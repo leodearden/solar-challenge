@@ -389,7 +389,7 @@ class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
             "which drew 'x', not a number"
         )
 
-    def test_a_sweep_multiplier_left_unexpanded_is_refused_naming_the_dependents_path(self) -> None:
+    def test_a_sweeping_fleet_is_refused_at_entry_naming_its_placement_and_expand_sweep_configs(self) -> None:
         """A fleet whose battery capacity sweeps is parsed whole, but its homes are drawn only from the fleet of each sweep point."""
         fleet = parse_fleet_distribution_config(
             {
@@ -409,9 +409,10 @@ class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
             generate_homes_from_distribution(fleet, Location.bristol())
 
         assert str(refusal.value) == (
-            "fleet_distribution.battery.capacity_kwh: proportional_to a sweep multiplier, "
-            "which expand_sweep_configs replaces before any home is drawn"
+            "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points; "
+            "generate the homes of each point's fleet, which expand_sweep_configs gives"
         )
+        assert "expand_sweep_configs replaces before any home is drawn" not in str(refusal.value)
 
 
 class _PoolOfText(ShuffledPoolDistribution):

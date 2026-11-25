@@ -886,8 +886,11 @@ class TestParseSweepFleetConfigs:
             tariff=_ECONOMY_7,
         )
 
-        sweep_spec = detect_fleet_sweep_spec(document)
+        found = detect_fleet_sweep_spec(document)
 
+        assert found is not None
+        placement, sweep_spec = found
+        assert placement == ("battery", "capacity_kwh")
         assert sweep_spec == SweepSpec(min=0.5, max=2.0, steps=3)
         assert tuple(value for value, _ in parse_sweep_fleet_configs(document)) == sweep_spec.get_values()
 
