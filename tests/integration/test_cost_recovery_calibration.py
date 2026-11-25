@@ -74,15 +74,15 @@ def _make_fleet_results_fin_cr6(
 
     With _make_finance_fin_cr6's finance the solve lands in the interior 'floor'
     regime (feasible=True):
-      - 100 homes × 5.5 kWp + 5 kWh (HomeConfig)
+      - 100 homes × 5.5 kWp + 5 kWh (HomeConfig), each wiring 5.606 kWp
       - fleet_sc = n_homes × self_kwh = 200,000 kWh
       - project_economics (solar_challenge.projection) charges debt service only in
         the 15 loan years but averages surplus over the 25-year asset life, so the
         effective annual cost is opex + debt_svc × 15/25
-      - Required revenue = opex(13,100) + debt_svc(≈14,410) × 15/25 (≈8,646)
-        + floor×n(2,700) ≈ £24,446/yr
-      - r* ≈ 24,446 / (200,000/100) ≈ 12.2 p/kWh < retail 23p
-      The single-year sum 13,100 + 14,410 + 2,700 = £30,210 → 15.1 p/kWh overstates
+      - Required revenue = opex(13,100) + debt_svc(≈14,701) × 15/25 (≈8,821)
+        + floor×n(2,700) ≈ £24,621/yr
+      - r* ≈ 24,621 / (200,000/100) ≈ 12.3 p/kWh < retail 23p
+      The single-year sum 13,100 + 14,701 + 2,700 = £30,501 → 15.25 p/kWh overstates
       r* because it charges debt service in all 25 years
       (docs/cost-recovery-finance-model.md §7.4).
 
@@ -101,11 +101,13 @@ def _make_scenario_fin_cr6(n_homes: int = 100) -> ScenarioConfig:
 def _make_finance_fin_cr6() -> FinanceConfig:
     """The [FIN] finance with no self-consumption override, so it prices the simulated own-use.
 
-    On the 100-home [FIN] fleet (grant=£250k, retail=23p, floor=£27):
-    Capex = 100 × (5.5×£1000 + £1000 + 5kWh×£250) = £775,000
-    Grant = £250,000 → financed = £525,000
-    Equity (0.75) = £393,750; Debt (0.25) = £131,250
-    Debt service (7%, 15yr) ≈ £14,410/yr
+    On the 100-home [FIN] fleet solved through project_fleet (grant=£250k, retail=23p,
+    floor=£27), whose curve carries the 100 × 5.606 kWp its homes wire:
+    Capex = 560.5992 kWp × £1000 + 100 × (£1000 + 5kWh×£250) = £785,599.20
+    Grant = £250,000 → financed = £535,599.20
+    Equity (0.75) = £401,699.40; Debt (0.25) = £133,899.80
+    Debt service (7%, 15yr) ≈ £14,701/yr
+    The spreadsheet column's curve carries the 550 kWp nameplate: capex £775,000.
     """
     return make_fin_finance(self_consumption_override=None)
 
@@ -453,17 +455,17 @@ def _make_interior_fleet_cr6(
 
     Interior guarantee (with _make_finance_interior_cr6 defaults):
       fleet_sc = n_homes × self_kwh = 5 × 2000 = 10,000 kWh
-      capex = 5 × (5.5×£2000 + £1000 + 5×£250) = 5 × £13,250 = £66,250
-      debt = 66250 × 0.25 = £16,562.50; single-year debt_svc ≈ £1,818/yr
+      capex = 5 × (5.606 kWp wired×£2000 + £1000 + 5×£250) = 5 × £13,461.98 = £67,309.92
+      debt = 67309.92 × 0.25 = £16,827.48; single-year debt_svc ≈ £1,848/yr
       (the loan runs 15 years)
       opex = 5 × £131 = £655/yr
       project_economics (solar_challenge.projection) charges debt service only in
       the 15 loan years but averages surplus over the 25-year asset life
       (ProjectEconomics.per_year_surplus_gbp, mean_fleet_surplus_per_year_gbp),
       so the effective annual cost is opex + debt_svc × 15/25
-      ≈ 655 + 1,818 × 15/25 ≈ £1,746/yr
-      required_revenue = 1746 + 50×5 ≈ £1,996/yr
-      r* = (1996 − 0) / (10000/100) ≈ 20p
+      ≈ 655 + 1,848 × 15/25 ≈ £1,764/yr
+      required_revenue = 1764 + 50×5 ≈ £2,014/yr
+      r* = (2014 − 0) / (10000/100) ≈ 20p
       retail=30p → interior: 0 < r* ≈ 20p < 30p ✓
 
     No-flex: no grid charging, export_revenue=0.
@@ -487,9 +489,9 @@ def _make_finance_interior_cr6(
     With n=5 homes, self=2000kWh:
       fleet_sc = 10,000 kWh
       Effective annual cost (surplus averaged over the 25-year asset life, loan
-      over 15 years) ≈ 655 + 1818 × 15/25 ≈ £1,746/yr
-      At r=0: surplus ≈ −1746/5 ≈ −349/home << floor=50
-      At r=retail=30p: surplus ≈ (30×10000/100−1746)/5 ≈ 251/home >> floor=50
+      over 15 years) ≈ 655 + 1848 × 15/25 ≈ £1,764/yr
+      At r=0: surplus ≈ −1764/5 ≈ −353/home << floor=50
+      At r=retail=30p: surplus ≈ (30×10000/100−1764)/5 ≈ 247/home >> floor=50
     ∴ interior ✓ (r* derived in _make_interior_fleet_cr6)
     """
     return _make_finance_cr6(
@@ -716,8 +718,8 @@ def _spreadsheet_economics_cr6(
     """[FIN]-assumption ProjectEconomics for ``scenario``: make_fin_spreadsheet_curve → project_economics.
 
     Physics-free and network-free.  Capex, debt and debt service depend on the
-    scenario's homes and ``finance`` alone, so callers that read only those do not
-    depend on the curve's revenue.
+    scenario's homes, ``finance`` and the curve's 5.5 kWp-a-home nameplate PV basis
+    alone, so callers that read only those do not depend on the curve's revenue.
     """
     curve = make_fin_spreadsheet_curve(
         n_homes=len(scenario.homes), asset_life_years=finance.asset_life_years
@@ -912,7 +914,7 @@ class TestArbitrageBasisCReconciliation:
         Debt service is charged in the 15 loan years but averaged over the 25-year
         asset life (see _make_interior_fleet_cr6), so
         r* = (floor×n + opex + debt_svc × 15/25) / (fleet_sc/100)
-           ≈ (135 + 655 + 1,818 × 15/25) / 130 ≈ 14.5p < retail = 30p
+           ≈ (135 + 655 + 1,848 × 15/25) / 130 ≈ 14.6p < retail = 30p
         → binding='floor', feasible=True.
         """
         n_homes = 5
