@@ -822,7 +822,7 @@ class TestSensitivityPanelGuards:
         """An axis with an empty values sequence raises ValueError."""
         base_configs = self._base_configs()
         baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="values must not be empty"):
             sensitivity_panel(
                 base_configs,
                 axes={KNOBS["battery_cost_per_kwh_gbp"]: []},
@@ -836,7 +836,7 @@ class TestSensitivityPanelGuards:
         scenario = _make_scenario(n_homes=_N_HOMES, finance=_make_finance(retained_cash_floor=9_999_999.0))
         base_configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6])
         baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
-        with pytest.raises(ValueError, match="baseline"):
+        with pytest.raises(ValueError, match="no feasible config"):
             sensitivity_panel(
                 base_configs,
                 axes={KNOBS["battery_cost_per_kwh_gbp"]: [250.0]},
