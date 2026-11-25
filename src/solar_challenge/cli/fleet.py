@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
 
 from solar_challenge.cli.utils import (
+    EndOption,
+    StartOption,
     console,
     create_fleet_progress,
     create_summary_table,
@@ -24,13 +26,14 @@ from solar_challenge.cli.utils import (
     print_info,
     print_success,
     print_warning,
+    with_window_options,
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
     detect_fleet_sweep_spec,
     load_community_config,
     load_config,
-    load_fleet_config,
+    load_scenario,
     parse_fleet_config,
     parse_sweep_fleet_configs,
     substitute_config_variables,
@@ -44,7 +47,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -130,20 +133,8 @@ def run(
             dir_okay=False,
         ),
     ],
-    start: Annotated[
-        str,
-        typer.Option(
-            "--start",
-            help="Start date (YYYY-MM-DD)",
-        ),
-    ] = DEFAULT_FIRST_DAY.isoformat(),
-    end: Annotated[
-        str,
-        typer.Option(
-            "--end",
-            help="End date (YYYY-MM-DD)",
-        ),
-    ] = DEFAULT_LAST_DAY.isoformat(),
+    start: StartOption = None,
+    end: EndOption = None,
     output: Annotated[
         Optional[Path],
         typer.Option(
@@ -166,14 +157,14 @@ def run(
     and load configurations.
     """
     cli = invocation(ctx)
-    fleet_config = load_fleet_config(config)
+    scenario = with_window_options(load_scenario(config), start=start, end=end)
     community_config = load_community_config(config)
+    fleet_config = FleetConfig(homes=scenario.simulated_homes(), name=scenario.name)
     n_homes = len(fleet_config.homes)
 
-    start_date, end_date = _period_in_fleet_timezone(fleet_config, start, end)
+    start_date, end_date = scenario.simulation_bounds()
 
-    days = covered_days(start_date.date(), end_date.date())
-    print_info(cli, f"Simulating fleet of {n_homes} homes for {days} days")
+    print_info(cli, f"Simulating fleet of {n_homes} homes for {scenario.window().days} days")
 
     with create_fleet_progress(cli) as progress:
         task = progress.add_task(f"Simulating {n_homes} homes...", total=n_homes)
