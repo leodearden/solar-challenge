@@ -47,7 +47,7 @@ Key public symbols:
 """
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import StrEnum
 from typing import TYPE_CHECKING, NamedTuple, Optional, TypeAlias, TypeVar
 
@@ -799,20 +799,52 @@ class GridServicesAtEvents:
             home simulated without a tariff (``tariff_rate`` 0) adds £0.  The
             householders import it; neither income figure subtracts it.
 
-    .. note::
-        ``sum(per_window_income_gbp) == annual_income_gbp`` is a design
-        invariant.  Consumers must NOT re-apply
-        ``(1 - aggregator_share)`` to the per-window tuple — it has already
-        been applied.
+    Construction raises ValueError for a breakdown of no event window, a
+    per-window field without one entry per event window, a figure below 0 or
+    NaN, and an *annual_income_gbp* that is not ``sum(per_window_income_gbp)``.
+    Consumers must NOT re-apply ``(1 - aggregator_share)`` to the per-window
+    tuple — it has already been applied.
     """
 
     annual_income_gbp: float
     per_window_avail_kw: tuple[float, ...]
     per_window_income_gbp: tuple[float, ...]
-    per_window_avail_p50_kw: tuple[float, ...] = ()
-    per_window_avail_p90_kw: tuple[float, ...] = ()
-    per_window_displaced_self_use_kwh_per_event: tuple[float, ...] = ()
-    per_window_displaced_import_gbp_per_year: tuple[float, ...] = ()
+    per_window_avail_p50_kw: tuple[float, ...]
+    per_window_avail_p90_kw: tuple[float, ...]
+    per_window_displaced_self_use_kwh_per_event: tuple[float, ...]
+    per_window_displaced_import_gbp_per_year: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        """Refuse no event window, a per-window field without one entry per window, a figure below 0 or NaN, and a total other than the window sum."""
+        windows = len(self.per_window_avail_kw)
+        if windows == 0:
+            raise ValueError(
+                "GridServicesAtEvents prices at least one event window, as GridServicesEventsConfig requires: "
+                f"got per_window_avail_kw={self.per_window_avail_kw!r}"
+            )
+        misfits = [f"{name}={entries!r}" for name in _PER_WINDOW_FIELDS if len(entries := getattr(self, name)) != windows]
+        if misfits:
+            raise ValueError(
+                f"GridServicesAtEvents holds one entry per event window in each per-window field, {windows} as "
+                f"per_window_avail_kw={self.per_window_avail_kw!r} does: got {', '.join(misfits)}"
+            )
+        figures = [("annual_income_gbp", self.annual_income_gbp)] + [
+            (f"{name}[{index}]", value) for name in _PER_WINDOW_FIELDS for index, value in enumerate(getattr(self, name))
+        ]
+        refused = [f"{label}={value!r}" for label, value in figures if not value >= 0.0]
+        if refused:
+            raise ValueError(
+                f"GridServicesAtEvents' capacities, energies and incomes are each at least 0: got {', '.join(refused)}"
+            )
+        total = sum(self.per_window_income_gbp)
+        if self.annual_income_gbp != total:
+            raise ValueError(
+                f"GridServicesAtEvents.annual_income_gbp must be sum(per_window_income_gbp), {total!r} for "
+                f"{self.per_window_income_gbp!r}, got {self.annual_income_gbp!r}"
+            )
+
+
+_PER_WINDOW_FIELDS = tuple(field.name for field in fields(GridServicesAtEvents) if field.name != "annual_income_gbp")
 
 
 # ---------------------------------------------------------------------------
