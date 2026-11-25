@@ -21,7 +21,7 @@ from rich.progress import Progress
 from rich.style import Style
 from typer.testing import CliRunner, Result
 
-from solar_challenge.board_report import generate_finance_report
+from solar_challenge.board_report import AssumptionSection, generate_finance_report
 from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
@@ -42,11 +42,12 @@ from solar_challenge.cli.utils import (
 from solar_challenge.config import load_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import FinanceConfig, bill_distribution
+from solar_challenge.finance import FinanceConfig, OwnUseBasis, bill_distribution
 from solar_challenge.home import SummaryStatistics, calculate_summary
 from solar_challenge.scenario_blocks import parse_finance_config
 from solar_challenge.timebase import ONE_MINUTE
 from solar_challenge.weather import WeatherCache, WeatherDataError
+from tests._assumption_sections import sections_of
 from tests._cli_fleet_simulator import (
     ReachedTheSweep,
     answering,
@@ -1101,6 +1102,11 @@ def _finance_run_over(first_day: date, days: int) -> tuple[Result, list[SummaryS
     return result, [calculate_summary(r) for r in fleet.per_home_results], finance
 
 
+def _physics_sections(summaries: list[SummaryStatistics], finance: FinanceConfig) -> dict[OwnUseBasis, AssumptionSection]:
+    """The finance report's input of `finance run`'s default physics mode: the bills of *summaries* under *finance*."""
+    return sections_of(AssumptionSection(finance, bill_distribution(summaries, finance)))
+
+
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestCommandsCountTheCalendarDaysOfTheirRun:
     """Tests that each command counts the calendar days its run covers, the local dates from --start to --end, however many hours the clocks make them."""
@@ -1137,7 +1143,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         assert result.exit_code == 0
         window = summaries[0].window
         assert window is not None and len(window.rows()) == (23 + 24) * 60
-        assert generate_finance_report(bill_distribution(summaries, finance), scenario_name="Bristol") in result.stdout
+        assert generate_finance_report(_physics_sections(summaries, finance), scenario_name="Bristol") in result.stdout
         assert f"×183.000 from a 2-day window ({_SPRING_FORWARD_FIRST} to {_SPRING_FORWARD_LAST})" in result.stdout
         assert summaries[0].simulation_days == 2
         assert f"Simulating fleet of 1 homes for {summaries[0].simulation_days} days…" in " ".join(
@@ -1149,7 +1155,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         result, summaries, finance = _finance_run_over(date(2023, 1, 1), 365)
 
         assert result.exit_code == 0
-        assert generate_finance_report(bill_distribution(summaries, finance), scenario_name="Bristol") in result.stdout
+        assert generate_finance_report(_physics_sections(summaries, finance), scenario_name="Bristol") in result.stdout
         assert "extrapolated" not in result.stdout
         assert "Simulating fleet of 1 homes for 365 days…" in " ".join(result.stderr.split())
 

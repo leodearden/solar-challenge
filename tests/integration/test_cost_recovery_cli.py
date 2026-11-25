@@ -18,6 +18,7 @@ from solar_challenge.finance import BillDistribution
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig
 from solar_challenge.projection import fewest_simulated_ages
+from tests._assumption_sections import make_assumption_section, sections_of
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
 from tests._factories import (
     make_bill_breakdown,
@@ -80,7 +81,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         assert "cost-recovery" in report.lower(), (
             f"Expected 'Cost-Recovery' heading in report but got:\n{report}"
@@ -94,7 +95,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         shown = _value_cell(report, "## Cost-Recovery Analysis", "Solved Own-Use Rate")
         assert shown == "18.75 p/kWh", f"solved rate not shown in its row:\n{report}"
@@ -107,7 +108,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         shown = _value_cell(report, "## Cost-Recovery Analysis", "CBS Net Surplus / home / yr")
         assert shown == "£27.00", f"net surplus not shown in its row:\n{report}"
@@ -120,7 +121,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         # Should contain some form of feasibility indicator
         assert "feasible" in report.lower() or "floor" in report.lower(), (
@@ -131,8 +132,8 @@ class TestGenerateFinanceReportCostRecoveryBasic:
         """generate_finance_report(bill) without cost_recovery must match cost_recovery=None."""
         bill = _make_bill_distribution()
 
-        report_default = generate_finance_report(bill)
-        report_none = generate_finance_report(bill, cost_recovery=None)
+        report_default = generate_finance_report(sections_of(make_assumption_section(bill=bill)))
+        report_none = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=None)))
 
         assert report_default == report_none, (
             "generate_finance_report() and generate_finance_report(cost_recovery=None) "
@@ -143,7 +144,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
         """generate_finance_report without cost_recovery must NOT contain a Cost-Recovery heading."""
         bill = _make_bill_distribution()
 
-        report = generate_finance_report(bill)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill)))
 
         assert "cost-recovery" not in report.lower(), (
             f"'Cost-Recovery' heading should not appear without cost_recovery param:\n{report}"
@@ -178,7 +179,9 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=True, binding="floor",
             outlay=cr_outlay,
         )
-        return generate_finance_report(_make_bill_distribution(), cost_recovery=sol)
+        return generate_finance_report(
+            sections_of(make_assumption_section(bill=_make_bill_distribution(), cost_recovery=sol)),
+        )
 
     def test_outlay_distribution_renders(self) -> None:
         """Cost-recovery block must render the per-home total-outlay distribution at solved rate."""
@@ -220,7 +223,7 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         # Should show a human-readable label for 'floor' (surplus meets floor)
         assert "surplus meets floor" in report.lower(), (
@@ -235,7 +238,7 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=True, binding="rate_clamped_zero",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         # Should show a human-readable label for 'rate_clamped_zero'
         assert "over-feasible" in report.lower() or "clamped" in report.lower(), (
@@ -250,7 +253,7 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=False, binding="infeasible_above_retail",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         # Should contain an explicit infeasible warning
         report_lower = report.lower()
@@ -275,9 +278,13 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=False, binding="infeasible_above_retail",
         )
 
-        r_floor = generate_finance_report(bill, cost_recovery=sol_floor)
-        r_clamped = generate_finance_report(bill, cost_recovery=sol_clamped)
-        r_infeasible = generate_finance_report(bill, cost_recovery=sol_infeasible)
+        r_floor = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol_floor)))
+        r_clamped = generate_finance_report(
+            sections_of(make_assumption_section(bill=bill, cost_recovery=sol_clamped)),
+        )
+        r_infeasible = generate_finance_report(
+            sections_of(make_assumption_section(bill=bill, cost_recovery=sol_infeasible)),
+        )
 
         # All three must differ (at minimum in the binding-label section)
         assert r_floor != r_clamped, "floor and rate_clamped_zero must produce different reports"

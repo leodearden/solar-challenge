@@ -34,8 +34,9 @@ from solar_challenge.projection import (
     project_multi_year,
     scenario_fleet,
 )
+from tests._assumption_sections import make_assumption_section, sections_of
 from tests._cli_fleet_simulator import invoke_finance_run
-from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._factories import make_bill_breakdown, make_bill_distribution, make_project_economics
 from tests._finance_builders import make_fleet_results, make_scenario_of, make_sized_home
 from tests._install_capex import fleet_wired_dc_kw, roof_battery_inverter_capex_gbp
 from tests._repository_paths import SCENARIOS_DIR
@@ -788,45 +789,22 @@ def _make_bill_distribution(multiplier: float = 1.0) -> BillDistribution:
     )
 
 
-def _make_project_economics(
-    *,
-    payback_years: Optional[float] = 10.0,
-    equity_irr: float = 0.08,
-    fleet_opex_gbp: float = 12000.0,
-) -> ProjectEconomics:
-    """Build a synthetic ProjectEconomics for report tests."""
-    return ProjectEconomics(
-        total_capex_gbp=250000.0,
-        grant_gbp=50000.0,
-        equity_gbp=150000.0,
-        debt_gbp=50000.0,
-        annual_debt_service_gbp=5500.0,
-        per_year_surplus_gbp=tuple([8000.0] * 25),
-        min_dscr=1.45,
-        equity_irr=equity_irr,
-        payback_years=payback_years,
-        net_surplus_per_home_per_year_gbp=80.0,
-        fleet_opex_gbp=fleet_opex_gbp,
-        mean_fleet_surplus_per_year_gbp=8000.0,
-    )
-
-
 class TestGenerateFinanceReportEconomics:
     """Fast tests for board_report.generate_finance_report economics block (η)."""
 
     def test_economics_section_present(self) -> None:
         """Report with economics= must contain a Project Economics section."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         assert "Project Economics" in report
 
     def test_economics_capex_in_report(self) -> None:
         """Economics block must include total capex value."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         # capex = 250000.00 or similar formatting
         assert "250000" in report.replace(",", "").replace(" ", "")
@@ -834,33 +812,33 @@ class TestGenerateFinanceReportEconomics:
     def test_economics_dscr_in_report(self) -> None:
         """Economics block must include min DSCR label."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         assert "DSCR" in report
 
     def test_economics_irr_in_report(self) -> None:
         """Economics block must include IRR label."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         assert "IRR" in report
 
     def test_economics_payback_in_report(self) -> None:
         """Economics block must include payback label."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         assert "Payback" in report
 
     def test_economics_none_payback_no_crash(self) -> None:
         """economics with payback_years=None must not crash and must render gracefully."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics(payback_years=None)
+        econ = make_project_economics(payback_years=None)
         # Should not raise
-        report = generate_finance_report(dist, economics=econ)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
         assert isinstance(report, str)
         # Should render a "never" or "—" or similar string, not "None"
         assert "None" not in report
@@ -868,24 +846,24 @@ class TestGenerateFinanceReportEconomics:
     def test_economics_nan_irr_no_crash(self) -> None:
         """economics with equity_irr=nan must not crash."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics(equity_irr=float("nan"))
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics(equity_irr=float("nan"))
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
         assert isinstance(report, str)
 
     def test_backward_compat_economics_none(self) -> None:
         """generate_finance_report() with no economics kwarg must return same as before."""
         dist = _make_bill_distribution()
         # Call without economics kwarg
-        report_no_econ = generate_finance_report(dist)
+        report_no_econ = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
         # Call with economics=None (explicit)
-        report_econ_none = generate_finance_report(dist, economics=None)
+        report_econ_none = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=None)))
 
         assert report_no_econ == report_econ_none
 
     def test_backward_compat_no_economics_section(self) -> None:
         """Report without economics kwarg must not contain Project Economics section."""
         dist = _make_bill_distribution()
-        report = generate_finance_report(dist)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
 
         # No economics block should appear
         assert "Project Economics" not in report
@@ -898,9 +876,9 @@ class TestGenerateFinanceReportEconomics:
         """
         dist = _make_bill_distribution()
         # fleet_opex_gbp=12000 is clearly distinct from net_surplus_per_home=80
-        econ = _make_project_economics(fleet_opex_gbp=12000.0)
+        econ = make_project_economics(fleet_opex_gbp=12000.0)
         assert econ.net_surplus_per_home_per_year_gbp == 80.0  # sanity
-        report = generate_finance_report(dist, economics=econ)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         # The Fleet OpEx row must contain "12,000" or "12000" (the actual fleet opex)
         lines = report.splitlines()

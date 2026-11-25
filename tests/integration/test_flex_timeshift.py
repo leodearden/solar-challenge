@@ -26,6 +26,7 @@ from solar_challenge.finance import FinanceConfig, bill_distribution, householde
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.tariff import PRESET_RATES
+from tests._assumption_sections import make_assumption_section, sections_of
 from tests._finance_builders import make_window
 from tests._synthetic_weather import sunless_weather, weather_for
 from tests.integration._helpers import SCENARIO
@@ -219,7 +220,7 @@ def test_finance_report_renders_flex_value_block() -> None:
     dist = bill_distribution([summary], finance)
 
     # ---- Baseline: no flex_band → bit-identical output -----------------------
-    baseline = generate_finance_report(dist, scenario_name="Flex")
+    baseline = generate_finance_report(sections_of(make_assumption_section(bill=dist)), scenario_name="Flex")
     assert "Flexibility Value" not in baseline, (
         "Default (no flex_band) must NOT render the Flexibility Value block"
     )
@@ -227,7 +228,7 @@ def test_finance_report_renders_flex_value_block() -> None:
     # ---- With central flex_band: block must appear with expected figures ------
     central = resolve_flex_band("central")
     report = generate_finance_report(
-        dist,
+        sections_of(make_assumption_section(bill=dist)),
         scenario_name="Flex",
         flex_band=central,
         flex_band_name="central",
@@ -254,7 +255,7 @@ def test_finance_report_renders_flex_value_block() -> None:
 
     # ---- Empty flex_band_name must fall back to '—' placeholder --------------
     report_no_name = generate_finance_report(
-        dist,
+        sections_of(make_assumption_section(bill=dist)),
         scenario_name="Flex",
         flex_band=central,
         flex_band_name="",
@@ -267,6 +268,6 @@ def test_finance_report_renders_flex_value_block() -> None:
     )
 
     # ---- Additive: default still returns baseline exactly --------------------
-    assert generate_finance_report(dist, scenario_name="Flex") == baseline, (
+    assert generate_finance_report(sections_of(make_assumption_section(bill=dist)), scenario_name="Flex") == baseline, (
         "generate_finance_report without flex_band must return bit-identical output"
     )

@@ -5,10 +5,11 @@ from dataclasses import fields, replace
 from datetime import date
 
 import pytest
-from solar_challenge.board_report import generate_config_ranking_report, generate_finance_report
-from solar_challenge.finance import BillDistribution, CostRecoverySolution
+from solar_challenge.board_report import AssumptionSection, generate_config_ranking_report, generate_finance_report
+from solar_challenge.finance import BillDistribution, CostRecoverySolution, OwnUseBasis
 from solar_challenge.optimize import RankedSweep
 from solar_challenge.timebase import SimulationWindow
+from tests._assumption_sections import make_assumption_section, sections_of
 from tests._factories import (
     make_bill_distribution,
     make_config_result,
@@ -30,6 +31,12 @@ def _one_config_sweep(window: SimulationWindow) -> RankedSweep:
     return make_ranked_sweep((cr,))
 
 
+def _sections(bill: BillDistribution, *, side_by_side: bool = False) -> dict[OwnUseBasis, AssumptionSection]:
+    """A finance report's input billing *bill* under physics, and under the spreadsheet too when *side_by_side*."""
+    bases = (OwnUseBasis.SIMULATED, OwnUseBasis.OVERRIDE) if side_by_side else (OwnUseBasis.SIMULATED,)
+    return sections_of(*(make_assumption_section(basis, bill=bill) for basis in bases))
+
+
 def _sized_by(*forecasts: str) -> BillDistribution:
     """make_bill_distribution's distribution, its homes' grid charge sized by *forecasts*."""
     return replace(make_bill_distribution(), grid_charge_forecasts=forecasts)
@@ -42,14 +49,14 @@ class TestGridChargeForecastNotice:
     def test_a_finance_report_names_each_forecast_under_its_title(self, side_by_side: bool) -> None:
         dist = _sized_by("pv_blind", "trailing_14_days")
 
-        report = generate_finance_report(dist, dist if side_by_side else None, scenario_name="Bristol")
+        report = generate_finance_report(_sections(dist, side_by_side=side_by_side), scenario_name="Bristol")
 
         assert report.startswith("# Finance Report: Bristol\n\n" + PV_BLIND_AND_TRAILING_NOTICE + "## Householder Bill")
 
     def test_a_finance_report_gives_the_forecast_notice_after_the_extrapolation_notice(self) -> None:
         dist = replace(_sized_by("trailing_14_days"), annualised_from=make_window(days=2, first_day=date(2024, 3, 31)))
 
-        report = generate_finance_report(dist, scenario_name="Bristol")
+        report = generate_finance_report(_sections(dist), scenario_name="Bristol")
 
         assert report.startswith(
             "# Finance Report: Bristol\n\n"
@@ -58,9 +65,9 @@ class TestGridChargeForecastNotice:
         )
 
     def test_a_finance_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
-        report = generate_finance_report(_sized_by(), scenario_name="Bristol")
+        report = generate_finance_report(_sections(_sized_by()), scenario_name="Bristol")
 
-        assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
+        assert report == generate_finance_report(_sections(make_bill_distribution()), scenario_name="Bristol")
         assert "sized by" not in report
 
     def test_a_ranking_report_names_its_outlays_forecasts_under_its_first_heading(self) -> None:
@@ -85,7 +92,7 @@ class TestExtrapolationNotice:
     ) -> None:
         dist = _annualised_from(make_window(days=2, first_day=date(2024, 3, 31)))
 
-        report = generate_finance_report(dist, dist if side_by_side else None, scenario_name="Bristol")
+        report = generate_finance_report(_sections(dist, side_by_side=side_by_side), scenario_name="Bristol")
 
         assert report.startswith(
             "# Finance Report: Bristol\n\n"
@@ -102,9 +109,9 @@ class TestExtrapolationNotice:
         ],
     )
     def test_a_finance_report_from_whole_calendar_years_has_no_notice(self, window: SimulationWindow) -> None:
-        report = generate_finance_report(_annualised_from(window), scenario_name="Bristol")
+        report = generate_finance_report(_sections(_annualised_from(window)), scenario_name="Bristol")
 
-        assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
+        assert report == generate_finance_report(_sections(make_bill_distribution()), scenario_name="Bristol")
         assert "extrapolated" not in report
 
     def test_a_ranking_report_from_a_30_day_window_says_so_under_its_first_heading(self) -> None:
@@ -149,7 +156,7 @@ class TestABindingOutsideTheLabelTableIsRefused:
         solution = _solution_with_binding_other()
 
         with pytest.raises(ValueError, match="'other'"):
-            generate_finance_report(make_bill_distribution(), cost_recovery=solution)
+            generate_finance_report(sections_of(make_assumption_section(cost_recovery=solution)))
 
     def test_a_ranking_report_refuses_a_binding_outside_the_label_table_by_name(self) -> None:
         cr = replace(make_config_result(), solution=_solution_with_binding_other(), binding="other")

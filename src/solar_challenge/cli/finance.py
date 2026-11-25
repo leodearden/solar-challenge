@@ -2,14 +2,13 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Finance CLI commands for householder bill and distribution analysis."""
 
-import dataclasses
 import enum
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Mapping, Optional
 
 import typer
 
-from solar_challenge.board_report import generate_finance_report
+from solar_challenge.board_report import AssumptionSection, generate_finance_report
 from solar_challenge.cli.utils import (
     CliInvocation,
     EndOption,
@@ -23,12 +22,12 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.config import load_scenario
 from solar_challenge.finance import (
-    DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
-    BillDistribution,
     CostRecoverySolution,
     FinanceConfig,
+    OwnUseBasis,
     bill_distribution,
     grid_services_model_of,
+    with_own_use_basis,
 )
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate, reusing
@@ -69,25 +68,12 @@ def _grid_services_at_events(
     return compute_grid_services_at_events(fleet_results, pricing)
 
 
-def _bill_finances(
-    assumptions: AssumptionMode, finance: FinanceConfig
-) -> tuple[FinanceConfig, Optional[FinanceConfig]]:
-    """The FinanceConfigs of the report's first and second bill columns: for --assumptions physics or spreadsheet that mode's config and None, for both the physics config then the spreadsheet config."""
-    physics = dataclasses.replace(finance, self_consumption_override=None)
-    spreadsheet = dataclasses.replace(
-        finance,
-        self_consumption_override=(
-            finance.self_consumption_override
-            if finance.self_consumption_override is not None
-            else DEFAULT_SPREADSHEET_SELF_CONSUMPTION
-        ),
-    )
-    pairs: dict[AssumptionMode, tuple[FinanceConfig, Optional[FinanceConfig]]] = {
-        AssumptionMode.physics: (physics, None),
-        AssumptionMode.spreadsheet: (spreadsheet, None),
-        AssumptionMode.both: (physics, spreadsheet),
-    }
-    return pairs[assumptions]
+_BASES: Mapping[AssumptionMode, tuple[OwnUseBasis, ...]] = {
+    AssumptionMode.physics: (OwnUseBasis.SIMULATED,),
+    AssumptionMode.spreadsheet: (OwnUseBasis.OVERRIDE,),
+    AssumptionMode.both: (OwnUseBasis.SIMULATED, OwnUseBasis.OVERRIDE),
+}
+"""The own-use bases each --assumptions mode reports, one column each."""
 
 
 def _economics_and_solution(
@@ -195,25 +181,25 @@ def run(
     grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
 
     summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
-    primary_finance, spreadsheet_finance = _bill_finances(assumptions, finance)
-    primary_bill = bill_distribution(summaries, primary_finance)
-    spreadsheet_bill: Optional[BillDistribution] = (
-        bill_distribution(summaries, spreadsheet_finance)
-        if spreadsheet_finance is not None
-        else None
-    )
 
     simulate = reusing(cli.runner.simulate, fleet_results, fleet.start, fleet.end)
     economics_result, cost_recovery_result = _economics_and_solution(
         cli, fleet, finance, simulate, project=project, cost_recovery=cost_recovery
     )
+    mode_finances = {basis: with_own_use_basis(finance, basis) for basis in _BASES[assumptions]}
+    sections = {
+        basis: AssumptionSection(
+            mode_finance,
+            bill_distribution(summaries, mode_finance),
+            economics=economics_result,
+            cost_recovery=cost_recovery_result,
+        )
+        for basis, mode_finance in mode_finances.items()
+    }
 
     report = generate_finance_report(
-        primary_bill,
-        spreadsheet_bill,
+        sections,
         scenario_name=scenario_config.name or str(scenario),
-        economics=economics_result,
-        cost_recovery=cost_recovery_result,
         flex_band=resolve_flex_band(band) if band is not None else None,
         flex_band_name=band.value if band is not None else "",
         grid_services_at_events=grid_services_at_events,
