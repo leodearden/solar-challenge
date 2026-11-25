@@ -4,8 +4,10 @@
 The home is f44's probe: 4 kW of PV, a deterministic 3400 kWh a year and a 5 kWh battery that
 grid-charges to 0.9, simulated on 2024-06-15 in synthetic June weather. The probe found three
 settings that ran storing 0 kWh from the grid, with no warning. A tariff with no cheap period,
-such as a flat rate, is a fourth: a strategy that grid-charges never finds a minute to charge in
-(docs/prds/tariff-coverage-classifier-presets.md §5.4, §9 row 9).
+such as a flat rate, is a fourth: a configured strategy that grid-charges does so only in cheap
+minutes, so never finds one to charge in (docs/prds/tariff-coverage-classifier-presets.md §5.4,
+§9 row 9). A ChargeWindow grid-charges whatever the rates, so a window strategy given to
+simulate_home is not refused for the tariff's.
 
 No HomeConfig or BatteryConfig is built at import: each test builds its own, so a config
 refused by mistake fails its own cases and not the module's collection.
@@ -32,6 +34,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategy,
     TOUOptimizedStrategyConfig,
+    refuse_grid_charging_it_would_ignore,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import simulate_timestep
@@ -40,6 +43,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import PrefetchedWeather
+from tests._consumer_dispatch_strategy import ConsumerStrategy, ConsumerStrategyThatIgnoresTheGrid
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 _DAY = pd.Timestamp("2024-06-15")
@@ -49,6 +53,9 @@ _E7 = TariffConfig.economy_7()
 _FLAT = TariffConfig.flat_rate(0.25)
 
 _LONDON = ZoneInfo("Europe/London")
+
+_NIGHTLY = ChargeWindow("daily", datetime.time(0, 30), datetime.timedelta(hours=7), 0.9, False)
+"""Every night from 00:30 for 7 hours, to 0.9 of the battery's capacity, holding at the target."""
 
 
 def _battery(strategy: DispatchStrategyConfig | None = None) -> BatteryConfig:
@@ -164,16 +171,21 @@ def test_an_honoured_home_without_its_tariff_is_refused(build_home: Callable[[],
 @pytest.mark.parametrize(
     ("strategy", "named"),
     [
-        pytest.param(SelfConsumptionStrategy(), "'self_consumption'", id="self_consumption"),
+        pytest.param(SelfConsumptionStrategy(), ["'self_consumption'"], id="self_consumption"),
         pytest.param(
             ScheduledChargeStrategy(SelfConsumptionStrategy(), (), _LONDON),
-            "'scheduled_charge(self_consumption)'",
+            ["'scheduled_charge(self_consumption)'", "give it a ChargeWindow"],
             id="no-window-over-self_consumption",
+        ),
+        pytest.param(
+            ConsumerStrategyThatIgnoresTheGrid(),
+            ["'consumer_that_ignores_the_grid'"],
+            id="a-consumer-s-strategy-that-ignores-the-grid",
         ),
     ],
 )
 def test_a_strategy_given_to_simulate_home_that_would_ignore_the_grid_charging_is_refused_before_the_run_asks_for_weather(
-    strategy: DispatchStrategy, named: str
+    strategy: DispatchStrategy, named: list[str]
 ) -> None:
     """The weather answers for no location, so a run that asked for it would raise LookupError instead."""
     home = _home(_battery(TOUOptimizedStrategyConfig()), tariff=_E7)
@@ -181,8 +193,17 @@ def test_a_strategy_given_to_simulate_home_that_would_ignore_the_grid_charging_i
     with pytest.raises(ConfigurationError) as refused:
         simulate_home(home, _DAY, _DAY, weather=PrefetchedWeather({}), strategy=strategy)
 
-    for name in ["grid_charging", named, "does not charge from the grid"]:
+    for name in ["grid_charging", *named, "does not charge from the grid"]:
         assert name in str(refused.value), (name, str(refused.value))
+
+
+def test_a_consumer_s_strategy_that_keeps_the_default_runs_on_a_home_whose_battery_grid_charges() -> None:
+    """Its use of the GridChargeContext it is offered is its own, so simulate_home runs it as it would any other."""
+    home = _home(_battery(TOUOptimizedStrategyConfig()), tariff=_E7)
+
+    results = _simulate_the_day(home, strategy=ConsumerStrategy())
+
+    assert results.strategy_name == "consumer"
 
 
 @pytest.mark.parametrize(
@@ -191,11 +212,7 @@ def test_a_strategy_given_to_simulate_home_that_would_ignore_the_grid_charging_i
         pytest.param(TOUOptimizedStrategy([(16, 19)]), "tou_optimized", id="tou_optimized"),
         pytest.param(PeakShavingStrategy(3.0), "peak_shaving", id="peak_shaving"),
         pytest.param(
-            ScheduledChargeStrategy(
-                SelfConsumptionStrategy(),
-                (ChargeWindow("daily", datetime.time(0, 30), datetime.timedelta(hours=7), 0.9, False),),
-                _LONDON,
-            ),
+            ScheduledChargeStrategy(SelfConsumptionStrategy(), (_NIGHTLY,), _LONDON),
             "scheduled_charge(self_consumption)",
             id="a-window-over-self_consumption",
         ),
@@ -222,6 +239,25 @@ def test_a_battery_naming_no_strategy_grid_charges_under_a_tou_strategy_driven_t
         timestamp=datetime.datetime(2024, 6, 15, 2, 0),
         strategy=TOUOptimizedStrategy([(16, 19)]),
         tariff=_E7,
+    )
+
+    assert flows.grid_charge > 0
+
+
+def test_a_window_strategy_on_a_flat_tariff_is_not_refused_since_its_window_grid_charges_whatever_the_rates() -> None:
+    """Rule 1 of docs/scheduled-charge-windows.md: an open window grid-charges whenever it is offered a GridChargeContext, here at 02:00 on a flat rate."""
+    strategy = ScheduledChargeStrategy(SelfConsumptionStrategy(), (_NIGHTLY,), _LONDON)
+    battery = _battery()
+
+    refuse_grid_charging_it_would_ignore(strategy, grid_charging=battery.grid_charging, tariff=_FLAT)
+    flows = simulate_timestep(
+        generation_kw=0.0,
+        demand_kw=0.5,
+        battery=Battery(battery),
+        timestep_minutes=1.0,
+        timestamp=datetime.datetime(2024, 6, 15, 2, 0, tzinfo=_LONDON),
+        strategy=strategy,
+        tariff=_FLAT,
     )
 
     assert flows.grid_charge > 0

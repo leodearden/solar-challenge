@@ -1056,7 +1056,8 @@ def build_dispatch_strategy(
             tou_optimized variant with no peak_hours and no tariff, or with peak_hours that
             reach a cheap minute of tariff. Then refuse_grid_charging_it_would_ignore refuses
             grid_charging under the strategy built: its variant does not charge from the grid,
-            there is no tariff to find a cheap period in, or the tariff has no cheap period.
+            or there is no tariff to find a cheap period in. Last, grid_charging is refused on a
+            tariff with no cheap period, the only minutes a variant's strategy grid-charges in.
     """
     strategy: DispatchStrategy
     match config:
@@ -1071,44 +1072,49 @@ def build_dispatch_strategy(
         case _:
             assert_never(config)
     refuse_grid_charging_it_would_ignore(strategy, grid_charging=grid_charging, tariff=tariff)
+    if grid_charging is not None and tariff is not None:
+        _require_cheap_minutes_for_grid_charging(strategy.name, tariff)
     return strategy
 
 
 def refuse_grid_charging_it_would_ignore(
     strategy: DispatchStrategy, *, grid_charging: GridChargeConfig | None, tariff: TariffConfig | None
 ) -> None:
-    """Refuse grid_charging, a battery's grid-charge setting, if *strategy* would ignore it in a home on tariff: if the strategy does not charge from the grid, there is no tariff, or the tariff has no cheap minute to charge in.
+    """Refuse grid_charging, a battery's grid-charge setting, if *strategy* would ignore it in a home on tariff: if the strategy does not charge from the grid, or there is no tariff, so no grid charge is offered.
+
+    It does not judge the tariff's rates: a ScheduledChargeStrategy's open window grid-charges
+    on any tariff, a flat one included (docs/scheduled-charge-windows.md rule 1).
 
     Raises:
         ConfigurationError: grid_charging is set and strategy.charges_from_the_grid is False,
             or grid_charging is set and tariff is None; the message names grid_charging, the
             strategy and what to change. The first message names, as the strategy to use
-            instead, each variant of DispatchStrategyConfig that charges from the grid.
-            Otherwise _require_cheap_minutes_for_grid_charging's refusal of a tariff with no
-            cheap minute.
+            instead, each variant of DispatchStrategyConfig that charges from the grid, and
+            for a ScheduledChargeStrategy a ChargeWindow too.
     """
     if grid_charging is None:
         return
     if not strategy.charges_from_the_grid:
         grid_charging_tags = [tag for tag, variant in STRATEGY_CONFIG_BY_TYPE.items() if variant._charges_from_the_grid]
+        window_remedy = "give it a ChargeWindow, " if isinstance(strategy, ScheduledChargeStrategy) else ""
         raise ConfigurationError(
             f"grid_charging is set, but dispatch strategy {strategy.name!r} does not charge from the grid; "
-            f"remove grid_charging, or use {' or '.join(grid_charging_tags)}"
+            f"remove grid_charging, {window_remedy}or use {' or '.join(grid_charging_tags)}"
         )
     if tariff is None:
         raise ConfigurationError(
             f"grid_charging is set, but there is no tariff, so dispatch strategy {strategy.name!r} has no cheap "
             "period to charge in; add a tariff or remove grid_charging"
         )
-    _require_cheap_minutes_for_grid_charging(strategy.name, tariff)
 
 
 def _require_cheap_minutes_for_grid_charging(strategy_name: str, tariff: TariffConfig) -> None:
-    """Refuse grid_charging under the dispatch strategy named *strategy_name* when *tariff* has no cheap minute to charge in.
+    """Refuse grid_charging under the dispatch strategy named *strategy_name*, a variant's, when *tariff* has no cheap minute to charge in.
 
-    refuse_grid_charging_it_would_ignore calls it once it has established that grid_charging
-    is set, that the strategy charges from the grid and that there is a tariff, so a strategy
-    that does not grid-charge, or a home with no tariff, is told that instead.
+    A variant's strategy grid-charges only in the tariff's cheap minutes. build_dispatch_strategy
+    calls it once refuse_grid_charging_it_would_ignore has established that the strategy charges
+    from the grid and that there is a tariff, so a strategy that does not grid-charge, or a home
+    with no tariff, is told that instead.
 
     Raises:
         ConfigurationError: tariff's cheap_minutes_of_day is empty, naming grid_charging, the

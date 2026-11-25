@@ -2,14 +2,12 @@
 """Tests for DispatchStrategy.charges_from_the_grid, whether a strategy charges the battery from the grid when it is offered a GridChargeContext."""
 
 from datetime import datetime, time, timedelta
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from solar_challenge.dispatch import (
     ChargeWindow,
-    DispatchDecision,
     DispatchStrategy,
     GridChargeContext,
     PeakShavingStrategy,
@@ -17,6 +15,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
 )
+from tests._consumer_dispatch_strategy import ConsumerStrategy
 
 _LONDON = ZoneInfo("Europe/London")
 
@@ -75,28 +74,5 @@ def test_a_strategy_declares_whether_it_charges_from_the_grid_as_it_decides(
     assert (decision.grid_charge_kw > 0) == expected, decision
 
 
-class _ConsumerStrategy(DispatchStrategy):
-    """Test double: a strategy of a caller's own, which defines only name and decide_action."""
-
-    @property
-    def name(self) -> str:
-        """Return strategy name."""
-        return "consumer"
-
-    def decide_action(
-        self,
-        timestamp: datetime,
-        generation_kw: float,
-        demand_kw: float,
-        battery_soc_kwh: float,
-        battery_capacity_kwh: float,
-        timestep_minutes: float,
-        *,
-        grid_charge_ctx: Optional[GridChargeContext] = None,
-    ) -> DispatchDecision:
-        """Leave the battery alone."""
-        return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
-
-
 def test_a_strategy_the_library_does_not_know_charges_from_the_grid() -> None:
-    assert _ConsumerStrategy().charges_from_the_grid is True
+    assert ConsumerStrategy().charges_from_the_grid is True
