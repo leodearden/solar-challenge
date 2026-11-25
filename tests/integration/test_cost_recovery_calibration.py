@@ -38,7 +38,6 @@ from solar_challenge.projection import (
     scenario_fleet,
     solve_cost_recovery_rate,
 )
-from solar_challenge.pv import wired_dc_capacity_kw
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
@@ -55,6 +54,7 @@ from tests._finance_builders import (
     make_sim_results,
     make_sized_home,
 )
+from tests._install_capex import fleet_wired_dc_kw
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ def _surplus_the_bills_fund_cr6(
         sampled_ages=(0,),
         interp_error_estimate=0.0,
         annualised_from=None,
-        fleet_pv_dc_kw=sum(wired_dc_capacity_kw(home.pv_config) for home in scenario_fleet(scenario).homes),
+        fleet_pv_dc_kw=fleet_wired_dc_kw(scenario_fleet(scenario).homes),
     )
     return project_economics(curve, scenario_fleet(scenario), finance).net_surplus_per_home_per_year_gbp
 
@@ -1099,7 +1099,7 @@ class TestPhysicsColumnPremises:
         fleet = scenario_fleet(scenario)
         curve = dataclasses.replace(
             make_fin_spreadsheet_curve(n_homes=2, asset_life_years=25),
-            fleet_pv_dc_kw=sum(wired_dc_capacity_kw(home.pv_config) for home in fleet.homes),
+            fleet_pv_dc_kw=fleet_wired_dc_kw(fleet.homes),
         )
 
         econ = project_economics(curve, fleet, finance)

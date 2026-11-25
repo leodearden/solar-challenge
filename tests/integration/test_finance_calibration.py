@@ -37,7 +37,6 @@ from solar_challenge.projection import (
     scenario_fleet,
     spreadsheet_revenue_curve,
 )
-from solar_challenge.pv import wired_dc_capacity_kw
 from solar_challenge.scenario_blocks import (
     parse_finance_config,
     parse_seg_rate,
@@ -52,6 +51,7 @@ from tests._fin_calibration import (
     simulate_physics_column,
 )
 from tests._finance_builders import make_scenario_of, make_sized_home
+from tests._install_capex import fleet_wired_dc_kw
 from tests._repository_paths import SCENARIOS_DIR
 
 
@@ -583,8 +583,7 @@ class TestCalibrationPhysicsColumn:
 
         # STRUCTURAL assertions only (no physics==spreadsheet assertions)
         # The physics curve's PV basis is the DC its 2 homes wire, not their 2 × 5.5 kWp nameplate
-        wired_per_home_kw = wired_dc_capacity_kw(scenario_fleet(scenario).homes[0].pv_config)
-        assert physics_curve.fleet_pv_dc_kw == pytest.approx(2.0 * wired_per_home_kw)
+        assert physics_curve.fleet_pv_dc_kw == pytest.approx(fleet_wired_dc_kw(scenario_fleet(scenario).homes))
         assert physics_curve.fleet_pv_dc_kw != pytest.approx(11.0)
         # Physics capex: that PV DC × £1000 + 2 × (£1000 + 5.0kWh×£250)
         assert physics_econ.total_capex_gbp == pytest.approx(

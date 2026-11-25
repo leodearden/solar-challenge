@@ -44,6 +44,7 @@ from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._factories import make_config_result, make_cost_recovery_solution
 from tests._finance_builders import make_fleet_results, make_scenario
 from tests._fleet_simulate_stand_in import answering_with
+from tests._install_capex import fleet_wired_dc_kw, roof_battery_inverter_capex_gbp
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +369,25 @@ class TestRunSweepSingleConfig:
             assert math.isnan(cr.equity_irr)
         else:
             assert cr.equity_irr == pytest.approx(econ.equity_irr)
+
+    def test_a_3_kwp_configs_pv_capex_is_the_pv_dc_its_homes_wire(self) -> None:
+        """A 3 kWp config's capex prices the 2.803 kWp its homes wire, not their 3 kWp nameplate."""
+        finance = _interior_finance()
+        configs = enumerate_configs(
+            _make_scenario(n_homes=5, finance=finance), pv_kwp=[3.0], battery_kwh=[6.0], inverter_kw=[3.6]
+        )
+        homes = configs[0][1].homes
+        assert wired_dc_capacity_kw(homes[0].pv_config) == pytest.approx(2.803, abs=5e-4)
+
+        ranked = run_sweep(configs, simulate=answering_with(_make_fleet_results(n_homes=5)))
+
+        assert len(ranked.results) == 1, (
+            f"the config must solve feasibly, as only ranked.results holds a ConfigResult; "
+            f"infeasible: {ranked.infeasible!r}"
+        )
+        assert ranked.results[0].total_capex_gbp == pytest.approx(
+            fleet_wired_dc_kw(homes) * finance.pv_cost_per_kwp_gbp + roof_battery_inverter_capex_gbp(homes, finance)
+        )
 
     def test_baseline_outlay_matches_age0_bill_distribution(self) -> None:
         """baseline_outlay_gbp equals bill_distribution(...).representative.total_outlay_gbp
@@ -754,29 +774,3 @@ class TestHeterogeneousFloorEcho:
         # Documented behaviour: echoes the first config's floor when no global override
         assert ranked.retained_cash_floor_gbp == pytest.approx(floor_a)
 
-
-def test_a_3_kwp_configs_pv_capex_is_the_pv_dc_its_homes_wire() -> None:
-    """A 3 kWp config's capex prices the 2.803 kWp its homes wire, not their 3 kWp nameplate."""
-    finance = _interior_finance()
-    configs = enumerate_configs(
-        _make_scenario(n_homes=5, finance=finance), pv_kwp=[3.0], battery_kwh=[6.0], inverter_kw=[3.6]
-    )
-    homes = configs[0][1].homes
-    assert wired_dc_capacity_kw(homes[0].pv_config) == pytest.approx(2.803, abs=5e-4)
-
-    ranked = run_sweep(configs, simulate=answering_with(_make_fleet_results(n_homes=5)))
-
-    assert len(ranked.results) == 1, (
-        f"the config must solve feasibly, as only ranked.results holds a ConfigResult; "
-        f"infeasible: {ranked.infeasible!r}"
-    )
-    assert ranked.results[0].total_capex_gbp == pytest.approx(
-        sum(
-            wired_dc_capacity_kw(home.pv_config) * finance.pv_cost_per_kwp_gbp
-            + finance.roof_fit_cost_gbp
-            + (0.0 if home.battery_config is None else home.battery_config.capacity_kwh)
-            * finance.battery_cost_per_kwh_gbp
-            + home.pv_config.effective_inverter_capacity_kw * finance.inverter_cost_per_kw_gbp
-            for home in homes
-        )
-    )
