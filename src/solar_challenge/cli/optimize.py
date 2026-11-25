@@ -245,7 +245,7 @@ def configs(
     Enumerates homogeneous-install scenarios over the cartesian product of
     PV/battery/inverter capacity dimensions, solves the CBS cost-recovery rate
     for each config, ranks by householder outlay, and renders a two-table
-    markdown report (cost-recovery rank + fixed-15p trade-off).
+    markdown report (cost-recovery rank + configured-rate trade-off).
 
     When the sensitivity axes are non-empty, a one-at-a-time (OAT) sensitivity
     panel is appended showing which cost assumptions most affect the top-ranked
