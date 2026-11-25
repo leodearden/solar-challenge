@@ -22,7 +22,8 @@ class Knob:
     """A setting of a scenario that a sweep or a sensitivity axis varies.
 
     Attributes:
-        name: The knob's canonical name, the name of the field it sets.
+        name: The knob's canonical name, under which KNOBS holds it and
+            knob_named resolves it; it need not be the name of a field the knob edits.
         apply: The knob's one edit, pure: a new scenario with the setting at the
             value given, in the form (home or homes) of the scenario given, which
             it leaves unchanged.
@@ -111,20 +112,21 @@ def _registry(
     """*knobs* by name, in order, and *aliases*, each read-only.
 
     Raises:
-        ConfigurationError: Naming the names involved, if two knobs share a name,
-            an alias is a knob's name, or an alias names no knob.
+        RuntimeError: Naming the names involved, if two knobs share a name, an
+            alias is a knob's name, or an alias names no knob: a defect of this
+            module, not of a scenario or a command line.
     """
     by_name: dict[str, Knob] = {}
     for knob in knobs:
         if knob.name in by_name:
-            raise ConfigurationError(f"Two knobs are named {knob.name!r}")
+            raise RuntimeError(f"Two knobs are named {knob.name!r}")
         by_name[knob.name] = knob
     canonical = sorted(alias for alias in aliases if alias in by_name)
     if canonical:
-        raise ConfigurationError(f"Aliases {canonical} are knobs' canonical names")
+        raise RuntimeError(f"Aliases {canonical} are knobs' canonical names")
     dangling = sorted(f"{alias} -> {name}" for alias, name in aliases.items() if name not in by_name)
     if dangling:
-        raise ConfigurationError(f"Aliases name no knob: {', '.join(dangling)}")
+        raise RuntimeError(f"Aliases name no knob: {', '.join(dangling)}")
     return MappingProxyType(by_name), MappingProxyType(dict(aliases))
 
 
