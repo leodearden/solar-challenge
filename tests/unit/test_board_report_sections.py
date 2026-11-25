@@ -2,10 +2,10 @@
 """The finance report renders one value column per own-use basis it is given, and refuses sections that disagree (review-all S25 γ, B9).
 
 ``generate_finance_report`` reads a mapping of AssumptionSections keyed by
-OwnUseBasis.  Every table has one value column per section, in OwnUseBasis
-order whatever the mapping's order, headed by the section's label: Physics, or
-Spreadsheet with the override its figures were computed under.  No heading
-names a mode.  It refuses, naming the values, an empty mapping (R1), a key its
+OwnUseBasis.  Every table of its bill, economics and cost-recovery blocks has
+one value column per section, in OwnUseBasis order whatever the mapping's
+order, headed by the section's label: Physics, or Spreadsheet with the override
+its figures were computed under.  No heading names a mode.  It refuses, naming the values, an empty mapping (R1), a key its
 section's finance is not on (R2), sections that carry different computations
 (R3), and bills annualised from different windows (R4).
 """
@@ -21,10 +21,12 @@ from tests._assumption_sections import make_assumption_section, sections_of
 from tests._factories import (
     make_bill_breakdown,
     make_bill_distribution,
+    make_bill_distribution_from_statistics,
     make_cost_recovery_solution,
     make_project_economics,
 )
 from tests._finance_builders import make_window
+from tests._markdown_tables import row_cells, table_rows
 
 _BILL_HEADING = "## Householder Bill"
 _DISTRIBUTION_HEADING = "## Per-Home Bill Distribution (Total Annual Outlay, £)"
@@ -57,39 +59,17 @@ def _physics_section() -> AssumptionSection:
 
 
 def _spreadsheet_section() -> AssumptionSection:
-    """An OVERRIDE section at 70%, paying £420.00, capex £300,000, solved at 18 p/kWh with a mean outlay of £320.00."""
+    """An OVERRIDE section at 70%, its every home paying £420.00, capex £300,000, solved at 18 p/kWh with a mean outlay of £320.00."""
     return make_assumption_section(
         OwnUseBasis.OVERRIDE,
-        bill=make_bill_distribution(representative=make_bill_breakdown(total_outlay_gbp=420.0)),
+        bill=make_bill_distribution_from_statistics(
+            representative_outlay_gbp=420.0, min_gbp=420.0, mean_gbp=420.0, median_gbp=420.0, max_gbp=420.0
+        ),
         economics=make_project_economics(total_capex_gbp=300_000.0),
         cost_recovery=make_cost_recovery_solution(
             own_use_rate_pence_per_kwh=18.0, outlay=make_bill_distribution(mean_gbp=320.0)
         ),
     )
-
-
-def _cells(line: str) -> list[str]:
-    """The cells of the markdown table row *line*."""
-    return [cell.strip() for cell in line.strip().strip("|").split("|")]
-
-
-def _table(report: str, heading: str) -> list[list[str]]:
-    """The cells of each row of the table under *heading*, its header first, up to the next heading."""
-    lines = report.splitlines()
-    assert lines.count(heading) == 1, report
-    rows: list[list[str]] = []
-    for line in lines[lines.index(heading) + 1 :]:
-        if line.startswith("#"):
-            break
-        if line.startswith("|") and not line.startswith("|-"):
-            rows.append(_cells(line))
-    return rows
-
-
-def _row(report: str, heading: str, label: str) -> list[str]:
-    """The value cells of the row labelled *label* in the table under *heading*."""
-    (row,) = [cells for cells in _table(report, heading) if cells[0] == label]
-    return row[1:]
 
 
 def _headings(report: str) -> list[str]:
@@ -162,12 +142,12 @@ class TestColumns:
         )
 
         for heading, first_header in _FIRST_HEADERS.items():
-            assert _table(report, heading)[0] == [first_header, "Physics", _SPREADSHEET_AT_70], heading
-        assert _row(report, _BILL_HEADING, "**Total Outlay**") == ["**£367.50**", "**£420.00**"]
-        assert _row(report, _DISTRIBUTION_HEADING, "Max") == ["£367.50", "£367.50"]
-        assert _row(report, _ECONOMICS_HEADING, "Total CapEx") == ["£250,000", "£300,000"]
-        assert _row(report, _COST_RECOVERY_HEADING, "Solved Own-Use Rate") == ["15.00 p/kWh", "18.00 p/kWh"]
-        assert _row(report, _SOLVED_OUTLAY_HEADING, "Mean") == ["£300.00", "£320.00"]
+            assert table_rows(report, heading)[0] == [first_header, "Physics", _SPREADSHEET_AT_70], heading
+        assert row_cells(report, _BILL_HEADING, "**Total Outlay**") == ["**£367.50**", "**£420.00**"]
+        assert row_cells(report, _DISTRIBUTION_HEADING, "Max") == ["£367.50", "£420.00"]
+        assert row_cells(report, _ECONOMICS_HEADING, "Total CapEx") == ["£250,000", "£300,000"]
+        assert row_cells(report, _COST_RECOVERY_HEADING, "Solved Own-Use Rate") == ["15.00 p/kWh", "18.00 p/kWh"]
+        assert row_cells(report, _SOLVED_OUTLAY_HEADING, "Mean") == ["£300.00", "£320.00"]
 
     @pytest.mark.parametrize(
         ("section", "label"),
@@ -180,7 +160,7 @@ class TestColumns:
         report = generate_finance_report(sections_of(section()))
 
         for heading, first_header in _FIRST_HEADERS.items():
-            table = _table(report, heading)
+            table = table_rows(report, heading)
             assert table[0] == [first_header, label], heading
             assert all(len(row) == 2 for row in table), heading
 
@@ -204,7 +184,7 @@ class TestColumns:
     def test_a_spreadsheet_column_is_headed_by_its_own_override(self, override: float, label: str) -> None:
         report = generate_finance_report(sections_of(make_assumption_section(OwnUseBasis.OVERRIDE, override=override)))
 
-        assert _table(report, _BILL_HEADING)[0] == ["Line Item", label]
+        assert table_rows(report, _BILL_HEADING)[0] == ["Line Item", label]
 
     def test_the_extrapolation_notice_renders_once_under_the_title(self) -> None:
         thirty_days = make_bill_distribution(annualised_from=make_window(days=30))

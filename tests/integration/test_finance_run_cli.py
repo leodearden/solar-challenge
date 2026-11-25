@@ -19,6 +19,7 @@ from solar_challenge.home import simulate_home
 from solar_challenge.projection import CostRecoveryRun, run_cost_recovery, scenario_fleet
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results, make_fleet_results_of
+from tests._markdown_tables import row_cells, table_rows
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 _BILL_HEADING = "## Householder Bill"
@@ -44,13 +45,7 @@ _INTERIOR_FINANCE: Mapping[str, float] = {
     "retained_cash_floor_per_home_per_year_gbp": 100.0,
     "retail_baseline_rate_pence_per_kwh": 30.0,
 }
-"""A finance block whose cost-recovery solve binds at its retained-cash floor under either own-use basis, for interior_fleet_results' fleet."""
-
-
-@pytest.fixture(scope="module")
-def interior_fleet_results() -> FleetResults:
-    """Two homes, each self-consuming 2,000 kWh, exporting 800 kWh and importing 1,200 kWh over a year: under _INTERIOR_FINANCE their solve binds at the floor."""
-    return make_fleet_results(n_homes=2, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+"""A finance block whose cost-recovery solve binds at its retained-cash floor under either own-use basis, for fleet_results' fleet."""
 
 
 def _write_scenario(
@@ -97,28 +92,9 @@ def _write_scenario(
     return path
 
 
-def _table_rows(report: str, heading: str) -> list[list[str]]:
-    """The cells of each row of the table under *heading*, its header row first, read up to the next # heading."""
-    lines = report.splitlines()
-    assert lines.count(heading) == 1, report
-    rows: list[list[str]] = []
-    for line in lines[lines.index(heading) + 1 :]:
-        if line.startswith("#"):
-            break
-        if line.startswith("|") and not line.startswith("|-"):
-            rows.append([cell.strip() for cell in line.strip().strip("|").split("|")])
-    return rows
-
-
-def _cells(report: str, heading: str, label: str) -> list[str]:
-    """The value cells of the row labelled *label* in the table under *heading*: one per mode the report renders."""
-    (row,) = [cells for cells in _table_rows(report, heading) if cells[0] == label]
-    return row[1:]
-
-
 def _total_outlay_cells(report: str) -> list[str]:
     """The cells of the report's Total Outlay row after its label: one per bill the report renders."""
-    return _cells(report, _BILL_HEADING, "**Total Outlay**")
+    return row_cells(report, _BILL_HEADING, "**Total Outlay**")
 
 
 def _bill_cells(scenario: Path, assumptions: str, fleet_results: FleetResults) -> list[str]:
@@ -189,9 +165,7 @@ def test_the_spreadsheet_column_bills_the_scenarios_override_and_the_physics_col
 
 def _own_use_payment_cell(report: str) -> str:
     """The one cell of the report's Own-Use Payment row after its label: a single bill's own-use payment."""
-    rows = [line for line in report.splitlines() if line.startswith("| Own-Use Payment |")]
-    assert len(rows) == 1, report
-    (cell,) = [cell.strip() for cell in rows[0].strip("|").split("|")][1:]
+    (cell,) = row_cells(report, _BILL_HEADING, "Own-Use Payment")
     return cell
 
 
@@ -350,9 +324,7 @@ def _simulated_on_a_clear_midsummer_day(fleet_config: FleetConfig, start: pd.Tim
 
 def _import_cost_cell(report: str) -> str:
     """The one cell of the report's Import Cost row after its label: a single bill's import cost."""
-    rows = [line for line in report.splitlines() if line.startswith("| Import Cost |")]
-    assert len(rows) == 1, report
-    (cell,) = [cell.strip() for cell in rows[0].strip("|").split("|")][1:]
+    (cell,) = row_cells(report, _BILL_HEADING, "Import Cost")
     return cell
 
 
@@ -411,13 +383,13 @@ def _figures(run: CostRecoveryRun) -> dict[tuple[str, str], str]:
 
 
 def test_spreadsheet_economics_and_solve_are_the_overrides(
-    tmp_path: Path, interior_fleet_results: FleetResults
+    tmp_path: Path, fleet_results: FleetResults
 ) -> None:
     """--assumptions spreadsheet reports the projection, economics and solve of the scenario's finance at the 70% override, not the physics ones."""
     path = _write_scenario(tmp_path, finance=_INTERIOR_FINANCE)
 
     def fake(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
-        return interior_fleet_results
+        return fleet_results
 
     spreadsheet = _cost_recovery_run(path, OwnUseBasis.OVERRIDE, fake)
     physics = _cost_recovery_run(path, OwnUseBasis.SIMULATED, fake)
@@ -429,17 +401,17 @@ def test_spreadsheet_economics_and_solve_are_the_overrides(
     )
 
     result = invoke_finance_run(
-        ["--assumptions", "spreadsheet", "--project", "--cost-recovery", str(path)], interior_fleet_results
+        ["--assumptions", "spreadsheet", "--project", "--cost-recovery", str(path)], fleet_results
     )
 
     assert result.exit_code == 0, result.output
-    rendered = {(heading, label): _cells(result.stdout, heading, label) for heading, label in expected}
+    rendered = {(heading, label): row_cells(result.stdout, heading, label) for heading, label in expected}
     assert rendered == {key: [figure] for key, figure in expected.items()}
     assert rendered != {key: [figure] for key, figure in physics_figures.items()}
 
 
 def test_physics_on_a_yaml_override_is_the_physics_run(
-    tmp_path: Path, interior_fleet_results: FleetResults
+    tmp_path: Path, fleet_results: FleetResults
 ) -> None:
     """--assumptions physics reports the same bill, economics and solve for a scenario whose finance block sets a 0.70 override as for the same scenario without one."""
     plain = _write_scenario(tmp_path / "plain", finance=_INTERIOR_FINANCE)
@@ -448,8 +420,8 @@ def test_physics_on_a_yaml_override_is_the_physics_run(
     )
     arguments = ["--assumptions", "physics", "--project", "--cost-recovery"]
 
-    plain_run = invoke_finance_run([*arguments, str(plain)], interior_fleet_results)
-    overridden_run = invoke_finance_run([*arguments, str(overridden)], interior_fleet_results)
+    plain_run = invoke_finance_run([*arguments, str(plain)], fleet_results)
+    overridden_run = invoke_finance_run([*arguments, str(overridden)], fleet_results)
 
     assert plain_run.exit_code == 0, plain_run.output
     assert overridden_run.exit_code == 0, overridden_run.output
@@ -486,4 +458,4 @@ def test_both_modes_render_every_table_in_two_columns_and_project_once_per_mode(
         _COST_RECOVERY_HEADING,
         _SOLVED_OUTLAY_HEADING,
     ):
-        assert _table_rows(report, heading)[0][1:] == ["Physics", "Spreadsheet (70% self-consumption)"], heading
+        assert table_rows(report, heading)[0][1:] == ["Physics", "Spreadsheet (70% self-consumption)"], heading

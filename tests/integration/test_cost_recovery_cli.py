@@ -27,6 +27,7 @@ from tests._factories import (
     make_cost_recovery_solution,
 )
 from tests._finance_builders import make_fleet_results
+from tests._markdown_tables import row_cells
 from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
 
 
@@ -47,22 +48,9 @@ def _make_bill_distribution() -> BillDistribution:
 
 
 def _value_cell(report: str, heading: str, label: str) -> str:
-    """The Value cell of the row labelled *label* in the table of *heading*'s own section.
-
-    A section ends at the next heading, so the bill's own Min, Mean, Median and Max rows are never read as the cost-recovery block's.
-    """
-    assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
-    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
-    rows = [
-        [cell.strip() for cell in line.strip("|").split("|")]
-        for line in section.splitlines()
-        if line.startswith("|")
-    ]
-    matching_rows = [row for row in rows if row[0] == label]
-    assert len(matching_rows) == 1, f"Expected one {label!r} row under {heading!r}:\n{section}"
-    row = matching_rows[0]
-    assert len(row) == 2, f"Expected the {label!r} row under {heading!r} to be a label and a value, got {row!r}:\n{section}"
-    return row[1]
+    """The one value cell of the row labelled *label* in the table under *heading*: a one-mode report's."""
+    (cell,) = row_cells(report, heading, label)
+    return cell
 
 
 # ---------------------------------------------------------------------------
