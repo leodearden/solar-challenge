@@ -3,7 +3,7 @@
 """Integration tests for W3 sweep E: generate_config_ranking_report + optimize CLI."""
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +25,7 @@ from solar_challenge.optimize import (
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.projection import fewest_simulated_ages
 from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli, simulate_reaching_the_sweep
+from tests._cli_stderr_text import stderr_text
 from tests._factories import (
     make_bill_distribution_from_statistics,
     make_config_result,
@@ -79,10 +80,14 @@ def _make_sensitivity_axis(
 
 
 def _write_optimize_scenario(
-    tmp_path: Path, n_homes: int = 5, *, finance_overrides: Optional[dict[str, object]] = None
+    tmp_path: Path,
+    n_homes: int = 5,
+    *,
+    finance_overrides: Optional[dict[str, object]] = None,
+    seg_rate: Optional[float] = None,
 ) -> Path:
-    """Write a minimal feasible-regime scenario YAML to tmp_path, its finance block updated with *finance_overrides*."""
-    scenario = {
+    """Write a minimal feasible-regime scenario YAML to tmp_path, its finance block updated with *finance_overrides*, and its top-level SEG rate *seg_rate* when given."""
+    scenario: dict[str, object] = {
         "name": "W3 Optimize CLI Test",
         "location": {
             "latitude": 51.45,
@@ -111,6 +116,8 @@ def _write_optimize_scenario(
             **(finance_overrides or {}),
         },
     }
+    if seg_rate is not None:
+        scenario["seg"] = {"rate_pence_per_kwh": seg_rate}
     path = tmp_path / "optimize_scenario.yaml"
     path.write_text(yaml.dump(scenario))
     return path
@@ -847,8 +854,9 @@ class TestOptimizeCLIE2EFast:
         *,
         n_homes: int = 5,
         finance_overrides: Optional[dict[str, object]] = None,
+        seg_rate: Optional[float] = None,
     ) -> tuple[Result, list[FleetConfig]]:
-        """Run `optimize configs` on a fresh *n_homes*-home scenario, its finance block updated with *finance_overrides*, with *options*, answering every fleet simulation with *fleet_results*' per-home results, paired with that fleet's homes.
+        """Run `optimize configs` on a fresh *n_homes*-home scenario, its finance block updated with *finance_overrides* and its SEG rate *seg_rate* when given, with *options*, answering every fleet simulation with *fleet_results*' per-home results, paired with that fleet's homes.
 
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
@@ -861,7 +869,7 @@ class TestOptimizeCLIE2EFast:
             return answer(fleet_config, start, end)
 
         scenario_file = _write_optimize_scenario(
-            tmp_path, n_homes=n_homes, finance_overrides=finance_overrides
+            tmp_path, n_homes=n_homes, finance_overrides=finance_overrides, seg_rate=seg_rate
         )
         result = invoke_cli(["optimize", "configs", str(scenario_file), *options], answering(simulate))
         return result, simulated_fleets
@@ -1083,6 +1091,28 @@ class TestOptimizeCLIE2EFast:
         assert result.exit_code == 0, result.output
         assert len(simulated_fleets) == 2 * fewest_simulated_ages(25), [fleet.name for fleet in simulated_fleets]
 
+    def test_every_fleet_the_sweep_simulates_pays_the_scenarios_seg_rate(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        result, simulated_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", ""],
+            n_homes=1,
+            seg_rate=5.5,
+        )
+
+        assert result.exit_code == 0, result.output
+        rates = [
+            home.seg_tariff.rate_pence_per_kwh if home.seg_tariff is not None else None
+            for fleet in simulated_fleets
+            for home in fleet.homes
+        ]
+        assert rates, result.output
+        assert rates == [5.5] * len(rates)
+
     def test_unknown_sensitivity_alias_exits_one(
         self,
         tmp_path: Path,
@@ -1294,3 +1324,65 @@ def test_without_sensitivity_under_the_events_model_a_status_line_names_grid_ser
         "grid_services_income_per_kw_per_year_gbp, which grid_services_model='capacity_at_events' does not read."
     ) in stderr
     assert "Sensitivity axis retained_floor" not in stderr
+
+
+# ---------------------------------------------------------------------------
+# §I — `optimize configs` reads its file as `finance run` does, refusing before any simulation
+# ---------------------------------------------------------------------------
+
+
+def _edited_optimize_scenario(
+    tmp_path: Path, edit: Callable[[dict[str, object]], dict[str, object]]
+) -> Path:
+    """_write_optimize_scenario's one-home scenario, its document replaced by what *edit* makes of it."""
+    path = _write_optimize_scenario(tmp_path, n_homes=1)
+    path.write_text(yaml.dump(edit(yaml.safe_load(path.read_text()))))
+    return path
+
+
+def test_a_file_with_no_finance_block_is_refused_as_finance_run_refuses_it_before_any_simulation(
+    tmp_path: Path,
+) -> None:
+    scenario_file = _edited_optimize_scenario(
+        tmp_path, lambda document: {key: value for key, value in document.items() if key != "finance"}
+    )
+
+    finance_run = invoke_cli(["finance", "run", str(scenario_file)], answering(simulate_reaching_the_sweep))
+    optimize_configs = invoke_cli(
+        ["optimize", "configs", str(scenario_file)], answering(simulate_reaching_the_sweep)
+    )
+
+    for result in (finance_run, optimize_configs):
+        assert result.exit_code == 1, result.output
+        assert not isinstance(result.exception, ReachedTheSweep), result.output
+    assert stderr_text(optimize_configs) == stderr_text(finance_run)
+    assert stderr_text(optimize_configs).startswith("Configuration error:"), optimize_configs.output
+
+
+def test_a_scenario_flex_band_naming_no_band_is_refused_before_any_simulation(tmp_path: Path) -> None:
+    scenario_file = _edited_optimize_scenario(tmp_path, lambda document: {**document, "flex_band": 1})
+
+    result = invoke_cli(["optimize", "configs", str(scenario_file)], answering(simulate_reaching_the_sweep))
+
+    assert result.exit_code == 1, result.output
+    assert not isinstance(result.exception, ReachedTheSweep), result.output
+    assert "Configuration error: flex_band must be one of low, central, high, got 1" in stderr_text(result)
+
+
+def test_a_home_document_is_refused_as_no_fleet_before_any_simulation(tmp_path: Path) -> None:
+    scenario_file = _edited_optimize_scenario(
+        tmp_path,
+        lambda document: {
+            "home": {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3500}},
+            "finance": document["finance"],
+        },
+    )
+
+    result = invoke_cli(
+        ["optimize", "configs", str(scenario_file), "--pv", "4", "--battery", "0", "--inverter", "5"],
+        answering(simulate_reaching_the_sweep),
+    )
+
+    assert result.exit_code == 1, result.output
+    assert not isinstance(result.exception, ReachedTheSweep), result.output
+    assert "requires a fleet scenario" in stderr_text(result), result.output
