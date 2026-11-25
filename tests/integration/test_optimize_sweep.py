@@ -816,6 +816,27 @@ class TestRunSweepGuards:
         with pytest.raises(TypeError, match="simulate"):
             run_sweep(configs)
 
+    def test_configs_at_two_floors_are_refused_naming_both_before_any_simulation(self) -> None:
+        """run_sweep solves every config at one retained-cash floor: configs at two are refused, naming both, unsimulated."""
+        n_homes = 3
+        configs = enumerate_configs(
+            _make_scenario(n_homes=n_homes, finance=_make_finance(retained_cash_floor=15.0)),
+            pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6],
+        ) + enumerate_configs(
+            _make_scenario(n_homes=n_homes, finance=_make_finance(retained_cash_floor=27.0)),
+            pv_kwp=[5.0], battery_kwh=[6.0], inverter_kw=[3.6],
+        )
+        asked: list[FleetConfig] = []
+        answer = answering_with(_make_fleet_results(n_homes=n_homes))
+
+        def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            asked.append(fleet_config)
+            return answer(fleet_config, start, end)
+
+        with pytest.raises(ValueError, match=r"15\.0.*27\.0"):
+            run_sweep(configs, simulate=simulate)
+        assert asked == []
+
 
 # ---------------------------------------------------------------------------
 # Amendment tests — coverage gaps surfaced by code review
@@ -850,44 +871,3 @@ class TestRunSweepRateClampedZero:
         assert ranked.results[0].solved_own_use_rate_pence_per_kwh == pytest.approx(0.0)
         assert ranked.infeasible == ()
         assert ranked.cheapest_feasible is ranked.results[0].config
-
-
-class TestHeterogeneousFloorEcho:
-    """retained_cash_floor_gbp echoes the FIRST config's floor when None and
-    configs carry heterogeneous finance blocks."""
-
-    def test_heterogeneous_floor_echoes_first_config(self) -> None:
-        """When retained_cash_floor_gbp=None and configs have differing finance floors,
-        ranked.retained_cash_floor_gbp equals the FIRST config's floor."""
-        n_homes = 3
-        floor_a = 80.0
-        floor_b = 120.0
-        finance_a = _make_finance(
-            pv_cost_per_kwp_gbp=2000.0,
-            grant_gbp=0.0,
-            own_use_rate_pence_per_kwh=15.0,
-            retained_cash_floor=floor_a,
-            retail_baseline_rate=30.0,
-        )
-        finance_b = _make_finance(
-            pv_cost_per_kwp_gbp=2000.0,
-            grant_gbp=0.0,
-            own_use_rate_pence_per_kwh=15.0,
-            retained_cash_floor=floor_b,
-            retail_baseline_rate=30.0,
-        )
-        scenario_a = _make_scenario(n_homes=n_homes, finance=finance_a)
-        scenario_b = _make_scenario(n_homes=n_homes, finance=finance_b)
-
-        configs_a = enumerate_configs(scenario_a, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6])
-        configs_b = enumerate_configs(scenario_b, pv_kwp=[5.0], battery_kwh=[6.0], inverter_kw=[3.6])
-        configs = configs_a + configs_b  # first config has floor_a
-
-        fr = _make_fleet_results(n_homes=n_homes)
-        simulate = answering_with(fr)
-
-        ranked = run_sweep(configs, simulate=simulate)
-
-        # Documented behaviour: echoes the first config's floor when no global override
-        assert ranked.retained_cash_floor_gbp == pytest.approx(floor_a)
-
