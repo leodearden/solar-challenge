@@ -449,29 +449,9 @@ class PrefetchedWeather:
         return cls({location: weather.get(location) for location in dict.fromkeys(locations)})
 
 
-# Global cache instance (can be replaced for testing)
-_weather_cache: Optional[WeatherCache] = None
-
-
-def get_weather_cache() -> WeatherCache:
-    """The cache installed with set_weather_cache, else a new WeatherCache(), so that CACHE_DIR_VARIABLE is read at each call."""
-    return WeatherCache() if _weather_cache is None else _weather_cache
-
-
-def set_weather_cache(cache: Optional[WeatherCache]) -> None:
-    """Set the global weather cache (for testing)."""
-    global _weather_cache
-    _weather_cache = cache
-
-
 def default_weather() -> PvgisTmy:
-    """The weather a composition root uses when it is given none.
-
-    Until the surface bump it is PvgisTmy over get_weather_cache(), so it reads the cache set_weather_cache
-    installs. At the bump it becomes PvgisTmy(WeatherCache()); docs/prds/weather-as-explicit-input.md says why,
-    in its decisions 3 and 9.
-    """
-    return PvgisTmy(get_weather_cache())
+    """The weather a composition root uses when it is given none: PvgisTmy over a new WeatherCache(), so it reads the directory CACHE_DIR_VARIABLE names at each call; docs/prds/weather-as-explicit-input.md says why, in its decisions 3 and 9."""
+    return PvgisTmy(WeatherCache())
 
 
 def scale_tmy_to_annual_ghi(tmy: pd.DataFrame, annual_ghi_kwh_per_m2: float) -> pd.DataFrame:
@@ -488,22 +468,6 @@ def scale_tmy_to_annual_ghi(tmy: pd.DataFrame, annual_ghi_kwh_per_m2: float) -> 
         raise ValueError(f"the TMY's annual ghi total must be positive, got {tmy_annual_ghi_kwh_per_m2} kWh/m²")
     factor = annual_ghi_kwh_per_m2 / tmy_annual_ghi_kwh_per_m2
     return tmy.assign(**{column: tmy[column] * factor for column in IRRADIANCE_COLUMNS})
-
-
-def get_tmy_data(
-    location: Location,
-    use_cache: bool = True,
-) -> pd.DataFrame:
-    """Retrieve PVGIS's Typical Meteorological Year (TMY) for location, scaled to the point's long-term mean GHI.
-
-    It is default_weather()'s get, or PvgisTmy(None)'s when use_cache is False; PvgisTmy.get says what it
-    returns and raises.
-
-    Args:
-        location: Location object with latitude, longitude, and altitude
-        use_cache: Whether to use caching (default True)
-    """
-    return (default_weather() if use_cache else PvgisTmy(None)).get(location)
 
 
 def _fetch_scaled_tmy(location: Location) -> pd.DataFrame:
