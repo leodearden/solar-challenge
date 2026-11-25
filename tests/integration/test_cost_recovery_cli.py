@@ -26,6 +26,7 @@ from tests._factories import (
     make_cost_recovery_solution,
 )
 from tests._finance_builders import make_fleet_results
+from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
 
 
 # ---------------------------------------------------------------------------
@@ -508,9 +509,6 @@ class TestFinanceRunSimulatesTheAge0FleetOnce:
         assert "## Cost-Recovery Analysis" in result.stdout, result.output
 
 
-_PROJECTION_AGES_OVER_25_YEARS = ["proj-age-0", "proj-age-12", "proj-age-24", "proj-age-6", "proj-age-18"]
-"""The fleets a smooth projection over 25 years asks for: its seeds, then its first pass's midpoints."""
-
 _PROJECT_AND_COST_RECOVERY_OVER_A_WEEK = ["finance", "run", "--project", "--cost-recovery", "--start", "2024-06-01", "--end", "2024-06-07"]
 """`finance run` with both economics blocks over the first week of June 2024, its scenario file to follow."""
 
@@ -524,7 +522,7 @@ class TestFinanceRunMakesOneProjection:
         result = invoke_cli([*_PROJECT_AND_COST_RECOVERY_OVER_A_WEEK, str(_write_aged_pv_scenario(tmp_path))], answering(recorder))
 
         assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
-        assert [fleet.name for fleet in recorder.fleets[1:]] == _PROJECTION_AGES_OVER_25_YEARS
+        assert tuple(fleet.name for fleet in recorder.fleets[1:]) == PROJECTION_AGES_OVER_25_YEARS
         assert len(recorder.fleets) == 1 + fewest_simulated_ages(25)
         assert "## Project Economics" in result.stdout, result.output
         assert "## Cost-Recovery Analysis" in result.stdout, result.output

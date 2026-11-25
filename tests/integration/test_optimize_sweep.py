@@ -24,7 +24,7 @@ from solar_challenge.finance import (
     bill_distribution,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.home import RunPricing, calculate_summary
+from solar_challenge.home import RunPricing, SimulationResults, calculate_summary
 from solar_challenge.optimize import (
     ConfigPoint,
     ConfigResult,
@@ -37,7 +37,6 @@ from solar_challenge.projection import (
     fewest_simulated_ages,
     project_economics,
     project_multi_year,
-    run_cost_recovery,
     scenario_fleet,
     solve_cost_recovery_rate,
 )
@@ -45,9 +44,10 @@ from solar_challenge.pv import wired_dc_capacity_kw
 from solar_challenge.seg import SEGTariff
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._factories import make_config_result, make_cost_recovery_solution
-from tests._finance_builders import make_fleet_results, make_scenario
+from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_scenario, make_sim_results
 from tests._fleet_simulate_stand_in import answering_with
 from tests._install_capex import fleet_wired_dc_kw, roof_battery_inverter_capex_gbp
+from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +459,45 @@ class TestRunSweepSingleConfig:
 # ---------------------------------------------------------------------------
 
 
+def _results_at_battery_soh(soh: float, *, seg_rate_pence_per_kwh: float | None) -> SimulationResults:
+    """A home's year with a battery at *soh*: it self-consumes 2,000 × *soh* kWh, exporting and importing the rest of 2,000 instead.
+
+    It generates 2,800 kWh and demands 3,200 at every SOH, and its export earns SEG income at *seg_rate_pence_per_kwh*.
+    """
+    lost_kwh = 2000.0 * (1.0 - soh)
+    return make_sim_results(
+        self_kwh=2000.0 - lost_kwh,
+        export_kwh=800.0 + lost_kwh,
+        import_kwh=1200.0 + lost_kwh,
+        pricing=RunPricing(None, seg_rate_pence_per_kwh),
+    )
+
+
+def _answering_by_battery_soh(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+    """A simulate answering each home with _results_at_battery_soh of its battery's resolved SOH (1.0 without one), at its own SEG rate."""
+    return make_fleet_results_of(
+        [
+            _results_at_battery_soh(
+                1.0 if home.battery_config is None else home.battery_config.resolved_soh,
+                seg_rate_pence_per_kwh=None if home.seg_tariff is None else home.seg_tariff.rate_pence_per_kwh,
+            )
+            for home in fleet_config.homes
+        ],
+        homes=fleet_config.homes,
+    )
+
+
+def _six_year_battery_configs() -> list[tuple[ConfigPoint, ScenarioConfig]]:
+    """One config of two homes whose 5 kWh batteries are 6 years old, at a 4.1 p/kWh scenario SEG rate and _interior_finance()."""
+    scenario = make_scenario(
+        n_homes=2,
+        seg_tariff_pence_per_kwh=4.1,
+        battery_config=BatteryConfig(capacity_kwh=5.0, system_age_years=6.0),
+        finance=_interior_finance(),
+    )
+    return enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[5.0], inverter_kw=[3.6])
+
+
 class TestOneProjectionPerConfig:
     """Each config's one projection at the configured rate gives its rank fields, its baseline pair and its economics."""
 
@@ -477,18 +516,12 @@ class TestOneProjectionPerConfig:
 
         run_sweep(configs, simulate=recording_simulate)
 
-        assert asked == ["proj-age-0", "proj-age-12", "proj-age-24", "proj-age-6", "proj-age-18"]
+        assert tuple(asked) == PROJECTION_AGES_OVER_25_YEARS
         assert len(asked) == fewest_simulated_ages(finance.asset_life_years)
 
     def test_an_aged_battery_configs_age_0_fleets_are_new_installs_at_the_scenario_seg_rate(self) -> None:
-        """B11: a 6-year battery's age-0 fleet holds new batteries, so the baseline outlay bills a new install."""
-        scenario = make_scenario(
-            n_homes=2,
-            seg_tariff_pence_per_kwh=4.1,
-            battery_config=BatteryConfig(capacity_kwh=5.0, system_age_years=6.0),
-            finance=_interior_finance(),
-        )
-        configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[5.0], inverter_kw=[3.6])
+        """B11: a 6-year battery's age-0 fleets, the ones the baseline outlay bills, hold new batteries exporting at the scenario SEG rate."""
+        configs = _six_year_battery_configs()
         asked: list[FleetConfig] = []
         answer = answering_with(_make_fleet_results(n_homes=2, seg_rate_pence_per_kwh=4.1))
 
@@ -496,20 +529,29 @@ class TestOneProjectionPerConfig:
             asked.append(fc)
             return answer(fc, start, end)
 
-        ranked = run_sweep(configs, simulate=recording_simulate)
+        run_sweep(configs, simulate=recording_simulate)
 
         age0_fleets = [fc for fc in asked if all(home.pv_config.system_age_years == 0.0 for home in fc.homes)]
         assert age0_fleets
         for fleet_config in age0_fleets:
             assert [home.battery_config.soh for home in fleet_config.homes if home.battery_config] == [1.0, 1.0]
             assert {home.seg_tariff for home in fleet_config.homes} == {SEGTariff(name="", rate_pence_per_kwh=4.1)}
-        assert ranked.results, f"the config must solve feasibly; infeasible: {ranked.infeasible!r}"
+
+    def test_an_aged_battery_configs_baseline_outlay_bills_a_new_install(self) -> None:
+        """B11: billed on what a stand-in answers by each home's battery SOH, the outlay is a new install's, not the 6-year battery's."""
+        configs = _six_year_battery_configs()
         swept = configs[0][1]
         assert swept.finance is not None
-        run = run_cost_recovery(scenario_fleet(swept), swept.finance, simulate=answer)
-        assert ranked.results[0].baseline_outlay_gbp == pytest.approx(
-            bill_distribution(run.projection.age0_summaries, swept.finance).representative.total_outlay_gbp
+        assert all(home.battery_config and home.battery_config.resolved_soh < 1.0 for home in swept.homes), (
+            "premise: the swept homes' batteries are aged, so a fleet of them answers otherwise than a new install"
         )
+
+        ranked = run_sweep(configs, simulate=_answering_by_battery_soh)
+
+        assert ranked.results, f"the config must solve feasibly; infeasible: {ranked.infeasible!r}"
+        new_install = _results_at_battery_soh(1.0, seg_rate_pence_per_kwh=4.1)
+        expected = bill_distribution([calculate_summary(new_install)] * 2, swept.finance)
+        assert ranked.results[0].baseline_outlay_gbp == pytest.approx(expected.representative.total_outlay_gbp)
 
     def test_the_baseline_pair_names_the_configured_own_use_rate(self) -> None:
         """B12: the rate the baseline outlay and surplus are priced at is the scenario's configured rate."""

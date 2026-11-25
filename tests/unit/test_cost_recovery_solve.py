@@ -36,6 +36,7 @@ from solar_challenge.projection import (
 from tests._factories import make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario
 from tests._fleet_simulate_stand_in import answering_with
+from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -848,9 +849,6 @@ class TestTheSolveIsExactAndIndependentOfTheConfiguredRate:
 # C7 — one projection serves the economics, the solve and the outlay
 # ---------------------------------------------------------------------------
 
-_PROJECTION_AGES_OVER_25_YEARS = ["proj-age-0", "proj-age-12", "proj-age-24", "proj-age-6", "proj-age-18"]
-"""The fleets a smooth fleet's projection over 25 years asks for: its seeds, then its first pass's midpoints."""
-
 
 class TestOneProjectionServesTheRun:
     """run_cost_recovery's one projection, at the configured rate, gives its economics, its solve and its outlay."""
@@ -918,9 +916,9 @@ class TestOneProjectionServesTheRun:
         run_cost_recovery(scenario_fleet(scenario), finance, simulate=recording(run_asked))
         solve_cost_recovery_rate(scenario, finance, simulate=recording(solve_asked))
 
-        assert run_asked == _PROJECTION_AGES_OVER_25_YEARS
+        assert tuple(run_asked) == PROJECTION_AGES_OVER_25_YEARS
         assert len(run_asked) == fewest_simulated_ages(finance.asset_life_years)
-        assert solve_asked == _PROJECTION_AGES_OVER_25_YEARS
+        assert tuple(solve_asked) == PROJECTION_AGES_OVER_25_YEARS
 
     def test_the_run_is_a_cost_recovery_run(self) -> None:
         scenario, finance, fr = self._interior()
