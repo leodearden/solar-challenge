@@ -33,6 +33,8 @@
       "grid_export": "blue",
       "battery_charge": "teal",
       "heat_pump": "purple",
+      "household": "red",
+      "ev": "teal",
       "cost": "red",
       "revenue": "green",
       "soc_low_threshold": "red",

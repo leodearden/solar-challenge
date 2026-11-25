@@ -41,6 +41,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.output import SeasonSummary, aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
@@ -688,6 +689,51 @@ def heat_pump_analysis(results: SimulationResults) -> tuple[ChartPanel, ChartPan
         _panel("chart-hp-load-share", "Heat Pump Share of Demand", 400, pie_fig),
         _panel("chart-hp-load-profile", "Heat Pump Load Profile", 400, load_fig),
     )
+
+
+def load_panels(results: SimulationResults) -> tuple[ChartPanel, ...]:
+    """The panels of *results*'s loads: none for a run whose demand is the household's alone; otherwise the demand-by-load panel, then each additional load's profile panel, in LoadKind order."""
+    if not results.additional_loads:
+        return ()
+    return (
+        _demand_by_load_panel(results),
+        *(_load_profile_panel(kind, load) for kind, load in results.additional_loads.items()),
+    )
+
+
+def _demand_by_load_panel(results: SimulationResults) -> ChartPanel:
+    """The panel of each load's share of *results*'s demand, each in its kind's colour."""
+    loads = results.loads
+    window = results.window
+    fig = go.Figure(data=[go.Pie(
+        labels=[kind.label for kind in loads],
+        values=[round(window.energy_kwh(load), 1) for load in loads.values()],
+        marker=dict(colors=[COLOUR_PALETTE[kind.value] for kind in loads]),
+        hole=0.4,
+    )])
+    fig.update_layout(**_SHARED_LAYOUT)
+    return _panel("chart-demand-by-load", "Demand by Load", 400, fig)
+
+
+def _load_profile_panel(kind: LoadKind, load: pd.Series) -> ChartPanel:
+    """The panel of *kind*'s *load* in kW over time, in its kind's colour."""
+    colour = COLOUR_PALETTE[kind.value]
+    drawn = _adaptive_downsample(load)
+    fig = go.Figure(data=[go.Scatter(
+        name=kind.label,
+        x=[instant.isoformat() for instant in drawn.index],
+        y=drawn.round(4).tolist(),
+        mode="lines",
+        fill="tozeroy",
+        line=dict(color=colour, width=1),
+        fillcolor=_with_alpha(colour, 0.15),
+    )])
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        xaxis=dict(title="Time"),
+        yaxis=dict(title="Power (kW)"),
+    )
+    return _panel(f"chart-load-profile-{kind.value.replace('_', '-')}", f"Load Profile: {kind.label}", 400, fig)
 
 
 # ---------------------------------------------------------------------------
