@@ -19,6 +19,7 @@ import pandas as pd
 import numpy as np
 from unittest.mock import call, patch
 
+import solar_challenge
 from solar_challenge.weather import (
     CACHE_DIR_VARIABLE,
     DEFAULT_CACHE_DIR,
@@ -28,10 +29,7 @@ from solar_challenge.weather import (
     WeatherCache,
     WeatherDataError,
     default_weather,
-    get_tmy_data,
-    get_weather_cache,
     scale_tmy_to_annual_ghi,
-    set_weather_cache,
 )
 from solar_challenge.location import Location
 from tests._repository_paths import REPOSITORY_ROOT
@@ -793,64 +791,34 @@ class TestPvgisTmy:
 
 
 class TestDefaultWeather:
-    """default_weather() is PvgisTmy over get_weather_cache(): the cache set_weather_cache installed, else a new WeatherCache() at each call."""
+    """default_weather() is PvgisTmy over a new WeatherCache() at each call, so it reads the directory CACHE_DIR_VARIABLE names at that call, else DEFAULT_CACHE_DIR under the working directory."""
 
     @pytest.fixture
-    def no_cache_installed(self, monkeypatch, tmp_path):
-        """No cache installed and the variable unset, working in tmp_path, so that WeatherCache() resolves its default there."""
-        set_weather_cache(None)
+    def variable_unset_in_tmp_path(self, monkeypatch, tmp_path):
+        """The variable unset, working in tmp_path, so that WeatherCache() resolves its default there."""
         monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
         monkeypatch.chdir(tmp_path)
 
-    @pytest.fixture
-    def installed_cache(self, tmp_path):
-        """A cache of the test's own, installed with set_weather_cache for the test and uninstalled after it."""
-        cache = WeatherCache(cache_dir=tmp_path / "installed")
-        set_weather_cache(cache)
-        yield cache
-        set_weather_cache(None)
-
-    def test_get_weather_cache_with_none_installed_follows_the_variable_at_each_call(
-        self, no_cache_installed, monkeypatch, tmp_path
-    ):
-        """With no cache installed, each get_weather_cache() is a cache in the directory the variable names at that call."""
+    def test_default_weather_follows_the_variable_at_each_call(self, variable_unset_in_tmp_path, monkeypatch, tmp_path):
+        """Each default_weather() reads a cache in the directory the variable names at that call."""
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "first"))
-        assert get_weather_cache().cache_dir == tmp_path / "first"
+        assert default_weather().cache.cache_dir == tmp_path / "first"
 
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "second"))
-        assert get_weather_cache().cache_dir == tmp_path / "second"
+        assert default_weather().cache.cache_dir == tmp_path / "second"
 
-    def test_set_weather_cache_overrides_the_variable(self, installed_cache, monkeypatch, tmp_path):
-        """get_weather_cache() returns the installed cache, whatever directory the variable names."""
-        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
-
-        assert get_weather_cache() is installed_cache
-
-    def test_default_weather_with_none_installed_creates_no_directory(self, no_cache_installed, tmp_path):
-        """With no cache installed, neither default_weather() nor get_weather_cache() writes anything under the
-        working directory, so a composition root that builds the default provider writes nothing before its first
-        put."""
+    def test_default_weather_creates_no_directory(self, variable_unset_in_tmp_path, tmp_path):
+        """default_weather() writes nothing under the working directory, so a composition root that builds the
+        default provider writes nothing before its first put."""
         default_weather()
-        get_weather_cache()
 
         assert list(tmp_path.iterdir()) == []
 
-    def test_default_weather_reads_the_installed_cache(self, installed_cache, pvgis_requests):
-        """default_weather() serves the TMY the installed cache holds, exactly, and requests nothing from PVGIS."""
-        june_day = synthetic_june_weather("2024-06-21")
-        installed_cache.put(june_day, "tmy", Location.bristol())
-
-        result = default_weather().get(Location.bristol())
-
-        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
-        pvgis_requests.tmy.assert_not_called()
-        pvgis_requests.hourly.assert_not_called()
-
-    def test_default_weather_with_none_installed_reads_the_directory_the_variable_names(
-        self, no_cache_installed, monkeypatch, tmp_path, pvgis_requests
+    def test_default_weather_reads_the_directory_the_variable_names(
+        self, variable_unset_in_tmp_path, monkeypatch, tmp_path, pvgis_requests
     ):
-        """With no cache installed, default_weather() serves the TMY held in the directory the variable names, exactly,
-        and requests nothing from PVGIS."""
+        """default_weather() serves the TMY held in the directory the variable names, exactly, and requests nothing
+        from PVGIS."""
         june_day = synthetic_june_weather("2024-06-21")
         WeatherCache(cache_dir=tmp_path / "named").put(june_day, "tmy", Location.bristol())
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
@@ -860,6 +828,26 @@ class TestDefaultWeather:
         pd.testing.assert_frame_equal(result, june_day, check_exact=True)
         pvgis_requests.tmy.assert_not_called()
         pvgis_requests.hourly.assert_not_called()
+
+
+RETIRED_NAMES = ("set_weather_cache", "get_weather_cache", "get_tmy_data")
+"""The process-wide weather cache's setter and getter, and the facade over it, which task 827 retired."""
+
+
+class TestTheGlobalWeatherSourceIsRetired:
+    """Neither the package nor solar_challenge.weather serves a retired name: weather reaches a simulation only as a provider it is given."""
+
+    @pytest.mark.parametrize("name", RETIRED_NAMES)
+    def test_the_package_serves_no_retired_name(self, name):
+        """Accessing a retired name on the package raises AttributeError naming it."""
+        with pytest.raises(AttributeError, match=name):
+            getattr(solar_challenge, name)
+
+    @pytest.mark.parametrize("name", RETIRED_NAMES)
+    def test_importing_a_retired_name_from_the_weather_module_raises_import_error(self, name):
+        """`from solar_challenge.weather import <name>` raises ImportError naming it."""
+        with pytest.raises(ImportError, match=f"cannot import name '{name}'"):
+            exec(f"from solar_challenge.weather import {name}", {})
 
 
 @dataclass
@@ -949,47 +937,12 @@ class TestPrefetchedWeather:
             restored.frames[self.UNHELD] = bath_frame
 
 
-class TestGetTmyDataWithCache:
-    """Test TMY data retrieval with caching."""
-
-    @pytest.fixture
-    def mock_tmy_data(self, sample_index):
-        """Mock TMY data from PVGIS."""
-        return pd.DataFrame({
-            "ghi": np.linspace(0, 800, 24),
-            "dni": np.linspace(0, 600, 24),
-            "dhi": np.linspace(0, 300, 24),
-            "temp_air": np.linspace(5, 15, 24),
-        }, index=sample_index)
-
-    def test_uses_cache_when_available(self, weather_cache, pvgis_requests, mock_tmy_data):
-        """Uses cached data when available, returned exactly as stored."""
-        location = Location.bristol()
-        weather_cache.put(mock_tmy_data, "tmy", location)
-
-        result = get_tmy_data(location, use_cache=True)
-
-        pvgis_requests.tmy.assert_not_called()
-        pvgis_requests.hourly.assert_not_called()
-        pd.testing.assert_frame_equal(result, mock_tmy_data)
-
-    def test_skips_cache_when_disabled(self, weather_cache, pvgis_requests, mock_tmy_data):
-        """Skips cache when use_cache=False."""
-        location = Location.bristol()
-        weather_cache.put(mock_tmy_data, "tmy", location)
-
-        get_tmy_data(location, use_cache=False)
-
-        pvgis_requests.tmy.assert_called_once()
-        pvgis_requests.hourly.assert_called_once()
-
-
-class TestGetTmyDataScalesToLongTermMeanGhi:
-    """get_tmy_data scales PVGIS's TMY to the mean annual GHI of PVGIS's 2005-2020 hourly series."""
+class TestPvgisTmyScalesToLongTermMeanGhi:
+    """PvgisTmy.get scales PVGIS's TMY to the mean annual GHI of PVGIS's 2005-2020 hourly series."""
 
     def test_annual_ghi_is_the_series_mean(self, pvgis_tmy, pvgis_requests):
         """The TMY's GHI sums to the mean of the series' calendar-year totals; its temperatures are PVGIS's."""
-        result = get_tmy_data(Location.bristol(), use_cache=False)
+        result = PvgisTmy(None).get(Location.bristol())
 
         assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
         pd.testing.assert_series_equal(result["temp_air"], pvgis_tmy["temp_air"])
@@ -997,7 +950,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
     def test_tmy_is_requested_with_pvgis_tmy_request(self, pvgis_requests):
         """The TMY request is PVGIS_TMY_REQUEST at the location's point, so whatever imports it asks for the same TMY."""
         bristol = Location.bristol()
-        get_tmy_data(bristol, use_cache=False)
+        PvgisTmy(None).get(bristol)
 
         assert pvgis_requests.tmy.call_args == call(
             latitude=bristol.latitude, longitude=bristol.longitude, **PVGIS_TMY_REQUEST
@@ -1005,7 +958,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
 
     def test_series_is_requested_as_ghi_for_the_tmys_point_years_and_horizon(self, pvgis_requests):
         """The series request asks for the TMY request's data as one GHI column, the response pvgis_hourly_series mirrors."""
-        get_tmy_data(Location.bristol(), use_cache=False)
+        PvgisTmy(None).get(Location.bristol())
 
         tmy_request = pvgis_requests.tmy.call_args.kwargs
         series_request = pvgis_requests.hourly.call_args.kwargs
@@ -1020,16 +973,6 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
             assert series_request[series_arg] == tmy_request[tmy_arg], series_arg
         assert series_request["surface_tilt"] == 0
         assert series_request["components"] is False
-
-    def test_scaled_tmy_is_cached(self, weather_cache, pvgis_requests):
-        """Once fetched, the scaled TMY is served from the cache exactly as fetched, with no further PVGIS request."""
-        first = get_tmy_data(Location.bristol())
-        pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
-        pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
-        second = get_tmy_data(Location.bristol())
-
-        assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
-        pd.testing.assert_frame_equal(second, first, check_exact=True)
 
     def test_a_tmy_cached_before_scaling_is_never_served(self, weather_cache, pvgis_tmy, pvgis_requests):
         """Bristol's unscaled TMY, as the cache stored it before task 285, is fetched afresh and scaled instead."""
@@ -1048,7 +991,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
             )
         )
 
-        result = get_tmy_data(Location.bristol())
+        result = PvgisTmy(weather_cache).get(Location.bristol())
 
         pvgis_requests.tmy.assert_called_once()
         assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
@@ -1070,7 +1013,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         pvgis_requests.hourly.return_value = (make_series(pvgis_hourly_series), {})
 
         with pytest.raises(WeatherDataError, match="2020"):
-            get_tmy_data(Location.bristol())
+            PvgisTmy(weather_cache).get(Location.bristol())
 
         assert weather_cache.get("tmy", Location.bristol()) is None
 
@@ -1086,14 +1029,14 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         pvgis_requests.tmy.return_value = (make_tmy(pvgis_tmy), {})
 
         with pytest.raises(WeatherDataError) as refusal:
-            get_tmy_data(Location.bristol())
+            PvgisTmy(weather_cache).get(Location.bristol())
 
         assert isinstance(refusal.value.__cause__, ValueError)
         assert str(refusal.value.__cause__) in str(refusal.value)
         assert weather_cache.get("tmy", Location.bristol()) is None
 
 
-class TestGetTmyDataReportsPvgisFailures:
+class TestPvgisTmyReportsPvgisFailures:
     """Every failure at the PVGIS boundary raises WeatherDataError naming why, and leaves nothing cached."""
 
     @pytest.mark.parametrize(
@@ -1108,7 +1051,7 @@ class TestGetTmyDataReportsPvgisFailures:
         getattr(pvgis_requests, failing_request).side_effect = ConnectionError("PVGIS is unreachable")
 
         with pytest.raises(WeatherDataError, match="PVGIS is unreachable"):
-            get_tmy_data(Location.bristol())
+            PvgisTmy(weather_cache).get(Location.bristol())
 
         assert weather_cache.get("tmy", Location.bristol()) is None
 
@@ -1119,7 +1062,7 @@ class TestGetTmyDataReportsPvgisFailures:
         pvgis_requests.tmy.return_value = (pvgis_tmy.drop(columns="ghi"), {})
 
         with pytest.raises(WeatherDataError, match="ghi"):
-            get_tmy_data(Location.bristol())
+            PvgisTmy(weather_cache).get(Location.bristol())
 
         assert weather_cache.get("tmy", Location.bristol()) is None
 
