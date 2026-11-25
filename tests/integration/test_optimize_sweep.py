@@ -23,7 +23,7 @@ from solar_challenge.finance import (
     FinanceConfig,
     bill_distribution,
 )
-from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.home import RunPricing, SimulationResults, calculate_summary
 from solar_challenge.optimize import (
     ConfigPoint,
@@ -41,6 +41,7 @@ from solar_challenge.projection import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.pv import wired_dc_capacity_kw
+from solar_challenge.scenario_knobs import KNOBS
 from solar_challenge.seg import SEGTariff
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._factories import make_config_result, make_cost_recovery_solution
@@ -703,81 +704,61 @@ class TestRunSweepMultiConfig:
 
 
 # ---------------------------------------------------------------------------
-# step-13/14 — retained_cash_floor_gbp override threads to the solve
+# The retained-cash floor has one setter: the scenario's finance field, set
+# through its knob before enumerate_configs
 # ---------------------------------------------------------------------------
 
 
-class TestRetainedCashFloorOverride:
-    """retained_cash_floor_gbp param overrides scenario.finance.retained_cash_floor."""
+class TestRetainedCashFloor:
+    """run_sweep solves at the floor its configs' finance sets, which the floor knob sets on the base scenario."""
 
-    def _setup(self) -> tuple:  # type: ignore[type-arg]
+    def _setup(self, floor: float) -> tuple[FleetSimulate, list[tuple[ConfigPoint, ScenarioConfig]]]:
+        """(simulate, configs): one config enumerated from the interior scenario with the floor knob applied at *floor*."""
         n_homes = 5
-        finance = _interior_finance(n_homes)
-        scenario = _make_scenario(n_homes=n_homes, finance=finance)
-        fr = _make_fleet_results(n_homes=n_homes)
-        simulate = answering_with(fr)
-
-        configs = enumerate_configs(
-            scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
+        scenario = KNOBS["retained_cash_floor_per_home_per_year_gbp"].apply(
+            _make_scenario(n_homes=n_homes, finance=_interior_finance(n_homes)), floor
         )
-        return scenario, finance, fr, simulate, configs
+        simulate = answering_with(_make_fleet_results(n_homes=n_homes))
+        configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6])
+        return simulate, configs
 
-    def test_floor_override_echoed_in_retained_cash_floor_gbp(self) -> None:
-        """ranked.retained_cash_floor_gbp == the overriding value F."""
-        scenario, finance, fr, simulate, configs = self._setup()
-        F = finance.retained_cash_floor_per_home_per_year_gbp + 20.0
-        ranked = run_sweep(configs, retained_cash_floor_gbp=F, simulate=simulate)
-        assert ranked.retained_cash_floor_gbp == pytest.approx(F)
+    def test_the_sweep_echoes_its_configs_common_floor(self) -> None:
+        simulate, configs = self._setup(120.0)
+        ranked = run_sweep(configs, simulate=simulate)
+        assert ranked.retained_cash_floor_gbp == pytest.approx(120.0)
 
-    def test_floor_override_matches_direct_solve_with_overridden_finance(self) -> None:
-        """Result surplus equals direct solve_cost_recovery_rate with finance override."""
-        scenario, finance, fr, simulate, configs = self._setup()
-        F = finance.retained_cash_floor_per_home_per_year_gbp + 20.0
-        ranked = run_sweep(configs, retained_cash_floor_gbp=F, simulate=simulate)
+    def test_a_floor_set_through_its_knob_reaches_the_solve(self) -> None:
+        """The surplus and solved rate equal solve_cost_recovery_rate's on the knob-applied scenario and its finance."""
+        simulate, configs = self._setup(120.0)
+        ranked = run_sweep(configs, simulate=simulate)
         cr = ranked.results[0]
 
-        # Direct W2 call with the overridden floor.
-        # Use configs[0][1] as the base — same scenario run_sweep uses after
-        # enumerate_configs (homes may have been modified, e.g. battery fabricated).
         sweep_scenario = configs[0][1]
-        finance_overridden = dataclasses.replace(
-            finance, retained_cash_floor_per_home_per_year_gbp=F
-        )
-        scenario_overridden = dataclasses.replace(sweep_scenario, finance=finance_overridden)
-        sol = solve_cost_recovery_rate(scenario_overridden, finance_overridden, simulate=simulate)
+        finance = sweep_scenario.finance
+        assert finance is not None
+        assert finance.retained_cash_floor_per_home_per_year_gbp == pytest.approx(120.0)
+        sol = solve_cost_recovery_rate(sweep_scenario, finance, simulate=simulate)
 
         assert cr.surplus_at_solved_gbp == pytest.approx(sol.net_surplus_per_home_per_year_gbp)
-        assert cr.solved_own_use_rate_pence_per_kwh == pytest.approx(
-            sol.own_use_rate_pence_per_kwh
-        )
+        assert cr.solved_own_use_rate_pence_per_kwh == pytest.approx(sol.own_use_rate_pence_per_kwh)
 
-    def test_no_floor_override_uses_scenario_finance_floor(self) -> None:
-        """retained_cash_floor_gbp=None uses scenario.finance's own floor."""
-        scenario, finance, fr, simulate, configs = self._setup()
-        ranked = run_sweep(configs, simulate=simulate)  # no floor override
-        assert ranked.retained_cash_floor_gbp == pytest.approx(
-            finance.retained_cash_floor_per_home_per_year_gbp
-        )
+    def test_the_floor_leaves_the_baseline_outlay_unchanged(self) -> None:
+        """baseline_outlay_gbp is the same at two floors (the own-use rate stays the configured one)."""
+        simulate, configs_low = self._setup(100.0)
+        _, configs_high = self._setup(130.0)
 
-    def test_floor_override_does_not_change_baseline_outlay(self) -> None:
-        """baseline_outlay_gbp is unchanged by floor override (the own-use rate stays the configured one)."""
-        scenario, finance, fr, simulate, configs = self._setup()
-        F_low = finance.retained_cash_floor_per_home_per_year_gbp
-        F_high = F_low + 30.0
-
-        configs_low = enumerate_configs(
-            scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
-        )
-        configs_high = enumerate_configs(
-            scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
-        )
-
-        ranked_low = run_sweep(configs_low, retained_cash_floor_gbp=F_low, simulate=simulate)
-        ranked_high = run_sweep(configs_high, retained_cash_floor_gbp=F_high, simulate=simulate)
+        ranked_low = run_sweep(configs_low, simulate=simulate)
+        ranked_high = run_sweep(configs_high, simulate=simulate)
 
         assert ranked_low.results[0].baseline_outlay_gbp == pytest.approx(
             ranked_high.results[0].baseline_outlay_gbp
         )
+
+    def test_run_sweep_takes_no_floor_override(self) -> None:
+        """The scenario's finance is the floor's one setter: run_sweep refuses a floor keyword at the call."""
+        simulate, configs = self._setup(120.0)
+        with pytest.raises(TypeError, match="retained_cash_floor_gbp"):
+            run_sweep(configs, retained_cash_floor_gbp=60.0, simulate=simulate)
 
 
 # ---------------------------------------------------------------------------
