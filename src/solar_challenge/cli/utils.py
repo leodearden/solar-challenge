@@ -168,12 +168,20 @@ def with_window_options(
     """*scenario* with its period's first day replaced by start's date and its last by end's, each only when given.
 
     Raises:
-        ConfigurationError: as ScenarioConfig.with_window refuses days that give no window, naming the scenario and both days.
+        ConfigurationError: for days that give no window, naming each flag given with its
+            day, then the reason ScenarioConfig.with_window refuses the window for.
     """
-    return scenario.with_window(
-        first_day=None if start is None else start.date(),
-        last_day=None if end is None else end.date(),
-    )
+    first_day = None if start is None else start.date()
+    last_day = None if end is None else end.date()
+    try:
+        return scenario.with_window(first_day=first_day, last_day=last_day)
+    except ConfigurationError as exc:
+        given = " ".join(
+            f"{flag} {day.isoformat()}"
+            for flag, day in (("--start", first_day), ("--end", last_day))
+            if day is not None
+        )
+        raise ConfigurationError(f"{given}: {exc.__cause__ or exc}") from exc
 
 
 def verbatim_table_title(title: str) -> Text:

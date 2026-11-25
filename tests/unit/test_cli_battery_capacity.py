@@ -13,13 +13,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 import yaml
-from typer.testing import CliRunner, Result
+from typer.testing import CliRunner
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_home_config
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
+from tests._cli_stderr_text import stderr_text
 from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 
@@ -59,11 +60,6 @@ def _write_home_with_battery() -> Path:
     return path
 
 
-def _stderr_text(result: Result) -> str:
-    """The result's stderr with its whitespace collapsed, undoing Rich's wrap at 80 columns."""
-    return " ".join(result.stderr.split())
-
-
 @pytest.mark.parametrize("value", ["nan", "inf"])
 def test_home_quick_refuses_a_battery_kwh_that_is_not_a_capacity(value: str) -> None:
     """`home quick`'s BATTERY_KWH is refused, naming it, when it is not a finite capacity."""
@@ -72,7 +68,7 @@ def test_home_quick_refuses_a_battery_kwh_that_is_not_a_capacity(value: str) -> 
     assert result.exit_code == 1
     assert (
         f"Configuration error: battery_kwh must be a finite number, got {float(value)!r}"
-        in _stderr_text(result)
+        in stderr_text(result)
     )
 
 
@@ -91,7 +87,7 @@ def test_home_run_refuses_a_battery_kwh_override_that_is_not_a_capacity(value: s
     assert result.exit_code == 1
     assert (
         f"Configuration error: --battery-kwh must be {requirement}, got {float(value)!r}"
-        in _stderr_text(result)
+        in stderr_text(result)
     )
 
 

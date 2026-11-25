@@ -15,6 +15,7 @@ from typer.testing import CliRunner, Result
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.cli.main import app
 from solar_challenge.pv import PVConfig
+from tests._cli_stderr_text import stderr_text
 from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
@@ -98,4 +99,4 @@ def test_a_value_pvconfig_refuses_is_refused_naming_the_option(value: str) -> No
     overridden = _home_run(_write_home("override.yaml"), "--system-losses", value)
 
     assert (overridden.exit_code, overridden.stdout) == (1, "")
-    assert " ".join(overridden.stderr.split()) == f"Configuration error: --system-losses: {pv_refusal.value}"
+    assert stderr_text(overridden) == f"Configuration error: --system-losses: {pv_refusal.value}"
