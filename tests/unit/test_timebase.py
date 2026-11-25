@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How long simulated time lasts: the minutes in an hour and in a day; which durations in minutes are refused; the row counts of one calendar year; and a simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock."""
+"""How long simulated time lasts: the minutes in an hour, the hours and minutes in a day; which durations in minutes are refused; the row counts of one calendar year; the text naming the first row where two indexes differ; and a simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock."""
 
 import math
 import re
@@ -13,6 +13,7 @@ import pytest
 from solar_challenge.timebase import (
     DEFAULT_FIRST_DAY,
     DEFAULT_LAST_DAY,
+    HOURS_PER_DAY,
     HOURS_PER_MINUTE,
     MINUTES_PER_DAY,
     MINUTES_PER_HOUR,
@@ -21,6 +22,7 @@ from solar_challenge.timebase import (
     LocalDay,
     SimulationWindow,
     covered_days,
+    describe_first_differing_row,
     require_valid_duration,
     year_row_counts,
 )
@@ -64,6 +66,36 @@ def test_one_calendar_year_of_one_minute_rows_runs_from_365_to_366_days_of_1440(
 def test_a_leap_year_of_hours_is_one_calendar_year_and_one_hour_more_is_not() -> None:
     assert 8784 in year_row_counts(24)
     assert 8785 not in year_row_counts(24)
+
+
+_HOURS = pd.date_range("2024-06-01", periods=4, freq="h", tz="Europe/London")
+
+
+def test_no_row_differs_between_equal_indexes() -> None:
+    assert describe_first_differing_row(_HOURS, _HOURS.copy(), "the window") is None
+
+
+def test_the_first_differing_row_is_named_with_each_index_s_row_there() -> None:
+    shifted = _HOURS.insert(2, _HOURS[1] + pd.Timedelta(minutes=30))[:4]
+
+    assert describe_first_differing_row(shifted, _HOURS, "the window") == (
+        "they first differ at row 2, where it has 2024-06-01 01:30:00+01:00 "
+        "and the window has 2024-06-01 02:00:00+01:00"
+    )
+
+
+def test_an_index_ending_early_differs_at_its_length_where_it_has_no_row() -> None:
+    assert describe_first_differing_row(_HOURS[:3], _HOURS, "demand") == (
+        "they first differ at row 3, where it has no row and demand has 2024-06-01 03:00:00+01:00"
+    )
+
+
+def test_an_index_running_on_differs_at_the_expected_length_with_the_row_number_grouped() -> None:
+    two_days = pd.date_range("2024-06-01", periods=2 * MINUTES_PER_DAY, freq="min", tz="Europe/London")
+
+    assert describe_first_differing_row(two_days, two_days[:MINUTES_PER_DAY], "demand") == (
+        "they first differ at row 1,440, where it has 2024-06-02 00:00:00+01:00 and demand has no row"
+    )
 
 
 @pytest.mark.parametrize(
@@ -171,6 +203,13 @@ def test_one_minute_is_a_standard_library_minute() -> None:
     """The standard library's timedelta, the kind a window's cadence holds; pandas' Timedelta subclasses it, so the check is on the exact type."""
     assert ONE_MINUTE == timedelta(minutes=1)
     assert type(ONE_MINUTE) is timedelta
+
+
+def test_hours_per_day_is_the_whole_hours_on_a_24_hour_clock() -> None:
+    """An int, since its readers build whole row counts from it, as year_row_counts(HOURS_PER_DAY) does."""
+    assert HOURS_PER_DAY == timedelta(days=1) // timedelta(hours=1)
+    assert isinstance(HOURS_PER_DAY, int)
+    assert MINUTES_PER_DAY == HOURS_PER_DAY * MINUTES_PER_HOUR
 
 
 def test_minutes_per_day_is_the_whole_minutes_in_24_hours() -> None:

@@ -11,7 +11,7 @@ import pandas as pd
 from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.demand import DemandInputs, LoadKind, PerLoad, compose_demand, first_differing_row, row_at
+from solar_challenge.demand import DemandInputs, LoadKind, PerLoad, compose_demand
 from solar_challenge.dispatch import (
     DispatchStrategy,
     GridChargeForecast,
@@ -29,7 +29,7 @@ from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_fi
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow, describe_first_differing_row
 from solar_challenge.weather import WeatherProvider, align_tmy_to_index
 
 
@@ -323,13 +323,9 @@ class SimulationResults:
                 )
         rows = self.demand.index
         for kind, load in loads.items():
-            position = first_differing_row(load.index, rows)
-            if position is not None:
-                raise SeriesRefused(
-                    kind.column,
-                    f"is not on demand's rows: they first differ at row {position:,}, where it has "
-                    f"{row_at(load.index, position)} and demand has {row_at(rows, position)}",
-                )
+            difference = describe_first_differing_row(load.index, rows, "demand")
+            if difference is not None:
+                raise SeriesRefused(kind.column, f"is not on demand's rows: {difference}")
             loads[kind] = load.set_axis(rows).rename(kind.column)
         settled = PerLoad(loads)
         object.__setattr__(self, "additional_loads", settled)

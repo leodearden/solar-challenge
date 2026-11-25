@@ -17,12 +17,10 @@ from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.pv import interpolate_to_minute_resolution
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import SimulationWindow, year_row_counts
+from solar_challenge.timebase import HOURS_PER_DAY, SimulationWindow, describe_first_differing_row, year_row_counts
 from solar_challenge.weather import align_tmy_to_index
 
 V = TypeVar("V")
-
-_HOURS_PER_DAY = 24
 
 
 class LoadKind(StrEnum):
@@ -97,20 +95,6 @@ class PerLoad(Mapping[LoadKind, V]):
         return (type(self), (dict(self._items),))
 
 
-def first_differing_row(index: pd.Index, expected: pd.Index) -> Optional[int]:
-    """The position of the first row where index differs from expected: None when they are equal, and the shorter one's length when it is the other's start."""
-    shorter = min(len(index), len(expected))
-    differs = np.flatnonzero(np.asarray(index[:shorter] != expected[:shorter]))
-    if differs.size:
-        return int(differs[0])
-    return None if len(index) == len(expected) else shorter
-
-
-def row_at(index: pd.Index, position: int) -> str:
-    """index's row at position, as text, or 'no row' when index ends before it."""
-    return str(index[position]) if position < len(index) else "no row"
-
-
 @dataclass(frozen=True)
 class DemandInputs:
     """What a home's loads are placed by, besides their own settings.
@@ -168,12 +152,9 @@ class Demand:
 
 def _refuse_unless_on_rows(kind: LoadKind, index: pd.Index, rows: pd.DatetimeIndex) -> None:
     """Refuse the *kind* load, on *index*, unless index is the window's *rows*, naming the first row that differs."""
-    position = first_differing_row(index, rows)
-    if position is not None:
-        raise ValueError(
-            f"the {kind.value} load is not on its window's rows: they first differ at row {position:,}, "
-            f"where it has {row_at(index, position)} and the window has {row_at(rows, position)}"
-        )
+    difference = describe_first_differing_row(index, rows, "the window")
+    if difference is not None:
+        raise ValueError(f"the {kind.value} load is not on its window's rows: {difference}")
 
 
 def compose_demand(
@@ -213,7 +194,7 @@ def _heat_pump_load(
     Raises:
         ValueError: If hourly_temperature_c is not one year of hourly rows, naming its row count.
     """
-    year_hours = year_row_counts(_HOURS_PER_DAY)
+    year_hours = year_row_counts(HOURS_PER_DAY)
     if len(hourly_temperature_c) not in year_hours:
         raise ValueError(
             f"the weather's air temperature has {len(hourly_temperature_c):,} rows, not one year of hourly rows "
