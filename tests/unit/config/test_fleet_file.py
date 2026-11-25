@@ -4,6 +4,7 @@
 import json
 import re
 import warnings
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -13,8 +14,10 @@ import yaml
 from solar_challenge.config import (
     detect_fleet_sweep_spec,
     load_fleet_config,
+    load_scenario,
     parse_fleet_config,
     parse_sweep_fleet_configs,
+    parse_sweep_scenarios,
 )
 from solar_challenge.dispatch import GridChargeConfig, SelfConsumptionStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
@@ -747,6 +750,35 @@ def _fleet_file(capacity_kwh: object, **top_level_blocks: object) -> dict[str, A
         },
         **top_level_blocks,
     }
+
+
+class TestParseSweepScenarios:
+    """parse_sweep_scenarios builds each point of a fleet file's sweep as load_scenario reads that point's file."""
+
+    def test_every_sweep_points_scenario_is_the_scenario_load_scenario_reads_at_that_point(
+        self, tmp_path: Path
+    ) -> None:
+        top_level_blocks = {
+            "name": "Sweep street",
+            "period": {"start_date": "2024-06-01", "end_date": "2024-06-07"},
+            "tariff": _ECONOMY_7,
+            "seg": {"rate_pence_per_kwh": 4.1},
+        }
+        sweep = {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"}
+
+        points = parse_sweep_scenarios(_fleet_file(_proportional_to_pv(sweep), **top_level_blocks))
+
+        assert [value for value, _ in points] == [1.25, 2.5]
+        for value, scenario in points:
+            fixed_capacity_file = tmp_path / f"fleet-{value}.yaml"
+            fixed_capacity_file.write_text(
+                yaml.safe_dump(_fleet_file(_PV_KW * value, **top_level_blocks))
+            )
+            assert (scenario.window().first_day, scenario.window().last_day) == (
+                date(2024, 6, 1),
+                date(2024, 6, 7),
+            )
+            assert scenario == load_scenario(fixed_capacity_file)
 
 
 class TestParseSweepFleetConfigs:
