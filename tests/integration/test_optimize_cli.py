@@ -24,6 +24,7 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.projection import fewest_simulated_ages
+from solar_challenge.scenario_knobs import KNOBS
 from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli, simulate_reaching_the_sweep
 from tests._cli_stderr_text import stderr_text
 from tests._factories import (
@@ -819,7 +820,7 @@ _SENSITIVITY_ALIAS_KNOBS: dict[str, str] = {
 
 def test_the_documented_sensitivity_aliases_cover_exactly_the_library_bands() -> None:
     """The documented aliases' knobs are exactly the optimize.SENSITIVITY_BANDS knobs, so the end-to-end alias test covers every band."""
-    assert set(_SENSITIVITY_ALIAS_KNOBS.values()) == set(SENSITIVITY_BANDS), (
+    assert {KNOBS[knob] for knob in _SENSITIVITY_ALIAS_KNOBS.values()} == set(SENSITIVITY_BANDS), (
         "Every library band must be reachable from a CLI alias."
     )
 
@@ -954,7 +955,7 @@ class TestOptimizeCLIE2EFast:
             f"Expected one axis section per alias's knob in the report:\n{result.output}"
         )
         for knob in _SENSITIVITY_ALIAS_KNOBS.values():
-            assert swept[knob] == pytest.approx(SENSITIVITY_BANDS[knob], abs=0.005), (
+            assert swept[knob] == pytest.approx(SENSITIVITY_BANDS[KNOBS[knob]], abs=0.005), (
                 f"Axis {knob} swept {swept[knob]}, not its SENSITIVITY_BANDS values.\n"
                 f"Output:\n{result.output}"
             )

@@ -356,7 +356,7 @@ class TestRunSweepSingleConfig:
         cr = ranked.results[0]
 
         # Use configs[0][1] — the same scenario run_sweep uses (homes may differ
-        # after _apply_install, e.g. battery fabricated).
+        # after the install knobs apply, e.g. battery fabricated).
         sweep_scenario = configs[0][1]
         curve = project_multi_year(sweep_scenario, finance, simulate=simulate)
         econ = project_economics(curve, scenario_fleet(sweep_scenario), finance)

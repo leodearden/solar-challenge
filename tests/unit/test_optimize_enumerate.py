@@ -309,7 +309,7 @@ class TestPvInverterHomogenization:
 
 
 class TestBatteryHomogenization:
-    """Tests for battery homogenization in _apply_install / enumerate_configs."""
+    """Tests for battery homogenization by the battery_capacity_kwh knob that enumerate_configs applies."""
 
     def _make_mixed_battery_base(self) -> ScenarioConfig:
         """Fleet with one home that HAS a non-default battery and one without.

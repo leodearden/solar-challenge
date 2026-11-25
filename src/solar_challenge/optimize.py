@@ -4,23 +4,25 @@
 Enumerates homogeneous-install fleet scenarios over discrete PV, battery and
 inverter sizes, ranks them by householder outlay at the solved cost-recovery
 own-use rate, and measures how one-at-a-time assumption changes move that
-rank.  The design is specified in docs/prds/discrete-install-config-sweep.md.
+rank.  The knobs a sweep or panel varies, and the edit each makes, are
+scenario_knobs'.  The design is specified in
+docs/prds/discrete-install-config-sweep.md.
 """
 
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass, fields as dc_fields, replace
+from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Iterator, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
 
-from solar_challenge.battery import CAPACITY_SETTING_KWH, BatteryConfig, has_battery
+from solar_challenge.battery import CAPACITY_SETTING_KWH
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
-from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import POSITIVE, as_finite_float, read_field
 from solar_challenge.projection import run_cost_recovery, scenario_fleet
+from solar_challenge.scenario_knobs import KNOBS, Knob
 
 if TYPE_CHECKING:
     from solar_challenge.finance import CostRecoverySolution
@@ -44,12 +46,14 @@ class ConfigPoint:
             energy a home can actually cycle is the usable window inside that
             capacity, bounded by its battery's ``min_soc_fraction`` and
             ``max_soc_fraction``.
-            The value **exactly** ``0.0`` is the no-battery sentinel; it causes
-            :func:`_apply_install` (and therefore :func:`enumerate_configs` /
-            :func:`iter_configs`) to set ``battery_config = None`` on every home
-            in the scenario.  Any strictly positive value — however small —
-            triggers battery fabrication or replacement; there is no epsilon
-            tolerance.  Callers must pass ``0.0`` (not, e.g., ``1e-9``) to mean
+            The value **exactly** ``0.0`` is the no-battery sentinel; the
+            ``battery_capacity_kwh`` knob of
+            :mod:`~solar_challenge.scenario_knobs`, which
+            :func:`enumerate_configs` / :func:`iter_configs` apply, then sets
+            ``battery_config = None`` on every home in the scenario.  Any
+            strictly positive value — however small — triggers battery
+            fabrication or replacement; there is no epsilon tolerance.
+            Callers must pass ``0.0`` (not, e.g., ``1e-9``) to mean
             "no battery".
         inverter_kw: AC inverter rated capacity in kW, a finite number greater
             than 0, held as a float.
@@ -64,6 +68,22 @@ class ConfigPoint:
         read_field(self, "pv_kwp", as_finite_float, POSITIVE)
         read_field(self, "battery_kwh", as_finite_float, CAPACITY_SETTING_KWH)
         read_field(self, "inverter_kw", as_finite_float, POSITIVE)
+
+
+# Each install knob a ConfigPoint sets, with the dimension of the point it sets it to.
+_INSTALL_KNOBS: tuple[tuple[Knob, Callable[[ConfigPoint], float]], ...] = (
+    (KNOBS["pv_capacity_kw"], lambda point: point.pv_kwp),
+    (KNOBS["battery_capacity_kwh"], lambda point: point.battery_kwh),
+    (KNOBS["inverter_capacity_kw"], lambda point: point.inverter_kw),
+)
+
+
+def _installed(base: ScenarioConfig, point: ConfigPoint) -> ScenarioConfig:
+    """*base* with each install knob applied at its dimension of *point*."""
+    scenario = base
+    for knob, dimension in _INSTALL_KNOBS:
+        scenario = knob.apply(scenario, dimension(point))
+    return scenario
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +286,7 @@ def iter_configs(
 
     for pv, batt, inv in itertools.product(pv_kwp, battery_kwh, inverter_kw):
         point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv)
-        yield point, base.map_homes(lambda home: _apply_install(home, point))
+        yield point, _installed(base, point)
 
 
 def enumerate_configs(
@@ -280,10 +300,11 @@ def enumerate_configs(
 
     For each combination in ``itertools.product(pv_kwp, battery_kwh, inverter_kw)``
     (pv outermost, inverter innermost) a :class:`ConfigPoint` is built and a new
-    :class:`~solar_challenge.config.ScenarioConfig` is produced from *base* via
-    :meth:`~solar_challenge.config.ScenarioConfig.map_homes`, so every
-    scenario-level field is kept.  The homes in the returned scenario are
-    homogeneous in PV/battery/inverter install (see :func:`_apply_install`).
+    :class:`~solar_challenge.config.ScenarioConfig` is produced from *base* by
+    the ``pv_capacity_kw``, ``battery_capacity_kwh`` and ``inverter_capacity_kw``
+    knobs of :mod:`~solar_challenge.scenario_knobs`, so every scenario-level
+    field is kept.  The homes in the returned scenario are homogeneous in
+    PV/battery/inverter install capacity.
 
     .. note::
         This function eagerly materialises the full product into a list.  For a
@@ -330,7 +351,6 @@ __all__ = [
     "SensitivityAxis",
     "SensitivityPanel",
     "sensitivity_panel",
-    "apply_knob",
     "SENSITIVITY_BANDS",
 ]
 
@@ -347,8 +367,8 @@ class SensitivityAxis:
     the resulting per-value ConfigPoint rankings and cheapest-feasible tops.
 
     Attributes:
-        name: Knob name (a FinanceConfig field name, or a supported alias
-            such as ``'seg'`` / ``'degradation'``).
+        name: The swept knob's canonical name, its
+            :class:`~solar_challenge.scenario_knobs.Knob`'s ``name``.
         values: Swept values for this axis (non-empty).
         rankings: Per-value tuple of feasible ConfigPoints in ascending
             outlay order (i.e. ``run_sweep(...).results`` mapped to configs).
@@ -413,84 +433,37 @@ class SensitivityPanel:
 # OAT sensitivity bands
 # ---------------------------------------------------------------------------
 
+# The axis sensitivity_panel routes through run_sweep's floor override.
+_RETAINED_FLOOR_KNOB = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
+
 # Board-facing values to sweep per sensitivity_panel knob, headline axes first; pass the mapping,
 # or a subset, as the panel's axes. Grid services sweeps GRID_SERVICES_RATE_BANDS' flat column, low to high;
 # the other spans are provisional: docs/prds/discrete-install-config-sweep.md §12, questions 2-3.
-SENSITIVITY_BANDS: Mapping[str, tuple[float, ...]] = MappingProxyType({
-    "retained_cash_floor_per_home_per_year_gbp": (15.0, 27.0, 40.0),
-    "grid_services_income_per_kw_per_year_gbp": tuple(
+SENSITIVITY_BANDS: Mapping[Knob, tuple[float, ...]] = MappingProxyType({
+    _RETAINED_FLOOR_KNOB: (15.0, 27.0, 40.0),
+    KNOBS["grid_services_income_per_kw_per_year_gbp"]: tuple(
         GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year for band in GridServicesBand
     ),
-    "battery_cost_per_kwh_gbp": (200.0, 300.0, 450.0),
-    "pv_cost_per_kwp_gbp": (800.0, 1200.0, 1800.0),
-    "inverter_cost_per_kw_gbp": (100.0, 200.0, 350.0),
+    KNOBS["battery_cost_per_kwh_gbp"]: (200.0, 300.0, 450.0),
+    KNOBS["pv_cost_per_kwp_gbp"]: (800.0, 1200.0, 1800.0),
+    KNOBS["inverter_cost_per_kw_gbp"]: (100.0, 200.0, 350.0),
 })
 
 
 # ---------------------------------------------------------------------------
-# OAT knob application
+# OAT sensitivity panel
 # ---------------------------------------------------------------------------
-
-_FINANCE_KNOBS: frozenset[str] = frozenset(f.name for f in dc_fields(FinanceConfig))
-_SEG_KNOBS: tuple[str, ...] = ("seg", "seg_tariff_pence_per_kwh")
-_DEGRADATION_KNOBS: tuple[str, ...] = ("degradation", "degradation_rate_per_year")
-
-
-def apply_knob(scenario: ScenarioConfig, name: str, value: float) -> ScenarioConfig:
-    """Return a copy of the fleet *scenario* with the sensitivity knob *name* set to *value*.
-
-    The supported knobs:
-
-    - any :class:`~solar_challenge.finance.FinanceConfig` field: that field of
-      ``scenario.finance``;
-    - ``'seg'`` / ``'seg_tariff_pence_per_kwh'``: the scenario's SEG rate, which
-      :meth:`~solar_challenge.config.ScenarioConfig.simulated_homes` gives every
-      home that has no tariff of its own;
-    - ``'degradation'`` / ``'degradation_rate_per_year'``: every home's
-      ``pv_config.degradation_rate_per_year``.
-
-    *scenario* itself is not modified.  A single-home scenario is refused, whatever
-    the knob.
-
-    Raises:
-        ValueError: If *scenario* is not a fleet scenario, *name* is not a supported
-            knob, or *name* is a FinanceConfig field and ``scenario.finance`` is None.
-        ConfigurationError: A ValueError, if the config the knob rebuilds refuses
-            *value*: :class:`~solar_challenge.finance.FinanceConfig` for a finance
-            knob, :class:`~solar_challenge.pv.PVConfig` for a degradation knob, and
-            for a SEG knob :class:`~solar_challenge.seg.SEGTariff`, or a home carrying
-            its own tariff at another rate.
-    """
-    _require_fleet_scenario(scenario, "apply_knob")
-    if name in _FINANCE_KNOBS:
-        if scenario.finance is None:
-            raise ValueError(
-                f"Cannot set finance knob '{name}': scenario.finance is None"
-            )
-        new_finance = replace(scenario.finance, **{name: value})  # type: ignore[arg-type]
-        return replace(scenario, finance=new_finance)
-    if name in _SEG_KNOBS:
-        return replace(scenario, seg_tariff_pence_per_kwh=value)
-    if name in _DEGRADATION_KNOBS:
-        return scenario.map_homes(
-            lambda home: replace(
-                home, pv_config=replace(home.pv_config, degradation_rate_per_year=value)
-            )
-        )
-    supported = sorted(_FINANCE_KNOBS) + list(_SEG_KNOBS) + list(_DEGRADATION_KNOBS)
-    raise ValueError(f"Unknown sensitivity knob '{name}'. Supported knobs: {supported}")
-
 
 def sensitivity_panel(
     base_configs: "List[tuple[ConfigPoint, ScenarioConfig]]",
-    axes: "Mapping[str, Sequence[float]]",
+    axes: "Mapping[Knob, Sequence[float]]",
     *,
     retained_cash_floor_gbp: Optional[float] = None,
     simulate: FleetSimulate,
 ) -> SensitivityPanel:
     """Compute a one-at-a-time (OAT) sensitivity panel over the cost-recovery rank.
 
-    For each axis (knob name + values), every value is swept in isolation while
+    For each axis (knob + values), every value is swept in isolation while
     all other knobs stay at their baseline levels.  The panel floor
     ``retained_cash_floor_gbp`` is held fixed for non-floor axes (OAT); the
     ``retained_cash_floor_per_home_per_year_gbp`` axis is routed through
@@ -499,11 +472,11 @@ def sensitivity_panel(
     Args:
         base_configs: (ConfigPoint, ScenarioConfig) pairs produced by
             :func:`enumerate_configs`.  The scenarios carry the baseline
-            finance / tariff values; :func:`apply_knob` sets exactly one knob
-            on each scenario per axis per value.
-        axes: Mapping of knob name → non-empty sequence of float values.
-            Supported names: the knobs :func:`apply_knob` supports.  The
-            ``retained_cash_floor_per_home_per_year_gbp`` axis goes through
+            finance / tariff values; each axis's ``knob.apply`` sets exactly
+            that knob on each scenario per value.
+        axes: Mapping of :class:`~solar_challenge.scenario_knobs.Knob` (a value
+            of ``scenario_knobs.KNOBS``) → non-empty sequence of float values.
+            The ``retained_cash_floor_per_home_per_year_gbp`` axis goes through
             ``run_sweep``'s floor override instead.
             :data:`SENSITIVITY_BANDS`, or a subset of it, holds the board-facing values.
         retained_cash_floor_gbp: Optional panel-level floor override passed to
@@ -519,7 +492,7 @@ def sensitivity_panel(
         ValueError: If *base_configs* is empty, *axes* is empty, any axis has
             empty values, or the baseline run has no feasible config.  After
             the baseline run, every axis but the floor's also propagates any
-            ValueError (ConfigurationError included) that :func:`apply_knob`
+            ValueError (ConfigurationError included) that its ``knob.apply``
             raises.
     """
     # -----------------------------------------------------------------------
@@ -529,9 +502,9 @@ def sensitivity_panel(
         raise ValueError("base_configs must not be empty")
     if not axes:
         raise ValueError("axes mapping must not be empty")
-    for axis_name, axis_vals in axes.items():
+    for axis_knob, axis_vals in axes.items():
         if not list(axis_vals):
-            raise ValueError(f"axis '{axis_name}' must have at least one value")
+            raise ValueError(f"axis '{axis_knob.name}' must have at least one value")
 
     # -----------------------------------------------------------------------
     # Baseline
@@ -553,28 +526,28 @@ def sensitivity_panel(
     #   1. Floor-baseline short-circuit: when the floor axis sweeps a value
     #      equal to the panel-level floor, the call would be identical to the
     #      already-computed `base` sweep — reuse it directly.
-    #   2. Result cache: keyed by (axis_name, value); base_configs, the panel
+    #   2. Result cache: keyed by (knob, value); base_configs, the panel
     #      floor, and simulate are all constant within this function call, so
-    #      (name, v) uniquely identifies the sweep.  Identical repeated values
-    #      across axes (e.g. two axes both sweeping 0.0) avoid re-simulation.
+    #      (knob, v) uniquely identifies the sweep.  A value repeated within
+    #      one axis avoids re-simulation.
     # -----------------------------------------------------------------------
-    _sweep_cache: dict[tuple[str, float], RankedSweep] = {}
+    _sweep_cache: dict[tuple[Knob, float], RankedSweep] = {}
     axis_list: List[SensitivityAxis] = []
     total = 0
     stable = 0
 
-    for name, values in axes.items():
+    for knob, values in axes.items():
         vals_list = list(values)
         rankings_per_value: List[tuple[ConfigPoint, ...]] = []
         tops_per_value: List[Optional[ConfigPoint]] = []
 
         for v in vals_list:
-            cache_key = (name, v)
+            cache_key = (knob, v)
             if cache_key in _sweep_cache:
                 ranked = _sweep_cache[cache_key]
             # Special-case: floor axis must go through run_sweep's override to
             # avoid panel-floor clobber / double-apply.
-            elif name == "retained_cash_floor_per_home_per_year_gbp":
+            elif knob is _RETAINED_FLOOR_KNOB:
                 # Short-circuit: same floor value as the panel baseline.
                 if v == retained_cash_floor_gbp:
                     ranked = base
@@ -585,7 +558,7 @@ def sensitivity_panel(
                 _sweep_cache[cache_key] = ranked
             else:
                 axis_cfgs = [
-                    (point, apply_knob(scenario, name, v)) for point, scenario in base_configs
+                    (point, knob.apply(scenario, v)) for point, scenario in base_configs
                 ]
                 ranked = run_sweep(
                     axis_cfgs,
@@ -604,7 +577,7 @@ def sensitivity_panel(
 
         axis_list.append(
             SensitivityAxis(
-                name=name,
+                name=knob.name,
                 values=tuple(vals_list),
                 rankings=tuple(rankings_per_value),
                 top_config_per_value=tuple(tops_per_value),
@@ -759,81 +732,6 @@ def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
             r.config.inverter_kw,
         ),
     )
-
-
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
-
-def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
-    """Return a new :class:`~solar_challenge.home.HomeConfig` with the PV,
-    inverter, and battery install from *point* applied.
-
-    **What is homogenized** (equalized across the fleet for a given
-    :class:`ConfigPoint`):
-
-    - PV DC capacity (``pv_config.capacity_kw``)
-    - AC inverter capacity (``pv_config.inverter_capacity_kw``)
-    - Battery nameplate (total) energy capacity (``battery_config.capacity_kwh``)
-
-    **What is intentionally left diverse** (preserved from the base home):
-
-    - Battery power limit (``max_discharge_kw``), state-of-charge limits
-      (``min_soc_fraction``/``max_soc_fraction``), grid-charging schedule
-      (``grid_charging``), and battery dispatch strategy (``dispatch_strategy``).
-      Homes that already have a battery therefore retain their individual power,
-      state-of-charge and dispatch characteristics, while only capacity is
-      swept; two homes at one :class:`ConfigPoint` can thus have different
-      usable windows.
-    - Household load profile (``load_config``) — occupancy diversity is
-      preserved, and with each battery's ``dispatch_strategy`` the board
-      dispatch (docs/prds/discrete-install-config-sweep.md §3.2).
-
-    .. note::
-        Because battery power limits, state-of-charge limits and
-        ``grid_charging`` are left diverse, two homes at the same
-        :class:`ConfigPoint` may behave economically differently if their base
-        configs differ in those fields.  "Homogeneous install" means equal
-        *install capacity*, not equal *dispatch behaviour*.
-
-    *PV/inverter*: ``pv_config.capacity_kw`` and ``pv_config.inverter_capacity_kw``
-    are set to *point.pv_kwp* and *point.inverter_kw* respectively.
-
-    *Battery*: battery presence is
-    :func:`~solar_challenge.battery.has_battery` of ``point.battery_kwh``. There is
-    no epsilon tolerance; a small positive value fabricates a battery.
-
-    - No battery → ``battery_config = None``.
-    - A battery, and the home already has one →
-      ``dataclasses.replace(home.battery_config, capacity_kwh=point.battery_kwh)``
-      preserving ``max_discharge_kw``, ``grid_charging``, ``dispatch_strategy``,
-      and all other base fields.
-    - A battery, and the home has NO battery → a fresh
-      :class:`~solar_challenge.battery.BatteryConfig` is FABRICATED at defaults
-      (``max_discharge_kw=2.5``, ``grid_charging=None``, ``dispatch_strategy=SelfConsumptionStrategyConfig()``).
-
-    Args:
-        home: Original (frozen) home configuration.
-        point: Install specification for this grid cell.
-
-    Returns:
-        A fresh :class:`~solar_challenge.home.HomeConfig` with updated install.
-    """
-    new_pv = replace(
-        home.pv_config,
-        capacity_kw=point.pv_kwp,
-        inverter_capacity_kw=point.inverter_kw,
-    )
-
-    new_battery: Optional[BatteryConfig]
-    if not has_battery(point.battery_kwh, "battery_kwh"):
-        new_battery = None
-    elif home.battery_config is not None:
-        new_battery = replace(home.battery_config, capacity_kwh=point.battery_kwh)
-    else:
-        new_battery = BatteryConfig(capacity_kwh=point.battery_kwh)
-
-    return replace(home, pv_config=new_pv, battery_config=new_battery)
 
 
 # ---------------------------------------------------------------------------

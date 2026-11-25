@@ -34,6 +34,7 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.projection import fewest_simulated_ages
+from solar_challenge.scenario_knobs import KNOBS, Knob
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
@@ -323,8 +324,8 @@ def configs(
     # ---- Optional sensitivity panel ----------------------------------------
     panel = None
     if sensitivity_axes and ranked.cheapest_feasible is not None:
-        knobs = [_SENSITIVITY_ALIAS_MAP[alias] for alias in sensitivity_axes]
-        axes_map: dict[str, tuple[float, ...]] = {knob: SENSITIVITY_BANDS[knob] for knob in knobs}
+        knobs = [KNOBS[_SENSITIVITY_ALIAS_MAP[alias]] for alias in sensitivity_axes]
+        axes_map: dict[Knob, tuple[float, ...]] = {knob: SENSITIVITY_BANDS[knob] for knob in knobs}
         print_info(cli, f"Computing sensitivity panel for axes: {list(sensitivity_axes)}…")
         panel = sensitivity_panel(
             all_configs,
