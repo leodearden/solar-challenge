@@ -225,7 +225,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "optimize configs"
+          pattern: "measure_battery_sizing"
           paths: ["docs/battery-sizing-with-events.md"]
           expect: present
       - name: "figures-are-the-sweeps-own"
