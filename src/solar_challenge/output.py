@@ -198,12 +198,12 @@ class _LoadSeason:
 
 
 def _times(winter: float, summer: float) -> str:
-    """How many times *summer* *winter* is, or "-" when summer is not positive."""
+    """*winter* as a multiple of *summer*, such as "8.0x", or "-" when summer is not positive."""
     return f"{winter / summer:.1f}x" if summer > 0 else "-"
 
 
 def _seasonal_load_table(kind: LoadKind, winter: _LoadSeason, summer: _LoadSeason) -> str:
-    """*kind*'s table of its winter and summer figures, with how many times summer's winter's are."""
+    """*kind*'s table of its winter and summer figures, each winter figure but the share also as a multiple of summer's."""
     return f"""
 ### {kind.label}
 | Metric | Winter | Summer | Winter/Summer Ratio |
