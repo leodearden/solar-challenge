@@ -464,20 +464,21 @@ _RANDOM_ORDERS: Mapping[str, _RandomOrder] = MappingProxyType({
 })
 
 
-def _component_draws(config: FleetDistributionConfig) -> Iterator[tuple[str, "FleetField", DistributionSpec]]:
-    """Each spec *config*'s components draw, with its path and its fleet row, e.g. ('pv.tilt', row, spec).
+def _component_draws(
+    components: Mapping[str, tuple["ComponentBlock[Any]", Optional[ComponentDistribution]]],
+) -> Iterator[tuple[FleetFieldPath, "FleetField", DistributionSpec]]:
+    """Each spec a fleet's *components*, by name, draw, with its field and its fleet row, e.g. (('pv', 'tilt'), row, spec).
 
     Components come in _DEFAULT_SHUFFLE_ORDER and each component's keys in its table's fleet
     order, never in the order its draws mapping lists them.
     """
-    components = _fleet_components(config)
     for name in _DEFAULT_SHUFFLE_ORDER:
         block, component = components[name]
         if component is None:
             continue
         for key, row in block.fleet.items():
             if key in component.draws:
-                yield f"{name}.{key}", row, component.draws[key]
+                yield FleetFieldPath(name, key), row, component.draws[key]
 
 
 def _refuse_keys_held_where_no_row_puts_them(config: FleetDistributionConfig) -> None:
@@ -515,28 +516,24 @@ def _refuse_required_keys_not_drawn(config: FleetDistributionConfig) -> None:
 
 def _refuse_specs_their_kinds_cannot_draw(config: FleetDistributionConfig) -> None:
     """Refuse *config* when a key is drawn from a spec its row's kind does not draw, or one listing a value the kind does not admit, as _refuse_a_spec_its_row_cannot_draw states."""
-    for path, row, spec in _component_draws(config):
-        _refuse_a_spec_its_row_cannot_draw(row, spec, child_path(_FLEET_DISTRIBUTION_PATH, path), written=spec)
+    for path, row, spec in _component_draws(_fleet_components(config)):
+        _refuse_a_spec_its_row_cannot_draw(row, spec, child_path(_FLEET_DISTRIBUTION_PATH, path.dotted), written=spec)
 
 
 def _sweep_multipliers(
     components: Mapping[str, tuple["ComponentBlock[Any]", Optional[ComponentDistribution]]],
 ) -> list[tuple[FleetFieldPath, SweepSpec]]:
-    """Each sweep multiplier the fleet whose *components*, by name, draw holds, with the field whose proportional_to holds it.
+    """Each sweep multiplier the fleet whose *components*, by name, draw holds, with the field whose proportional_to holds it, in _component_draws' order."""
+    return [
+        (path, spec.multiplier)
+        for path, _, spec in _component_draws(components)
+        if isinstance(spec, ProportionalDistribution) and isinstance(spec.multiplier, SweepSpec)
+    ]
 
-    Components come in _DEFAULT_SHUFFLE_ORDER and each component's keys in its table's fleet
-    order, as _component_draws walks them.
-    """
-    sweeps: list[tuple[FleetFieldPath, SweepSpec]] = []
-    for name in _DEFAULT_SHUFFLE_ORDER:
-        block, component = components[name]
-        if component is None:
-            continue
-        for key in block.fleet:
-            spec = component.draws.get(key)
-            if isinstance(spec, ProportionalDistribution) and isinstance(spec.multiplier, SweepSpec):
-                sweeps.append((FleetFieldPath(name, key), spec.multiplier))
-    return sweeps
+
+def _sweep_placements_under(block_path: str) -> str:
+    """The fields of SWEEP_PLACEMENTS, each under the fleet_distribution block at *block_path*, as a refusal lists them, e.g. 'fleet_distribution.battery.capacity_kwh'; "" lists them bare."""
+    return " or ".join(child_path(block_path, placement.dotted) for placement in sorted(SWEEP_PLACEMENTS))
 
 
 def _refuse_sweeps_not_at_one_placement(
@@ -552,9 +549,9 @@ def _refuse_sweeps_not_at_one_placement(
         raise refusal(block_path, f"holds {len(sweeps)} sweep multipliers, at {paths}; a fleet sweeps at most one")
     for placement, _ in sweeps:
         if placement not in SWEEP_PLACEMENTS:
-            placements = " or ".join(child_path(block_path, each.dotted) for each in sorted(SWEEP_PLACEMENTS))
             raise refusal(
-                child_path(block_path, placement.dotted), f"a sweep multiplier, which a fleet holds only at {placements}"
+                child_path(block_path, placement.dotted),
+                f"a sweep multiplier, which a fleet holds only at {_sweep_placements_under(block_path)}",
             )
 
 
@@ -596,9 +593,9 @@ def _shuffled_pools(
     config: FleetDistributionConfig,
 ) -> Iterator[tuple[str, ShuffledPoolDistribution]]:
     """Each shuffled pool among *config*'s component parameters, with its path, e.g. ('pv.capacity_kw', pool)."""
-    for path, _, spec in _component_draws(config):
+    for path, _, spec in _component_draws(_fleet_components(config)):
         if isinstance(spec, ShuffledPoolDistribution):
-            yield path, spec
+            yield path.dotted, spec
 
 
 def _refuse_pools_not_sized_to_the_fleet(config: FleetDistributionConfig) -> None:
@@ -621,9 +618,9 @@ def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) 
 
 def _refuse_rounded_counts_with_no_whole_number(config: FleetDistributionConfig) -> None:
     """Refuse *config* when a normal or uniform count that _converted_count rounds has no whole number from its min to its max, as _count_bounds states; draws are checked as drawn."""
-    for path, row, spec in _component_draws(config):
+    for path, row, spec in _component_draws(_fleet_components(config)):
         if row.kind is FieldKind.COUNT and isinstance(spec, (NormalDistribution, UniformDistribution)):
-            _count_bounds(spec, path)
+            _count_bounds(spec, path.dotted)
 
 
 #: The kinds a fleet gives every home as one value, never drawn.
@@ -1294,7 +1291,7 @@ class _DistributionSampler:
         self._drawn_ahead: dict[str, list[SpecValue]] = {}
         self._handed_out: dict[str, int] = {}
         order = _RANDOM_ORDERS[config.random_order]
-        specs = {path: spec for path, _, spec in _component_draws(config)}
+        specs = {path.dotted: spec for path, _, spec in _component_draws(_fleet_components(config))}
         for setting in order.pre_sampled:
             spec = specs.get(setting)
             if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
@@ -1620,10 +1617,9 @@ def expand_sweep_configs(
     """
     found = detect_sweep_spec(config)
     if found is None:
-        placements = " or ".join(placement.dotted for placement in sorted(SWEEP_PLACEMENTS))
         raise refusal(
             _FLEET_DISTRIBUTION_PATH,
-            f"holds no sweep: give {placements} a proportional_to whose multiplier has type: sweep",
+            f"holds no sweep: give {_sweep_placements_under('')} a proportional_to whose multiplier has type: sweep",
         )
     placement, sweep = found
     for value in sweep.get_values():
