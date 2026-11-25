@@ -295,14 +295,13 @@ conventions:
       additive is breaking. An additive entry lands in its own leaf with its FROZEN_* row and its
       release note, docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
       A breaking entry, such as a removed, renamed or retyped name, parameter or member, lands
-      only with a deliberate version/tag bump — never a silent edit — unless it is a member form
-      change that needs no consumer edit. Under D29
-      (plans/review-all-program-solar_challenge-20261014.md), only renames and retirements are
-      held: a leaf whose own edit renames or retires a frozen name or member is a held leaf for
-      S29's release. A member form change that needs no consumer edit, such as a plain attribute
-      becoming a settable property still read and assigned as before (tasks 540 and 1691), lands
-      in-leaf with its FROZEN_* row and its release note in the same commit, although the lock
-      prints it `breaking`. Each class
+      only with a deliberate version/tag bump — never a silent edit: under D29
+      (plans/review-all-program-solar_challenge-20261014.md), a leaf whose own edit prints
+      `breaking` is a held leaf for S29's release. The one exception, ruled by Leo on
+      esc-review-20261120T232056-5, is a member form change that needs no consumer edit, such as a
+      plain attribute becoming a settable property still read and assigned as before (tasks 540
+      and 1691): it lands in-leaf with its FROZEN_* row and its release note in the same commit,
+      although the lock prints it `breaking`. Each class
       the contract covers declares in its class body each public attribute it sets on its
       instances, as an annotation such as `cache_dir: Path`.
     why: >
