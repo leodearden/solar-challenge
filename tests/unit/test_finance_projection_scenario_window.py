@@ -55,11 +55,11 @@ def test_project_multi_year_simulates_every_age_over_the_scenario_bounds() -> No
 
 
 def test_solve_cost_recovery_rate_simulates_over_the_scenario_bounds() -> None:
-    """Both the projection's ages and the solve's own age-0 fleet, cr4-solve-age0."""
+    """Every age of its projection, the age-0 fleet its outlay bills among them."""
     scenario, finance = _scenario_and_finance()
     asked: list[_Request] = []
 
     solve_cost_recovery_rate(scenario, finance, simulate=_recording(asked))
 
-    assert "cr4-solve-age0" in [name for name, _, _ in asked]
+    assert "proj-age-0" in [name for name, _, _ in asked]
     assert [(start, end) for _, start, end in asked] == [scenario.simulation_bounds()] * len(asked)
