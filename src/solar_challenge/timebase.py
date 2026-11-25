@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; the default window's first and last days; and the first day of an n-day window."""
+"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; the row counts of one calendar year; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; the default window's first and last days; and the first day of an n-day window."""
 
 import calendar
 import itertools
@@ -50,6 +50,11 @@ def covered_days(first_day: date, last_day: date) -> int:
             "a window's days run from its first day to its last"
         )
     return last_day.toordinal() - first_day.toordinal() + 1
+
+
+def year_row_counts(rows_per_day: int) -> range:
+    """The row counts of one calendar year, 365 to 366 days of rows_per_day rows."""
+    return range(365 * rows_per_day, 366 * rows_per_day + 1)
 
 
 def minutes_of_day(index: pd.DatetimeIndex) -> np.ndarray:

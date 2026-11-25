@@ -22,18 +22,18 @@ from solar_challenge.dispatch import (
 from solar_challenge.ev import EVConfig, RowWeights, generate_ev_charging_profile, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
 from solar_challenge.grid_charge_forecast import grid_charge_ceilings_kwh
-from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
+from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow, year_row_counts
 from solar_challenge.weather import WeatherProvider, align_tmy_to_index
 
 
-_YEAR_LENGTHS_IN_HOURS = reference_year_lengths(rows_per_day=24)
+_YEAR_LENGTHS_IN_HOURS = year_row_counts(24)
 
 
 @dataclass(frozen=True)
