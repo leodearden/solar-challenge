@@ -15,21 +15,25 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+import pandas as pd
 import pytest
 import yaml
 
 from solar_challenge.config import ScenarioConfig, load_scenario
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.home import HomeConfig
+from solar_challenge.fleet import default_runner
+from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_tariff_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from solar_challenge.weather import WeatherCache, WeatherProvider
 from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.jobs import JobManager
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
 from tests._cli_stderr_text import stderr_text
 from tests._cli_table_text import table_text
+from tests._synthetic_weather import synthetic_tmy
 from tests._web_app import app_builder
 
 _PERIOD = {"start_date": "2024-06-03", "end_date": "2024-06-09"}
@@ -364,3 +368,32 @@ def test_the_fleet_import_refuses_a_document_the_reader_refuses_with_the_readers
 
     assert (imported.status_code, imported.get_json()) == (400, {"error": str(refused.value)})
     assert recorder.fleets == []
+
+
+@dataclasses.dataclass(frozen=True)
+class _KeepingHomeSimulator:
+    """A HomeSimulator that simulates each home as home.simulate_home does and keeps the results it returns in kept."""
+
+    kept: list[SimulationResults] = dataclasses.field(default_factory=list)
+
+    def __call__(
+        self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
+        results = simulate_home(config, start_date, end_date, weather=weather)
+        self.kept.append(results)
+        return results
+
+
+@pytest.mark.parametrize("flags", _flags_rows("task894-s12-beta_task956-beta"))
+def test_home_run_simulates_the_scenarios_window(tmp_path: Path, weather_cache: WeatherCache, flags: _Flags) -> None:
+    """G2: home run's real simulate_home runs over the window of the scenario the reader reads, the flags' days replacing the file's: simulate_home builds its window first (S12 β, task 894) and the scenario gives the window (S6 β, task 956)."""
+    path = _written(tmp_path, HOME)
+    weather_cache.put(synthetic_tmy(), "tmy", load_scenario(path).get_location())
+    keeping = _KeepingHomeSimulator()
+    runner = dataclasses.replace(default_runner(), home_simulator=keeping, parallel=False)
+
+    result = invoke_cli([*_HOME_RUN.words, str(path), *flags.cli_args()], runner)
+
+    assert result.exit_code == 0, result.output
+    (results,) = keeping.kept
+    assert results.window == flags.applied(load_scenario(path)).window()
