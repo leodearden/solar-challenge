@@ -186,19 +186,22 @@ class _LoadSeason:
     daily_kwh: float
 
     @classmethod
-    def of(cls, kind: LoadKind, load: pd.Series, season_amounts: pd.DataFrame, cadence: timedelta) -> "_LoadSeason":
-        """*kind*'s figures over the rows of *season_amounts*, per_step_amounts' rows of one season, each lasting *cadence*; *load* is its kW over the whole run."""
+    def of(
+        cls, kind: LoadKind, load: pd.Series, amounts: pd.DataFrame, months: tuple[int, ...], cadence: timedelta
+    ) -> "_LoadSeason":
+        """*kind*'s figures over the rows in *months*: *load* is its kW and *amounts* the run's per_step_amounts(), each row lasting *cadence*."""
+        season_amounts = _in_months(amounts, months)
         energy_kwh = float(season_amounts[kind.energy_column].sum())
         return cls(
             energy_kwh=energy_kwh,
-            peak_kw=float(load[season_amounts.index].max()),
+            peak_kw=float(_in_months(load, months).max()),
             share_of_demand=load_ratio(load_kwh=energy_kwh, demand_kwh=float(season_amounts["demand_kwh"].sum())),
             daily_kwh=energy_kwh / _days_lasted(len(season_amounts), cadence),
         )
 
 
-def _times(winter: float, summer: float) -> str:
-    """*winter* as a multiple of *summer*, such as "8.0x", or "-" when summer is not positive."""
+def _winter_over_summer_cell(winter: float, summer: float) -> str:
+    """The Winter/Summer Ratio cell: *winter* divided by *summer*, written as a multiple such as "8.0x", or "-" when summer is not positive."""
     return f"{winter / summer:.1f}x" if summer > 0 else "-"
 
 
@@ -208,10 +211,10 @@ def _seasonal_load_table(kind: LoadKind, winter: _LoadSeason, summer: _LoadSeaso
 ### {kind.label}
 | Metric | Winter | Summer | Winter/Summer Ratio |
 |--------|--------|--------|---------------------|
-| Energy | {winter.energy_kwh:.1f} kWh | {summer.energy_kwh:.1f} kWh | {_times(winter.energy_kwh, summer.energy_kwh)} |
-| Peak | {winter.peak_kw:.2f} kW | {summer.peak_kw:.2f} kW | {_times(winter.peak_kw, summer.peak_kw)} |
+| Energy | {winter.energy_kwh:.1f} kWh | {summer.energy_kwh:.1f} kWh | {_winter_over_summer_cell(winter.energy_kwh, summer.energy_kwh)} |
+| Peak | {winter.peak_kw:.2f} kW | {summer.peak_kw:.2f} kW | {_winter_over_summer_cell(winter.peak_kw, summer.peak_kw)} |
 | Share of Demand | {winter.share_of_demand:.1%} | {summer.share_of_demand:.1%} | - |
-| Daily Average | {winter.daily_kwh:.1f} kWh/day | {summer.daily_kwh:.1f} kWh/day | {_times(winter.daily_kwh, summer.daily_kwh)} |
+| Daily Average | {winter.daily_kwh:.1f} kWh/day | {summer.daily_kwh:.1f} kWh/day | {_winter_over_summer_cell(winter.daily_kwh, summer.daily_kwh)} |
 """
 
 
@@ -224,16 +227,14 @@ def _seasonal_load_section(results: SimulationResults) -> str:
     if not results.additional_loads:
         return ""
     amounts = results.per_step_amounts()
-    winter_amounts = _in_months(amounts, _WINTER_MONTHS)
-    summer_amounts = _in_months(amounts, _SUMMER_MONTHS)
-    if winter_amounts.empty or summer_amounts.empty:
+    if _in_months(amounts, _WINTER_MONTHS).empty or _in_months(amounts, _SUMMER_MONTHS).empty:
         return ""
     cadence = results.window.cadence
     tables = "".join(
         _seasonal_load_table(
             kind,
-            winter=_LoadSeason.of(kind, load, winter_amounts, cadence),
-            summer=_LoadSeason.of(kind, load, summer_amounts, cadence),
+            winter=_LoadSeason.of(kind, load, amounts, _WINTER_MONTHS, cadence),
+            summer=_LoadSeason.of(kind, load, amounts, _SUMMER_MONTHS, cadence),
         )
         for kind, load in results.additional_loads.items()
     )
