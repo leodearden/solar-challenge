@@ -87,14 +87,19 @@ def _year() -> SimulationResults:
 
 
 def _year_with_additional_loads() -> SimulationResults:
-    """_year()'s run whose demand also holds a 0.3 kW heat pump and a 0.2 kW EV."""
+    """_year()'s run whose demand also holds a steady 0.1 kW of every additional LoadKind.
+
+    load_panels colours each load by its kind's chart role, so a kind added without a role in
+    the token file's chart section fails every case that draws this run.
+    """
     year = _year()
-    heat_pump = pd.Series(0.3, index=year.demand.index)
-    ev = pd.Series(0.2, index=year.demand.index)
+    additional_loads = {
+        kind: pd.Series(0.1, index=year.demand.index) for kind in LoadKind if kind is not LoadKind.HOUSEHOLD
+    }
     return dataclasses.replace(
         year,
-        demand=year.demand + heat_pump + ev,
-        additional_loads={LoadKind.HEAT_PUMP: heat_pump, LoadKind.EV: ev},
+        demand=year.demand + sum(additional_loads.values()),
+        additional_loads=additional_loads,
     )
 
 
