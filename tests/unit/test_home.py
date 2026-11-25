@@ -261,10 +261,12 @@ class TestSimulationResults:
             built, **{name: getattr(built, name).rename(built_name) for name in _series_field_names()}
         )
 
-        name_by_field = {field_name: getattr(results, field_name).name for field_name in _series_field_names()}
-        column_by_field = dict(zip(name_by_field, results.to_dataframe().columns, strict=True))
+        frame = results.to_dataframe()
 
-        assert name_by_field == column_by_field
+        assert sorted(getattr(results, name).name for name in _series_field_names()) == sorted(frame.columns)
+        for name in _series_field_names():
+            series = getattr(results, name)
+            pd.testing.assert_series_equal(frame[series.name], series, obj=name)
 
     def test_the_series_it_was_built_from_keep_their_names(self):
         """Naming its series does not rename the series a SimulationResults was built from."""

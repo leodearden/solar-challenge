@@ -106,6 +106,11 @@ def first_differing_row(index: pd.Index, expected: pd.Index) -> Optional[int]:
     return None if len(index) == len(expected) else shorter
 
 
+def row_at(index: pd.Index, position: int) -> str:
+    """index's row at position, as text, or 'no row' when index ends before it."""
+    return str(index[position]) if position < len(index) else "no row"
+
+
 @dataclass(frozen=True)
 class DemandInputs:
     """What a home's loads are placed by, besides their own settings.
@@ -164,13 +169,11 @@ class Demand:
 def _refuse_unless_on_rows(kind: LoadKind, index: pd.Index, rows: pd.DatetimeIndex) -> None:
     """Refuse the *kind* load, on *index*, unless index is the window's *rows*, naming the first row that differs."""
     position = first_differing_row(index, rows)
-    if position is None:
-        return
-    its_row = index[position] if position < len(index) else "no row"
-    window_row = f"the window has {rows[position]}" if position < len(rows) else "the window is past its last row"
-    raise ValueError(
-        f"the {kind.value} load's rows differ from its window's at row {position:,}: it has {its_row} where {window_row}"
-    )
+    if position is not None:
+        raise ValueError(
+            f"the {kind.value} load is not on its window's rows: they first differ at row {position:,}, "
+            f"where it has {row_at(index, position)} and the window has {row_at(rows, position)}"
+        )
 
 
 def compose_demand(
