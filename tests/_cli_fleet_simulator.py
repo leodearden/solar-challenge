@@ -17,6 +17,7 @@ Usage::
     recorder = RecordingSimulate()
     result = invoke_cli(["finance", "run", str(scenario_file)], answering(recorder))
     asked_homes = recorder.homes
+    asked_windows = recorder.bounds
 
     result = invoke_cli(["optimize", "configs", str(scenario_file)], answering(simulate_reaching_the_sweep))
     reached_the_sweep = isinstance(result.exception, ReachedTheSweep)
@@ -94,7 +95,7 @@ class _Answering:
 
 @dataclasses.dataclass
 class RecordingSimulate:
-    """A fleet simulate that records every fleet it is asked for in fleets.
+    """A fleet simulate that records every fleet it is asked for in fleets, and the (start, end) it is asked for it over in bounds.
 
     It answers each home of a fleet with make_sim_results over the asked
     window's calendar days, from its first, paired with that fleet's homes, so
@@ -104,9 +105,11 @@ class RecordingSimulate:
     """
 
     fleets: list[FleetConfig] = dataclasses.field(default_factory=list)
+    bounds: list[tuple[pd.Timestamp, pd.Timestamp]] = dataclasses.field(default_factory=list)
 
     def __call__(self, fleet: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
         self.fleets.append(fleet)
+        self.bounds.append((start, end))
         days = covered_days(start.date(), end.date())
         return make_fleet_results_of(
             [make_sim_results(days=days, first_day=start.date(), cadence=ONE_MINUTE) for _ in fleet.homes],

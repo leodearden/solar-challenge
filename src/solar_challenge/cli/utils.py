@@ -21,13 +21,17 @@ that runner from --workers and --sequential, as root_invocation says, unless
 whoever invokes the CLI passes a CliInvocation as obj; the root's options leave
 that invocation's runner as it is. `web start` passes it on once create_app
 takes one (task 889).
+
+A command reads its --start and --end as StartOption and EndOption, and applies
+them to its scenario with with_window_options, so each replaces only its own day
+of the scenario's period.
 """
 
 import dataclasses
 from collections.abc import Iterable
+from datetime import datetime
 from functools import wraps
-from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Annotated, Any, Callable, Optional, TypeVar
 
 import typer
 from rich.console import Console
@@ -45,15 +49,13 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
-from solar_challenge.battery import has_battery
-from solar_challenge.config import load_config
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
 from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.location import parse_location
-from solar_challenge.scenario_writer import location_block
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 from solar_challenge.weather import WeatherDataError
 
 console = Console()
@@ -133,67 +135,53 @@ def root_invocation(obj: object, *, quiet: bool, workers: int | None, sequential
     raise TypeError(f"The CLI's context object must be a CliInvocation or None, got a {type(obj).__name__}")
 
 
-def load_config_with_overrides(
-    config_path: Optional[Path],
-    pv_kw: Optional[float] = None,
-    battery_kwh: Optional[float] = None,
-    consumption_kwh: Optional[float] = None,
-    location_str: Optional[str] = None,
-    system_losses: Optional[float] = None,
-) -> dict[str, Any]:
-    """Load config file and apply CLI overrides.
+StartOption = Annotated[
+    Optional[datetime],
+    typer.Option(
+        "--start",
+        formats=["%Y-%m-%d"],
+        help=(
+            "First day to simulate (YYYY-MM-DD), replacing only the start_date of the file's period:; "
+            f"defaults to the file's start_date, else {DEFAULT_FIRST_DAY.isoformat()}"
+        ),
+    ),
+]
+"""The --start option of a command that simulates a scenario's period: the day with_window_options gives as its first."""
 
-    Args:
-        config_path: Path to config file (optional)
-        pv_kw: Override PV capacity
-        battery_kwh: Override battery capacity
-        consumption_kwh: Override annual consumption
-        location_str: Override location, a location in location.parse_location's grammar:
-            a preset name or 'lat,lon[,alt]'
-        system_losses: Override PV system losses, set as the home's pv: block system_losses
-            key, which PVConfig range-checks
+EndOption = Annotated[
+    Optional[datetime],
+    typer.Option(
+        "--end",
+        formats=["%Y-%m-%d"],
+        help=(
+            "Last day to simulate (YYYY-MM-DD), replacing only the end_date of the file's period:; "
+            f"defaults to the file's end_date, else {DEFAULT_LAST_DAY.isoformat()}"
+        ),
+    ),
+]
+"""The --end option of a command that simulates a scenario's period: the day with_window_options gives as its last."""
 
-    Returns:
-        Config dict with overrides applied
+
+def with_window_options(
+    scenario: ScenarioConfig, *, start: Optional[datetime], end: Optional[datetime]
+) -> ScenarioConfig:
+    """*scenario* with its period's first day replaced by start's date and its last by end's, each only when given.
 
     Raises:
-        ConfigurationError: From has_battery, naming --battery-kwh, if battery_kwh is
-            negative or not finite; and from location.parse_location, for a location_str
-            it refuses
+        ConfigurationError: for days that give no window, naming each flag given with its
+            day, then the reason ScenarioConfig.with_window refuses the window for.
     """
-    if config_path is not None:
-        config = load_config(config_path)
-    else:
-        config = {}
-
-    # Ensure nested structure exists
-    if "home" not in config:
-        config["home"] = {}
-    if "pv" not in config["home"]:
-        config["home"]["pv"] = {}
-    if "load" not in config["home"]:
-        config["home"]["load"] = {}
-
-    # Apply overrides
-    if pv_kw is not None:
-        config["home"]["pv"]["capacity_kw"] = pv_kw
-
-    if system_losses is not None:
-        config["home"]["pv"]["system_losses"] = system_losses
-
-    if battery_kwh is not None:
-        if has_battery(battery_kwh, "--battery-kwh"):
-            config["home"]["battery"] = {"capacity_kwh": battery_kwh}
-        else:
-            config["home"].pop("battery", None)
-
-    if consumption_kwh is not None:
-        config["home"]["load"]["annual_consumption_kwh"] = consumption_kwh
-
-    if location_str is not None:
-        config["location"] = location_block(parse_location(location_str))
-
-    return config
+    first_day = None if start is None else start.date()
+    last_day = None if end is None else end.date()
+    try:
+        return scenario.with_window(first_day=first_day, last_day=last_day)
+    except ConfigurationError as exc:
+        given = " ".join(
+            f"{flag} {day.isoformat()}"
+            for flag, day in (("--start", first_day), ("--end", last_day))
+            if day is not None
+        )
+        raise ConfigurationError(f"{given}: {exc.__cause__ or exc}") from exc
 
 
 def verbatim_table_title(title: str) -> Text:
