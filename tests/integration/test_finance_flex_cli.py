@@ -183,6 +183,25 @@ class TestFinanceFlexCLIBehaviour:
             f"'Flexibility Value' should NOT appear when no band is set:\n{result.output}"
         )
 
+    def test_with_no_grid_services_pricing_the_grid_services_row_is_the_consulting_band_not_booked(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        """B11: a scenario that prices no grid services renders the central band's grid-services figure, labelled not booked, and no Grid Services Income section."""
+        scenario_file = _write_scenario(tmp_path / "not-booked")
+
+        result = invoke_finance_run(["--flex-band", "central", str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 0, result.output
+        lines = result.output.splitlines()
+        assert (
+            "| Grid services (consulting planning band, not booked: the scenario prices no grid services) "
+            "| £30 | £12.0/kW |"
+        ) in lines, result.output
+        assert "| **Headline total** | **£280** | — |" in lines, result.output
+        assert "## Grid Services Income" not in result.output
+        assert "PRD §6" not in result.output
+        assert "docs/flexibility-buildability.md" in result.output
+
     def test_invalid_flex_band_exits_nonzero(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:

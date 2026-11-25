@@ -31,7 +31,7 @@ from typing import Optional
 
 from solar_challenge.finance import BillBreakdown, BillDistribution, CostRecoverySolution
 from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep
-from solar_challenge.projection import ProjectEconomics
+from solar_challenge.projection import FleetProjection, MultiYearCurve, ProjectEconomics, YearPoint
 from solar_challenge.timebase import SimulationWindow
 
 from tests._finance_builders import make_window
@@ -290,3 +290,32 @@ def make_project_economics(
         fleet_opex_gbp=fleet_opex_gbp,
         mean_fleet_surplus_per_year_gbp=mean_fleet_surplus_per_year_gbp,
     )
+
+
+def make_fleet_projection(income_by_age: Sequence[tuple[int, float]], *, asset_life_years: int) -> FleetProjection:
+    """A FleetProjection over *asset_life_years* constant years, sampled at the ages of *income_by_age*, booking each age's grid-services income.
+
+    Every year is the same: no state-of-health loss, 1,000 kWh billed own-use,
+    500 exported and 2,000 imported, £100 of revenue.  It carries no age-0
+    summaries.
+    """
+    points = tuple(
+        YearPoint(
+            year=year,
+            pv_soh=1.0,
+            battery_soh=1.0,
+            fleet_billed_own_use_kwh=1_000.0,
+            fleet_export_kwh=500.0,
+            fleet_import_kwh=2_000.0,
+            fleet_revenue_gbp=100.0,
+        )
+        for year in range(asset_life_years)
+    )
+    curve = MultiYearCurve(
+        points=points,
+        sampled_ages=tuple(age for age, _ in income_by_age),
+        interp_error_estimate=0.0,
+        annualised_from=make_window(),
+        fleet_pv_dc_kw=4.0,
+    )
+    return FleetProjection(curve=curve, age0_summaries=(), grid_services_income_gbp=tuple(income_by_age))

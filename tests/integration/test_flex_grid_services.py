@@ -8,16 +8,20 @@ project_multi_year → project_economics.mean_fleet_surplus_per_year_gbp.
 The board scenario's own grid-services choice (the events model in its flex band, and
 no flat rate), then seam verification that the consuming math (W2-CR2,
 project_multi_year._simulate_age) propagates a band's flat rate into project surplus,
-on the board fleet pinned to the flat model at the central band's flat rate.
+on the board fleet pinned to the flat model at the central band's flat rate; and
+finance run on the board fleet priced flat, whose report books that rate's income and
+whose flexibility-value block reads it (review-all S25 δ, B11).
 """
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
@@ -37,7 +41,9 @@ from solar_challenge.projection import (
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_finance_config
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from tests._cli_fleet_simulator import invoke_finance_run
 from tests._finance_builders import make_fleet_results_of
+from tests._markdown_tables import row_cells
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
 
@@ -366,3 +372,37 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
         f"(central={central_rate} × 2.5 kW battery); "
         f"got £{surplus_central - surplus_zero:.6f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# B11 — finance run on the board fleet priced flat books the rate's income
+# ---------------------------------------------------------------------------
+
+
+def test_b11_finance_run_on_the_board_fleet_priced_flat_books_the_rate_and_the_flex_row_reads_it(tmp_path: Path) -> None:
+    """The board YAML priced flat at £4.0/kW-yr: the report's model line, its £4 × Σ kW income, and the flex row per battery home and per kW."""
+    document = yaml.safe_load(SCENARIO.read_text(encoding="utf-8"))
+    finance_block = document["finance"]
+    finance_block["grid_services_model"] = "flat"
+    del finance_block["grid_services_events"]
+    finance_block["grid_services_income_per_kw_per_year_gbp"] = 4.0
+    path = tmp_path / SCENARIO.name
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    scenario, _finance = board_econ_scenario()
+    batteries = [home.battery_config for home in scenario.homes if home.battery_config is not None]
+    homes, kw = len(batteries), sum(battery.max_discharge_kw for battery in batteries)
+    assert (homes, kw) == (100, 250.0)
+
+    result = invoke_finance_run(
+        [str(path), "--flex-band", "central"], _synthetic_fleet_results(list(scenario.homes))
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "Model: **flat, £4.0/kW-yr**" in lines, result.output
+    assert row_cells(
+        result.output, "### This window's fleet, the same under every assumption", "Annual fleet income"
+    ) == ["£1,000"]
+    assert "| Grid services (booked) | £10 | £4.0/kW |" in lines, result.output
+    assert "| **Headline total** | **£260** | — |" in lines, result.output
+    assert "90% of event days" not in result.output
