@@ -9,6 +9,7 @@ from typing import Annotated, Optional
 
 import typer
 
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.utils import (
     CliInvocation,
     EndOption,
@@ -39,7 +40,6 @@ from solar_challenge.gridservices import (
     compute_grid_services_at_events,
 )
 from solar_challenge.home import calculate_summary
-from solar_challenge.output import generate_finance_report
 from solar_challenge.projection import (
     ProjectEconomics,
     ScenarioFleet,
