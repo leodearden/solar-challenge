@@ -7,11 +7,11 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.demand import DemandInputs, LoadKind, compose_demand
 from solar_challenge.dispatch import (
     DispatchStrategy,
     GridChargeForecast,
@@ -19,21 +19,18 @@ from solar_challenge.dispatch import (
     build_dispatch_strategy,
     refuse_grid_charging_it_would_ignore,
 )
-from solar_challenge.ev import EVConfig, RowWeights, generate_ev_charging_profile, require_tariff_for_smart_charging
+from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
 from solar_challenge.grid_charge_forecast import grid_charge_ceilings_kwh
-from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
-from solar_challenge.load import LoadConfig, generate_load_profile
+from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import ONE_MINUTE, SimulationWindow, year_row_counts
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from solar_challenge.weather import WeatherProvider, align_tmy_to_index
-
-
-_YEAR_LENGTHS_IN_HOURS = year_row_counts(24)
 
 
 @dataclass(frozen=True)
@@ -497,77 +494,6 @@ def _share(part: float, whole: float) -> float:
     return float(part / whole) if whole > 0 else 0.0
 
 
-def _hourly_weather(config: HomeConfig, weather: WeatherProvider) -> pd.DataFrame:
-    """The hourly weather a run uses: weather's for config.location, asked once.
-
-    Raises:
-        ValueError: If the home has a heat pump and the weather is not one year of hourly rows.
-    """
-    frame = weather.get(config.location)
-    if config.heat_pump_config is not None and len(frame) not in _YEAR_LENGTHS_IN_HOURS:
-        raise ValueError(
-            f"the weather for {config.location!r} has {len(frame):,} rows, not one year of hourly rows "
-            f"({_YEAR_LENGTHS_IN_HOURS.start:,} to {_YEAR_LENGTHS_IN_HOURS[-1]:,}): a heat pump's "
-            "annual_heat_demand_kwh is shared out over the heating degree-minutes of this whole year, "
-            "so give simulate_home a provider whose weather is one TMY year of hourly rows, as PvgisTmy's is."
-        )
-    return frame
-
-
-@dataclass(frozen=True)
-class _Demand:
-    """A run's demand in kW on its minutes: the household's load, plus any EV's charging, plus any heat pump's load.
-
-    heat_pump_kw is None without a heat pump.
-    """
-
-    total_kw: pd.Series
-    heat_pump_kw: Optional[pd.Series]
-
-
-def _heat_pump_load(
-    heat_pump: HeatPumpConfig,
-    hourly_temperature_c: pd.Series,
-    minutes: pd.DatetimeIndex,
-) -> pd.Series:
-    """The heat pump's electrical load in kW on minutes.
-
-    Its annual heat demand is shared out over the whole TMY year's air temperature.
-    """
-    minute_temperature = interpolate_to_minute_resolution(hourly_temperature_c)
-    return generate_heat_pump_load(
-        heat_pump, align_tmy_to_index(minute_temperature, minutes), annual_temperature_c=minute_temperature
-    )
-
-
-def _generation_on(minute_generation: pd.Series) -> RowWeights:
-    """The home's PV generation in kW on whatever rows it is given, read from its TMY-year *minute_generation* by UTC time of year."""
-
-    def generation_kw(rows: pd.DatetimeIndex) -> np.ndarray:
-        on_rows: np.ndarray = align_tmy_to_index(minute_generation, rows).to_numpy()
-        return on_rows
-
-    return generation_kw
-
-
-def _demand(
-    config: HomeConfig, weather: pd.DataFrame, minute_generation: pd.Series, window: SimulationWindow
-) -> _Demand:
-    """The home's demand on window's rows: its household's, plus any EV's charging, a solar EV's in the most of *minute_generation*, plus any heat pump's, run on weather."""
-    demand_kw = generate_load_profile(config.load_config, window)
-    if config.ev_config is not None:
-        demand_kw = demand_kw + generate_ev_charging_profile(
-            config.ev_config,
-            window,
-            tariff=config.tariff_config,
-            generation_kw=_generation_on(minute_generation),
-        )
-    if config.heat_pump_config is None:
-        return _Demand(demand_kw, None)
-    heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], demand_kw.index)
-    return _Demand(demand_kw + heat_pump_kw, heat_pump_kw)
-
-
 _Timestep = Callable[[Optional[Battery], datetime.datetime, float, float, Optional[float]], EnergyFlowResult]
 """One row of a run's dispatch, which charges and discharges the run's battery, if it has one.
 
@@ -863,8 +789,8 @@ def simulate_home(
 
     Raises:
         ValueError: If end_date's date is before start_date's, naming both;
-            or if a heat pump is configured and the weather is not one year
-            of hourly rows.
+            or, as compose_demand refuses it, if a heat pump is configured and
+            the weather is not one year of hourly rows.
         ConfigurationError: If strategy is given, battery_config sets
             grid_charging and the strategy does not charge from the grid
             (refuse_grid_charging_it_would_ignore); raised before weather is
@@ -876,11 +802,16 @@ def simulate_home(
     window = run_window(config.location, start_date, end_date)
     rows = window.rows()
     dispatch = _dispatch_path(config, window.step_minutes, strategy)
-    hourly_weather = _hourly_weather(config, weather)
+    hourly_weather = weather.get(config.location)
     minute_generation = interpolate_to_minute_resolution(
         simulate_pv_output(config.pv_config, config.location, hourly_weather)
     )
-    demand = _demand(config, hourly_weather, minute_generation, window)
+    demand = compose_demand(
+        config.load_config,
+        config.heat_pump_config,
+        config.ev_config,
+        DemandInputs(window, hourly_weather["temp_air"], minute_generation, config.tariff_config),
+    )
     generation_kw = align_tmy_to_index(minute_generation, rows)
     ceilings_kwh = _grid_charge_ceilings(config, generation_kw, demand.total_kw)
     flows = _row_flows(
@@ -901,7 +832,7 @@ def simulate_home(
         step_hours=window.step_hours,
         import_pricing=import_pricing,
         export_revenue=export_revenue,
-        heat_pump_load=demand.heat_pump_kw,
+        heat_pump_load=demand.additional().get(LoadKind.HEAT_PUMP),
         strategy_name=dispatch.strategy_name,
         pricing=_run_pricing(config, import_pricing.tariff_rate),
         grid_charge_forecast=_grid_charge_forecast(config),
