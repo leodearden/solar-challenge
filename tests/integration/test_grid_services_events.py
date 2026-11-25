@@ -32,6 +32,7 @@ import pytest
 import yaml
 
 from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
@@ -46,7 +47,6 @@ from solar_challenge.gridservices import (
     compute_grid_services_at_events,
 )
 from solar_challenge.home import RunPricing, SimulationResults, SummaryStatistics
-from solar_challenge.output import generate_finance_report
 from solar_challenge.projection import (
     MultiYearCurve,
     project_economics,

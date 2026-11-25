@@ -2,7 +2,6 @@
 
 import tempfile
 from dataclasses import asdict, replace
-from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -10,10 +9,7 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityConfig, simulate_community
-from solar_challenge.finance import BillDistribution
-from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
 from solar_challenge.home import RunPricing, SimulationResults, calculate_summary, simulate_home
-from solar_challenge.optimize import RankedSweep
 from solar_challenge.output import (
     CommunityMetrics,
     SeasonSummary,
@@ -23,13 +19,10 @@ from solar_challenge.output import (
     compute_community_metrics,
     export_to_csv,
     generate_community_report,
-    generate_config_ranking_report,
-    generate_finance_report,
     generate_summary_report,
 )
-from solar_challenge.timebase import SimulationWindow
-from tests._factories import make_bill_distribution, make_config_result, make_ranked_sweep
-from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results, make_window
+from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
+from tests._grid_charge_forecast_notices import PV_BLIND_AND_TRAILING_NOTICE, TRAILING_NOTICE
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
@@ -497,40 +490,13 @@ class TestPeriodTotalsAndPeaks:
         assert frame["peak_demand_kw"].max() == pytest.approx(summary.peak_demand_kw)
 
 
-def _annualised_from(window: SimulationWindow) -> BillDistribution:
-    """make_bill_distribution's distribution, its yearly figures annualised from *window*."""
-    return replace(make_bill_distribution(), annualised_from=window)
-
-
-def _one_config_sweep(window: SimulationWindow) -> RankedSweep:
-    """A sweep of one feasible config, whose outlay's yearly figures are annualised from *window*."""
-    cr = make_config_result(outlay=_annualised_from(window))
-    return make_ranked_sweep((cr,))
-
-
-_TRAILING_NOTICE = (
-    "*Battery grid charging in cheap periods was sized by the trailing_14_days forecast: "
-    f"{GRID_CHARGE_FORECAST_LABELS['trailing_14_days']}.*\n\n"
-)
-_PV_BLIND_AND_TRAILING_NOTICE = (
-    "*Battery grid charging in cheap periods was sized by the pv_blind forecast: "
-    f"{GRID_CHARGE_FORECAST_LABELS['pv_blind']}; and by the trailing_14_days forecast: "
-    f"{GRID_CHARGE_FORECAST_LABELS['trailing_14_days']}.*\n\n"
-)
-
-
-def _sized_by(*forecasts: str) -> BillDistribution:
-    """make_bill_distribution's distribution, its homes' grid charge sized by *forecasts*."""
-    return replace(make_bill_distribution(), grid_charge_forecasts=forecasts)
-
-
 class TestGridChargeForecastNotice:
-    """Every report of results whose grid charge a forecast sized says, under its first heading, which forecast and what it is."""
+    """A run's or a community's report of results whose grid charge a forecast sized says, under its first heading, which forecast and what it is."""
 
     def test_a_summary_report_names_its_runs_forecast_under_its_title(self, sample_results: SimulationResults) -> None:
         report = generate_summary_report(replace(sample_results, grid_charge_forecast="trailing_14_days"))
 
-        assert report.startswith("# Simulation Report\n\n" + _TRAILING_NOTICE + "## Simulation Period")
+        assert report.startswith("# Simulation Report\n\n" + TRAILING_NOTICE + "## Simulation Period")
 
     def test_a_summary_report_of_a_run_that_did_not_grid_charge_has_no_notice(
         self, sample_results: SimulationResults
@@ -539,43 +505,6 @@ class TestGridChargeForecastNotice:
 
         assert report.startswith("# Simulation Report\n\n## Simulation Period")
         assert "sized by" not in report
-
-    @pytest.mark.parametrize("side_by_side", [False, True], ids=["physics-only", "side-by-side"])
-    def test_a_finance_report_names_each_forecast_under_its_title(self, side_by_side: bool) -> None:
-        dist = _sized_by("pv_blind", "trailing_14_days")
-
-        report = generate_finance_report(dist, dist if side_by_side else None, scenario_name="Bristol")
-
-        assert report.startswith("# Finance Report: Bristol\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "## Householder Bill")
-
-    def test_a_finance_report_gives_the_forecast_notice_after_the_extrapolation_notice(self) -> None:
-        dist = replace(_sized_by("trailing_14_days"), annualised_from=make_window(days=2, first_day=date(2024, 3, 31)))
-
-        report = generate_finance_report(dist, scenario_name="Bristol")
-
-        assert report.startswith(
-            "# Finance Report: Bristol\n\n"
-            "*Yearly figures are extrapolated ×183.000 from a 2-day window (2024-03-31 to 2024-04-01), "
-            "not whole calendar years.*\n\n" + _TRAILING_NOTICE + "## Householder Bill"
-        )
-
-    def test_a_finance_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
-        report = generate_finance_report(_sized_by(), scenario_name="Bristol")
-
-        assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
-        assert "sized by" not in report
-
-    def test_a_ranking_report_names_its_outlays_forecasts_under_its_first_heading(self) -> None:
-        sweep = make_ranked_sweep((make_config_result(outlay=_sized_by("pv_blind", "trailing_14_days")),))
-
-        assert generate_config_ranking_report(sweep).startswith(
-            "## Cost-Recovery Rank\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "| Config"
-        )
-
-    def test_a_ranking_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
-        sweep = make_ranked_sweep((make_config_result(outlay=_sized_by()),))
-
-        assert generate_config_ranking_report(sweep).startswith("## Cost-Recovery Rank\n\n| Config")
 
     def test_a_community_report_names_its_homes_forecasts_under_its_title(self, sample_results: SimulationResults) -> None:
         """Its baseline is the homes' own grid flows, which their forecasts sized."""
@@ -586,7 +515,7 @@ class TestGridChargeForecastNotice:
         report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
 
         assert report.startswith(
-            "# Community Energy Sharing Report\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "## Sharing Mode"
+            "# Community Energy Sharing Report\n\n" + PV_BLIND_AND_TRAILING_NOTICE + "## Sharing Mode"
         )
 
     def test_a_community_report_whose_homes_did_not_grid_charge_has_no_notice(
@@ -598,51 +527,3 @@ class TestGridChargeForecastNotice:
 
         assert report.startswith("# Community Energy Sharing Report\n\n## Sharing Mode")
         assert "sized by" not in report
-
-
-class TestExtrapolationNotice:
-    """A board report whose bills are annualised from a window other than whole calendar years says so under its first heading."""
-
-    @pytest.mark.parametrize("side_by_side", [False, True], ids=["physics-only", "side-by-side"])
-    def test_a_finance_report_from_a_window_that_is_not_whole_calendar_years_says_so_under_its_title(
-        self, side_by_side: bool
-    ) -> None:
-        dist = _annualised_from(make_window(days=2, first_day=date(2024, 3, 31)))
-
-        report = generate_finance_report(dist, dist if side_by_side else None, scenario_name="Bristol")
-
-        assert report.startswith(
-            "# Finance Report: Bristol\n\n"
-            "*Yearly figures are extrapolated ×183.000 from a 2-day window (2024-03-31 to 2024-04-01), "
-            "not whole calendar years.*\n\n"
-            "## Householder Bill"
-        )
-
-    @pytest.mark.parametrize(
-        "window",
-        [
-            pytest.param(make_window(days=365, first_day=date(2023, 1, 1)), id="calendar-year-2023"),
-            pytest.param(make_window(days=731, first_day=date(2023, 1, 1)), id="two-calendar-years"),
-        ],
-    )
-    def test_a_finance_report_from_whole_calendar_years_has_no_notice(self, window: SimulationWindow) -> None:
-        report = generate_finance_report(_annualised_from(window), scenario_name="Bristol")
-
-        assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
-        assert "extrapolated" not in report
-
-    def test_a_ranking_report_from_a_30_day_window_says_so_under_its_first_heading(self) -> None:
-        sweep = _one_config_sweep(make_window(days=30, first_day=date(2024, 6, 1)))
-
-        assert generate_config_ranking_report(sweep).startswith(
-            "## Cost-Recovery Rank\n\n"
-            "*Yearly figures are extrapolated ×12.200 from a 30-day window (2024-06-01 to 2024-06-30), "
-            "not whole calendar years.*\n\n"
-            "| Config"
-        )
-
-    def test_a_ranking_report_from_a_whole_calendar_year_has_no_notice(self) -> None:
-        report = generate_config_ranking_report(_one_config_sweep(make_window(days=365, first_day=date(2023, 1, 1))))
-
-        assert "extrapolated" not in report
-        assert report.startswith("## Cost-Recovery Rank\n\n| Config")

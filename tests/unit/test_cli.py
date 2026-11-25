@@ -21,6 +21,7 @@ from rich.progress import Progress
 from rich.style import Style
 from typer.testing import CliRunner, Result
 
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
@@ -43,7 +44,6 @@ from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.home import SummaryStatistics, calculate_summary
-from solar_challenge.output import generate_finance_report
 from solar_challenge.scenario_blocks import parse_finance_config
 from solar_challenge.timebase import ONE_MINUTE
 from solar_challenge.weather import WeatherCache, WeatherDataError

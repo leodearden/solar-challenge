@@ -15,6 +15,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.main import app
 from solar_challenge.finance import (
     BillBreakdown,
@@ -25,7 +26,6 @@ from solar_challenge.finance import (
     householder_bill,
 )
 from solar_challenge.home import RunPricing, SummaryStatistics
-from solar_challenge.output import generate_finance_report
 from tests._factories import make_bill_breakdown, make_bill_distribution
 from tests._finance_builders import make_window
 
@@ -761,7 +761,7 @@ def _make_bill_distribution(multiplier: float = 1.0) -> BillDistribution:
 
 
 class TestGenerateFinanceReport:
-    """Fast (no-network) tests for output.generate_finance_report rendering."""
+    """Fast (no-network) tests for board_report.generate_finance_report rendering."""
 
     def test_returns_string(self) -> None:
         """generate_finance_report must return a str."""

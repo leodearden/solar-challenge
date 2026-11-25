@@ -16,6 +16,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenarios
 from solar_challenge.finance import (
@@ -25,7 +26,6 @@ from solar_challenge.finance import (
     irr,
     npv,
 )
-from solar_challenge.output import generate_finance_report
 from solar_challenge.projection import (
     MultiYearCurve,
     ProjectEconomics,
@@ -812,7 +812,7 @@ def _make_project_economics(
 
 
 class TestGenerateFinanceReportEconomics:
-    """Fast tests for output.generate_finance_report economics block (η)."""
+    """Fast tests for board_report.generate_finance_report economics block (η)."""
 
     def test_economics_section_present(self) -> None:
         """Report with economics= must contain a Project Economics section."""

@@ -12,6 +12,7 @@ from typing import Annotated, Optional
 
 import typer
 
+from solar_challenge.board_report import generate_config_ranking_report
 from solar_challenge.cli.utils import (
     EndOption,
     StartOption,
@@ -32,7 +33,6 @@ from solar_challenge.optimize import (
     run_sweep,
     sensitivity_panel,
 )
-from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.projection import fewest_simulated_ages
 from solar_challenge.scenario_knobs import KNOBS, Knob, knob_named, names_with_aliases
 

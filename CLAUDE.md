@@ -112,6 +112,7 @@ Built on top of simulation results; this is the board-facing decision layer:
 - `scenario_knobs.py` — the settings a sweep or a sensitivity axis varies: each a named `Knob` whose `apply` is its one pure `ScenarioConfig` edit (`KNOBS`), one alias table (`ALIASES`) and `knob_named`, which resolves either; above `config`, below `optimize` and the CLI
 - `flex.py` / `gridservices.py` — Flexibility value model and grid-services event-window pricing
 - `community.py` — Post-hoc peer-to-peer community netting over `FleetResults` (homes are not re-simulated)
+- `board_report.py` — the board's markdown reports, `finance run`'s finance report and `optimize configs`' config ranking, with one binding-label table and one formatter set
 
 ### Configuration System (`scenario_blocks.py`, `fleet_distribution.py`, `config.py`)
 
@@ -128,7 +129,7 @@ Typer-based; subcommand groups are registered in `cli/main.py` (run `solar-chall
 
 ### Output & Validation
 
-- `output.py` — CSV export and markdown summary reports
+- `output.py` — per-run output: CSV export, the markdown summary and community reports, seasonal and period aggregation
 - `validation.py` — Energy balance checks, generation/consumption sanity validation
 
 ## Key Patterns

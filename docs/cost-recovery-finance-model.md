@@ -1,7 +1,7 @@
 # CBS Cost-Recovery Finance Model
 
 **Task**: W2-CR + task-84 §6 — authoritative specification (CR6, task/62; basis-C amendment, task/84)
-**Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/projection.py`, `src/solar_challenge/output.py`
+**Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/projection.py`, `src/solar_challenge/board_report.py`
 **Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_ledger.py` (one ledger per home, its pricing rules and balances, §3, §4); `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4); `tests/integration/test_finance_bill.py::TestOverrideExactValues` (override path, §3); `tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue` (override path, §4)
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
 **Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
@@ -534,8 +534,8 @@ notice, which replaces the short-period warnings
 when their bills' window is extrapolated: the annualisation scale to three
 decimals, the window's day count and its first and last days, as in *Yearly
 figures are extrapolated ×183.000 from a 2-day window (2024-03-31 to 2024-04-01),
-not whole calendar years.* (`output._extrapolation_notice`;
-`tests/unit/test_output.py::TestExtrapolationNotice`).  A short window is still one
+not whole calendar years.* (`board_report._extrapolation_notice`;
+`tests/unit/test_board_report.py::TestExtrapolationNotice`).  A short window is still one
 season's sample, so board figures want `scenario.period` to cover whole calendar
 years.
 
@@ -1085,9 +1085,9 @@ solves at a lower rate.
 
 ---
 
-## 9. The Rendered Cost-Recovery Report (output.py)
+## 9. The Rendered Cost-Recovery Report (board_report.py)
 
-Source: `src/solar_challenge/output.py` (`generate_finance_report()`).
+Source: `src/solar_challenge/board_report.py` (`generate_finance_report()`).
 
 Running `solar-challenge finance run <scenario> --cost-recovery`, where `<scenario>` is a
 scenario YAML with a `finance:` block, appends a `## Cost-Recovery Analysis` block to the
@@ -1116,6 +1116,13 @@ markdown finance report it prints.  The block renders the `CostRecoverySolution`
 
 The `representative` outlay is the home whose `total_outlay_gbp` is closest to the
 fleet median — the board's single-home summary figure.
+
+The Feasibility row labels the solution's `binding` (§5): `floor` as *✔ Surplus meets
+floor*, `rate_clamped_zero` as *✔ Over-feasible (rate clamped to 0, surplus > floor)* and
+`infeasible_above_retail` as *✘ INFEASIBLE: required rate exceeds retail*, the labels
+`optimize configs`' ranking gives each config's binding too. A binding outside those three
+is refused with a `ValueError` naming it, in both reports
+(`tests/unit/test_board_report.py::TestABindingOutsideTheLabelTableIsRefused`).
 
 A report whose bills come from a window other than whole calendar years opens, under
 its title, with the extrapolated notice (§4, *Annual basis*).
