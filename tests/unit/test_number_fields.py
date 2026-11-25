@@ -45,6 +45,68 @@ def test_importing_the_module_loads_only_errors_boolean_fields_and_whole_numbers
 
 OPEN_INFINITE = Interval(-math.inf, math.inf, low_open=True, high_open=True)
 
+ADMISSION_CASES = [
+    pytest.param(POSITIVE, 5e-324, True, id="positive-smallest-float"),
+    pytest.param(POSITIVE, True, True, id="positive-true"),
+    pytest.param(POSITIVE, math.nan, False, id="positive-nan"),
+    pytest.param(POSITIVE, math.inf, False, id="positive-infinity"),
+    pytest.param(POSITIVE, -math.inf, False, id="positive-negative-infinity"),
+    pytest.param(POSITIVE, 0, False, id="positive-zero"),
+    pytest.param(POSITIVE, False, False, id="positive-false"),
+    pytest.param(NON_NEGATIVE, 0, True, id="non-negative-zero"),
+    pytest.param(NON_NEGATIVE, -0.0, True, id="non-negative-negative-zero"),
+    pytest.param(NON_NEGATIVE, 5e-324, True, id="non-negative-smallest-float"),
+    pytest.param(NON_NEGATIVE, 1e308, True, id="non-negative-large-float"),
+    pytest.param(NON_NEGATIVE, 10**400, True, id="non-negative-huge-int"),
+    pytest.param(NON_NEGATIVE, np.float64(2.5), True, id="non-negative-numpy-float"),
+    pytest.param(NON_NEGATIVE, np.int64(3), True, id="non-negative-numpy-int"),
+    pytest.param(NON_NEGATIVE, -5e-324, False, id="non-negative-negative-smallest-float"),
+    pytest.param(NON_NEGATIVE, -(10**400), False, id="non-negative-negative-huge-int"),
+    pytest.param(NON_NEGATIVE, math.inf, False, id="non-negative-infinity"),
+    pytest.param(NON_NEGATIVE, -math.inf, False, id="non-negative-negative-infinity"),
+    pytest.param(NON_NEGATIVE, math.nan, False, id="non-negative-nan"),
+    pytest.param(NON_NEGATIVE, np.float64("nan"), False, id="non-negative-numpy-nan"),
+    pytest.param(NON_NEGATIVE, np.float64("inf"), False, id="non-negative-numpy-infinity"),
+    pytest.param(FRACTION, 1, True, id="fraction-high-bound"),
+    pytest.param(FRACTION, 0, False, id="fraction-low-bound"),
+    pytest.param(UNIT_INTERVAL, True, True, id="unit-interval-true"),
+    pytest.param(UNIT_INTERVAL, False, True, id="unit-interval-false"),
+    pytest.param(Interval(0, 360), 0, True, id="closed-low-bound"),
+    pytest.param(Interval(0, 360), 360, True, id="closed-high-bound"),
+    pytest.param(Interval(0, 360), -0.5, False, id="closed-below"),
+    pytest.param(Interval(0, 360), 360.5, False, id="closed-above"),
+    pytest.param(Interval(0, 360), 10**400, False, id="closed-huge-int"),
+    pytest.param(Interval(0, 360), math.inf, False, id="closed-infinity"),
+    pytest.param(Interval(0, 360), -math.inf, False, id="closed-negative-infinity"),
+    pytest.param(Interval(0, 360), math.nan, False, id="closed-nan"),
+    pytest.param(Interval(0, 1, high_open=True), 0, True, id="open-above-low-bound"),
+    pytest.param(Interval(0, 1, high_open=True), 1, False, id="open-above-high-bound"),
+    pytest.param(Interval(5, 5), 5, True, id="closed-at-one-number"),
+    pytest.param(Interval(2, 3), True, False, id="two-to-three-true"),
+    pytest.param(Interval(0, 10**400), 10**400, True, id="huge-high-bound-itself"),
+    pytest.param(Interval(0, 10**400), 10**400 + 1, False, id="huge-high-bound-plus-one"),
+    pytest.param(Interval(0, 10**400), math.inf, False, id="huge-high-bound-infinity"),
+    pytest.param(Interval(-500), -500, True, id="low-bound-only-its-bound"),
+    pytest.param(Interval(-500), 10**400, True, id="low-bound-only-huge-int"),
+    pytest.param(Interval(-500), math.inf, False, id="low-bound-only-infinity"),
+    pytest.param(Interval(-500), math.nan, False, id="low-bound-only-nan"),
+    pytest.param(Interval(-500), -500.5, False, id="low-bound-only-below-it"),
+    pytest.param(Interval(high=23), -(10**400), True, id="high-bound-only-negative-huge-int"),
+    pytest.param(Interval(high=23), 23, True, id="high-bound-only-its-bound"),
+    pytest.param(Interval(high=23), -math.inf, False, id="high-bound-only-negative-infinity"),
+    pytest.param(Interval(high=23), math.nan, False, id="high-bound-only-nan"),
+    pytest.param(Interval(high=23), 23.5, False, id="high-bound-only-above-it"),
+    pytest.param(Interval(), -1e308, True, id="unbounded-large-negative"),
+    pytest.param(Interval(), 10**400, True, id="unbounded-int-too-large-for-a-float"),
+    pytest.param(Interval(), math.nan, False, id="unbounded-nan"),
+    pytest.param(Interval(), math.inf, False, id="unbounded-infinity"),
+    pytest.param(Interval(), -math.inf, False, id="unbounded-negative-infinity"),
+    pytest.param(OPEN_INFINITE, 0, True, id="open-infinite-zero"),
+    pytest.param(OPEN_INFINITE, math.inf, False, id="open-infinite-infinity"),
+    pytest.param(OPEN_INFINITE, -math.inf, False, id="open-infinite-negative-infinity"),
+    pytest.param(OPEN_INFINITE, math.nan, False, id="open-infinite-nan"),
+]
+
 
 class TestInterval:
     """An Interval is a frozen value: it admits the finite numbers inside its bounds, and its str() phrases them for a refusal."""
@@ -137,70 +199,7 @@ class TestInterval:
             in str(exc_info.value)
         )
 
-    @pytest.mark.parametrize(
-        ("interval", "number", "admitted"),
-        [
-            pytest.param(POSITIVE, 5e-324, True, id="positive-smallest-float"),
-            pytest.param(POSITIVE, True, True, id="positive-true"),
-            pytest.param(POSITIVE, math.nan, False, id="positive-nan"),
-            pytest.param(POSITIVE, math.inf, False, id="positive-infinity"),
-            pytest.param(POSITIVE, -math.inf, False, id="positive-negative-infinity"),
-            pytest.param(POSITIVE, 0, False, id="positive-zero"),
-            pytest.param(POSITIVE, False, False, id="positive-false"),
-            pytest.param(NON_NEGATIVE, 0, True, id="non-negative-zero"),
-            pytest.param(NON_NEGATIVE, -0.0, True, id="non-negative-negative-zero"),
-            pytest.param(NON_NEGATIVE, 5e-324, True, id="non-negative-smallest-float"),
-            pytest.param(NON_NEGATIVE, 1e308, True, id="non-negative-large-float"),
-            pytest.param(NON_NEGATIVE, 10**400, True, id="non-negative-huge-int"),
-            pytest.param(NON_NEGATIVE, np.float64(2.5), True, id="non-negative-numpy-float"),
-            pytest.param(NON_NEGATIVE, np.int64(3), True, id="non-negative-numpy-int"),
-            pytest.param(NON_NEGATIVE, -5e-324, False, id="non-negative-negative-smallest-float"),
-            pytest.param(NON_NEGATIVE, -(10**400), False, id="non-negative-negative-huge-int"),
-            pytest.param(NON_NEGATIVE, math.inf, False, id="non-negative-infinity"),
-            pytest.param(NON_NEGATIVE, -math.inf, False, id="non-negative-negative-infinity"),
-            pytest.param(NON_NEGATIVE, math.nan, False, id="non-negative-nan"),
-            pytest.param(NON_NEGATIVE, np.float64("nan"), False, id="non-negative-numpy-nan"),
-            pytest.param(NON_NEGATIVE, np.float64("inf"), False, id="non-negative-numpy-infinity"),
-            pytest.param(FRACTION, 1, True, id="fraction-high-bound"),
-            pytest.param(FRACTION, 0, False, id="fraction-low-bound"),
-            pytest.param(UNIT_INTERVAL, True, True, id="unit-interval-true"),
-            pytest.param(UNIT_INTERVAL, False, True, id="unit-interval-false"),
-            pytest.param(Interval(0, 360), 0, True, id="closed-low-bound"),
-            pytest.param(Interval(0, 360), 360, True, id="closed-high-bound"),
-            pytest.param(Interval(0, 360), -0.5, False, id="closed-below"),
-            pytest.param(Interval(0, 360), 360.5, False, id="closed-above"),
-            pytest.param(Interval(0, 360), 10**400, False, id="closed-huge-int"),
-            pytest.param(Interval(0, 360), math.inf, False, id="closed-infinity"),
-            pytest.param(Interval(0, 360), -math.inf, False, id="closed-negative-infinity"),
-            pytest.param(Interval(0, 360), math.nan, False, id="closed-nan"),
-            pytest.param(Interval(0, 1, high_open=True), 0, True, id="open-above-low-bound"),
-            pytest.param(Interval(0, 1, high_open=True), 1, False, id="open-above-high-bound"),
-            pytest.param(Interval(5, 5), 5, True, id="closed-at-one-number"),
-            pytest.param(Interval(2, 3), True, False, id="two-to-three-true"),
-            pytest.param(Interval(0, 10**400), 10**400, True, id="huge-high-bound-itself"),
-            pytest.param(Interval(0, 10**400), 10**400 + 1, False, id="huge-high-bound-plus-one"),
-            pytest.param(Interval(0, 10**400), math.inf, False, id="huge-high-bound-infinity"),
-            pytest.param(Interval(-500), -500, True, id="low-bound-only-its-bound"),
-            pytest.param(Interval(-500), 10**400, True, id="low-bound-only-huge-int"),
-            pytest.param(Interval(-500), math.inf, False, id="low-bound-only-infinity"),
-            pytest.param(Interval(-500), math.nan, False, id="low-bound-only-nan"),
-            pytest.param(Interval(-500), -500.5, False, id="low-bound-only-below-it"),
-            pytest.param(Interval(high=23), -(10**400), True, id="high-bound-only-negative-huge-int"),
-            pytest.param(Interval(high=23), 23, True, id="high-bound-only-its-bound"),
-            pytest.param(Interval(high=23), -math.inf, False, id="high-bound-only-negative-infinity"),
-            pytest.param(Interval(high=23), math.nan, False, id="high-bound-only-nan"),
-            pytest.param(Interval(high=23), 23.5, False, id="high-bound-only-above-it"),
-            pytest.param(Interval(), -1e308, True, id="unbounded-large-negative"),
-            pytest.param(Interval(), 10**400, True, id="unbounded-int-too-large-for-a-float"),
-            pytest.param(Interval(), math.nan, False, id="unbounded-nan"),
-            pytest.param(Interval(), math.inf, False, id="unbounded-infinity"),
-            pytest.param(Interval(), -math.inf, False, id="unbounded-negative-infinity"),
-            pytest.param(OPEN_INFINITE, 0, True, id="open-infinite-zero"),
-            pytest.param(OPEN_INFINITE, math.inf, False, id="open-infinite-infinity"),
-            pytest.param(OPEN_INFINITE, -math.inf, False, id="open-infinite-negative-infinity"),
-            pytest.param(OPEN_INFINITE, math.nan, False, id="open-infinite-nan"),
-        ],
-    )
+    @pytest.mark.parametrize(("interval", "number", "admitted"), ADMISSION_CASES)
     def test_an_interval_decides_each_kind_of_number_by_comparing_it_with_its_bounds(
         self, interval: Interval, number: float, admitted: bool
     ) -> None:
@@ -248,6 +247,49 @@ class TestInterval:
         assert hash(duplicate) == hash(interval)
         for number in (-1, 0, 0.5, 1, 10**400, math.inf, -math.inf, math.nan):
             assert duplicate.admits(number) is interval.admits(number)
+
+
+class TestIntervalRefused:
+    """refused answers admits for many numbers in one call, returning those it does not admit by their keys."""
+
+    @pytest.mark.parametrize(("interval", "number", "admitted"), ADMISSION_CASES)
+    def test_refused_agrees_with_admits_for_every_kind_of_number(
+        self, interval: Interval, number: float, admitted: bool
+    ) -> None:
+        """An admitted number is left out and a refused one returned as the very object given, never converted, so NaN, a numpy number and a huge int come back as given."""
+        answer = interval.refused({"number": number})
+        if admitted:
+            assert answer == {}
+            assert not answer
+        else:
+            assert list(answer) == ["number"]
+            assert answer["number"] is number
+
+    def test_refused_returns_each_refused_entry_by_its_key_in_the_mapping_s_order(self) -> None:
+        numbers: dict[str, float] = {
+            "a": 1.0,
+            "b": -0.5,
+            "c": math.inf,
+            "d": 0,
+            "e": math.nan,
+            "f": 10**400,
+            "g": -math.inf,
+        }
+        refused = NON_NEGATIVE.refused(numbers)
+        assert list(refused) == ["b", "c", "e", "g"]
+        for key in refused:
+            assert refused[key] is numbers[key]
+
+    def test_refused_names_any_hashable_key(self) -> None:
+        assert UNIT_INTERVAL.refused({0: 0.5, (1, "x"): 1.5}) == {(1, "x"): 1.5}
+
+    def test_refused_of_no_numbers_is_empty(self) -> None:
+        assert POSITIVE.refused({}) == {}
+
+    def test_refused_answers_by_the_interval_s_own_bounds(self) -> None:
+        """A replaced interval refuses by the bounds it was replaced with, not by those it was copied from."""
+        assert dataclasses.replace(POSITIVE, low_open=False).refused({"z": 0}) == {}
+        assert dataclasses.replace(NON_NEGATIVE, high=1).refused({"x": 1.5}) == {"x": 1.5}
 
 
 class TestAsFiniteFloat:
