@@ -105,7 +105,8 @@ This is a dated record. Re-measure with the method below before relying on it.
 - **Provenance.** Measured 2026-09-30 on main 0e8c240: CPython 3.12.3, pandas 3.0.3,
   pvlib 0.15.1, numpy 2.4.6. The 0.3–7.0 kW figures were re-measured identical on main
   df664c7 (2026-10-01).
-- **Weather.** PVGIS TMYs through `weather.get_tmy_data`. Bristol's is the 1990 TMY,
+- **Weather.** PVGIS TMYs through `weather.get_tmy_data` (task 827 retired it;
+  `PvgisTmy(WeatherCache()).get` serves the same year). Bristol's is the 1990 TMY,
   GHI 992.3 kWh/m², cached as `tmy_5dc8c8bca218`. **[Amended 2026-10-03, task 285:
   `get_tmy_data` now scales this TMY's irradiance by 1.078, to GHI 1069.5 kWh/m²
   ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)), so §3 and §4 describe the
@@ -158,7 +159,7 @@ This is a dated record. Re-measure with the method below before relying on it.
 - **Method.** South-facing at 35° unless stated. The hourly AC in kW, summed, is kWh:
 
   ```python
-  kwh = simulate_pv_output(config, location, get_tmy_data(location)).sum()
+  kwh = simulate_pv_output(config, location, PvgisTmy(WeatherCache()).get(location)).sum()
   kwh_per_wired_kwp = kwh / wired_dc_capacity_kw(config)
   ```
 
@@ -208,7 +209,7 @@ This is a dated record. Re-measure before relying on it.
 
 - **Provenance.** Measured 2026-10-02 on main 3c4fb55: CPython 3.12.3, pandas 3.0.3,
   pvlib 0.15.1, numpy 2.4.6, and §3's Bristol 1990 TMY. The peak is
-  `simulate_pv_output(config, location, get_tmy_data(location)).max()`.
+  `simulate_pv_output(config, location, PvgisTmy(WeatherCache()).get(location)).max()`.
 - **Per wired DC.** The AC peak reached at most 1.029 × the wired DC (0.6 kW: 0.412 kW
   on 0.40 kWp), and 10% over it failed none of these configs:
   - the default module at 0.3–3.0 kW in 0.1 kW steps and at 4.0, 5.9, 7.0 and 10.8 kW;
@@ -291,7 +292,7 @@ This is a dated record. Re-query before relying on it.
   Brighton's 1130.
 - PVGIS gives Eastbourne's optimum a year-to-year standard deviation, `SD_y`, of 38.73,
   so a sunny single year there can pass 1200. The band is for a typical year, the kind
-  of year `weather.get_tmy_data` gives the model.
+  of year `PvgisTmy.get` gives the model.
 
 ## 6. When to Revisit
 

@@ -1,14 +1,14 @@
 # PVGIS TMY Irradiation: Scaled to the Long-Term Mean
 
 **Task:** #285 (follow-up from #252)
-**Code:** [`src/solar_challenge/weather.py`](../src/solar_challenge/weather.py) (`get_tmy_data`, `scale_tmy_to_annual_ghi`, `WeatherCache`)
+**Code:** [`src/solar_challenge/weather.py`](../src/solar_challenge/weather.py) (`PvgisTmy`, `scale_tmy_to_annual_ghi`, `WeatherCache`)
 **Measurement:** [`scripts/measure_tmy_irradiation.py`](../scripts/measure_tmy_irradiation.py) (§3)
 
 ---
 
 ## 1. What the Code Does
 
-On a cache miss, `get_tmy_data` fetches two things for the same point, with the same
+On a cache miss, `PvgisTmy.get` fetches two things for the same point, with the same
 horizon, from one pinned PVGIS release, `PVGIS_API_URL` (v5_3: PVGIS-SARAH3 + ERA5):
 
 - PVGIS's TMY, built from `CLIMATE_YEARS`, 2005–2020;
@@ -18,9 +18,9 @@ It refuses a series that lacks or repeats any hour of those years: a `WeatherDat
 (a `RuntimeError`) names the years, and nothing is cached. Otherwise
 `scale_tmy_to_annual_ghi` multiplies the TMY's `ghi`, `dni` and `dhi` by one factor, so
 that the year's GHI equals the mean of the series' calendar-year totals, and
-`get_tmy_data` caches the scaled year. Temperature and wind stay as PVGIS gives them.
+`PvgisTmy.get` caches the scaled year. Temperature and wind stay as PVGIS gives them.
 `scale_tmy_to_annual_ghi` takes exactly one TMY year, 8760 hourly rows with some GHI, so
-it never rescales a partial frame. `get_tmy_data` raises its refusal as a
+it never rescales a partial frame. `PvgisTmy.get` raises its refusal as a
 `WeatherDataError`, as it does any other bad PVGIS response, and caches nothing.
 
 A cache hit is returned as stored, never rescaled: a cache seeded with
@@ -62,12 +62,12 @@ not part of the test suite. In outline:
   3.0.3, numpy 2.4.6. The architect's prototype gave the same figures on 2026-10-01.
 - **Sites.** Seven UK points, pinned in the script, because a site's factor depends on
   the exact point: Glasgow's read 0.978 at a nearby one.
-- **The TMY.** Requested with `get_tmy_data`'s own arguments, `PVGIS_TMY_REQUEST`,
+- **The TMY.** Requested with `PvgisTmy`'s own arguments, `PVGIS_TMY_REQUEST`,
   keeping the metadata's `months_selected`: the real year each month comes from.
 - **The real years.** The 2005–2020 hourly series with `components=True` on a horizontal
   plane, decomposed by task 290's recipe: ghi = `poa_direct` + `poa_sky_diffuse`,
   dhi = `poa_sky_diffuse`, and dni = `poa_direct` / sin(solar elevation) with the sun up,
-  else 0. `get_tmy_data` needs GHI alone, and reads it as the `components=False` series'
+  else 0. `PvgisTmy.get` needs GHI alone, and reads it as the `components=False` series'
   `poa_global`: for Bristol that mean is 1069.456 kWh/m², against 1069.454 from the
   components.
 - **Metric.** The annual AC of `PVConfig.default_4kw()` (4 kW, south, 35°) from
@@ -99,7 +99,7 @@ from the module's own NOCT and efficiency, not SAPM's generic open-rack glass/gl
 ([pv-cell-temperature.md](pv-cell-temperature.md)). Every AC figure here and in §2, §5
 and §6, task 252's above included, was measured under SAPM, and before task 236's
 configured inverter efficiency ([pv-inverter-efficiency.md](pv-inverter-efficiency.md)).
-Bristol's annual-scaled TMY, the year `get_tmy_data` serves, re-measured by
+Bristol's annual-scaled TMY, the year `PvgisTmy.get` serves, re-measured by
 [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s
 `measure` on task 823's commit 2be9d1b: 4052.83 kWh with the losses and 4716.89 without.
 The real years, the raw and monthly-scaled TMYs and the other sites need PVGIS's
