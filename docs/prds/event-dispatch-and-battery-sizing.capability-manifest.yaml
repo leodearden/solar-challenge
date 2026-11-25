@@ -1,0 +1,236 @@
+# Machine-readable twin of event-dispatch-and-battery-sizing.capability-manifest.md.
+# task_id values stay null until commit_planning stamps them.
+# Every grep check was run against main 4055b9a3 (2026-11-25) and fails there.
+prd: docs/prds/event-dispatch-and-battery-sizing.md
+schema_version: 1
+signal_leaves: ["ζ"]
+tasks:
+  - label: "α"
+    task_id: null
+    title: "Battery export in the dispatch engine"
+    capabilities:
+      - name: "decision-carries-export-power"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "export_kw: float"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "step-limits-bound-export"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "max_export_kw"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "flow-result-reports-battery-export"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "battery_export: float"
+          paths: ["src/solar_challenge/flow.py"]
+          expect: present
+      - name: "results-carry-battery-export-series"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "battery_export"
+          paths: ["src/solar_challenge/home.py"]
+          expect: present
+      - name: "decision-and-limits-exist-to-extend"
+        binding: "`grep:src/solar_challenge/dispatch.py::DispatchDecision` `grep:src/solar_challenge/dispatch.py::StepLimits.require_admissible` `grep:src/solar_challenge/flow.py::_settle` `grep:src/solar_challenge/flow.py::_execute`"
+        verdict: PASS
+  - label: "β"
+    task_id: null
+    title: "Event discharge strategy on the battery"
+    capabilities:
+      - name: "event-discharge-strategy-defined"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class EventDischargeStrategy"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "event-discharge-window-defined"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class EventDischargeWindow"
+          paths: ["src/solar_challenge/dispatch.py"]
+          expect: present
+      - name: "battery-config-carries-event-windows"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "event_discharge: tuple"
+          paths: ["src/solar_challenge/battery.py"]
+          expect: present
+      - name: "block-table-places-the-field"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"event_discharge\""
+          paths: ["src/solar_challenge/scenario_blocks.py"]
+          expect: present
+      - name: "export-power-on-the-decision"
+        binding: "producer α upstream"
+        verdict: PASS
+      - name: "strategy-builder-is-the-one-build-site"
+        binding: "`grep:src/solar_challenge/dispatch.py::build_dispatch_strategy` `grep:src/solar_challenge/home.py` `grep:src/solar_challenge/community.py` called from home.py and community.py"
+        verdict: PASS
+  - label: "γ"
+    task_id: null
+    title: "Enrolment, the event-day draw and the site export limit"
+    capabilities:
+      - name: "participation-vocabulary-defined"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^class EventParticipation"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "event-day-draw-defined"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "^def drawn_event_days\\("
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "site-export-limit-on-the-events-configuration"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "site_export_limit_kw"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "scenario-fills-homes-from-the-draw"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "drawn_event_days"
+          paths: ["src/solar_challenge/config.py"]
+          expect: present
+      - name: "scenario-fills-a-setting-into-its-homes"
+        binding: "`grep:src/solar_challenge/config.py::ScenarioConfig.simulated_homes` fills the SEG tariff today"
+        verdict: PASS
+      - name: "events-configuration-on-the-finance-config"
+        binding: "producer task 804 upstream, through task 224"
+        verdict: PASS
+      - name: "dispatched-with-no-battery-home-refused"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a refusal raised at scenario construction; boundary test B6 and the leaf's own refusal test cover it"
+  - label: "δ"
+    task_id: null
+    title: "Metered events income in pricing and the report"
+    capabilities:
+      - name: "breakdown-reports-battery-export-per-event"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "per_window_battery_export_kwh_per_event"
+          paths: ["src/solar_challenge/gridservices.py"]
+          expect: present
+      - name: "model-doc-states-the-metering"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "participation"
+          paths: ["docs/cost-recovery-finance-model.md"]
+          expect: present
+      - name: "pricing-reads-the-fleets-home-configs"
+        binding: "`grep:src/solar_challenge/gridservices.py::compute_grid_services_at_events` `grep:src/solar_challenge/fleet.py::FleetResults` whose home_configs field carries each home's battery configuration"
+        verdict: PASS
+      - name: "mismatch-refusal"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "a ConfigurationError raised in pricing; boundary test B10 asserts it fires in both directions"
+      - name: "report-table-home"
+        binding: "producer task 974 upstream"
+        verdict: PASS
+      - name: "empty-displaced-fields-render-as-not-reported"
+        binding: "producer task 1434 upstream"
+        verdict: PASS
+  - label: "ε"
+    task_id: null
+    title: "Battery power and inverter cost in the sweep, with the marginal verdict"
+    capabilities:
+      - name: "config-point-carries-battery-power"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "battery_kw:"
+          paths: ["src/solar_challenge/optimize.py"]
+          expect: present
+      - name: "battery-inverter-cost-on-the-finance-config"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "battery_inverter_cost_per_kw_gbp"
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "sweep-takes-battery-power-per-size"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"--battery-kw\""
+          paths: ["src/solar_challenge/cli/optimize.py"]
+          expect: present
+      - name: "sweep-takes-a-reference-configuration"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "\"--reference\""
+          paths: ["src/solar_challenge/cli/optimize.py"]
+          expect: present
+      - name: "victron-board-scenario-shipped"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "participation: dispatched"
+          paths: ["scenarios/"]
+          expect: present
+      - name: "sweep-applies-an-install-to-each-home"
+        binding: "`grep:src/solar_challenge/optimize.py::_apply_install` `grep:src/solar_challenge/optimize.py::ConfigPoint`"
+        verdict: PASS
+  - label: "ζ"
+    task_id: null
+    title: "The board's sizing answer, recorded"
+    capabilities:
+      - name: "sizing-answer-recorded"
+        binding: "built here"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: "optimize configs"
+          paths: ["docs/battery-sizing-with-events.md"]
+          expect: present
+      - name: "figures-are-the-sweeps-own"
+        binding: "producer ε upstream"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "the doc records what the full-fleet sweep returned; no figure is asserted in advance (PRD gate record, G6)"

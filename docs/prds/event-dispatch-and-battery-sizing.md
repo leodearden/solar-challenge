@@ -114,7 +114,7 @@ Today's observational model stays as the pricing of a fleet that is not enrolled
 ### 5.3 Enrolment and the event-day draw (γ)
 
 - `gridservices.EventParticipation`, a `StrEnum`: `observed` (the default) and `dispatched`, parsed and refused as `DeliveryBaseline` is.
-- `gridservices.GridServicesEventsConfig` gains `participation: str = "observed"`, `event_day_seed: int = 0` and `site_export_limit_kw: float | None = None` (§5.4). The scenario grammar reads them from `finance.grid_services_events`, as it reads the other fields of that value.
+- `gridservices.GridServicesEventsConfig` gains `participation: EventParticipation`, defaulting to `observed`, `event_day_seed: int = 0` and `site_export_limit_kw: float | None = None` (§5.4). The scenario grammar reads them where it reads the other fields of that value. Every leaf runs after the 0.6.0 release, so that place is the one task 804 leaves: `finance.grid_services_model: {type: capacity_at_events, …}`, with `FinanceConfig.grid_services_model` holding the events configuration itself. The `finance.grid_services_events` key and `finance.grid_services_model_of` on main today are retired by 804 and are not what a leaf binds to.
 - `gridservices.drawn_event_days(window, days, seed) -> tuple[date, ...]`: from the days of `days` that `window`'s months and weekdays admit, a draw without replacement, seeded by `seed` and the window's position, of `n` days in date order. `n` is `window.events_per_year` scaled by the share of a year's eligible days that `days` holds, rounded, at least 1 when any eligible day exists, and at most the eligible days. The same arguments give the same days.
 - `config.ScenarioConfig.simulated_homes` gives each battery home, when the scenario's events configuration is `dispatched`, a `battery_config.event_discharge` built from `drawn_event_days` over the scenario's window. Every home of a scenario gets the same days: an event is fleet-wide. A home with no battery is unchanged.
 - With `observed`, `simulated_homes` sets nothing and every result is byte-identical to today's.
@@ -187,6 +187,8 @@ Decisions 1 to 4 are Leo's rulings of 2026-11-24.
 ## 7. Pre-conditions
 
 - Task 224, the 0.6.0 release commit: every leaf depends on it.
+- Task 804 (S9 ε, held for the release and a prerequisite of 224): it moves the events configuration onto `FinanceConfig.grid_services_model` and the scenario key to `finance.grid_services_model`. γ and δ read the configuration from there.
+- Task 1270, which makes `optimize configs` say which assumptions it ranks under and edits the same sweep modules: ε depends on it.
 - Task 974 (S25 δ), which moves the capacity-at-events rows to the board report and names the delivery baseline: δ depends on it and extends the table where 974 leaves it.
 - Task 1434, the empty displaced-self-use rendering and `GridServicesAtEvents`'s unchecked per-window invariants: δ depends on it, because `dispatched` relies on an empty displaced field rendering as not reported.
 - Task 1315, the `simulate_home(strategy=...)` override against the grid-charging refusal: β depends on it, since both change how `home.py` builds a strategy.
