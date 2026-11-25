@@ -9,6 +9,8 @@ reader's own, never a literal copy of them.
 from __future__ import annotations
 
 import dataclasses
+import functools
+from contextlib import ExitStack
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
@@ -23,9 +25,12 @@ from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_tariff_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from solar_challenge.web.dashboard import dashboard_of
+from solar_challenge.web.jobs import JobManager
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
 from tests._cli_stderr_text import stderr_text
 from tests._cli_table_text import table_text
+from tests._web_app import app_builder
 
 _PERIOD = {"start_date": "2024-06-03", "end_date": "2024-06-09"}
 _TARIFF = {"type": "economy_7"}
@@ -122,6 +127,11 @@ _DOCUMENTS: dict[str, Mapping[str, Any]] = {
     "fleet-distribution-doc": FLEET_DISTRIBUTION,
 }
 _FLEET_DOCUMENTS = {name: document for name, document in _DOCUMENTS.items() if name != "home-doc"}
+
+
+def _flags_rows(leaf: str) -> list[Any]:
+    """One row of (flags) for each flag variant, its id '<flags>-<leaf>'."""
+    return [pytest.param(flags, id=f"{flags_name}-{leaf}") for flags_name, flags in _FLAG_VARIANTS.items()]
 
 
 def _document_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str, Any]], *, tag: str) -> list[Any]:
@@ -307,4 +317,50 @@ def test_home_run_refuses_a_fleet_document_naming_fleet_run(tmp_path: Path, docu
 
     assert result.exit_code == 1, result.output
     assert "`fleet run`" in stderr_text(result)
+    assert recorder.fleets == []
+
+
+_ALL_JOBS_DONE_WITHIN_SECONDS = 60
+
+
+@pytest.mark.parametrize("flags", _flags_rows("task961-eta"))
+def test_the_fleet_import_then_the_fleet_form_runs_the_readers_homes_over_its_bounds(
+    tmp_path: Path, closes_at_teardown: ExitStack, flags: _Flags
+) -> None:
+    """The fleet page's import loads everything of the fleet document that reaches a home, and running the form it answers, with the flags' days, simulates the reader's homes over the reader's bounds."""
+    path = _written(tmp_path, FLEET_DISTRIBUTION)
+    recorder = RecordingSimulate()
+    app = app_builder(closes_at_teardown)(
+        tmp_path / "dashboard", jobs=functools.partial(JobManager, runner=answering(recorder))
+    )
+    client = app.test_client()
+
+    imported = client.post("/api/fleet/import-yaml", data=path.read_text(encoding="utf-8"), content_type="text/yaml")
+    assert imported.status_code == 200, imported.get_data(as_text=True)
+    answer = imported.get_json()
+    assert answer["not_loaded"] == ["finance"]
+    submitted = client.post("/api/simulate/fleet-from-distribution", json=flags.on_form(answer["form"]))
+    assert submitted.status_code == 201, submitted.get_data(as_text=True)
+    assert dashboard_of(app).jobs.wait_until_idle(timeout=_ALL_JOBS_DONE_WITHIN_SECONDS)
+
+    expected = flags.applied(load_scenario(path))
+    assert [fleet.homes for fleet in recorder.fleets] == [expected.simulated_homes()]
+    assert recorder.bounds == [expected.simulation_bounds()]
+
+
+def test_the_fleet_import_refuses_a_document_the_reader_refuses_with_the_readers_message(
+    tmp_path: Path, closes_at_teardown: ExitStack
+) -> None:
+    """task961-eta: the import answers a 400 carrying load_scenario's own refusal of a document with a misspelt top-level key, and runs nothing."""
+    path = _written(tmp_path, {**FLEET_DISTRIBUTION, "finanse": FLEET_DISTRIBUTION["finance"]})
+    with pytest.raises(ConfigurationError) as refused:
+        load_scenario(path)
+    recorder = RecordingSimulate()
+    client = app_builder(closes_at_teardown)(
+        tmp_path / "dashboard", jobs=functools.partial(JobManager, runner=answering(recorder))
+    ).test_client()
+
+    imported = client.post("/api/fleet/import-yaml", data=path.read_text(encoding="utf-8"), content_type="text/yaml")
+
+    assert (imported.status_code, imported.get_json()) == (400, {"error": str(refused.value)})
     assert recorder.fleets == []
