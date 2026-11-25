@@ -20,7 +20,7 @@ from solar_challenge.cli.utils import (
     required_finance,
     with_window_options,
 )
-from solar_challenge.config import ScenarioConfig, load_scenario
+from solar_challenge.config import load_scenario
 from solar_challenge.finance import (
     DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
     BillDistribution,
@@ -42,6 +42,7 @@ from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
 from solar_challenge.projection import (
     ProjectEconomics,
+    ScenarioFleet,
     project_economics,
     project_fleet,
     run_cost_recovery,
@@ -91,21 +92,20 @@ def _bill_finances(
 
 def _economics_and_solution(
     cli: CliInvocation,
-    scenario_config: ScenarioConfig,
+    fleet: ScenarioFleet,
     finance: FinanceConfig,
     simulate: FleetSimulate,
     *,
     project: bool,
     cost_recovery: bool,
 ) -> tuple[Optional[ProjectEconomics], Optional[CostRecoverySolution]]:
-    """The project-level economics (DSCR/IRR/payback) if *project* and the cost-recovery solution if *cost_recovery* of *scenario_config*'s fleet under *finance*, from one projection run by *simulate*, after printing *cli*'s status line announcing each."""
+    """The project-level economics (DSCR/IRR/payback) if *project* and the cost-recovery solution if *cost_recovery* of *fleet* under *finance*, from one projection run by *simulate*, after printing *cli*'s status line announcing each."""
     if project:
         print_info(cli, "Computing project-level economics (DSCR/IRR/payback)…")
     if cost_recovery:
         print_info(cli, "Solving cost-recovery own-use rate…")
     if not (project or cost_recovery):
         return None, None
-    fleet = scenario_fleet(scenario_config)
     if cost_recovery:
         run = run_cost_recovery(fleet, finance, simulate=simulate)
         return (run.economics if project else None), run.solution
@@ -185,12 +185,13 @@ def run(
     pricing = grid_services_model_of(finance)
     band = flex_band if flex_band is not None else scenario_config.flex_band
 
-    fleet_config = FleetConfig(homes=scenario_config.simulated_homes(), name=scenario_config.name)
-    start_date, end_date = scenario_config.simulation_bounds()
+    fleet = scenario_fleet(scenario_config)
 
     cli = invocation(ctx)
-    print_info(cli, f"Simulating fleet of {len(fleet_config.homes)} homes for {scenario_config.window().days} days…")
-    fleet_results = cli.runner.simulate(fleet_config, start_date, end_date)
+    print_info(cli, f"Simulating fleet of {len(fleet.homes)} homes for {scenario_config.window().days} days…")
+    fleet_results = cli.runner.simulate(
+        FleetConfig(homes=fleet.homes, name=scenario_config.name), fleet.start, fleet.end
+    )
     grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
 
     summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
@@ -202,9 +203,9 @@ def run(
         else None
     )
 
-    simulate = reusing(cli.runner.simulate, fleet_results, start_date, end_date)
+    simulate = reusing(cli.runner.simulate, fleet_results, fleet.start, fleet.end)
     economics_result, cost_recovery_result = _economics_and_solution(
-        cli, scenario_config, finance, simulate, project=project, cost_recovery=cost_recovery
+        cli, fleet, finance, simulate, project=project, cost_recovery=cost_recovery
     )
 
     report = generate_finance_report(

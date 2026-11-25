@@ -99,6 +99,7 @@ def test_a_flag_that_is_not_a_date_is_a_usage_error_before_any_simulation(
     result, recorder = _invoke(command, _write_scenario(tmp_path), command_options, ("--start", "2024"))
 
     assert result.exit_code == 2, result.output
+    assert "'--start'" in result.output
     assert recorder.fleets == []
 
 
