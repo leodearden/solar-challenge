@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import itertools
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
 
@@ -199,10 +199,10 @@ class RankedSweep:
             desc, pv_kwp asc, battery_kwh asc, inverter_kw asc).
         infeasible: :class:`ConfigPoint` objects whose
             ``binding == 'infeasible_above_retail'``, in input order.
-        retained_cash_floor_gbp: The effective retained-cash floor used for
-            the solve across all grid cells (£/home/year).  Echoes
-            ``retained_cash_floor_gbp`` passed to :func:`run_sweep` when
-            non-None, otherwise ``scenario.finance.retained_cash_floor_per_home_per_year_gbp``.
+        retained_cash_floor_gbp: The retained-cash floor every config's
+            finance sets, ``finance.retained_cash_floor_per_home_per_year_gbp``,
+            which :func:`run_sweep` requires to be one (£/home/year): the
+            floor of every grid cell's solve.
         cheapest_feasible: :class:`ConfigPoint` with the lowest
             ``representative_outlay_gbp`` (== ``results[0].config``), or
             ``None`` when ``results`` is empty.
@@ -219,7 +219,7 @@ class RankedSweep:
     """ConfigPoints with binding=='infeasible_above_retail', in input order."""
 
     retained_cash_floor_gbp: float
-    """Effective retained-cash floor used for the solve (£/home/year)."""
+    """The configs' common retained-cash floor, every solve's (£/home/year)."""
 
     cheapest_feasible: Optional[ConfigPoint]
     """ConfigPoint with lowest outlay (results[0].config), or None."""
@@ -756,7 +756,6 @@ def _evaluate_config(
     scenario: ScenarioConfig,
     *,
     simulate: FleetSimulate,
-    retained_cash_floor_gbp: Optional[float],
 ) -> ConfigResult:
     """Evaluate one (ConfigPoint, ScenarioConfig) pair with one :func:`~solar_challenge.projection.run_cost_recovery`.
 
@@ -767,22 +766,15 @@ def _evaluate_config(
 
     Args:
         point: Install specification for this grid cell.
-        scenario: Fleet scenario for this grid cell (from :func:`enumerate_configs`).
+        scenario: Fleet scenario for this grid cell (from :func:`enumerate_configs`);
+            its finance block sets the retained-cash floor of the solve, which the
+            baseline pair does not read.
         simulate: Injected fleet simulator callable.
-        retained_cash_floor_gbp: When not None, overrides
-            ``scenario.finance.retained_cash_floor_per_home_per_year_gbp`` before
-            the solve; the baseline pair reads no floor, so it remains
-            floor-independent.
 
     Returns:
         :class:`ConfigResult` with all fields populated.
     """
     finance = _required_finance(point, scenario)
-
-    # Apply retained_cash_floor_gbp override if provided
-    if retained_cash_floor_gbp is not None:
-        finance = replace(finance, retained_cash_floor_per_home_per_year_gbp=retained_cash_floor_gbp)
-
     run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=simulate)
     solution = run.solution
     econ = run.economics
@@ -809,14 +801,13 @@ def _evaluate_config(
 def run_sweep(
     configs: List[tuple[ConfigPoint, ScenarioConfig]],
     *,
-    retained_cash_floor_gbp: Optional[float] = None,
     simulate: FleetSimulate,
 ) -> RankedSweep:
     """Drive a cartesian config grid through cost-recovery evaluation and rank results.
 
     For each (ConfigPoint, ScenarioConfig) pair produced by :func:`enumerate_configs`,
     makes one :func:`~solar_challenge.projection.run_cost_recovery` at the
-    (possibly overridden) retained-cash floor: its solution gives the *rank*
+    retained-cash floor its finance sets: its solution gives the *rank*
     fields, its economics the baseline surplus and economics, and its
     projection's age-0 summaries the baseline outlay, all at
     ``finance.own_use_rate_pence_per_kwh``.
@@ -829,20 +820,17 @@ def run_sweep(
     Args:
         configs: List of ``(ConfigPoint, ScenarioConfig)`` pairs, typically from
             :func:`enumerate_configs`.  Must be non-empty; every scenario must
-            carry a ``finance`` block (not None).
-        retained_cash_floor_gbp: When not None, overrides each scenario's
-            ``finance.retained_cash_floor_per_home_per_year_gbp`` before the
-            solve.  The baseline (outlay, surplus) pair is floor-independent
-            (the configured own-use rate stays fixed).  When None, the echoed
-            ``RankedSweep.retained_cash_floor_gbp`` is the floor every
-            config's finance block sets.
+            carry a ``finance`` block (not None), and every finance block must
+            set the same ``retained_cash_floor_per_home_per_year_gbp``: set the
+            floor on the base scenario, through its knob, before enumerating.
         simulate: The fleet simulator every config's projection runs
             through, such as a :class:`~solar_challenge.fleet.FleetRunner`'s
             ``simulate``.
 
     Returns:
         :class:`RankedSweep` with sorted feasible results, infeasible points,
-        Pareto front, cheapest config, and the effective retained-cash floor.
+        Pareto front, cheapest config, and the configs' common retained-cash
+        floor.
 
     Raises:
         ValueError: When *configs* is empty, any scenario's ``finance`` is
@@ -865,12 +853,7 @@ def run_sweep(
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [
-        _evaluate_config(
-            point,
-            scenario,
-            simulate=simulate,
-            retained_cash_floor_gbp=retained_cash_floor_gbp,
-        )
+        _evaluate_config(point, scenario, simulate=simulate)
         for point, scenario in configs
     ]
 
@@ -887,7 +870,7 @@ def run_sweep(
     return RankedSweep(
         results=tuple(ranked_feasible),
         infeasible=tuple(infeasible_pts),
-        retained_cash_floor_gbp=common_floor if retained_cash_floor_gbp is None else retained_cash_floor_gbp,
+        retained_cash_floor_gbp=common_floor,
         cheapest_feasible=cheapest,
         pareto_baseline=pareto,
     )
