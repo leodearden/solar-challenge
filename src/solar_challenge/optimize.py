@@ -547,7 +547,7 @@ def sensitivity_panel(
                 ranked = _sweep_cache[cache_key]
             # Special-case: floor axis must go through run_sweep's override to
             # avoid panel-floor clobber / double-apply.
-            elif knob is _RETAINED_FLOOR_KNOB:
+            elif knob == _RETAINED_FLOOR_KNOB:
                 # Short-circuit: same floor value as the panel baseline.
                 if v == retained_cash_floor_gbp:
                     ranked = base

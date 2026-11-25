@@ -10,6 +10,7 @@ simulation results come from tests/_finance_builders.py.
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 from typing import Optional
 
@@ -527,6 +528,21 @@ class TestRetainedFloorAxis:
             assert axis.top_config_per_value[i] == expected.cheapest_feasible, (
                 f"top_config_per_value[{i}] mismatch at floor={v}"
             )
+
+    def test_a_copy_of_the_floor_knob_is_routed_as_the_floor_axis(self) -> None:
+        """A knob equal to the registry's floor knob, though not it, sets each sweep's floor over the panel floor."""
+        floor_knob = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
+        floor_copy = copy.deepcopy(floor_knob)
+        assert floor_copy == floor_knob and floor_copy is not floor_knob
+
+        panel = sensitivity_panel(
+            self._setup(),
+            axes={floor_copy: [9_999_999.0]},
+            retained_cash_floor_gbp=50.0,
+            simulate=_paired_const_simulate,
+        )
+
+        assert panel.axes[0].top_config_per_value == (None,)
 
     def test_floor_axis_very_high_yields_none_top(self) -> None:
         """A sufficiently high floor makes all configs infeasible → None top, no crash."""
