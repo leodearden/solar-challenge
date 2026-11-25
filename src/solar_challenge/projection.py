@@ -13,6 +13,8 @@ Provides:
   - ``FleetProjection`` — frozen dataclass of a fleet's projection curve and
     its age-0 per-home summaries.
   - ``MAX_NODES`` — cap on the number of ages a projection interpolates through.
+  - ``fewest_simulated_ages`` — the fewest ages a projection over an asset life
+    simulates.
   - ``project_fleet`` — forward-march driver for adaptive PCHIP projection of a
     ScenarioFleet.
   - ``project_multi_year`` — ``project_fleet`` of a scenario's fleet, its curve.
@@ -387,6 +389,17 @@ def _interpolate_per_year(
 MAX_NODES: int = 12
 
 
+def _seed_ages(asset_life: int) -> tuple[int, ...]:
+    """The ages every projection over *asset_life* years simulates first, ascending: 0, asset_life // 2 and asset_life - 1."""
+    return (0, *sorted({asset_life // 2, asset_life - 1} - {0}))
+
+
+def fewest_simulated_ages(asset_life_years: int) -> int:
+    """The fewest ages a projection over *asset_life_years* simulates: its seed ages and the midpoints its first bisection pass always simulates."""
+    seeds = _seed_ages(asset_life_years)
+    return len(seeds) + len(_bisection_midpoints(seeds))
+
+
 class _AggregateShape(Enum):
     """Whether a :class:`_NodeData` aggregate holds one value for the fleet or one per home, in fleet order."""
 
@@ -677,9 +690,10 @@ def _nodes_of(simulated: Mapping[int, _SimulatedAge]) -> dict[int, _NodeData]:
 
 
 def _simulated_seeds(simulate_at: _SimulateAt, n_homes: int, asset_life: int) -> dict[int, _SimulatedAge]:
-    """The seed ages 0, asset_life // 2 and asset_life - 1 simulated ascending, each aged by :func:`_throughput_at` over the seeds before it."""
-    simulated = {0: simulate_at(0, [0.0] * n_homes)}
-    for age in sorted({asset_life // 2, asset_life - 1} - {0}):
+    """The :func:`_seed_ages` simulated ascending, each aged by :func:`_throughput_at` over the seeds before it."""
+    first, *later = _seed_ages(asset_life)
+    simulated = {first: simulate_at(first, [0.0] * n_homes)}
+    for age in later:
         simulated[age] = simulate_at(age, _throughput_at(age, _nodes_of(simulated)))
     return simulated
 
