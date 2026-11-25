@@ -11,11 +11,11 @@ whether the service served it, never by what it served:
   request it does not serve, then exit os.EX_TEMPFAIL: 75, the outage status of
   dark-factory's LaneCommand.outage_probe. The causes are a fixed vocabulary, so
   the line is identical on every run of one outage: "HTTP <status>" for a 403, a
-  429 or any 5xx; "no answer within <timeout> s"; "ChunkedEncodingError" for an
-  answer whose body is cut short; or the name of the requests ConnectionError
-  raised (ConnectionError, ProxyError, SSLError, ...), among them the
-  ConnectionError requests raises for a body that stops arriving for the
-  timeout. The URL and the detail go to stderr.
+  429 or any 5xx; "no answer within <timeout> s" for an answer, or the rest of a
+  body the probe reads, that does not arrive for the timeout; "ChunkedEncodingError"
+  for an answer whose body is cut short; or the name of the requests
+  ConnectionError raised (ConnectionError, ProxyError, SSLError, ...). The URL
+  and the detail go to stderr.
 - Any other status is the service answering, so it is usable: whether its answer
   is right is the job's tests' question.
 - Any other exception propagates, a traceback and exit 1, which the lane reads as
@@ -107,10 +107,33 @@ def _is_outage_status(status: int) -> bool:
     return status in (HTTPStatus.FORBIDDEN, HTTPStatus.TOO_MANY_REQUESTS) or status >= HTTPStatus.INTERNAL_SERVER_ERROR
 
 
+def _caused_by_a_timeout(error: BaseException) -> bool:
+    """Whether a builtin TimeoutError is among the exceptions that led to *error*, following each one's __cause__, else its __context__."""
+    seen: set[int] = set()
+    link: BaseException | None = error
+    while link is not None and id(link) not in seen:
+        if isinstance(link, TimeoutError):
+            return True
+        seen.add(id(link))
+        link = link.__cause__ or link.__context__
+    return False
+
+
 def _read_body_whole(response: requests.Response) -> None:
-    """Read all of *response*'s body a chunk at a time, discarding it; requests raises when the body is cut short or stops arriving for the timeout."""
-    for _ in response.iter_content(chunk_size=1 << 16):
-        pass
+    """Read all of *response*'s body a chunk at a time, discarding it.
+
+    A body cut short raises ChunkedEncodingError. One that stops arriving for
+    the timeout raises ReadTimeout, as an answer that never starts does: requests
+    wraps the read's timeout in a bare ConnectionError, which would name a stall
+    the refused connection's cause. Any other ConnectionError is raised as it is.
+    """
+    try:
+        for _ in response.iter_content(chunk_size=1 << 16):
+            pass
+    except requests.ConnectionError as error:
+        if _caused_by_a_timeout(error):
+            raise requests.exceptions.ReadTimeout(error, response=response) from error
+        raise
 
 
 def _outage_at(request: _Request, timeout: float) -> _Outage | None:
