@@ -12,6 +12,7 @@ import yaml
 from typer.testing import CliRunner, Result
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.board_report import generate_config_ranking_report
 from solar_challenge.cli.main import app
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig, FleetResults
@@ -22,7 +23,6 @@ from solar_challenge.optimize import (
     SensitivityAxis,
     SensitivityPanel,
 )
-from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.projection import fewest_simulated_ages
 from solar_challenge.scenario_knobs import KNOBS, knob_named
 from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli, simulate_reaching_the_sweep

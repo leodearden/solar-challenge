@@ -19,12 +19,12 @@ import warnings
 
 import pandas as pd
 
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.config import load_config, load_fleet_config
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary, simulate_home
-from solar_challenge.output import generate_finance_report
 from solar_challenge.tariff import PRESET_RATES
 from tests._finance_builders import make_window
 from tests._synthetic_weather import sunless_weather, weather_for
@@ -180,7 +180,7 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step-5: finance report flex block (RED until output.py is extended)
+# Step-5: finance report flex block (RED until board_report.py is extended)
 # ---------------------------------------------------------------------------
 
 

@@ -12,11 +12,11 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.battery import Battery
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.main import app
 from solar_challenge.finance import BillDistribution
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig
-from solar_challenge.output import generate_finance_report
 from solar_challenge.projection import fewest_simulated_ages
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
 from tests._factories import (
@@ -65,7 +65,7 @@ def _value_cell(report: str, heading: str, label: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# §B — output.py cost-recovery block
+# §B — board_report.py cost-recovery block
 # ---------------------------------------------------------------------------
 
 
