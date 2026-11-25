@@ -1289,7 +1289,7 @@ class TestFleetRunNamesTheHomeWhoseSimulationFailed:
         result = _run_fleet("run", "fleet.yaml")
 
         assert result.exit_code == 1, result.output
-        assert "Invalid value: the weather for" in " ".join(result.stderr.split())
+        assert "Invalid value: the weather's air temperature has" in " ".join(result.stderr.split())
         assert "not one year of hourly rows" in " ".join(result.stderr.split())
         lines = [line.strip() for line in result.stderr.splitlines()]
         refusal = next(index for index, line in enumerate(lines) if "Invalid value:" in line)
