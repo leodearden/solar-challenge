@@ -4,11 +4,12 @@
 Each chart builder returns a frozen ChartPanel: the chart's element id, the title and height its
 card and its figure share, and its Plotly figure JSON, or a ChartAbsence whose reason names the
 rule the run does not meet and the run's value. _panel, each builder's one exit, writes the title
-and height into the figure's layout, so each lives once. heat_pump_analysis returns its two panels,
-and sweep_panels one per SweepMetric, each marking its best point by the metric's direction.
+and height into the figure's layout, so each lives once. load_panels returns the demand-by-load
+panel and a profile panel per additional load, and sweep_panels one per SweepMetric, each marking
+its best point by the metric's direction.
 Each page's assembler, home_results_tabs, fleet_results_tabs or comparison_tabs, groups the panels
 of the charts that apply to its run into ChartTabs; a chart whose subject the run lacks, a battery
-or a heat-pump load, is not listed. The comparison charts draw each ComparedRun from its
+or an additional load, is not listed. The comparison charts draw each ComparedRun from its
 RunHeadline, the figures web/run_headline.py's run_headline reads from a run's summary of either
 kind. ChartPanel, ChartAbsence, ChartTab and ComparedRun each refuse at construction, naming the
 field and the value, what no page can draw.
@@ -643,54 +644,6 @@ def _seasonal_comparison_figure(results: SimulationResults) -> go.Figure:
     return fig
 
 
-def heat_pump_analysis(results: SimulationResults) -> tuple[ChartPanel, ChartPanel]:
-    """The panels of the heat pump's share of *results*'s demand and of its load over time.
-
-    Raises:
-        ValueError: If *results* carries no heat-pump load; the message names it.
-    """
-    if results.heat_pump_load is None:
-        _refuse("results.heat_pump_load", results.heat_pump_load, "a heat-pump load series")
-
-    # --- Load share pie chart ---
-    totals = results.total_amounts()
-    hp_total = totals["heat_pump_load_kwh"]
-    total_demand = totals["demand_kwh"]
-    other_demand = max(0, total_demand - hp_total)
-
-    pie_fig = go.Figure(data=[go.Pie(
-        labels=["Heat Pump", "Other Demand"],
-        values=[round(hp_total, 1), round(other_demand, 1)],
-        marker=dict(colors=[COLOUR_PALETTE["heat_pump"], COLOUR_PALETTE["demand"]]),
-        hole=0.4,
-    )])
-    pie_fig.update_layout(**_SHARED_LAYOUT)
-
-    # --- Heat pump load profile over time ---
-    hp_series = _adaptive_downsample(results.heat_pump_load)
-    dates = [d.isoformat() for d in hp_series.index]
-
-    load_fig = go.Figure(data=[go.Scatter(
-        name="Heat Pump Load",
-        x=dates,
-        y=hp_series.round(4).tolist(),
-        mode="lines",
-        fill="tozeroy",
-        line=dict(color=COLOUR_PALETTE["heat_pump"], width=1),
-        fillcolor=_with_alpha(COLOUR_PALETTE["heat_pump"], 0.15),
-    )])
-    load_fig.update_layout(
-        **_SHARED_LAYOUT,
-        xaxis=dict(title="Time"),
-        yaxis=dict(title="Power (kW)"),
-    )
-
-    return (
-        _panel("chart-hp-load-share", "Heat Pump Share of Demand", 400, pie_fig),
-        _panel("chart-hp-load-profile", "Heat Pump Load Profile", 400, load_fig),
-    )
-
-
 def load_panels(results: SimulationResults) -> tuple[ChartPanel, ...]:
     """The panels of *results*'s loads: none for a run whose demand is the household's alone; otherwise the demand-by-load panel, then each additional load's profile panel, in LoadKind order."""
     if not results.additional_loads:
@@ -1203,11 +1156,10 @@ def sweep_panels(parameter_label: str, points: Sequence[SweepPoint]) -> tuple[Ch
 def home_results_tabs(
     config: HomeConfig, results: SimulationResults, summary: SummaryStatistics
 ) -> tuple[ChartTab, ...]:
-    """The chart tabs of a home run's results page: the battery's chart only for a home with a battery, and the heat-pump charts only for a run with a heat-pump load."""
+    """The chart tabs of a home run's results page: the battery's chart only for a home with a battery, and the load charts only for a run with an additional load."""
     battery_panels: tuple[ChartPanel, ...] = (
         () if config.battery_config is None else (battery_soc_chart(results, config.battery_config),)
     )
-    heat_pump_panels: tuple[ChartPanel, ...] = () if results.heat_pump_load is None else heat_pump_analysis(results)
     return (
         ChartTab("overview", "Overview", (sankey_diagram(summary), daily_energy_balance(results))),
         ChartTab("power_flow", "Power Flow", (power_flow_timeline(results),)),
@@ -1216,7 +1168,7 @@ def home_results_tabs(
             "Battery & Finance",
             (*battery_panels, financial_breakdown(results, config), monthly_summary(results)),
         ),
-        ChartTab("analysis", "Analysis", (seasonal_comparison(results), *heat_pump_panels)),
+        ChartTab("analysis", "Analysis", (seasonal_comparison(results), *load_panels(results))),
     )
 
 
