@@ -825,15 +825,16 @@ def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
     return detect_sweep_spec(distribution)
 
 
-def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig]]:
-    """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
+def parse_sweep_scenarios(document: object) -> list[tuple[float, ScenarioConfig]]:
+    """The scenario each point of the document's YAML-defined sweep builds, with its sweep value.
 
     The document is a bare scenario whose homes source is a fleet_distribution: block whose
-    battery.capacity_kwh multiplier sweeps. Its scenario-level blocks are read once, as
-    parse_scenario reads them, and every point's homes get them as parse_fleet_config gives them.
+    battery.capacity_kwh multiplier sweeps. Its scenario-level blocks (its name, location,
+    period, tariff, seg, finance and flex_band) are read once, as parse_scenario reads them, and
+    hold that point's generated homes.
 
     Returns:
-        (sweep value, FleetConfig named after it) for each sweep point, in sweep order
+        (sweep value, the scenario holding that point's homes) for each sweep point, in sweep order
 
     Raises:
         ConfigurationError: as parse_scenario refuses the document's keys and scenario-level
@@ -843,14 +844,25 @@ def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig
     """
     blocks, distribution = _read_fleet_distribution_scenario(document)
     return [
-        (
-            value,
-            FleetConfig(
-                homes=blocks.scenario(homes=blocks.homes_generated_by(point)).simulated_homes(),
-                name=f"multiplier={value:.4f}",
-            ),
-        )
+        (value, blocks.scenario(homes=blocks.homes_generated_by(point)))
         for value, point in expand_sweep_configs(distribution)
+    ]
+
+
+def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig]]:
+    """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
+
+    Each fleet is the simulated homes of the point's scenario, as parse_sweep_scenarios builds it.
+
+    Returns:
+        (sweep value, FleetConfig named after it) for each sweep point, in sweep order
+
+    Raises:
+        ConfigurationError: as parse_sweep_scenarios refuses the document
+    """
+    return [
+        (value, FleetConfig(homes=scenario.simulated_homes(), name=f"multiplier={value:.4f}"))
+        for value, scenario in parse_sweep_scenarios(document)
     ]
 
 
