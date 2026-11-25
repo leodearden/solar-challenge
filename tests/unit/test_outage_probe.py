@@ -181,11 +181,11 @@ def test_a_pvgis_answer_whose_body_is_cut_short_is_an_outage_named_on_one_line(
 def test_a_pvgis_answer_whose_body_stops_arriving_is_an_outage_within_the_timeout(
     probe: ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """requests names a body that stops arriving for the timeout a ConnectionError, not a Timeout."""
+    """A body that stops arriving for the timeout is no answer within it, as a status line that never comes is (test_no_answer_within_the_timeout_is_an_outage), so one stall prints one line wherever in the answer it falls."""
     with _stand_in({}, body_faults={"tmy": _BodyFault.STALLED}) as (origin, _):
         exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin), "--timeout", "0.2"])
 
-    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, "PVGIS: tmy: ConnectionError\n")
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, "PVGIS: tmy: no answer within 0.2 s\n")
 
 
 def test_a_connection_this_machine_refuses_is_an_outage(probe: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
