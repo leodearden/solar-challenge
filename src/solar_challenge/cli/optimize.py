@@ -41,6 +41,9 @@ app = typer.Typer(help="Discrete install-config sweep and optimisation commands"
 # The knob the flat grid-services pricing reads: what --grid-services-kw sets.
 _FLAT_RATE_KNOB = KNOBS["grid_services_income_per_kw_per_year_gbp"]
 
+# The knob the cost-recovery solve's retained-cash floor reads: what --retained-floor sets.
+_RETAINED_FLOOR_KNOB = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
+
 # The --sensitivity names swept when the flag is not given, in report order.
 _DEFAULT_SENSITIVITY_NAMES: tuple[str, ...] = ("retained_floor", "grid_services")
 
@@ -173,6 +176,13 @@ def _with_grid_services_kw(
     return _FLAT_RATE_KNOB.apply(scenario, grid_services_kw)
 
 
+def _with_retained_floor(scenario: ScenarioConfig, retained_floor: Optional[float]) -> ScenarioConfig:
+    """*scenario* with *retained_floor* as its retained-cash floor, or *scenario* itself when it is None."""
+    if retained_floor is None:
+        return scenario
+    return _RETAINED_FLOOR_KNOB.apply(scenario, retained_floor)
+
+
 @app.command()
 @handle_errors
 def configs(
@@ -213,8 +223,9 @@ def configs(
         typer.Option(
             "--retained-floor",
             help=(
-                "Override the CBS retained-cash floor (£/home/yr) used by run_sweep "
-                "and sensitivity_panel.  Defaults to the scenario finance block value."
+                "Set the CBS retained-cash floor (£/home/yr) on the scenario's finance "
+                "block before enumeration, as the retained_floor knob does.  Defaults to "
+                "the finance block's value."
             ),
         ),
     ] = None,
@@ -283,7 +294,9 @@ def configs(
     # ---- Load the scenario and its finance block -----------------------------
     scenario_config = with_window_options(load_scenario(scenario), start=start, end=end)
     pricing = grid_services_model_of(required_finance(scenario_config))
-    base = _with_grid_services_kw(scenario_config, grid_services_kw, pricing)
+    base = _with_retained_floor(
+        _with_grid_services_kw(scenario_config, grid_services_kw, pricing), retained_floor
+    )
     finance = required_finance(base)
     sensitivity_axes, left_out_of_the_default = _resolve_sensitivity_axes(requested_sensitivity, pricing)
     for name in left_out_of_the_default:
@@ -322,7 +335,7 @@ def configs(
     # ---- Run sweep ----------------------------------------------------------
     print_info(cli, "Solving cost-recovery rates…")
     simulate = cli.runner.simulate
-    ranked = run_sweep(all_configs, retained_cash_floor_gbp=retained_floor, simulate=simulate)
+    ranked = run_sweep(all_configs, simulate=simulate)
 
     # Report sweep summary so the user knows what to expect in the report.
     n_feasible = len(ranked.results)
@@ -349,12 +362,7 @@ def configs(
     if sensitivity_axes and ranked.cheapest_feasible is not None:
         axes_map = {knob: SENSITIVITY_BANDS[knob] for _, knob in sensitivity_axes}
         print_info(cli, f"Computing sensitivity panel for axes: {[name for name, _ in sensitivity_axes]}…")
-        panel = sensitivity_panel(
-            all_configs,
-            axes_map,
-            retained_cash_floor_gbp=retained_floor,
-            simulate=simulate,
-        )
+        panel = sensitivity_panel(all_configs, axes_map, baseline=ranked, simulate=simulate)
     elif sensitivity_axes and ranked.cheapest_feasible is None:
         # Explicit user message when axes were requested but there is no feasible
         # baseline — sensitivity_panel would raise immediately, so we skip it.

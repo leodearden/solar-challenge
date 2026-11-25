@@ -10,8 +10,8 @@ simulation results come from tests/_finance_builders.py.
 """
 from __future__ import annotations
 
-import copy
 import dataclasses
+from collections.abc import Mapping, Sequence
 from typing import Optional
 
 import pytest
@@ -30,7 +30,7 @@ from solar_challenge.optimize import (
     run_sweep,
     sensitivity_panel,
 )
-from solar_challenge.scenario_knobs import KNOBS
+from solar_challenge.scenario_knobs import KNOBS, Knob
 from solar_challenge.seg import SEGTariff
 from tests._finance_builders import (
     make_fleet_results,
@@ -39,6 +39,7 @@ from tests._finance_builders import (
     make_sim_results,
 )
 from tests._fleet_simulate_stand_in import answering_with
+from tests._recording_simulate import recording
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +102,18 @@ _CONST_FLEET_RESULTS: FleetResults = make_fleet_results(
 
 
 _paired_const_simulate: FleetSimulate = answering_with(_CONST_FLEET_RESULTS)
+
+
+def _panel(
+    base_configs: list[tuple[ConfigPoint, ScenarioConfig]],
+    axes: Mapping[Knob, Sequence[float]],
+    *,
+    simulate: FleetSimulate = _paired_const_simulate,
+) -> SensitivityPanel:
+    """sensitivity_panel over *base_configs*, given the baseline that run_sweep returns for them."""
+    return sensitivity_panel(
+        base_configs, axes, baseline=run_sweep(base_configs, simulate=simulate), simulate=simulate
+    )
 
 
 def _home_seg_rates(homes) -> list[Optional[float]]:  # type: ignore[no-untyped-def]
@@ -208,6 +221,19 @@ class TestSensitivityDataclasses:
                 top_config_per_value=(),
             )
 
+    def test_sensitivity_axis_repeated_value_raises(self) -> None:
+        """A value repeated within an axis raises ValueError naming the axis and the value."""
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
+        with pytest.raises(ValueError) as refusal:
+            SensitivityAxis(
+                name="x",
+                values=(1.0, 2.0, 1.0),
+                rankings=((pt,), (pt,), (pt,)),
+                top_config_per_value=(pt, pt, pt),
+            )
+        assert "'x'" in str(refusal.value)
+        assert "1.0" in str(refusal.value)
+
     def test_sensitivity_axis_length_mismatch_rankings(self) -> None:
         """len(values) != len(rankings) raises ValueError."""
         pt = ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.6)
@@ -307,7 +333,7 @@ class TestSensitivityPanelStructure:
     def test_one_axis_length(self) -> None:
         """Panel has exactly one SensitivityAxis when one axis is swept."""
         base_configs, simulate = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0, 48.0]},
             simulate=simulate,
@@ -317,7 +343,7 @@ class TestSensitivityPanelStructure:
     def test_axis_values_preserved(self) -> None:
         """SensitivityAxis.values equals the input sequence as a float tuple."""
         base_configs, simulate = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0, 48.0]},
             simulate=simulate,
@@ -328,7 +354,7 @@ class TestSensitivityPanelStructure:
         """rankings and top_config_per_value both have length == len(values)."""
         base_configs, simulate = self._setup()
         n_values = 3
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0, 48.0]},
             simulate=simulate,
@@ -340,7 +366,7 @@ class TestSensitivityPanelStructure:
     def test_baseline_top_equals_run_sweep_cheapest_feasible(self) -> None:
         """panel.baseline_top == run_sweep(base_configs, simulate=...).cheapest_feasible."""
         base_configs, simulate = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0]},
             simulate=simulate,
@@ -351,12 +377,156 @@ class TestSensitivityPanelStructure:
     def test_rank_stability_in_range(self) -> None:
         """panel.rank_stability is in [0.0, 1.0]."""
         base_configs, simulate = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0, 48.0]},
             simulate=simulate,
         )
         assert 0.0 <= panel.rank_stability <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# TestBaseline — the panel takes its caller's baseline sweep
+# ---------------------------------------------------------------------------
+
+
+class TestBaseline:
+    """sensitivity_panel takes the baseline sweep its caller ran over base_configs: it sweeps
+    each axis value once, reuses the baseline for a value that leaves every scenario equal, and
+    refuses, before any simulation, a baseline of other points or another floor and a repeated value.
+    """
+
+    def _base_configs(self, pv_kwp: float = 4.0) -> list[tuple[ConfigPoint, ScenarioConfig]]:
+        """One with-battery config at *pv_kwp* on _interior_finance (floor 50, battery cost 250, grid services 0)."""
+        return enumerate_configs(
+            _make_scenario(n_homes=_N_HOMES, finance=_interior_finance()),
+            pv_kwp=[pv_kwp],
+            battery_kwh=[6.0],
+            inverter_kw=[3.6],
+        )
+
+    def test_the_panel_sweeps_each_value_once_and_never_its_baseline(self) -> None:
+        base_configs = self._base_configs()
+        one_sweep: list[FleetConfig] = []
+        baseline = run_sweep(base_configs, simulate=recording(one_sweep, _paired_const_simulate))
+        panel_asked: list[FleetConfig] = []
+
+        sensitivity_panel(
+            base_configs,
+            {KNOBS["battery_cost_per_kwh_gbp"]: [200.0, 400.0]},
+            baseline=baseline,
+            simulate=recording(panel_asked, _paired_const_simulate),
+        )
+
+        assert len(panel_asked) == 2 * len(one_sweep)
+
+    @pytest.mark.parametrize(
+        ("knob_name", "own_value", "other_value"),
+        [
+            ("retained_cash_floor_per_home_per_year_gbp", 50.0, 60.0),
+            ("battery_cost_per_kwh_gbp", 250.0, 400.0),
+            ("grid_services_income_per_kw_per_year_gbp", 0.0, 12.0),
+        ],
+    )
+    def test_a_value_that_leaves_every_scenario_equal_reuses_the_baseline(
+        self, knob_name: str, own_value: float, other_value: float
+    ) -> None:
+        assert getattr(_interior_finance(), knob_name) == own_value
+        base_configs = self._base_configs()
+        one_sweep: list[FleetConfig] = []
+        baseline = run_sweep(base_configs, simulate=recording(one_sweep, _paired_const_simulate))
+        panel_asked: list[FleetConfig] = []
+
+        panel = sensitivity_panel(
+            base_configs,
+            {KNOBS[knob_name]: [own_value, other_value]},
+            baseline=baseline,
+            simulate=recording(panel_asked, _paired_const_simulate),
+        )
+
+        axis = panel.axes[0]
+        assert len(panel_asked) == len(one_sweep)
+        assert axis.rankings[0] == tuple(r.config for r in baseline.results)
+        assert axis.top_config_per_value[0] == baseline.cheapest_feasible
+
+    def test_a_baseline_of_other_points_is_refused_naming_both(self) -> None:
+        base_configs = self._base_configs(pv_kwp=4.0)
+        baseline = run_sweep(self._base_configs(pv_kwp=5.0), simulate=_paired_const_simulate)
+        panel_asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError) as refusal:
+            sensitivity_panel(
+                base_configs,
+                {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
+                baseline=baseline,
+                simulate=recording(panel_asked, _paired_const_simulate),
+            )
+
+        assert "pv_kwp=4.0" in str(refusal.value)
+        assert "pv_kwp=5.0" in str(refusal.value)
+        assert panel_asked == []
+
+    def test_a_baseline_at_another_floor_is_refused_naming_both_floors(self) -> None:
+        base_configs = self._base_configs()
+        floor_knob = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
+        baseline = run_sweep(
+            [(point, floor_knob.apply(scenario, 60.0)) for point, scenario in base_configs],
+            simulate=_paired_const_simulate,
+        )
+        panel_asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError) as refusal:
+            sensitivity_panel(
+                base_configs,
+                {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
+                baseline=baseline,
+                simulate=recording(panel_asked, _paired_const_simulate),
+            )
+
+        assert "50.0" in str(refusal.value)
+        assert "60.0" in str(refusal.value)
+        assert panel_asked == []
+
+    def test_base_configs_at_two_floors_are_refused_naming_both_floors_and_no_run_sweep(self) -> None:
+        """The panel refuses base_configs at two floors as any cost-recovery sweep does: its refusal names both floors, not a run_sweep its caller never called."""
+        floor_knob = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
+        base_configs = self._base_configs(pv_kwp=4.0) + [
+            (point, floor_knob.apply(scenario, 60.0)) for point, scenario in self._base_configs(pv_kwp=5.0)
+        ]
+        baseline = run_sweep(
+            self._base_configs(pv_kwp=4.0) + self._base_configs(pv_kwp=5.0), simulate=_paired_const_simulate
+        )
+        panel_asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError, match="one retained-cash floor") as refusal:
+            sensitivity_panel(
+                base_configs,
+                {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
+                baseline=baseline,
+                simulate=recording(panel_asked, _paired_const_simulate),
+            )
+
+        assert "50.0" in str(refusal.value)
+        assert "60.0" in str(refusal.value)
+        assert "run_sweep" not in str(refusal.value)
+        assert panel_asked == []
+
+    def test_a_repeated_axis_value_is_refused_before_any_simulation(self) -> None:
+        base_configs = self._base_configs()
+        baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
+        panel_asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError) as refusal:
+            sensitivity_panel(
+                base_configs,
+                {KNOBS["battery_cost_per_kwh_gbp"]: [300.0, 300.0]},
+                baseline=baseline,
+                simulate=recording(panel_asked, _paired_const_simulate),
+            )
+
+        assert "battery_cost_per_kwh_gbp" in str(refusal.value)
+        assert "300.0" in str(refusal.value)
+        assert panel_asked == []
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +576,7 @@ class TestWH4Coupling:
     def test_baseline_top_is_battery_config(self) -> None:
         """With grid_services=100, Config B (battery) is cheaper → baseline_top==B."""
         base_configs, pt_a, pt_b = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["battery_cost_per_kwh_gbp"]: [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
             simulate=_paired_const_simulate,
@@ -418,7 +588,7 @@ class TestWH4Coupling:
     def test_battery_cost_high_makes_battery_infeasible(self) -> None:
         """At high battery_cost, B is infeasible: absent from rankings and top flips to A."""
         base_configs, pt_a, pt_b = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["battery_cost_per_kwh_gbp"]: [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
             simulate=_paired_const_simulate,
@@ -441,7 +611,7 @@ class TestWH4Coupling:
     def test_grid_services_flip(self) -> None:
         """At grid_services=0 A is on top; at grid_services=200 B is on top."""
         base_configs, pt_a, pt_b = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [self._GS_ZERO, self._GS_HIGH]},
             simulate=_paired_const_simulate,
@@ -462,7 +632,7 @@ class TestWH4Coupling:
     def test_rank_stability_less_than_one_with_flips(self) -> None:
         """Both axes together produce rank_stability < 1 due to flips."""
         base_configs, pt_a, pt_b = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={
                 KNOBS["battery_cost_per_kwh_gbp"]: [self._BATT_COST_LOW, self._BATT_COST_HIGH],
@@ -478,13 +648,13 @@ class TestWH4Coupling:
 
 
 # ---------------------------------------------------------------------------
-# TestRetainedFloorAxis — floor axis uses run_sweep's first-class override
+# TestRetainedFloorAxis — the floor is an ordinary knob axis
 # ---------------------------------------------------------------------------
 
 
 class TestRetainedFloorAxis:
-    """The retained_cash_floor axis is routed through run_sweep's retained_cash_floor_gbp
-    parameter (not via finance replace), and None tops at a high floor don't crash.
+    """The retained_cash_floor axis is an ordinary knob axis: each value sweeps the
+    base scenarios with the floor knob applied, and None tops at a high floor don't crash.
     """
 
     def _setup(self):  # type: ignore[no-untyped-def]
@@ -503,11 +673,11 @@ class TestRetainedFloorAxis:
         return base_configs
 
     def test_floor_axis_per_value_matches_run_sweep(self) -> None:
-        """Per-value rankings/tops match run_sweep called with the same floor override."""
+        """Per-value rankings/tops match run_sweep over the base scenarios with the floor knob applied at that value."""
         base_configs = self._setup()
         floor_low = 50.0
         floor_high = 500.0  # feasible at this level but different from baseline
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["retained_cash_floor_per_home_per_year_gbp"]: [floor_low, floor_high]},
             simulate=_paired_const_simulate,
@@ -517,9 +687,12 @@ class TestRetainedFloorAxis:
         assert axis.name == "retained_cash_floor_per_home_per_year_gbp"
         assert axis.values == (floor_low, floor_high)
 
-        # Verify per-value results match direct run_sweep calls
+        floor_knob = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
         for i, v in enumerate([floor_low, floor_high]):
-            expected = run_sweep(base_configs, retained_cash_floor_gbp=v, simulate=_paired_const_simulate)
+            expected = run_sweep(
+                [(point, floor_knob.apply(scenario, v)) for point, scenario in base_configs],
+                simulate=_paired_const_simulate,
+            )
             expected_ranking = tuple(r.config for r in expected.results)
             assert axis.rankings[i] == expected_ranking, (
                 f"rankings[{i}] mismatch at floor={v}: "
@@ -529,26 +702,11 @@ class TestRetainedFloorAxis:
                 f"top_config_per_value[{i}] mismatch at floor={v}"
             )
 
-    def test_a_copy_of_the_floor_knob_is_routed_as_the_floor_axis(self) -> None:
-        """A knob equal to the registry's floor knob, though not it, sets each sweep's floor over the panel floor."""
-        floor_knob = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
-        floor_copy = copy.deepcopy(floor_knob)
-        assert floor_copy == floor_knob and floor_copy is not floor_knob
-
-        panel = sensitivity_panel(
-            self._setup(),
-            axes={floor_copy: [9_999_999.0]},
-            retained_cash_floor_gbp=50.0,
-            simulate=_paired_const_simulate,
-        )
-
-        assert panel.axes[0].top_config_per_value == (None,)
-
     def test_floor_axis_very_high_yields_none_top(self) -> None:
         """A sufficiently high floor makes all configs infeasible → None top, no crash."""
         base_configs = self._setup()
         # 9,999,999 GBP floor is far above any solved rate — all infeasible
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["retained_cash_floor_per_home_per_year_gbp"]: [50.0, 9_999_999.0]},
             simulate=_paired_const_simulate,
@@ -563,13 +721,12 @@ class TestRetainedFloorAxis:
     def test_none_top_counts_as_unstable(self) -> None:
         """A None top at a swept value counts as unstable in rank_stability."""
         base_configs = self._setup()
-        panel = sensitivity_panel(
+        panel = _panel(
             base_configs,
             axes={KNOBS["retained_cash_floor_per_home_per_year_gbp"]: [50.0, 9_999_999.0]},
             simulate=_paired_const_simulate,
         )
-        # baseline_top is the config at panel_floor (None here) — run_sweep at baseline floor
-        # The low-floor value (50.0) matches baseline_top (same floor) → 1 stable.
+        # The low-floor value (50.0) is the scenarios' own floor, so its top is baseline_top → 1 stable.
         # The high-floor value is None → unstable.
         # Exactly 1 stable / 2 total = 0.5
         assert panel.rank_stability == pytest.approx(0.5), (
@@ -583,7 +740,7 @@ class TestRetainedFloorAxis:
             sc.finance.retained_cash_floor_per_home_per_year_gbp  # type: ignore[union-attr]
             for _, sc in base_configs
         ]
-        sensitivity_panel(
+        _panel(
             base_configs,
             axes={KNOBS["retained_cash_floor_per_home_per_year_gbp"]: [50.0, 500.0]},
             simulate=_paired_const_simulate,
@@ -617,7 +774,7 @@ class TestSegAxis:
         )
         simulate = _SegPricingSimulate()
 
-        panel = sensitivity_panel(base_configs, axes={KNOBS["seg_tariff_pence_per_kwh"]: [4.1, 6.0]}, simulate=simulate)
+        panel = _panel(base_configs, axes={KNOBS["seg_tariff_pence_per_kwh"]: [4.1, 6.0]}, simulate=simulate)
 
         assert panel.axes[0].values == (4.1, 6.0)
         assert set(simulate.rates_per_call) == {
@@ -637,7 +794,7 @@ class TestSegAxis:
         )
 
         with pytest.raises(ConfigurationError, match=r"homes\[0\].*4\.1.*6\.0"):
-            sensitivity_panel(base_configs, axes={KNOBS["seg_tariff_pence_per_kwh"]: [6.0]}, simulate=_SegPricingSimulate())
+            _panel(base_configs, axes={KNOBS["seg_tariff_pence_per_kwh"]: [6.0]}, simulate=_SegPricingSimulate())
 
 
 # ---------------------------------------------------------------------------
@@ -659,49 +816,56 @@ class TestSensitivityPanelGuards:
 
     def test_empty_base_configs_raises(self) -> None:
         """Empty base_configs raises ValueError."""
+        baseline = run_sweep(self._base_configs(), simulate=_paired_const_simulate)
         with pytest.raises(ValueError, match="base_configs"):
             sensitivity_panel(
                 [],
                 axes={KNOBS["battery_cost_per_kwh_gbp"]: [250.0]},
+                baseline=baseline,
                 simulate=_paired_const_simulate,
             )
 
     def test_empty_axes_raises(self) -> None:
         """Empty axes mapping raises ValueError."""
         base_configs = self._base_configs()
+        baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
         with pytest.raises(ValueError, match="axes"):
-            sensitivity_panel(
-                base_configs,
-                axes={},
-                simulate=_paired_const_simulate,
-            )
+            sensitivity_panel(base_configs, axes={}, baseline=baseline, simulate=_paired_const_simulate)
 
     def test_empty_axis_values_raises(self) -> None:
         """An axis with an empty values sequence raises ValueError."""
         base_configs = self._base_configs()
-        with pytest.raises(ValueError):
+        baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
+        with pytest.raises(ValueError, match="values must not be empty"):
             sensitivity_panel(
                 base_configs,
                 axes={KNOBS["battery_cost_per_kwh_gbp"]: []},
+                baseline=baseline,
                 simulate=_paired_const_simulate,
             )
 
     def test_all_infeasible_baseline_raises(self) -> None:
         """A baseline with no feasible config raises ValueError (cheapest_feasible is None)."""
-        base_configs = self._base_configs()
-        # Use a floor so high that no config is feasible at baseline
-        with pytest.raises(ValueError, match="baseline"):
+        # A floor so high that no config is feasible at baseline
+        scenario = _make_scenario(n_homes=_N_HOMES, finance=_make_finance(retained_cash_floor=9_999_999.0))
+        base_configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6])
+        baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
+        with pytest.raises(ValueError, match="no feasible config"):
             sensitivity_panel(
                 base_configs,
                 axes={KNOBS["battery_cost_per_kwh_gbp"]: [250.0]},
-                retained_cash_floor_gbp=9_999_999.0,
+                baseline=baseline,
                 simulate=_paired_const_simulate,
             )
 
     def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
         """sensitivity_panel runs only the simulator its caller passes: a call passing none is refused by name."""
+        base_configs = self._base_configs()
+        baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
         with pytest.raises(TypeError, match="simulate"):
-            sensitivity_panel(self._base_configs(), axes={KNOBS["battery_cost_per_kwh_gbp"]: [250.0]})
+            sensitivity_panel(
+                base_configs, axes={KNOBS["battery_cost_per_kwh_gbp"]: [250.0]}, baseline=baseline
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -721,7 +885,7 @@ def test_a_flat_rate_axis_under_the_events_model_is_refused() -> None:
     )
 
     with pytest.raises(ConfigurationError) as refusal:
-        sensitivity_panel(
+        _panel(
             base_configs,
             {KNOBS["grid_services_income_per_kw_per_year_gbp"]: (12.0,)},
             simulate=_paired_const_simulate,
