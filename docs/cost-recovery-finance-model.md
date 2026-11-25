@@ -1044,12 +1044,30 @@ bill prices that home's import at the retail baseline rate. Both are reported
 beside the income and not netted from it: the displaced energy lands on the
 householder's bill, not on CBS revenue, and netting it needs a counterfactual
 run with an event-day dispatch (docs/prds/grid-services-pricing-model.md §6
-decision 15, §11). The finance report's capacity-at-events table renders the
-two reliability rows and the per-event displaced row for a single event window,
-and — for several, since summed over windows they describe no set of event
-days; the value-per-year row sums the windows. A note says the income is gross
-of the displaced self-use, and that a home without a tariff values it at £0
+decision 15, §11).
+
+**Where the income renders.** Whenever the scenario's pricing books grid
+services, flat or at events, with or without `--flex-band`, the finance report
+renders a Grid Services Income section after Project Economics (§9). Its model
+line names the model: for events pricing its band and its delivery baseline, for
+flat pricing its rate. When the run projects (`--project` or `--cost-recovery`),
+a table gives, per mode, the income the projection booked at year 1 and at
+year N: the first and last entries of `FleetProjection.grid_services_income_gbp`,
+which holds the income priced at every simulated age, ascending, and whose first
+and last entries are the seed ages 0 and N − 1. A table of this window's fleet
+follows, the same under every assumption: the annual fleet income and, under
+events pricing, the per-event available capacity, the two reliability rows and
+the per-event displaced row for a single event window, and — for several, since
+summed over windows they describe no set of event days; the value-per-year row
+sums the windows. A note says the income is gross of the displaced self-use, and
+that a home without a tariff values it at £0. The flexibility-value block's
+grid-services row (`--flex-band`) is that booked income per battery home and per
+kW of battery discharge, under a headline of the band's time-shift plus it; a
+scenario that prices no grid services shows the band's consulting figure there,
+labelled not booked (docs/flexibility-buildability.md §1)
 (`tests/unit/test_gridservices.py::TestDisplacedEveningSelfUse`;
+`tests/unit/test_board_report_grid_services.py`;
+`tests/integration/test_grid_services_events.py::test_b10_finance_run_renders_the_booked_grid_services_income_with_the_economics`,
 `tests/integration/test_grid_services_events.py::test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement`,
 `tests/integration/test_grid_services_events.py::test_several_event_windows_show_no_per_window_figure_summed`).
 
@@ -1140,6 +1158,40 @@ both columns, each mode's figures solved under its own `FinanceConfig` (§3, *Ov
 the `own_use_basis` of its finance, and refuses an empty mapping, a key its section's
 finance is not on, sections carrying different computations, and bills annualised
 from different windows (`tests/unit/test_board_report_sections.py`).
+
+The blocks render in this order: the householder bill, its distribution, Project
+Economics, Grid Services Income, Cost-Recovery Analysis, the outlay at the solved
+rate, and the flexibility value. The Grid Services Income section renders whenever
+the scenario's pricing books grid services (`board_report.GridServicesIncome`, which
+`finance run` builds from the bill run's fleet), and its booked table whenever the
+run projects (§8.1). Under the board scenario's events pricing over 25 years:
+
+```markdown
+## Grid Services Income
+
+Model: **capacity at events, central band, operational delivery baseline**
+
+### Booked by the projection (£ a year)
+
+| Year | Physics | Spreadsheet (70% self-consumption) |
+|---|---|---|
+| Year 1 | £{income at age 0:,.0f} | £{income at age 0:,.0f} |
+| Year 25 | £{income at age 24:,.0f} | £{income at age 24:,.0f} |
+
+### This window's fleet, the same under every assumption
+
+| Metric | Value |
+|---|---|
+| Annual fleet income | £{annual_income_gbp:,.0f} |
+| Per-event available capacity | {kW:.1f} kW |
+| ... | ... |
+```
+
+The rows' labels come from one asset life, so sections whose projections span
+different years are refused, naming each mode's years. The flexibility-value
+block's grid-services row reads the booked figure, per battery home and per kW, or,
+when the scenario prices no grid services, the band's consulting figure labelled
+not booked (`tests/unit/test_board_report_grid_services.py`).
 
 The `representative` outlay is the home whose `total_outlay_gbp` is closest to the
 fleet median — the board's single-home summary figure.

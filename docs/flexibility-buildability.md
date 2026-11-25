@@ -27,6 +27,16 @@ per-home grid-services) and PRD §6 (per-kW grid-services rate).
 
 **Central is the Friday board headline case.** Low/High are selectable for sensitivity (PRD §6 decision 5).
 
+**In the finance report.** `solar-challenge finance run --flex-band <band>` renders
+these figures as its flexibility-value block, which cites this document.  Under a
+scenario whose grid-services pricing books an income, flat or at events, the block's
+grid-services row is that booked income per battery home and per kW of battery
+discharge, priced on the window's simulated fleet, and its headline is the band's
+time-shift plus it; the same income renders beside the economics in the report's
+Grid Services Income section (docs/cost-recovery-finance-model.md §8.1).  With no
+grid-services pricing the row is the band's consulting figure in the table above,
+labelled not booked, under the band's documented total.
+
 ---
 
 ## 2. Prerequisites
