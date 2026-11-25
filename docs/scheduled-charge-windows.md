@@ -86,18 +86,6 @@ tariff's clock. A home whose battery names no strategy, and so dispatches
 grid_charging", is the wrong one on this path: the windows are then offered no
 `GridChargeContext`, so they hold and never grid-charge.
 
-`simulate_home` also refuses a `strategy` that would ignore the battery's
-`grid_charging`, before it asks for weather, with a `ConfigurationError` naming
-`grid_charging` and the strategy. Such a strategy is one whose
-`DispatchStrategy.charges_from_the_grid` is `False`: `SelfConsumptionStrategy`, or a
-`ScheduledChargeStrategy` with no window over one. A `ScheduledChargeStrategy` with any
-window charges from the grid (rule 1), as do `TOUOptimizedStrategy` and
-`PeakShavingStrategy`. A strategy of the caller's own reads `True` unless it overrides the
-property. The refusal when the home is built stays until D3's mid-term direction lets
-self-consumption grid-charge
-([`docs/prds/dispatch-configuration-below-config.md`](prds/dispatch-configuration-below-config.md)
-§11).
-
 The `home` below is such a home, e.g. bristol-arbitrage's, which
 [`tests/_bristol_arbitrage_home.py`](../tests/_bristol_arbitrage_home.py) reads as `home run`
 does.
@@ -113,6 +101,18 @@ windows = (ChargeWindow("daily", time(0, 30), timedelta(hours=7), 0.9, allow_dis
 strategy = ScheduledChargeStrategy(SelfConsumptionStrategy(), windows, ZoneInfo(home.location.timezone))
 results = simulate_home(home, start, end, weather=weather, strategy=strategy)
 ```
+
+`simulate_home` also refuses a `strategy` that would ignore the battery's
+`grid_charging`, before it asks for weather, with a `ConfigurationError` naming
+`grid_charging` and the strategy. Such a strategy is one whose
+`DispatchStrategy.charges_from_the_grid` is `False`: `SelfConsumptionStrategy`, or a
+`ScheduledChargeStrategy` with no window over one, whose refusal adds giving it a
+`ChargeWindow` to its remedies. A `ScheduledChargeStrategy` with any window charges from the
+grid (rule 1), as do `TOUOptimizedStrategy` and `PeakShavingStrategy`. A strategy of the
+caller's own reads `True` unless it overrides the property. The refusal when the home is
+built stays until D3's mid-term direction lets self-consumption grid-charge
+([`docs/prds/dispatch-configuration-below-config.md`](prds/dispatch-configuration-below-config.md)
+§11).
 
 ## 3. The Year Harness
 
