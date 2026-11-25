@@ -16,6 +16,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     CostRecoverySolution,
@@ -33,8 +34,10 @@ from solar_challenge.optimize import (
     run_sweep,
 )
 from solar_challenge.projection import (
+    fewest_simulated_ages,
     project_economics,
     project_multi_year,
+    run_cost_recovery,
     scenario_fleet,
     solve_cost_recovery_rate,
 )
@@ -134,6 +137,7 @@ class TestConfigResult:
             min_dscr=1.5,
             equity_irr=0.08,
             payback_years=12.0,
+            baseline_own_use_rate_pence_per_kwh=15.0,
             baseline_outlay_gbp=450.0,
             baseline_surplus_per_home_gbp=80.0,
         )
@@ -149,6 +153,7 @@ class TestConfigResult:
         assert cr.min_dscr == pytest.approx(1.5)
         assert cr.equity_irr == pytest.approx(0.08)
         assert cr.payback_years == pytest.approx(12.0)
+        assert cr.baseline_own_use_rate_pence_per_kwh == pytest.approx(15.0)
         assert cr.baseline_outlay_gbp == pytest.approx(450.0)
         assert cr.baseline_surplus_per_home_gbp == pytest.approx(80.0)
 
@@ -198,6 +203,7 @@ class TestConfigResult:
             min_dscr=1.5,
             equity_irr=0.08,
             payback_years=12.0,
+            baseline_own_use_rate_pence_per_kwh=15.0,
             baseline_outlay_gbp=450.0,
             baseline_surplus_per_home_gbp=80.0,
         )
@@ -391,7 +397,7 @@ class TestRunSweepSingleConfig:
 
     def test_baseline_outlay_matches_age0_bill_distribution(self) -> None:
         """baseline_outlay_gbp equals bill_distribution(...).representative.total_outlay_gbp
-        from an age-0 simulation at own_use_rate=15p."""
+        from the age-0 simulation at the configured own-use rate."""
         scenario, finance, fr, simulate, configs = self._setup()
         ranked = run_sweep(configs, simulate=simulate)
         cr = ranked.results[0]
@@ -404,9 +410,9 @@ class TestRunSweepSingleConfig:
 
         assert cr.baseline_outlay_gbp == pytest.approx(expected_outlay)
 
-    def test_the_age0_baseline_fleet_is_simulated_over_the_scenario_bounds(self) -> None:
+    def test_the_projections_age0_fleet_is_simulated_over_the_scenario_bounds(self) -> None:
         """The calendar year 2024, a period other than make_period()'s 2021, reaches every fleet run_sweep simulates,
-        the age-0 baseline outlay fleet included, as the swept scenario's simulation_bounds()."""
+        the projection's age-0 fleet the baseline outlay bills included, as the swept scenario's simulation_bounds()."""
         finance = _interior_finance()
         scenario = dataclasses.replace(
             _make_scenario(finance=finance),
@@ -423,7 +429,7 @@ class TestRunSweepSingleConfig:
         run_sweep(configs, simulate=recording_simulate)
 
         swept_scenario = configs[0][1]
-        assert "age-0-baseline" in [name for name, _, _ in asked]
+        assert "proj-age-0" in [name for name, _, _ in asked]
         assert [(start, end) for _, start, end in asked] == [swept_scenario.simulation_bounds()] * len(asked)
 
     def test_cheapest_feasible_matches_config_point(self) -> None:
@@ -434,7 +440,7 @@ class TestRunSweepSingleConfig:
 
     def test_every_fleet_it_simulates_exports_at_the_scenario_seg_rate(self) -> None:
         """The scenario's 5 p/kWh reaches each home of every fleet run_sweep simulates, the age-0
-        baseline outlay fleet included, though no home carries a tariff of its own."""
+        fleet the baseline outlay bills included, though no home carries a tariff of its own."""
         _, _, fr, _, configs = self._setup()
         tariffs_simulated: list[SEGTariff | None] = []
         answer = answering_with(fr)
@@ -446,6 +452,75 @@ class TestRunSweepSingleConfig:
         run_sweep(configs, simulate=recording_simulate)
 
         assert set(tariffs_simulated) == {SEGTariff(name="", rate_pence_per_kwh=5.0)}
+
+
+# ---------------------------------------------------------------------------
+# B10-B12 — one projection per config serves its solve, economics and baseline
+# ---------------------------------------------------------------------------
+
+
+class TestOneProjectionPerConfig:
+    """Each config's one projection at the configured rate gives its rank fields, its baseline pair and its economics."""
+
+    def test_a_config_asks_its_simulator_for_one_projection(self) -> None:
+        """B10: at a 25-year life, the projection's seeds and first pass's midpoints, and nothing else."""
+        finance = _interior_finance()
+        configs = enumerate_configs(
+            _make_scenario(finance=finance), pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
+        )
+        asked: list[str] = []
+        answer = answering_with(_make_fleet_results())
+
+        def recording_simulate(fc: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            asked.append(fc.name)
+            return answer(fc, start, end)
+
+        run_sweep(configs, simulate=recording_simulate)
+
+        assert asked == ["proj-age-0", "proj-age-12", "proj-age-24", "proj-age-6", "proj-age-18"]
+        assert len(asked) == fewest_simulated_ages(finance.asset_life_years)
+
+    def test_an_aged_battery_configs_age_0_fleets_are_new_installs_at_the_scenario_seg_rate(self) -> None:
+        """B11: a 6-year battery's age-0 fleet holds new batteries, so the baseline outlay bills a new install."""
+        scenario = make_scenario(
+            n_homes=2,
+            seg_tariff_pence_per_kwh=4.1,
+            battery_config=BatteryConfig(capacity_kwh=5.0, system_age_years=6.0),
+            finance=_interior_finance(),
+        )
+        configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[5.0], inverter_kw=[3.6])
+        asked: list[FleetConfig] = []
+        answer = answering_with(_make_fleet_results(n_homes=2, seg_rate_pence_per_kwh=4.1))
+
+        def recording_simulate(fc: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            asked.append(fc)
+            return answer(fc, start, end)
+
+        ranked = run_sweep(configs, simulate=recording_simulate)
+
+        age0_fleets = [fc for fc in asked if all(home.pv_config.system_age_years == 0.0 for home in fc.homes)]
+        assert age0_fleets
+        for fleet_config in age0_fleets:
+            assert [home.battery_config.soh for home in fleet_config.homes if home.battery_config] == [1.0, 1.0]
+            assert {home.seg_tariff for home in fleet_config.homes} == {SEGTariff(name="", rate_pence_per_kwh=4.1)}
+        assert ranked.results, f"the config must solve feasibly; infeasible: {ranked.infeasible!r}"
+        swept = configs[0][1]
+        assert swept.finance is not None
+        run = run_cost_recovery(scenario_fleet(swept), swept.finance, simulate=answer)
+        assert ranked.results[0].baseline_outlay_gbp == pytest.approx(
+            bill_distribution(run.projection.age0_summaries, swept.finance).representative.total_outlay_gbp
+        )
+
+    def test_the_baseline_pair_names_the_configured_own_use_rate(self) -> None:
+        """B12: the rate the baseline outlay and surplus are priced at is the scenario's configured rate."""
+        finance = dataclasses.replace(_interior_finance(), own_use_rate_pence_per_kwh=12.0)
+        configs = enumerate_configs(
+            _make_scenario(finance=finance), pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
+        )
+
+        ranked = run_sweep(configs, simulate=answering_with(_make_fleet_results()))
+
+        assert ranked.results[0].baseline_own_use_rate_pence_per_kwh == 12.0
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +718,7 @@ class TestRetainedCashFloorOverride:
         )
 
     def test_floor_override_does_not_change_baseline_outlay(self) -> None:
-        """baseline_outlay_gbp is unchanged by floor override (own_use_rate fixed at 15p)."""
+        """baseline_outlay_gbp is unchanged by floor override (the own-use rate stays the configured one)."""
         scenario, finance, fr, simulate, configs = self._setup()
         F_low = finance.retained_cash_floor_per_home_per_year_gbp
         F_high = F_low + 30.0
