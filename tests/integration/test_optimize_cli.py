@@ -1319,6 +1319,85 @@ class TestOptimizeCLIE2EFast:
         assert stderr.endswith("Configuration error: a refusal raised while the sensitivity panel runs")
         assert "Sensitivity panel skipped" not in result.output
 
+    def test_the_default_sensitivity_asks_for_six_sweeps_and_reuses_the_baseline_at_the_scenarios_floor(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """C8: the default axes sweep three floors and three grid-services rates, and the floor band's value at the scenario's own floor reuses the sweep the report ranks, so the run asks for six sweeps' simulations."""
+        floor_band = SENSITIVITY_BANDS[KNOBS["retained_cash_floor_per_home_per_year_gbp"]]
+        grid_band = SENSITIVITY_BANDS[KNOBS["grid_services_income_per_kw_per_year_gbp"]]
+        assert 27.0 in floor_band, f"The premise needs 27.0 in the floor band {floor_band}"
+        assert 6.0 not in grid_band, f"The premise needs 6.0 outside the grid-services band {grid_band}"
+        finance_overrides: dict[str, object] = {
+            "retained_cash_floor_per_home_per_year_gbp": 27.0,
+            "grid_services_income_per_kw_per_year_gbp": 6.0,
+        }
+        options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
+        sweep_only, one_sweeps_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            [*options, "--sensitivity", ""],
+            n_homes=1,
+            finance_overrides=finance_overrides,
+        )
+        assert sweep_only.exit_code == 0, sweep_only.output
+
+        result, simulated_fleets = self._invoke_configs(
+            tmp_path, one_home_fleet_results, options, n_homes=1, finance_overrides=finance_overrides
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(simulated_fleets) == 6 * len(one_sweeps_fleets)
+        swept = _swept_values_by_axis(result.stdout)
+        assert swept["retained_cash_floor_per_home_per_year_gbp"] == pytest.approx(floor_band, abs=0.005), result.stdout
+        assert swept["grid_services_income_per_kw_per_year_gbp"] == pytest.approx(grid_band, abs=0.005), result.stdout
+
+    def test_retained_floor_at_the_scenarios_own_floor_changes_neither_the_report_nor_the_simulations(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """C9: --retained-floor at the scenario's own floor of 27 is the scenario's floor, so the run reports and simulates exactly as it does without the flag."""
+        finance_overrides: dict[str, object] = {
+            "retained_cash_floor_per_home_per_year_gbp": 27.0,
+            "grid_services_income_per_kw_per_year_gbp": 6.0,
+        }
+        options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
+        without_flag, fleets_without_flag = self._invoke_configs(
+            tmp_path, one_home_fleet_results, options, n_homes=1, finance_overrides=finance_overrides
+        )
+        with_flag, fleets_with_flag = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            [*options, "--retained-floor", "27"],
+            n_homes=1,
+            finance_overrides=finance_overrides,
+        )
+
+        assert without_flag.exit_code == 0, without_flag.output
+        assert with_flag.exit_code == 0, with_flag.output
+        assert with_flag.stdout == without_flag.stdout
+        assert len(fleets_with_flag) == len(fleets_without_flag)
+
+    def test_retained_floor_sets_the_floor_the_solve_binds_at(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """--retained-floor 60 on the scenario's floor of 100 is the floor the ranked configs' solve binds at, with the floor axis still swept."""
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5", "--retained-floor", "60"],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 0, result.output
+        row = _config_row(result.stdout, "## Cost-Recovery Rank", "4.0 kWp / 0.0 kWh / 5.0 kW")
+        assert row["CBS Surplus (£/home/yr)"] == "£60.00", result.stdout
+        assert "retained_cash_floor_per_home_per_year_gbp" in _swept_values_by_axis(result.stdout), result.stdout
+
 
 # ---------------------------------------------------------------------------
 # §H — `optimize configs` ignores no grid-services input under the events model
