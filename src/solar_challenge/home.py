@@ -597,7 +597,7 @@ class SummaryStatistics:
 
     def load_share(self, kind: LoadKind) -> float:
         """The share of the demand that was *kind*'s load: 0.0 for a load the summary has no energy for, or when the demand is not positive."""
-        return _share(self.load_energy_kwh.get(kind, 0.0), self.total_demand_kwh)
+        return load_ratio(load_kwh=self.load_energy_kwh.get(kind, 0.0), demand_kwh=self.total_demand_kwh)
 
 
 def _load_energy(kind: LoadKind, energy: object) -> float:
@@ -628,9 +628,9 @@ def grid_dependency_ratio(*, grid_import_kwh: float, demand_kwh: float) -> float
     return _share(grid_import_kwh, demand_kwh)
 
 
-def heat_pump_load_ratio(*, heat_pump_load_kwh: float, demand_kwh: float) -> float:
-    """The share of the demand that was the heat pump's load, or 0.0 when the demand is not positive."""
-    return _share(heat_pump_load_kwh, demand_kwh)
+def load_ratio(*, load_kwh: float, demand_kwh: float) -> float:
+    """The share of the demand that was a load's, or 0.0 when the demand is not positive."""
+    return _share(load_kwh, demand_kwh)
 
 
 def _share(part: float, whole: float) -> float:

@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What `home run --output` writes for scenarios/example-economy7.yaml with a deterministic load, its home's ev:, heat_pump: and tariff: blocks set by the test: the whole frame, or its demand.
+"""What `home run --report --output` prints and writes for scenarios/example-economy7.yaml with a deterministic load, its home's ev:, heat_pump: and tariff: blocks set by the test: the report and the whole frame, or the frame's demand.
 
 Usage::
 
-    from tests._home_run_demand import home_run_demand_kw, home_run_frame
+    from tests._home_run_demand import home_run, home_run_demand_kw, home_run_frame
 
     def test_home_run_charges_the_ev(tmp_path, weather_cache):
         demand_kw = home_run_demand_kw(
@@ -14,9 +14,21 @@ Usage::
             start="2024-01-10",
             end="2024-01-11",
         )
+
+    def test_home_run_reports_the_heat_pump(tmp_path, weather_cache):
+        run = home_run(
+            tmp_path,
+            weather_cache,
+            ev_block=None,
+            heat_pump_block={"heat_pump_type": "ASHP"},
+            start="2024-01-10",
+            end="2024-01-11",
+        )
+        assert "| Heat pump |" in run.report
 """
 
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +43,15 @@ from tests._repository_paths import SCENARIOS_DIR
 from tests._synthetic_weather import synthetic_tmy
 
 
-def home_run_frame(
+@dataclass(frozen=True)
+class HomeRun:
+    """What one `home run --report --output` printed and wrote."""
+
+    report: str
+    frame: pd.DataFrame
+
+
+def home_run(
     tmp_path: Path,
     weather_cache: WeatherCache,
     *,
@@ -40,8 +60,8 @@ def home_run_frame(
     tariff_block: dict[str, Any] | None = None,
     start: str,
     end: str,
-) -> pd.DataFrame:
-    """The CSV frame that `home run --output` writes from *start* to *end*, on the scenario's clock, for scenarios/example-economy7.yaml.
+) -> HomeRun:
+    """What `home run --report --output` prints, and the CSV frame it writes on the scenario's clock, from *start* to *end* for scenarios/example-economy7.yaml.
 
     The scenario's home gets a deterministic load, *ev_block* as its ev: block,
     *heat_pump_block*, when given, as its heat_pump: block, and *tariff_block*, when given,
@@ -65,14 +85,36 @@ def home_run_frame(
 
     result = CliRunner().invoke(
         app,
-        ["home", "run", str(config_file), "--start", start, "--end", end, "--output", str(output)],
+        ["home", "run", str(config_file), "--start", start, "--end", end, "--report", "--output", str(output)],
         catch_exceptions=False,
     )
 
     assert result.exit_code == 0, result.output
     frame = pd.read_csv(output, index_col=0)
     frame.index = pd.to_datetime(frame.index, utc=True).tz_convert(document["location"]["timezone"])
-    return frame
+    return HomeRun(report=result.output, frame=frame)
+
+
+def home_run_frame(
+    tmp_path: Path,
+    weather_cache: WeatherCache,
+    *,
+    ev_block: dict[str, Any] | None,
+    heat_pump_block: dict[str, Any] | None = None,
+    tariff_block: dict[str, Any] | None = None,
+    start: str,
+    end: str,
+) -> pd.DataFrame:
+    """The CSV frame of home_run's run of the scenario with *ev_block*, *heat_pump_block* and *tariff_block*, from *start* to *end*."""
+    return home_run(
+        tmp_path,
+        weather_cache,
+        ev_block=ev_block,
+        heat_pump_block=heat_pump_block,
+        tariff_block=tariff_block,
+        start=start,
+        end=end,
+    ).frame
 
 
 def home_run_demand_kw(

@@ -14,6 +14,7 @@ import pytest
 
 pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetSummary, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.seg import SEGTariff
@@ -29,7 +30,6 @@ from solar_challenge.web.charts import (
     daily_energy_balance,
     financial_breakdown,
     fleet_results_tabs,
-    heat_pump_analysis,
     home_results_tabs,
     monthly_summary,
     power_flow_timeline,
@@ -197,15 +197,6 @@ class TestChartFunctions:
 
     def test_seasonal_comparison_of_a_short_run_names_the_rule_and_the_runs_days(self) -> None:
         assert seasonal_comparison(make_sinusoidal_sim_results(days=60)).absence_reason == seasonal_reason(60)
-
-    def test_heat_pump_analysis_refuses_a_run_without_a_heat_pump_load(self) -> None:
-        with pytest.raises(ValueError, match="heat_pump_load"):
-            heat_pump_analysis(make_sinusoidal_sim_results(days=2))
-
-    def test_heat_pump_analysis_returns_the_load_share_panel_then_the_load_profile_panel(self) -> None:
-        panels = heat_pump_analysis(steady_run("2024-06-01", "2024-06-01", heat_pump_kw=1.5, demand_kw=4.0))
-
-        assert [panel.dom_id for panel in panels] == ["chart-hp-load-share", "chart-hp-load-profile"]
 
 
 class TestChartDisplayGates:
@@ -382,15 +373,6 @@ class TestSankeyBatteryCharge:
 
 class TestChartTotals:
     """Each chart's totals are the run's per-minute amounts summed: kWh for power, £ as they are."""
-
-    def test_heat_pump_share_is_the_runs_heat_pump_and_other_kwh(self) -> None:
-        load_share, _ = heat_pump_analysis(steady_run("2024-06-01", "2024-06-01", heat_pump_kw=1.5, demand_kw=4.0))
-
-        pie = traces(load_share.content)[0]
-
-        # 1.5 kW × 24 h of heat pump, and 4 kW × 24 h of demand less that.
-        assert pie["labels"] == ["Heat Pump", "Other Demand"]
-        assert pie["values"] == [36.0, 60.0]
 
     def test_financial_bars_are_each_days_pounds(self) -> None:
         by_name = traces_by_name(
@@ -659,14 +641,16 @@ class TestComparisonCharts:
 class TestResultsTabs:
     """Each page's assembler lists, tab by tab, the panels of the charts that apply to its run.
 
-    A home's battery chart applies only to a home with a battery, and its heat-pump charts only to a run with a
-    heat-pump load.
+    A home's battery chart applies only to a home with a battery, and its load charts only to a run with an
+    additional load.
     """
 
     def test_a_home_with_a_battery_and_a_heat_pump_load_lists_every_home_chart(self) -> None:
         year = make_sim_results()
         heat_pump = pd.Series(0.3, index=year.demand.index)
-        results = dataclasses.replace(year, demand=year.demand + heat_pump, heat_pump_load=heat_pump)
+        results = dataclasses.replace(
+            year, demand=year.demand + heat_pump, additional_loads={LoadKind.HEAT_PUMP: heat_pump}
+        )
 
         tabs = home_results_tabs(
             make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)), results, calculate_summary(results)
@@ -676,10 +660,10 @@ class TestResultsTabs:
             ("overview", "Overview", ["chart-sankey", "chart-daily-balance"]),
             ("power_flow", "Power Flow", ["chart-power-flow"]),
             ("battery_finance", "Battery & Finance", ["chart-battery-soc", "chart-financial", "chart-monthly"]),
-            ("analysis", "Analysis", ["chart-seasonal", "chart-hp-load-share", "chart-hp-load-profile"]),
+            ("analysis", "Analysis", ["chart-seasonal", "chart-demand-by-load", "chart-load-profile-heat-pump"]),
         ]
 
-    def test_a_home_without_a_battery_or_a_heat_pump_load_lists_neither_their_charts(self) -> None:
+    def test_a_home_without_a_battery_or_an_additional_load_lists_neither_their_charts(self) -> None:
         results = make_sim_results(days=1)
 
         tabs = home_results_tabs(make_home_config(), results, calculate_summary(results))

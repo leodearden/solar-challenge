@@ -2,6 +2,7 @@
 
 import tempfile
 from dataclasses import asdict, replace
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityConfig, simulate_community
+from solar_challenge.demand import LoadKind
 from solar_challenge.home import RunPricing, SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
     CommunityMetrics,
@@ -23,6 +25,7 @@ from solar_challenge.output import (
 )
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._grid_charge_forecast_notices import PV_BLIND_AND_TRAILING_NOTICE, TRAILING_NOTICE
+from tests._summary_report_tables import cells, energy_totals_demand_kwh, table_under
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
@@ -76,38 +79,68 @@ def _run_with_distinct_rising_series(
     )
 
 
-def _seasonal_run(freq: str = "1min") -> SimulationResults:
-    """Two February days, the spring, and half a June day, each day steady at its own levels, on one index whose rows are freq apart.
+def _by_season(index: pd.DatetimeIndex, *, winter_1_kw: float, winter_2_kw: float, spring_kw: float, summer_kw: float) -> pd.Series:
+    """A series on *index* steady at its own level on each February day, in the spring and in the summer."""
+    days = index.normalize()
+    winter_1 = days == pd.Timestamp("2024-02-28", tz="Europe/London")
+    winter_2 = days == pd.Timestamp("2024-02-29", tz="Europe/London")
+    spring = index.month <= 5
+    return pd.Series(
+        np.select([winter_1, winter_2, spring], [winter_1_kw, winter_2_kw, spring_kw], default=summer_kw),
+        index=index,
+    )
+
+
+def _plain_seasonal_run(freq: str = "1min") -> SimulationResults:
+    """Two February days, the spring, and half a June day, each day steady at its own levels, on one index whose rows are freq apart, its demand the household's alone.
 
     The first February day's battery stores its PV surplus and meets part of the sunless second
     day's demand. Every row balances as a simulated one does.
     """
     index = pd.date_range("2024-02-28", "2024-06-01 11:59", freq=freq, tz="Europe/London")
-    days = index.normalize()
-    winter_1 = days == pd.Timestamp("2024-02-28", tz="Europe/London")
-    winter_2 = days == pd.Timestamp("2024-02-29", tz="Europe/London")
-    spring = index.month <= 5
-
-    def steady(*, winter_1_kw: float, winter_2_kw: float, spring_kw: float, summer_kw: float) -> pd.Series:
-        return pd.Series(
-            np.select([winter_1, winter_2, spring], [winter_1_kw, winter_2_kw, spring_kw], default=summer_kw),
-            index=index,
-        )
-
     zeros = pd.Series(0.0, index=index)
     return SimulationResults(
-        generation=steady(winter_1_kw=8.0, winter_2_kw=0.0, spring_kw=9.0, summer_kw=4.0),
-        demand=steady(winter_1_kw=5.0, winter_2_kw=5.0, spring_kw=10.0, summer_kw=1.0),
-        self_consumption=steady(winter_1_kw=5.0, winter_2_kw=1.0, spring_kw=9.0, summer_kw=1.0),
-        battery_charge=steady(winter_1_kw=1.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=2.0),
-        battery_discharge=steady(winter_1_kw=0.0, winter_2_kw=1.0, spring_kw=0.0, summer_kw=0.0),
+        generation=_by_season(index, winter_1_kw=8.0, winter_2_kw=0.0, spring_kw=9.0, summer_kw=4.0),
+        demand=_by_season(index, winter_1_kw=5.0, winter_2_kw=5.0, spring_kw=10.0, summer_kw=1.0),
+        self_consumption=_by_season(index, winter_1_kw=5.0, winter_2_kw=1.0, spring_kw=9.0, summer_kw=1.0),
+        battery_charge=_by_season(index, winter_1_kw=1.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=2.0),
+        battery_discharge=_by_season(index, winter_1_kw=0.0, winter_2_kw=1.0, spring_kw=0.0, summer_kw=0.0),
         battery_soc=zeros,
-        grid_import=steady(winter_1_kw=0.0, winter_2_kw=4.0, spring_kw=1.0, summer_kw=0.0),
-        grid_export=steady(winter_1_kw=2.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=1.0),
+        grid_import=_by_season(index, winter_1_kw=0.0, winter_2_kw=4.0, spring_kw=1.0, summer_kw=0.0),
+        grid_export=_by_season(index, winter_1_kw=2.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=1.0),
         import_cost=zeros,
         export_revenue=zeros,
         tariff_rate=zeros,
-        heat_pump_load=steady(winter_1_kw=2.0, winter_2_kw=2.0, spring_kw=9.0, summer_kw=0.25),
+    )
+
+
+def _seasonal_run(freq: str = "1min", *, heat_pump_summer_kw: float = 0.25) -> SimulationResults:
+    """_plain_seasonal_run's run whose demand holds a heat pump, at *heat_pump_summer_kw* in the summer, and a steady 0.5 kW EV.
+
+    The household's load, demand less the two, is 2.5 kW in the winter, 0.5 kW in the spring
+    and at least 0.25 kW in the summer.
+    """
+    run = _plain_seasonal_run(freq)
+    index = run.demand.index
+    return replace(
+        run,
+        additional_loads={
+            LoadKind.HEAT_PUMP: _by_season(
+                index, winter_1_kw=2.0, winter_2_kw=2.0, spring_kw=9.0, summer_kw=heat_pump_summer_kw
+            ),
+            LoadKind.EV: pd.Series(0.5, index=index),
+        },
+    )
+
+
+def _with_additional_loads(results: SimulationResults, loads: dict[LoadKind, pd.Series]) -> SimulationResults:
+    """*results* whose demand, and grid import, also hold *loads*, which become its additional loads."""
+    extra = sum(loads.values(), start=pd.Series(0.0, index=results.demand.index))
+    return replace(
+        results,
+        demand=results.demand + extra,
+        grid_import=results.grid_import + extra,
+        additional_loads=loads,
     )
 
 
@@ -238,19 +271,114 @@ class TestGenerateSummaryReport:
             generate_summary_report(make_sim_results(), "Home", seg_tariff_pence_per_kwh=15.0)
 
 
+class TestDemandByLoad:
+    """The report's Demand by load table: each load's energy, share of the demand and peak, in LoadKind order."""
+
+    _HEADER = "| Load | Energy (kWh) | Share of Demand | Peak (kW) |"
+
+    def test_a_run_whose_demand_is_the_households_alone_has_one_household_row(self, sample_results) -> None:
+        lines = generate_summary_report(sample_results).splitlines()
+
+        assert table_under(lines, "## Demand by load") == [self._HEADER, "| Household | 96.0 | 100.0% | 2.00 |"]
+
+    def test_a_run_with_a_heat_pump_and_an_ev_has_a_row_for_each_load_summing_to_the_demand(self, sample_results) -> None:
+        index = sample_results.demand.index
+        ev_kw = pd.Series(np.where(index.hour < 6, 2.0, 0.0), index=index)
+        run = _with_additional_loads(
+            sample_results, {LoadKind.EV: ev_kw, LoadKind.HEAT_PUMP: pd.Series(1.5, index=index)}
+        )
+        lines = generate_summary_report(run).splitlines()
+
+        # Over 48 h: the household's 2 kW is 96 kWh, the heat pump's 1.5 kW 72 kWh and the EV's
+        # 2 kW for 6 h a day 24 kWh, of 192 kWh demanded.
+        table = table_under(lines, "## Demand by load")
+        assert table == [
+            self._HEADER,
+            "| Household | 96.0 | 50.0% | 2.00 |",
+            "| Heat pump | 72.0 | 37.5% | 1.50 |",
+            "| EV charging | 24.0 | 12.5% | 2.00 |",
+        ]
+        assert sum(float(cells(row)[1]) for row in table[1:]) == pytest.approx(energy_totals_demand_kwh(lines))
+
+    def test_the_demand_by_load_table_follows_the_energy_totals(self, sample_results) -> None:
+        lines = generate_summary_report(sample_results).splitlines()
+
+        energy_totals_end = lines.index("", lines.index("## Energy Totals (kWh)") + 1)
+        assert lines[energy_totals_end + 1] == "## Demand by load"
+
+    @pytest.mark.parametrize("with_heat_pump", [True, False], ids=["heat-pump", "no-heat-pump"])
+    def test_no_report_has_a_heat_pump_impact_section(self, sample_results, with_heat_pump: bool) -> None:
+        index = sample_results.demand.index
+        run = (
+            _with_additional_loads(sample_results, {LoadKind.HEAT_PUMP: pd.Series(1.5, index=index)})
+            if with_heat_pump
+            else sample_results
+        )
+
+        assert "Heat Pump Impact" not in generate_summary_report(run)
+
+
 class TestSeasonalBreakdowns:
     """Winter (December to February) and summer (June to August) each count only their own rows."""
 
     @pytest.mark.parametrize("freq", _SEASONAL_RUN_FREQS)
-    def test_report_tables_each_seasons_heat_pump_figures(self, freq: str) -> None:
+    def test_report_tables_each_seasons_figures_for_each_additional_load(self, freq: str) -> None:
         lines = generate_summary_report(_seasonal_run(freq)).splitlines()
 
-        # Winter: 2 kW × 48 h = 96 kWh, 40% of 5 kW × 48 h, over 2 days.
+        assert (
+            lines.index("## Seasonal demand by load")
+            < lines.index("**Winter (Dec-Feb) vs Summer (Jun-Aug)**")
+            < lines.index("### Heat pump")
+            < lines.index("### EV charging")
+        )
+        # Heat pump. Winter: 2 kW × 48 h = 96 kWh, 40% of 5 kW × 48 h, over 2 days.
         # Summer: 0.25 kW × 12 h = 3 kWh, 25% of 1 kW × 12 h, over half a day.
-        assert "| Total Heat Pump Load | 96.0 kWh | 3.0 kWh | 32.0x |" in lines
-        assert "| Peak Heat Pump Load | 2.00 kW | 0.25 kW | 8.0x |" in lines
-        assert "| HP % of Demand | 40.0% | 25.0% | - |" in lines
-        assert "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |" in lines
+        assert table_under(lines, "### Heat pump") == [
+            "| Metric | Winter | Summer | Winter/Summer Ratio |",
+            "| Energy | 96.0 kWh | 3.0 kWh | 32.0x |",
+            "| Peak | 2.00 kW | 0.25 kW | 8.0x |",
+            "| Share of Demand | 40.0% | 25.0% | - |",
+            "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |",
+        ]
+        # EV. Winter: 0.5 kW × 48 h = 24 kWh, 10% of 240 kWh, over 2 days.
+        # Summer: 0.5 kW × 12 h = 6 kWh, 50% of 12 kWh, over half a day.
+        assert table_under(lines, "### EV charging") == [
+            "| Metric | Winter | Summer | Winter/Summer Ratio |",
+            "| Energy | 24.0 kWh | 6.0 kWh | 4.0x |",
+            "| Peak | 0.50 kW | 0.50 kW | 1.0x |",
+            "| Share of Demand | 10.0% | 50.0% | - |",
+            "| Daily Average | 12.0 kWh/day | 12.0 kWh/day | 1.0x |",
+        ]
+
+    def test_a_load_with_no_summer_energy_keeps_its_table_with_no_ratio(self) -> None:
+        lines = generate_summary_report(_seasonal_run(heat_pump_summer_kw=0.0)).splitlines()
+
+        assert table_under(lines, "### Heat pump") == [
+            "| Metric | Winter | Summer | Winter/Summer Ratio |",
+            "| Energy | 96.0 kWh | 0.0 kWh | - |",
+            "| Peak | 2.00 kW | 0.00 kW | - |",
+            "| Share of Demand | 40.0% | 0.0% | - |",
+            "| Daily Average | 48.0 kWh/day | 0.0 kWh/day | - |",
+        ]
+
+    @pytest.mark.parametrize(
+        "first_day",
+        [pytest.param(date(2024, 6, 21), id="no-winter-row"), pytest.param(date(2024, 1, 10), id="no-summer-row")],
+    )
+    def test_a_run_missing_a_season_has_no_seasonal_load_section(self, first_day: date) -> None:
+        run = make_sim_results(days=1, first_day=first_day)
+        run = _with_additional_loads(run, {LoadKind.HEAT_PUMP: pd.Series(1.0, index=run.demand.index)})
+
+        report = generate_summary_report(run)
+
+        assert "Seasonal demand by load" not in report
+        assert "Winter (Dec-Feb) vs Summer (Jun-Aug)" not in report
+
+    def test_a_run_whose_demand_is_the_households_alone_has_no_seasonal_load_section(self) -> None:
+        report = generate_summary_report(_plain_seasonal_run())
+
+        assert "Seasonal demand by load" not in report
+        assert "Winter (Dec-Feb) vs Summer (Jun-Aug)" not in report
 
     @pytest.mark.parametrize("freq", _SEASONAL_RUN_FREQS)
     def test_seasonal_metrics_total_each_seasons_own_flows_and_leave_out_the_rest(self, freq: str) -> None:

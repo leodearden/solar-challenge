@@ -20,7 +20,7 @@ from solar_challenge.home import (
     SummaryStatistics,
     calculate_summary,
     grid_dependency_ratio,
-    heat_pump_load_ratio,
+    load_ratio,
     self_consumption_ratio,
     simulate_home,
 )
@@ -1129,9 +1129,9 @@ class TestSummaryRatios:
         """1 kWh imported of 4 kWh demanded is a ratio of 0.25."""
         assert grid_dependency_ratio(grid_import_kwh=1.0, demand_kwh=4.0) == 0.25
 
-    def test_heat_pump_load_ratio_is_heat_pump_load_over_demand(self):
-        """2 kWh of heat-pump load in 8 kWh demanded is a ratio of 0.25."""
-        assert heat_pump_load_ratio(heat_pump_load_kwh=2.0, demand_kwh=8.0) == 0.25
+    def test_load_ratio_is_a_loads_share_of_the_demand(self):
+        """A load of 2 kWh in 8 kWh demanded is a ratio of 0.25."""
+        assert load_ratio(load_kwh=2.0, demand_kwh=8.0) == 0.25
 
     @pytest.mark.parametrize("generation_kwh", _NOT_POSITIVE_KWH)
     def test_self_consumption_ratio_is_zero_without_positive_generation(self, generation_kwh):
@@ -1144,9 +1144,9 @@ class TestSummaryRatios:
         assert grid_dependency_ratio(grid_import_kwh=1.0, demand_kwh=demand_kwh) == 0.0
 
     @pytest.mark.parametrize("demand_kwh", _NOT_POSITIVE_KWH)
-    def test_heat_pump_load_ratio_is_zero_without_positive_demand(self, demand_kwh):
-        """Heat-pump load over demand that is not positive is 0.0."""
-        assert heat_pump_load_ratio(heat_pump_load_kwh=2.0, demand_kwh=demand_kwh) == 0.0
+    def test_load_ratio_is_zero_without_positive_demand(self, demand_kwh):
+        """A load over demand that is not positive is 0.0."""
+        assert load_ratio(load_kwh=2.0, demand_kwh=demand_kwh) == 0.0
 
 
 class TestCalculateSummary:
