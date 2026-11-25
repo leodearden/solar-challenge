@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for solar_challenge.board_report, the finance and config-ranking board reports."""
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import date
 
 import pytest
 from solar_challenge.board_report import generate_config_ranking_report, generate_finance_report
-from solar_challenge.finance import BillDistribution
+from solar_challenge.finance import BillDistribution, CostRecoverySolution
 from solar_challenge.optimize import RankedSweep
 from solar_challenge.timebase import SimulationWindow
-from tests._factories import make_bill_distribution, make_config_result, make_ranked_sweep
+from tests._factories import (
+    make_bill_distribution,
+    make_config_result,
+    make_cost_recovery_solution,
+    make_ranked_sweep,
+)
 from tests._finance_builders import make_window
 from tests._grid_charge_forecast_notices import PV_BLIND_AND_TRAILING_NOTICE, TRAILING_NOTICE
 
@@ -117,3 +122,35 @@ class TestExtrapolationNotice:
 
         assert "extrapolated" not in report
         assert report.startswith("## Cost-Recovery Rank\n\n| Config")
+
+
+class _UncheckedSolution(CostRecoverySolution):
+    """A solution that slipped past CostRecoverySolution's own binding check, which the board reports refuse again where they read it.
+
+    CostRecoverySolution(binding="other") already raises at construction, so this double is the only way a report can be handed one.
+    """
+
+    def __post_init__(self) -> None:
+        pass
+
+
+def _solution_with_binding_other() -> CostRecoverySolution:
+    """make_cost_recovery_solution's feasible solution, its binding "other", which is in no label table."""
+    base = make_cost_recovery_solution()
+    return _UncheckedSolution(
+        **{**{f.name: getattr(base, f.name) for f in fields(base)}, "binding": "other", "feasible": True}
+    )
+
+
+class TestABindingOutsideTheLabelTableIsRefused:
+    """Both board reports refuse, naming it, a cost-recovery binding their label table does not hold, rather than rendering it as some other binding or as raw text."""
+
+    def test_a_finance_report_refuses_a_binding_outside_the_label_table_by_name(self) -> None:
+        with pytest.raises(ValueError, match="'other'"):
+            generate_finance_report(make_bill_distribution(), cost_recovery=_solution_with_binding_other())
+
+    def test_a_ranking_report_refuses_a_binding_outside_the_label_table_by_name(self) -> None:
+        cr = replace(make_config_result(), solution=_solution_with_binding_other(), binding="other")
+
+        with pytest.raises(ValueError, match="'other'"):
+            generate_config_ranking_report(make_ranked_sweep((cr,)))
