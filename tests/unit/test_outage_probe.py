@@ -25,11 +25,12 @@ import requests
 from solar_challenge.location import Location
 from solar_challenge.weather import CLIMATE_YEARS
 from tests._network_guard import refusing_network
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._scripts import load_script
 
 _THIS_MACHINE = "127.0.0.1"
 
-_LOOPBACK_TLS = Path(__file__).resolve().parents[1] / "fixtures" / "tls"
+_LOOPBACK_TLS = REPOSITORY_ROOT / "tests" / "fixtures" / "tls"
 _LOOPBACK_CERTIFICATE = _LOOPBACK_TLS / "loopback-cert.pem"
 """A self-signed certificate for this machine's address, valid for a century, whose key is loopback-key.pem beside it. It guards nothing: a client that trusts it trusts only a stand-in on this machine."""
 _LOOPBACK_KEY = _LOOPBACK_TLS / "loopback-key.pem"
