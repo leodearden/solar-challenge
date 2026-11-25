@@ -17,12 +17,15 @@ import pytest
 import yaml
 
 from solar_challenge.config import ScenarioConfig, load_scenario
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_tariff_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
+from tests._cli_stderr_text import stderr_text
+from tests._cli_table_text import table_text
 
 _PERIOD = {"start_date": "2024-06-03", "end_date": "2024-06-09"}
 _TARIFF = {"type": "economy_7"}
@@ -119,6 +122,15 @@ _DOCUMENTS: dict[str, Mapping[str, Any]] = {
     "fleet-distribution-doc": FLEET_DISTRIBUTION,
 }
 _FLEET_DOCUMENTS = {name: document for name, document in _DOCUMENTS.items() if name != "home-doc"}
+
+
+def _document_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str, Any]], *, tag: str) -> list[Any]:
+    """One row of (command, document) for each command and document, its id '<command>-<document>-<tag>-<leaf>'."""
+    return [
+        pytest.param(command, document, id=f"{command.name}-{document_name}-{tag}-{command.leaf}")
+        for command in commands
+        for document_name, document in documents.items()
+    ]
 
 
 def _flag_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str, Any]]) -> list[Any]:
@@ -240,3 +252,59 @@ def test_optimize_configs_simulates_the_readers_homes_at_its_install_point_over_
             for read_home, recorded_home in zip(expected.simulated_homes(), fleet.homes, strict=True)
         )
         assert fleet.homes == read_homes
+
+
+@pytest.mark.parametrize(
+    "document", [pytest.param(document, id=f"{name}-{_VALIDATE_CONFIG.leaf}") for name, document in _DOCUMENTS.items()]
+)
+def test_validate_config_reads_each_document_as_valid(tmp_path: Path, document: Mapping[str, Any]) -> None:
+    """validate config reads each document as valid and simulates nothing."""
+    recorder = RecordingSimulate()
+
+    result = invoke_cli(["validate", "config", str(_written(tmp_path, document))], answering(recorder))
+
+    assert result.exit_code == 0, result.output
+    assert "OK Configuration is valid" in table_text(result.stdout)
+    assert recorder.fleets == []
+
+
+@pytest.mark.parametrize(
+    ("command", "document"),
+    [
+        *_document_rows([_HOME_RUN], {"home-doc": HOME}, tag="finanse"),
+        *_document_rows([_FLEET_RUN, _FINANCE_RUN, _VALIDATE_CONFIG], _DOCUMENTS, tag="finanse"),
+        *_document_rows([_OPTIMIZE_CONFIGS], _FLEET_DOCUMENTS, tag="finanse"),
+    ],
+)
+def test_every_command_refuses_a_document_the_reader_refuses_with_the_readers_message(
+    tmp_path: Path, command: _Command, document: Mapping[str, Any]
+) -> None:
+    """A document with a misspelt top-level key is refused by the command with the message load_scenario refuses it with, and nothing is simulated."""
+    path = _written(tmp_path, {**document, "finanse": document["finance"]})
+    with pytest.raises(ConfigurationError) as refused:
+        load_scenario(path)
+    message = str(refused.value)
+    recorder = RecordingSimulate()
+
+    result = invoke_cli([*command.words, str(path)], answering(recorder))
+
+    assert result.exit_code == 1, result.output
+    assert recorder.fleets == []
+    if command is _VALIDATE_CONFIG:
+        assert f"ERROR {message}" in table_text(result.stdout)
+    else:
+        assert stderr_text(result) == f"Configuration error: {message}"
+
+
+@pytest.mark.parametrize(
+    "document", [pytest.param(document, id=f"{name}-{_HOME_RUN.leaf}") for name, document in _FLEET_DOCUMENTS.items()]
+)
+def test_home_run_refuses_a_fleet_document_naming_fleet_run(tmp_path: Path, document: Mapping[str, Any]) -> None:
+    """home run refuses a document that holds a fleet, naming `fleet run` as the command that simulates it, and simulates nothing."""
+    recorder = RecordingSimulate()
+
+    result = invoke_cli([*_HOME_RUN.words, str(_written(tmp_path, document))], answering(recorder))
+
+    assert result.exit_code == 1, result.output
+    assert "`fleet run`" in stderr_text(result)
+    assert recorder.fleets == []
