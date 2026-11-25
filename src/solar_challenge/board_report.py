@@ -276,12 +276,13 @@ def generate_finance_report(
     flex_band_name: str = "",
     grid_services_at_events: Optional[GridServicesAtEvents] = None,
 ) -> str:
-    """The markdown finance report of *sections*: each table one value column per own-use basis.
+    """The markdown finance report of *sections*: each bill, economics and cost-recovery table one value column per own-use basis.
 
-    Each table has one value column per section, in OwnUseBasis order whatever
-    *sections*' order, headed by its basis's label in ASSUMPTION_LABELS and,
-    when the section's finance sets a self-consumption override, the override,
-    e.g. ``Spreadsheet (70% self-consumption)``.  No heading names a mode.
+    Each of those tables has one value column per section, in OwnUseBasis
+    order whatever *sections*' order, headed by its basis's label in
+    ASSUMPTION_LABELS and, when the section's finance sets a self-consumption
+    override, the override, e.g. ``Spreadsheet (70% self-consumption)``.  No
+    heading names a mode.
 
     The blocks, in order: the representative householder bill's line items
     (standing charge, import cost, own-use payment, VAT, total outlay,

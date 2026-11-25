@@ -1121,10 +1121,12 @@ under the default `--assumptions physics`:
 | Max    | £{max:.2f}    |
 ```
 
-Every table of the report, the bill, its distribution, the project economics and these
-two, has one value column per `--assumptions` mode, in `OwnUseBasis` order: *Physics*
-for SIMULATED, then *Spreadsheet* for OVERRIDE, followed by the override that column was
-computed under.  No heading names a mode.  Under `--assumptions both` each table has
+Every table of the bill, project-economics and cost-recovery blocks, the bill, its
+distribution, the project economics and these two, has one value column per
+`--assumptions` mode, in `OwnUseBasis` order: *Physics* for SIMULATED, then *Spreadsheet*
+for OVERRIDE, followed by the override that column was computed under.  No heading names
+a mode.  The flexibility-value block (`--flex-band`), which no mode changes, renders once
+with its own columns.  Under `--assumptions both` each table has
 both columns, each mode's figures solved under its own `FinanceConfig` (§3, *Override
 (spreadsheet-assumption) path*):
 

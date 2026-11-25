@@ -167,7 +167,8 @@ def run(
     --cost-recovery the projection, the economics and the solve, from its own
     finance, ``finance.with_own_use_basis`` of the scenario's: physics clears
     any override, spreadsheet keeps the scenario's or sets the default, and
-    both runs the two.  Each mode is its column of every table of the report.
+    both runs the two.  Each mode is its column of every bill, economics and
+    cost-recovery table of the report.
 
     The scenario file must contain a ``finance:`` block with at least
     ``standing_charge_pence_per_day``.
