@@ -2,7 +2,7 @@
 
 **Task:** #1016
 **Code:** [`src/solar_challenge/dispatch.py`](../src/solar_challenge/dispatch.py) (`ChargeWindow`, `ScheduledChargeStrategy`); [`src/solar_challenge/home.py`](../src/solar_challenge/home.py) (`simulate_home(..., strategy=...)`)
-**Tests:** [`tests/unit/dispatch/test_scheduled_charge_strategy.py`](../tests/unit/dispatch/test_scheduled_charge_strategy.py); [`tests/unit/test_home_scheduled_charge.py`](../tests/unit/test_home_scheduled_charge.py)
+**Tests:** [`tests/unit/dispatch/test_scheduled_charge_strategy.py`](../tests/unit/dispatch/test_scheduled_charge_strategy.py); [`tests/unit/test_home_scheduled_charge.py`](../tests/unit/test_home_scheduled_charge.py); [`tests/unit/dispatch/test_charges_from_the_grid.py`](../tests/unit/dispatch/test_charges_from_the_grid.py); [`tests/unit/test_grid_charge_refusals.py`](../tests/unit/test_grid_charge_refusals.py)
 **Measurement:** [`scripts/measure_charge_window_bills.py`](../scripts/measure_charge_window_bills.py) (§3, §4), smoke-tested offline by [`tests/unit/test_measurement_scripts.py`](../tests/unit/test_measurement_scripts.py)
 
 ---
@@ -101,6 +101,18 @@ windows = (ChargeWindow("daily", time(0, 30), timedelta(hours=7), 0.9, allow_dis
 strategy = ScheduledChargeStrategy(SelfConsumptionStrategy(), windows, ZoneInfo(home.location.timezone))
 results = simulate_home(home, start, end, weather=weather, strategy=strategy)
 ```
+
+`simulate_home` also refuses a `strategy` that would ignore the battery's
+`grid_charging`, before it asks for weather, with a `ConfigurationError` naming
+`grid_charging` and the strategy. Such a strategy is one whose
+`DispatchStrategy.charges_from_the_grid` is `False`: `SelfConsumptionStrategy`, or a
+`ScheduledChargeStrategy` with no window over one, whose refusal adds giving it a
+`ChargeWindow` to its remedies. A `ScheduledChargeStrategy` with any window charges from the
+grid (rule 1), as do `TOUOptimizedStrategy` and `PeakShavingStrategy`. A strategy of the
+caller's own reads `True` unless it overrides the property. The refusal when the home is
+built stays until D3's mid-term direction lets self-consumption grid-charge
+([`docs/prds/dispatch-configuration-below-config.md`](prds/dispatch-configuration-below-config.md)
+§11).
 
 ## 3. The Year Harness
 

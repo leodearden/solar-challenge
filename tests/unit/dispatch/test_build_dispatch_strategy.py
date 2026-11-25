@@ -66,6 +66,7 @@ def test_each_variant_builds_the_strategy_it_names(case: _Case, tariff: Optional
 
     assert isinstance(strategy, case.strategy_class)
     assert strategy.name == case.config.strategy_type
+    assert strategy.charges_from_the_grid == case.charges_from_the_grid
 
 
 def test_the_tou_strategy_discharges_in_the_configs_peak_hours_only() -> None:

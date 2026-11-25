@@ -388,8 +388,9 @@ BUILT_IN_STRATEGIES: dict[str, DispatchStrategy] = {
     ),
 }
 
-# Every built-in strategy but self-consumption, which ignores grid_charge_ctx, charges from the grid toward the
-# target its battery's grid_charging sets.
+# Every built-in strategy but self-consumption charges from the grid toward the target its battery's grid_charging
+# sets. Self-consumption ignores grid_charge_ctx, so simulate_home refuses it on a battery that sets grid_charging,
+# and it runs only the runs without one.
 GRID_CHARGING_STRATEGIES = ["tou_optimized", "peak_shaving", "scheduled_charge"]
 
 _SCENARIO_HOME = bristol_arbitrage_home()
@@ -435,6 +436,16 @@ HOME_RUNS = GRID_CHARGING_RUNS | {
     for day, home, weather, start, end in _DAYS
 }
 
+# Each built-in strategy's runs: every run for one that charges from the grid, only those without grid_charging else.
+_RUNS_OF: dict[str, list[str]] = {
+    strategy_id: [
+        run_id
+        for run_id in HOME_RUNS
+        if strategy_id in GRID_CHARGING_STRATEGIES or run_id not in GRID_CHARGING_RUNS
+    ]
+    for strategy_id in BUILT_IN_STRATEGIES
+}
+
 
 @functools.cache
 def _run(strategy_id: str, run_id: str) -> SimulationResults:
@@ -464,12 +475,21 @@ def _pv_charge_kw(results: SimulationResults) -> pd.Series:
 class TestNoBuiltInStrategyTripsABound:
     """§9 row 12: each built-in strategy keeps every decision within its step's limits, so each of its runs, its balance checked every minute, completes.
 
+    Self-consumption ignores grid_charge_ctx, so simulate_home refuses it on a battery that sets grid_charging, and it
+    runs only the runs without one; every other strategy runs every run.
+
     Every bound meets decisions that reach it: each grid-charging strategy charges from the grid in each run whose
     battery sets a target, and between its runs each strategy charges from PV and discharges.
     """
 
-    @pytest.mark.parametrize("run_id", list(HOME_RUNS))
-    @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
+    @pytest.mark.parametrize(
+        ("strategy_id", "run_id"),
+        [
+            pytest.param(strategy_id, run_id, id=f"{strategy_id}-{run_id}")
+            for strategy_id, run_ids in _RUNS_OF.items()
+            for run_id in run_ids
+        ],
+    )
     def test_the_run_completes(self, strategy_id: str, run_id: str) -> None:
         assert _run(strategy_id, run_id).strategy_name == BUILT_IN_STRATEGIES[strategy_id].name
 
@@ -483,8 +503,8 @@ class TestNoBuiltInStrategyTripsABound:
     @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
     def test_between_its_runs_the_strategy_charges_from_pv(self, strategy_id: str) -> None:
         """A battery that a strategy fills from the grid overnight takes no PV the next day, so not every sunny run charges from PV."""
-        assert any(_pv_charge_kw(_run(strategy_id, run_id)).gt(0).any() for run_id in HOME_RUNS)
+        assert any(_pv_charge_kw(_run(strategy_id, run_id)).gt(0).any() for run_id in _RUNS_OF[strategy_id])
 
     @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
     def test_between_its_runs_the_strategy_discharges(self, strategy_id: str) -> None:
-        assert any(_run(strategy_id, run_id).battery_discharge.gt(0).any() for run_id in HOME_RUNS)
+        assert any(_run(strategy_id, run_id).battery_discharge.gt(0).any() for run_id in _RUNS_OF[strategy_id])
