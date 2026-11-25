@@ -10,6 +10,7 @@ simulation results come from tests/_finance_builders.py.
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 from typing import Optional
 
@@ -29,6 +30,7 @@ from solar_challenge.optimize import (
     run_sweep,
     sensitivity_panel,
 )
+from solar_challenge.scenario_knobs import KNOBS
 from solar_challenge.seg import SEGTariff
 from tests._finance_builders import (
     make_fleet_results,
@@ -307,7 +309,7 @@ class TestSensitivityPanelStructure:
         base_configs, simulate = self._setup()
         panel = sensitivity_panel(
             base_configs,
-            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0, 48.0]},
+            axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0, 48.0]},
             simulate=simulate,
         )
         assert len(panel.axes) == 1
@@ -317,7 +319,7 @@ class TestSensitivityPanelStructure:
         base_configs, simulate = self._setup()
         panel = sensitivity_panel(
             base_configs,
-            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0, 48.0]},
+            axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0, 48.0]},
             simulate=simulate,
         )
         assert panel.axes[0].values == (0.0, 12.0, 48.0)
@@ -328,7 +330,7 @@ class TestSensitivityPanelStructure:
         n_values = 3
         panel = sensitivity_panel(
             base_configs,
-            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0, 48.0]},
+            axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0, 48.0]},
             simulate=simulate,
         )
         axis = panel.axes[0]
@@ -340,7 +342,7 @@ class TestSensitivityPanelStructure:
         base_configs, simulate = self._setup()
         panel = sensitivity_panel(
             base_configs,
-            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0]},
+            axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0]},
             simulate=simulate,
         )
         baseline = run_sweep(base_configs, simulate=simulate)
@@ -351,7 +353,7 @@ class TestSensitivityPanelStructure:
         base_configs, simulate = self._setup()
         panel = sensitivity_panel(
             base_configs,
-            axes={"grid_services_income_per_kw_per_year_gbp": [0.0, 12.0, 48.0]},
+            axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [0.0, 12.0, 48.0]},
             simulate=simulate,
         )
         assert 0.0 <= panel.rank_stability <= 1.0
@@ -406,7 +408,7 @@ class TestWH4Coupling:
         base_configs, pt_a, pt_b = self._setup()
         panel = sensitivity_panel(
             base_configs,
-            axes={"battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
+            axes={KNOBS["battery_cost_per_kwh_gbp"]: [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
             simulate=_paired_const_simulate,
         )
         assert panel.baseline_top == pt_b, (
@@ -418,7 +420,7 @@ class TestWH4Coupling:
         base_configs, pt_a, pt_b = self._setup()
         panel = sensitivity_panel(
             base_configs,
-            axes={"battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
+            axes={KNOBS["battery_cost_per_kwh_gbp"]: [self._BATT_COST_LOW, self._BATT_COST_HIGH]},
             simulate=_paired_const_simulate,
         )
         batt_axis = panel.axes[0]
@@ -441,7 +443,7 @@ class TestWH4Coupling:
         base_configs, pt_a, pt_b = self._setup()
         panel = sensitivity_panel(
             base_configs,
-            axes={"grid_services_income_per_kw_per_year_gbp": [self._GS_ZERO, self._GS_HIGH]},
+            axes={KNOBS["grid_services_income_per_kw_per_year_gbp"]: [self._GS_ZERO, self._GS_HIGH]},
             simulate=_paired_const_simulate,
         )
         gs_axis = panel.axes[0]
@@ -463,8 +465,8 @@ class TestWH4Coupling:
         panel = sensitivity_panel(
             base_configs,
             axes={
-                "battery_cost_per_kwh_gbp": [self._BATT_COST_LOW, self._BATT_COST_HIGH],
-                "grid_services_income_per_kw_per_year_gbp": [self._GS_ZERO, self._GS_HIGH],
+                KNOBS["battery_cost_per_kwh_gbp"]: [self._BATT_COST_LOW, self._BATT_COST_HIGH],
+                KNOBS["grid_services_income_per_kw_per_year_gbp"]: [self._GS_ZERO, self._GS_HIGH],
             },
             simulate=_paired_const_simulate,
         )
@@ -507,7 +509,7 @@ class TestRetainedFloorAxis:
         floor_high = 500.0  # feasible at this level but different from baseline
         panel = sensitivity_panel(
             base_configs,
-            axes={"retained_cash_floor_per_home_per_year_gbp": [floor_low, floor_high]},
+            axes={KNOBS["retained_cash_floor_per_home_per_year_gbp"]: [floor_low, floor_high]},
             simulate=_paired_const_simulate,
         )
 
@@ -527,13 +529,28 @@ class TestRetainedFloorAxis:
                 f"top_config_per_value[{i}] mismatch at floor={v}"
             )
 
+    def test_a_copy_of_the_floor_knob_is_routed_as_the_floor_axis(self) -> None:
+        """A knob equal to the registry's floor knob, though not it, sets each sweep's floor over the panel floor."""
+        floor_knob = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
+        floor_copy = copy.deepcopy(floor_knob)
+        assert floor_copy == floor_knob and floor_copy is not floor_knob
+
+        panel = sensitivity_panel(
+            self._setup(),
+            axes={floor_copy: [9_999_999.0]},
+            retained_cash_floor_gbp=50.0,
+            simulate=_paired_const_simulate,
+        )
+
+        assert panel.axes[0].top_config_per_value == (None,)
+
     def test_floor_axis_very_high_yields_none_top(self) -> None:
         """A sufficiently high floor makes all configs infeasible → None top, no crash."""
         base_configs = self._setup()
         # 9,999,999 GBP floor is far above any solved rate — all infeasible
         panel = sensitivity_panel(
             base_configs,
-            axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 9_999_999.0]},
+            axes={KNOBS["retained_cash_floor_per_home_per_year_gbp"]: [50.0, 9_999_999.0]},
             simulate=_paired_const_simulate,
         )
 
@@ -548,7 +565,7 @@ class TestRetainedFloorAxis:
         base_configs = self._setup()
         panel = sensitivity_panel(
             base_configs,
-            axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 9_999_999.0]},
+            axes={KNOBS["retained_cash_floor_per_home_per_year_gbp"]: [50.0, 9_999_999.0]},
             simulate=_paired_const_simulate,
         )
         # baseline_top is the config at panel_floor (None here) — run_sweep at baseline floor
@@ -568,7 +585,7 @@ class TestRetainedFloorAxis:
         ]
         sensitivity_panel(
             base_configs,
-            axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 500.0]},
+            axes={KNOBS["retained_cash_floor_per_home_per_year_gbp"]: [50.0, 500.0]},
             simulate=_paired_const_simulate,
         )
         after_floors = [
@@ -581,15 +598,14 @@ class TestRetainedFloorAxis:
 
 
 # ---------------------------------------------------------------------------
-# TestSegAxis — the 'seg' knob sets the scenario's SEG rate
+# TestSegAxis — the SEG knob sets the scenario's SEG rate
 # ---------------------------------------------------------------------------
 
 
 class TestSegAxis:
-    """The 'seg' knob sets the scenario's rate, at which each home without a tariff of its own exports."""
+    """The SEG knob sets the scenario's rate, at which each home without a tariff of its own exports."""
 
-    @pytest.mark.parametrize("knob", ["seg", "seg_tariff_pence_per_kwh"])
-    def test_every_fleet_a_sweep_simulates_exports_at_that_sweeps_rate(self, knob: str) -> None:
+    def test_every_fleet_a_sweep_simulates_exports_at_that_sweeps_rate(self) -> None:
         """On homes with no tariff of their own, the baseline sweep's fleets, its age-0 outlay fleet
         included, export at the scenario's 4.1 p/kWh, and each swept value's fleets at that value.
         """
@@ -601,7 +617,7 @@ class TestSegAxis:
         )
         simulate = _SegPricingSimulate()
 
-        panel = sensitivity_panel(base_configs, axes={knob: [4.1, 6.0]}, simulate=simulate)
+        panel = sensitivity_panel(base_configs, axes={KNOBS["seg_tariff_pence_per_kwh"]: [4.1, 6.0]}, simulate=simulate)
 
         assert panel.axes[0].values == (4.1, 6.0)
         assert set(simulate.rates_per_call) == {
@@ -621,7 +637,7 @@ class TestSegAxis:
         )
 
         with pytest.raises(ConfigurationError, match=r"homes\[0\].*4\.1.*6\.0"):
-            sensitivity_panel(base_configs, axes={"seg": [6.0]}, simulate=_SegPricingSimulate())
+            sensitivity_panel(base_configs, axes={KNOBS["seg_tariff_pence_per_kwh"]: [6.0]}, simulate=_SegPricingSimulate())
 
 
 # ---------------------------------------------------------------------------
@@ -646,7 +662,7 @@ class TestSensitivityPanelGuards:
         with pytest.raises(ValueError, match="base_configs"):
             sensitivity_panel(
                 [],
-                axes={"battery_cost_per_kwh_gbp": [250.0]},
+                axes={KNOBS["battery_cost_per_kwh_gbp"]: [250.0]},
                 simulate=_paired_const_simulate,
             )
 
@@ -666,7 +682,7 @@ class TestSensitivityPanelGuards:
         with pytest.raises(ValueError):
             sensitivity_panel(
                 base_configs,
-                axes={"battery_cost_per_kwh_gbp": []},
+                axes={KNOBS["battery_cost_per_kwh_gbp"]: []},
                 simulate=_paired_const_simulate,
             )
 
@@ -677,25 +693,15 @@ class TestSensitivityPanelGuards:
         with pytest.raises(ValueError, match="baseline"):
             sensitivity_panel(
                 base_configs,
-                axes={"battery_cost_per_kwh_gbp": [250.0]},
+                axes={KNOBS["battery_cost_per_kwh_gbp"]: [250.0]},
                 retained_cash_floor_gbp=9_999_999.0,
-                simulate=_paired_const_simulate,
-            )
-
-    def test_unknown_knob_propagates_value_error(self) -> None:
-        """Unknown knob name in axes raises ValueError (propagated from apply_knob)."""
-        base_configs = self._base_configs()
-        with pytest.raises(ValueError, match="Unknown sensitivity knob"):
-            sensitivity_panel(
-                base_configs,
-                axes={"completely_unknown_knob_xyz": [1.0, 2.0]},
                 simulate=_paired_const_simulate,
             )
 
     def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
         """sensitivity_panel runs only the simulator its caller passes: a call passing none is refused by name."""
         with pytest.raises(TypeError, match="simulate"):
-            sensitivity_panel(self._base_configs(), axes={"battery_cost_per_kwh_gbp": [250.0]})
+            sensitivity_panel(self._base_configs(), axes={KNOBS["battery_cost_per_kwh_gbp"]: [250.0]})
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +710,7 @@ class TestSensitivityPanelGuards:
 
 
 def test_a_flat_rate_axis_under_the_events_model_is_refused() -> None:
-    """A flat grid-services rate swept over a capacity_at_events scenario is refused by FinanceConfig's rule, which apply_knob's rebuilt finance runs, so a library caller of sensitivity_panel gets the refusal too."""
+    """A flat grid-services rate swept over a capacity_at_events scenario is refused by FinanceConfig's rule, which the knob's rebuilt finance runs, so a library caller of sensitivity_panel gets the refusal too."""
     finance = dataclasses.replace(
         _interior_finance(),
         grid_services_model="capacity_at_events",
@@ -717,7 +723,7 @@ def test_a_flat_rate_axis_under_the_events_model_is_refused() -> None:
     with pytest.raises(ConfigurationError) as refusal:
         sensitivity_panel(
             base_configs,
-            {"grid_services_income_per_kw_per_year_gbp": (12.0,)},
+            {KNOBS["grid_services_income_per_kw_per_year_gbp"]: (12.0,)},
             simulate=_paired_const_simulate,
         )
 

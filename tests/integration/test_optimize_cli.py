@@ -24,6 +24,7 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.projection import fewest_simulated_ages
+from solar_challenge.scenario_knobs import KNOBS, knob_named
 from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli, simulate_reaching_the_sweep
 from tests._cli_stderr_text import stderr_text
 from tests._factories import (
@@ -818,8 +819,9 @@ _SENSITIVITY_ALIAS_KNOBS: dict[str, str] = {
 
 
 def test_the_documented_sensitivity_aliases_cover_exactly_the_library_bands() -> None:
-    """The documented aliases' knobs are exactly the optimize.SENSITIVITY_BANDS knobs, so the end-to-end alias test covers every band."""
-    assert set(_SENSITIVITY_ALIAS_KNOBS.values()) == set(SENSITIVITY_BANDS), (
+    """Each documented alias names its knob in the registry, and their knobs are exactly the optimize.SENSITIVITY_BANDS knobs, so the end-to-end alias test covers every band."""
+    assert [alias for alias, knob in _SENSITIVITY_ALIAS_KNOBS.items() if knob_named(alias) is not KNOBS[knob]] == []
+    assert {KNOBS[knob] for knob in _SENSITIVITY_ALIAS_KNOBS.values()} == set(SENSITIVITY_BANDS), (
         "Every library band must be reachable from a CLI alias."
     )
 
@@ -954,10 +956,70 @@ class TestOptimizeCLIE2EFast:
             f"Expected one axis section per alias's knob in the report:\n{result.output}"
         )
         for knob in _SENSITIVITY_ALIAS_KNOBS.values():
-            assert swept[knob] == pytest.approx(SENSITIVITY_BANDS[knob], abs=0.005), (
+            assert swept[knob] == pytest.approx(SENSITIVITY_BANDS[KNOBS[knob]], abs=0.005), (
                 f"Axis {knob} swept {swept[knob]}, not its SENSITIVITY_BANDS values.\n"
                 f"Output:\n{result.output}"
             )
+
+    def test_a_banded_knobs_canonical_name_sweeps_its_band(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """--sensitivity takes a knob's canonical name as well as its alias, sweeping that knob's band."""
+        knob = "retained_cash_floor_per_home_per_year_gbp"
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", knob],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 0, result.output
+        swept = _swept_values_by_axis(result.stdout)
+        assert list(swept) == [knob], result.output
+        assert swept[knob] == pytest.approx(SENSITIVITY_BANDS[KNOBS[knob]], abs=0.005), result.output
+
+    def test_a_knob_without_a_band_is_refused_naming_it_and_every_banded_knob_before_any_simulation(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """A knob with no sensitivity band is a configuration error naming it and the banded knobs, refused before the sweep."""
+        result, simulated_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "seg"],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 1, result.output
+        refusal = stderr_text(result)
+        assert refusal.startswith("Configuration error:"), refusal
+        assert "seg_tariff_pence_per_kwh" in refusal
+        assert "band" in refusal
+        assert [knob.name for knob in SENSITIVITY_BANDS if knob.name not in refusal] == [], refusal
+        assert simulated_fleets == []
+
+    def test_a_knob_named_twice_is_refused_naming_both_spellings_before_any_simulation(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """A knob named by its alias and by its canonical name is a configuration error naming both, refused before the sweep."""
+        canonical = "retained_cash_floor_per_home_per_year_gbp"
+        result, simulated_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", f"retained_floor,{canonical}"],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 1, result.output
+        refusal = stderr_text(result)
+        assert refusal.startswith("Configuration error:"), refusal
+        assert f"as retained_floor and as {canonical}" in refusal, refusal
+        assert simulated_fleets == []
 
     def test_parse_robustness_single_pv_value_works(
         self,
@@ -1117,7 +1179,7 @@ class TestOptimizeCLIE2EFast:
         self,
         tmp_path: Path,
     ) -> None:
-        """An unknown `--sensitivity` alias must exit 1 with a clear error message."""
+        """An unknown `--sensitivity` name is knob_named's configuration error, listing the knobs and their aliases."""
         scenario_file = _write_optimize_scenario(tmp_path)
 
         runner = CliRunner()
@@ -1132,17 +1194,15 @@ class TestOptimizeCLIE2EFast:
             ],
         )
 
-        assert result.exit_code != 0, (
-            f"Expected non-zero exit for unknown sensitivity alias; got {result.exit_code}.\n"
+        assert result.exit_code == 1, (
+            f"Expected exit 1 for unknown sensitivity alias; got {result.exit_code}.\n"
             f"Output:\n{result.output}"
         )
-        assert (
-            "unknown" in result.output.lower()
-            or "alias" in result.output.lower()
-            or "known" in result.output.lower()
-        ), (
-            f"Expected clear error message about unknown alias in output:\n{result.output}"
-        )
+        refusal = stderr_text(result)
+        assert refusal.startswith("Configuration error:"), refusal
+        assert "completely_unknown_alias_xyz" in refusal
+        assert "retained_cash_floor_per_home_per_year_gbp" in refusal
+        assert "retained_floor" in refusal
 
     def test_a_plain_value_error_while_the_sensitivity_panel_runs_exits_one_as_an_invalid_value(
         self,

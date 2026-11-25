@@ -6,7 +6,7 @@ The command and its report are specified in
 docs/prds/discrete-install-config-sweep.md §3.6.
 """
 
-import dataclasses
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -22,9 +22,9 @@ from solar_challenge.cli.utils import (
     required_finance,
     with_window_options,
 )
-from solar_challenge.config import load_scenario
+from solar_challenge.config import ScenarioConfig, load_scenario
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import FinanceConfig, grid_services_model_of
+from solar_challenge.finance import grid_services_model_of
 from solar_challenge.gridservices import GridServicesEventsConfig, GridServicesModel
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
@@ -34,29 +34,24 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.projection import fewest_simulated_ages
+from solar_challenge.scenario_knobs import KNOBS, Knob, knob_named, names_with_aliases
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
 # The knob the flat grid-services pricing reads: what --grid-services-kw sets.
-_FLAT_RATE_KNOB = "grid_services_income_per_kw_per_year_gbp"
+_FLAT_RATE_KNOB = KNOBS["grid_services_income_per_kw_per_year_gbp"]
 
-# --sensitivity alias → the knob it sweeps, over that knob's optimize.SENSITIVITY_BANDS values.
-_SENSITIVITY_ALIAS_MAP: dict[str, str] = {
-    "grid_services": _FLAT_RATE_KNOB,
-    "retained_floor": "retained_cash_floor_per_home_per_year_gbp",
-    "battery_cost": "battery_cost_per_kwh_gbp",
-    "pv_cost": "pv_cost_per_kwp_gbp",
-    "inverter_cost": "inverter_cost_per_kw_gbp",
-}
-
-# The --sensitivity aliases swept when the flag is not given, in report order.
-_DEFAULT_SENSITIVITY_ALIASES: tuple[str, ...] = ("retained_floor", "grid_services")
+# The --sensitivity names swept when the flag is not given, in report order.
+_DEFAULT_SENSITIVITY_NAMES: tuple[str, ...] = ("retained_floor", "grid_services")
 
 # Why --grid-services-kw and the grid_services axis have nothing to set under the events model.
 _FLAT_RATE_UNREAD_UNDER_EVENTS = (
-    f"the flat grid-services rate, {_FLAT_RATE_KNOB}, "
+    f"the flat grid-services rate, {_FLAT_RATE_KNOB.name}, "
     "which grid_services_model='capacity_at_events' does not read"
 )
+
+# A sensitivity axis as --sensitivity names it: the name as written, and the knob it names.
+_NamedAxis = tuple[str, Knob]
 
 
 def _parse_float_list(raw: str, flag: str) -> list[float]:
@@ -83,44 +78,74 @@ def _parse_float_list(raw: str, flag: str) -> list[float]:
         ) from None
 
 
-def _parse_sensitivity_aliases(raw: str) -> tuple[str, ...]:
-    """The --sensitivity aliases the comma-separated *raw* names, in order; '' names none.
+def _banded_knob(name: str) -> Knob:
+    """The knob *name* names, canonically or by an alias, which has a SENSITIVITY_BANDS entry.
 
     Raises:
-        ValueError: If an alias is not one of _SENSITIVITY_ALIAS_MAP's.
+        ConfigurationError: If *name* names no knob, as knob_named refuses it, or
+            names a knob with no sensitivity band, listing the knobs with one.
     """
-    aliases = tuple(alias.strip() for alias in raw.split(",") if alias.strip())
-    for alias in aliases:
-        if alias not in _SENSITIVITY_ALIAS_MAP:
-            known = ", ".join(sorted(_SENSITIVITY_ALIAS_MAP))
-            raise ValueError(f"Unknown sensitivity alias '{alias}'. Known aliases: {known}")
-    return aliases
+    knob = knob_named(name)
+    if knob not in SENSITIVITY_BANDS:
+        raise ConfigurationError(
+            f"--sensitivity names {name}, the knob {knob.name}, which has no sensitivity band; "
+            f"the knobs with one: {names_with_aliases(SENSITIVITY_BANDS)}"
+        )
+    return knob
 
 
-def _flat_rate_aliases(aliases: tuple[str, ...]) -> tuple[str, ...]:
-    """The aliases of *aliases* whose axis sweeps _FLAT_RATE_KNOB, in order."""
-    return tuple(alias for alias in aliases if _SENSITIVITY_ALIAS_MAP[alias] == _FLAT_RATE_KNOB)
+def _banded_axes(names: Iterable[str]) -> tuple[_NamedAxis, ...]:
+    """Each of *names*, in order, paired with the banded knob it names.
+
+    Raises:
+        ConfigurationError: As _banded_knob refuses a name, or if two of *names*
+            name one knob, naming both as written.
+    """
+    name_of: dict[Knob, str] = {}
+    for name in names:
+        knob = _banded_knob(name)
+        if knob in name_of:
+            raise ConfigurationError(
+                f"--sensitivity names the knob {knob.name} twice, as {name_of[knob]} and as {name}; "
+                "name each knob once"
+            )
+        name_of[knob] = name
+    return tuple((name, knob) for knob, name in name_of.items())
 
 
-def _resolve_sensitivity_aliases(
-    requested: Optional[tuple[str, ...]], pricing: GridServicesModel
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The sensitivity axes to sweep under *pricing*, paired with the default's axes left out of them.
+def _parse_sensitivity(raw: str) -> tuple[_NamedAxis, ...]:
+    """The sensitivity axes the comma-separated *raw* names, in order; '' names none.
 
-    They are *requested*, leaving out none, or _DEFAULT_SENSITIVITY_ALIASES when
-    it is None. Under an events configuration the default leaves out each axis
-    that sweeps _FLAT_RATE_KNOB.
+    Raises:
+        ConfigurationError: As _banded_axes refuses *raw*'s names.
+    """
+    return _banded_axes(name.strip() for name in raw.split(",") if name.strip())
+
+
+def _flat_rate_names(axes: tuple[_NamedAxis, ...]) -> tuple[str, ...]:
+    """The names, as written, of the axes of *axes* that sweep _FLAT_RATE_KNOB, in order."""
+    return tuple(name for name, knob in axes if knob == _FLAT_RATE_KNOB)
+
+
+def _resolve_sensitivity_axes(
+    requested: Optional[tuple[_NamedAxis, ...]], pricing: GridServicesModel
+) -> tuple[tuple[_NamedAxis, ...], tuple[str, ...]]:
+    """The sensitivity axes to sweep under *pricing*, paired with the names of the default's axes left out of them.
+
+    They are *requested*, leaving out none, or those _DEFAULT_SENSITIVITY_NAMES
+    names when it is None. Under an events configuration the default leaves out
+    each axis that sweeps _FLAT_RATE_KNOB.
 
     Raises:
         ConfigurationError: If *pricing* is an events configuration and
             *requested* names an axis that sweeps _FLAT_RATE_KNOB.
     """
+    default = _banded_axes(_DEFAULT_SENSITIVITY_NAMES)
     if not isinstance(pricing, GridServicesEventsConfig):
-        return (_DEFAULT_SENSITIVITY_ALIASES if requested is None else requested), ()
+        return (default if requested is None else requested), ()
     if requested is None:
-        omitted = _flat_rate_aliases(_DEFAULT_SENSITIVITY_ALIASES)
-        return tuple(alias for alias in _DEFAULT_SENSITIVITY_ALIASES if alias not in omitted), omitted
-    refused = _flat_rate_aliases(requested)
+        return tuple(axis for axis in default if axis[1] != _FLAT_RATE_KNOB), _flat_rate_names(default)
+    refused = _flat_rate_names(requested)
     if refused:
         raise ConfigurationError(
             f"--sensitivity names {', '.join(refused)}, which sweeps "
@@ -130,22 +155,22 @@ def _resolve_sensitivity_aliases(
 
 
 def _with_grid_services_kw(
-    finance: FinanceConfig, grid_services_kw: Optional[float], pricing: GridServicesModel
-) -> FinanceConfig:
-    """*finance* with *grid_services_kw* as its flat grid-services rate, or *finance* itself when it is None.
+    scenario: ScenarioConfig, grid_services_kw: Optional[float], pricing: GridServicesModel
+) -> ScenarioConfig:
+    """*scenario* with *grid_services_kw* as its flat grid-services rate, or *scenario* itself when it is None.
 
     Raises:
         ConfigurationError: If *grid_services_kw*, whatever its value, is given
             and *pricing* is an events configuration.
     """
     if grid_services_kw is None:
-        return finance
+        return scenario
     if isinstance(pricing, GridServicesEventsConfig):
         raise ConfigurationError(
             f"--grid-services-kw sets {_FLAT_RATE_UNREAD_UNDER_EVENTS}; drop the flag or "
             "select grid_services_model: flat in the scenario's finance block"
         )
-    return dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=grid_services_kw)
+    return _FLAT_RATE_KNOB.apply(scenario, grid_services_kw)
 
 
 @app.command()
@@ -209,12 +234,13 @@ def configs(
         typer.Option(
             "--sensitivity",
             help=(
-                "Comma-separated short alias names of OAT sensitivity axes to sweep "
+                "Comma-separated knob names or aliases of OAT sensitivity axes to sweep "
                 "(e.g. 'retained_floor,grid_services').  Defaults to "
                 "retained_floor,grid_services, or to retained_floor alone under "
                 "grid_services_model: capacity_at_events, which refuses grid_services.  "
                 "Use '' to skip sensitivity.  "
-                "Supported aliases: " + ", ".join(sorted(_SENSITIVITY_ALIAS_MAP))
+                "Knobs with a sensitivity band, each with its aliases: "
+                + names_with_aliases(SENSITIVITY_BANDS)
             ),
         ),
     ] = None,
@@ -251,24 +277,22 @@ def configs(
     battery_list = _parse_float_list(battery, "battery")
     inverter_list = _parse_float_list(inverter, "inverter")
 
-    # ---- Parse sensitivity aliases -----------------------------------------
-    requested_sensitivity = None if sensitivity is None else _parse_sensitivity_aliases(sensitivity)
+    # ---- Parse sensitivity names -------------------------------------------
+    requested_sensitivity = None if sensitivity is None else _parse_sensitivity(sensitivity)
 
     # ---- Load the scenario and its finance block -----------------------------
     scenario_config = with_window_options(load_scenario(scenario), start=start, end=end)
-    finance = required_finance(scenario_config)
-
-    pricing = grid_services_model_of(finance)
-    finance = _with_grid_services_kw(finance, grid_services_kw, pricing)
-    sensitivity_axes, left_out_of_the_default = _resolve_sensitivity_aliases(requested_sensitivity, pricing)
-    for alias in left_out_of_the_default:
+    pricing = grid_services_model_of(required_finance(scenario_config))
+    base = _with_grid_services_kw(scenario_config, grid_services_kw, pricing)
+    finance = required_finance(base)
+    sensitivity_axes, left_out_of_the_default = _resolve_sensitivity_axes(requested_sensitivity, pricing)
+    for name in left_out_of_the_default:
         print_info(
             cli,
-            f"Sensitivity axis {alias} omitted from the default: it sweeps "
+            f"Sensitivity axis {name} omitted from the default: it sweeps "
             f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
         )
 
-    base = dataclasses.replace(scenario_config, finance=finance)
     days = base.window().days
     n_homes = len(base.simulated_homes())
 
@@ -323,9 +347,8 @@ def configs(
     # ---- Optional sensitivity panel ----------------------------------------
     panel = None
     if sensitivity_axes and ranked.cheapest_feasible is not None:
-        knobs = [_SENSITIVITY_ALIAS_MAP[alias] for alias in sensitivity_axes]
-        axes_map: dict[str, tuple[float, ...]] = {knob: SENSITIVITY_BANDS[knob] for knob in knobs}
-        print_info(cli, f"Computing sensitivity panel for axes: {list(sensitivity_axes)}…")
+        axes_map = {knob: SENSITIVITY_BANDS[knob] for _, knob in sensitivity_axes}
+        print_info(cli, f"Computing sensitivity panel for axes: {[name for name, _ in sensitivity_axes]}…")
         panel = sensitivity_panel(
             all_configs,
             axes_map,
