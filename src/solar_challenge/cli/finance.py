@@ -2,16 +2,14 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Finance CLI commands for householder bill and distribution analysis."""
 
-import dataclasses
 import enum
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Mapping, Optional, Sequence
 
 import typer
 
-from solar_challenge.board_report import generate_finance_report
+from solar_challenge.board_report import AssumptionSection, generate_finance_report
 from solar_challenge.cli.utils import (
-    CliInvocation,
     EndOption,
     StartOption,
     handle_errors,
@@ -23,12 +21,11 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.config import load_scenario
 from solar_challenge.finance import (
-    DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
-    BillDistribution,
-    CostRecoverySolution,
     FinanceConfig,
+    OwnUseBasis,
     bill_distribution,
     grid_services_model_of,
+    with_own_use_basis,
 )
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate, reusing
@@ -39,9 +36,8 @@ from solar_challenge.gridservices import (
     GridServicesModel,
     compute_grid_services_at_events,
 )
-from solar_challenge.home import calculate_summary
+from solar_challenge.home import SummaryStatistics, calculate_summary
 from solar_challenge.projection import (
-    ProjectEconomics,
     ScenarioFleet,
     project_economics,
     project_fleet,
@@ -69,47 +65,43 @@ def _grid_services_at_events(
     return compute_grid_services_at_events(fleet_results, pricing)
 
 
-def _bill_finances(
-    assumptions: AssumptionMode, finance: FinanceConfig
-) -> tuple[FinanceConfig, Optional[FinanceConfig]]:
-    """The FinanceConfigs of the report's first and second bill columns: for --assumptions physics or spreadsheet that mode's config and None, for both the physics config then the spreadsheet config."""
-    physics = dataclasses.replace(finance, self_consumption_override=None)
-    spreadsheet = dataclasses.replace(
-        finance,
-        self_consumption_override=(
-            finance.self_consumption_override
-            if finance.self_consumption_override is not None
-            else DEFAULT_SPREADSHEET_SELF_CONSUMPTION
-        ),
-    )
-    pairs: dict[AssumptionMode, tuple[FinanceConfig, Optional[FinanceConfig]]] = {
-        AssumptionMode.physics: (physics, None),
-        AssumptionMode.spreadsheet: (spreadsheet, None),
-        AssumptionMode.both: (physics, spreadsheet),
-    }
-    return pairs[assumptions]
+_BASES: Mapping[AssumptionMode, tuple[OwnUseBasis, ...]] = {
+    AssumptionMode.physics: (OwnUseBasis.SIMULATED,),
+    AssumptionMode.spreadsheet: (OwnUseBasis.OVERRIDE,),
+    AssumptionMode.both: (OwnUseBasis.SIMULATED, OwnUseBasis.OVERRIDE),
+}
+"""The own-use bases each --assumptions mode reports, one column each."""
 
 
-def _economics_and_solution(
-    cli: CliInvocation,
+def _assumption_section(
+    summaries: Sequence[SummaryStatistics],
     fleet: ScenarioFleet,
     finance: FinanceConfig,
     simulate: FleetSimulate,
     *,
     project: bool,
     cost_recovery: bool,
-) -> tuple[Optional[ProjectEconomics], Optional[CostRecoverySolution]]:
-    """The project-level economics (DSCR/IRR/payback) if *project* and the cost-recovery solution if *cost_recovery* of *fleet* under *finance*, from one projection run by *simulate*, after printing *cli*'s status line announcing each."""
-    if project:
-        print_info(cli, "Computing project-level economics (DSCR/IRR/payback)…")
-    if cost_recovery:
-        print_info(cli, "Solving cost-recovery own-use rate…")
-    if not (project or cost_recovery):
-        return None, None
+) -> AssumptionSection:
+    """One --assumptions mode's section, every figure computed under *finance*: the bill of *summaries*, and, when asked for, *fleet*'s one projection run by *simulate*, its economics if *project* and its cost-recovery solve if *cost_recovery*."""
+    bill = bill_distribution(summaries, finance)
     if cost_recovery:
         run = run_cost_recovery(fleet, finance, simulate=simulate)
-        return (run.economics if project else None), run.solution
-    return project_economics(project_fleet(fleet, finance, simulate=simulate).curve, fleet, finance), None
+        return AssumptionSection(
+            finance,
+            bill,
+            projection=run.projection,
+            economics=run.economics if project else None,
+            cost_recovery=run.solution,
+        )
+    if project:
+        projection = project_fleet(fleet, finance, simulate=simulate)
+        return AssumptionSection(
+            finance,
+            bill,
+            projection=projection,
+            economics=project_economics(projection.curve, fleet, finance),
+        )
+    return AssumptionSection(finance, bill)
 
 
 @app.command()
@@ -171,6 +163,13 @@ def run(
     prints a finance report showing the representative householder bill and
     fleet bill distribution.
 
+    Each --assumptions mode drives the bill, and with --project or
+    --cost-recovery the projection, the economics and the solve, from its own
+    finance, ``finance.with_own_use_basis`` of the scenario's: physics clears
+    any override, spreadsheet keeps the scenario's or sets the default, and
+    both runs the two.  Each mode is its column of every bill, economics and
+    cost-recovery table of the report.
+
     The scenario file must contain a ``finance:`` block with at least
     ``standing_charge_pence_per_day``.
 
@@ -195,25 +194,27 @@ def run(
     grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
 
     summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
-    primary_finance, spreadsheet_finance = _bill_finances(assumptions, finance)
-    primary_bill = bill_distribution(summaries, primary_finance)
-    spreadsheet_bill: Optional[BillDistribution] = (
-        bill_distribution(summaries, spreadsheet_finance)
-        if spreadsheet_finance is not None
-        else None
-    )
 
+    if project:
+        print_info(cli, "Computing project-level economics (DSCR/IRR/payback)…")
+    if cost_recovery:
+        print_info(cli, "Solving cost-recovery own-use rate…")
     simulate = reusing(cli.runner.simulate, fleet_results, fleet.start, fleet.end)
-    economics_result, cost_recovery_result = _economics_and_solution(
-        cli, fleet, finance, simulate, project=project, cost_recovery=cost_recovery
-    )
+    sections = {
+        basis: _assumption_section(
+            summaries,
+            fleet,
+            with_own_use_basis(finance, basis),
+            simulate,
+            project=project,
+            cost_recovery=cost_recovery,
+        )
+        for basis in _BASES[assumptions]
+    }
 
     report = generate_finance_report(
-        primary_bill,
-        spreadsheet_bill,
+        sections,
         scenario_name=scenario_config.name or str(scenario),
-        economics=economics_result,
-        cost_recovery=cost_recovery_result,
         flex_band=resolve_flex_band(band) if band is not None else None,
         flex_band_name=band.value if band is not None else "",
         grid_services_at_events=grid_services_at_events,

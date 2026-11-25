@@ -54,6 +54,7 @@ from solar_challenge.projection import (
     scenario_fleet,
     solve_cost_recovery_rate,
 )
+from tests._assumption_sections import make_assumption_section, sections_of
 from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
 from tests.integration._helpers import SCENARIO, board_econ_scenario
@@ -613,7 +614,7 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
 
     # Call generate_finance_report with the grid_services_at_events param
     report = generate_finance_report(
-        dist,
+        sections_of(make_assumption_section(bill=dist)),
         scenario_name="Epsilon-Events-Test",
         flex_band=resolve_flex_band("central"),
         flex_band_name="central",
@@ -698,7 +699,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
 
 def _events_report(gse: GridServicesAtEvents) -> str:
     return generate_finance_report(
-        _synthetic_bill_distribution(),
+        sections_of(make_assumption_section(bill=_synthetic_bill_distribution())),
         scenario_name="Alpha-Prime-Events-Test",
         flex_band=resolve_flex_band("central"),
         flex_band_name="central",

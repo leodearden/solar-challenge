@@ -21,11 +21,13 @@ from solar_challenge.finance import (
     BillBreakdown,
     BillDistribution,
     FinanceConfig,
+    OwnUseBasis,
     bill,
     bill_distribution,
     householder_bill,
 )
 from solar_challenge.home import RunPricing, SummaryStatistics
+from tests._assumption_sections import make_assumption_section, sections_of
 from tests._factories import make_bill_breakdown, make_bill_distribution
 from tests._finance_builders import make_window
 
@@ -766,13 +768,13 @@ class TestGenerateFinanceReport:
     def test_returns_string(self) -> None:
         """generate_finance_report must return a str."""
         dist = _make_bill_distribution()
-        report = generate_finance_report(dist)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
         assert isinstance(report, str)
 
     def test_physics_bill_block_present(self) -> None:
         """Report must contain the CR3 householder-bill block headings (no Gross Bill / SEG)."""
         dist = _make_bill_distribution()
-        report = generate_finance_report(dist)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
 
         # CR3 line items that MUST appear
         assert "Standing Charge" in report or "standing" in report.lower()
@@ -789,7 +791,7 @@ class TestGenerateFinanceReport:
     def test_distribution_table_present(self) -> None:
         """Report must contain a per-home total-outlay distribution table."""
         dist = _make_bill_distribution()
-        report = generate_finance_report(dist)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
 
         assert "min" in report.lower() or "Min" in report
         assert "mean" in report.lower() or "Mean" in report
@@ -801,7 +803,7 @@ class TestGenerateFinanceReport:
     def test_representative_values_in_report(self) -> None:
         """Report must include representative total_outlay_gbp value."""
         dist = _make_bill_distribution()
-        report = generate_finance_report(dist)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
 
         # CR3: check total_outlay_gbp appears (formatted to 2 dp)
         outlay = dist.representative.total_outlay_gbp
@@ -810,28 +812,31 @@ class TestGenerateFinanceReport:
     def test_scenario_name_in_report(self) -> None:
         """When scenario_name is provided it must appear in the report."""
         dist = _make_bill_distribution()
-        report = generate_finance_report(dist, scenario_name="Bristol Phase 1")
+        report = generate_finance_report(
+            sections_of(make_assumption_section(bill=dist)),
+            scenario_name="Bristol Phase 1",
+        )
 
         assert "Bristol Phase 1" in report
 
     def test_both_assumptions_side_by_side(self) -> None:
-        """With physics AND spreadsheet BillDistributions, both labels must appear."""
+        """With a physics and a spreadsheet section, the bill's header row names both columns, physics first."""
         dist_physics = _make_bill_distribution(multiplier=1.0)
         dist_spreadsheet = _make_bill_distribution(multiplier=1.2)
 
         report = generate_finance_report(
-            dist_physics,
-            bill_spreadsheet=dist_spreadsheet,
+            sections_of(
+                make_assumption_section(bill=dist_physics),
+                make_assumption_section(OwnUseBasis.OVERRIDE, bill=dist_spreadsheet),
+            )
         )
 
-        # Both assumption labels must be present
-        assert "physics" in report.lower() or "Physics" in report
-        assert "spreadsheet" in report.lower() or "Spreadsheet" in report
+        assert "| Line Item | Physics | Spreadsheet (70% self-consumption) |" in report.splitlines()
 
     def test_physics_only_no_spreadsheet_label(self) -> None:
         """With only physics BillDistribution, 'Spreadsheet' label must NOT appear."""
         dist = _make_bill_distribution()
-        report = generate_finance_report(dist)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
 
         assert "spreadsheet" not in report.lower()
 

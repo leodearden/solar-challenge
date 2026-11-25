@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Shared fixture factories for the finance and optimize result dataclasses.
+"""Shared fixture factories for the finance, projection and optimize result dataclasses.
 
 Nine test modules used to spell out their own ``BillBreakdown`` literal, so
 every field added to the dataclass cost nine mechanical edits and a tenth
@@ -31,6 +31,7 @@ from typing import Optional
 
 from solar_challenge.finance import BillBreakdown, BillDistribution, CostRecoverySolution
 from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep
+from solar_challenge.projection import ProjectEconomics
 from solar_challenge.timebase import SimulationWindow
 
 from tests._finance_builders import make_window
@@ -256,4 +257,36 @@ def make_ranked_sweep(
         retained_cash_floor_gbp=floor,
         cheapest_feasible=results[0].config if results else None,
         pareto_baseline=tuple(pareto),
+    )
+
+
+def make_project_economics(
+    *,
+    total_capex_gbp: float = 250_000.0,
+    grant_gbp: float = 50_000.0,
+    equity_gbp: float = 150_000.0,
+    debt_gbp: float = 50_000.0,
+    annual_debt_service_gbp: float = 5_500.0,
+    per_year_surplus_gbp: tuple[float, ...] = (8_000.0,) * 25,
+    min_dscr: float = 1.45,
+    equity_irr: float = 0.08,
+    payback_years: Optional[float] = 10.0,
+    net_surplus_per_home_per_year_gbp: float = 80.0,
+    fleet_opex_gbp: float = 12_000.0,
+    mean_fleet_surplus_per_year_gbp: float = 8_000.0,
+) -> ProjectEconomics:
+    """Build a synthetic ProjectEconomics: by default a 25-year project surplusing £8,000 a year, capex £250,000, DSCR 1.45, IRR 8%, paying back in 10 years."""
+    return ProjectEconomics(
+        total_capex_gbp=total_capex_gbp,
+        grant_gbp=grant_gbp,
+        equity_gbp=equity_gbp,
+        debt_gbp=debt_gbp,
+        annual_debt_service_gbp=annual_debt_service_gbp,
+        per_year_surplus_gbp=per_year_surplus_gbp,
+        min_dscr=min_dscr,
+        equity_irr=equity_irr,
+        payback_years=payback_years,
+        net_surplus_per_home_per_year_gbp=net_surplus_per_home_per_year_gbp,
+        fleet_opex_gbp=fleet_opex_gbp,
+        mean_fleet_surplus_per_year_gbp=mean_fleet_surplus_per_year_gbp,
     )

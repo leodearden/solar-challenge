@@ -303,9 +303,15 @@ subtraction and one scaling, and nothing more
 
 Source: `finance.py:householder_bill()` via `home_ledger()` (*One ledger per home*, above).
 
-With `FinanceConfig.self_consumption_override` set (a scenario's `finance:` block, or
-`finance run --assumptions spreadsheet|both`), the bill's own-use comes from the
-override fraction instead of basis C:
+With `FinanceConfig.self_consumption_override` set, by a scenario's `finance:` block,
+the bill's own-use comes from the override fraction instead of basis C.
+`home_ledger`'s basis is `finance.own_use_basis`, the one rule: OVERRIDE when the
+override is set, else SIMULATED.  `finance run --assumptions` picks each mode's
+`FinanceConfig` through `finance.with_own_use_basis`: `physics` clears any override,
+`spreadsheet` keeps the scenario's override, else sets
+`DEFAULT_SPREADSHEET_SELF_CONSUMPTION` (0.70), and `both` renders the two.  Each
+mode's bill, projection, economics and cost-recovery solve are computed under that
+mode's `FinanceConfig`.  On the override path:
 
 ```
 own_use_kwh = min(self_consumption_override × generation_kwh, demand_kwh)
@@ -1091,13 +1097,14 @@ Source: `src/solar_challenge/board_report.py` (`generate_finance_report()`).
 
 Running `solar-challenge finance run <scenario> --cost-recovery`, where `<scenario>` is a
 scenario YAML with a `finance:` block, appends a `## Cost-Recovery Analysis` block to the
-markdown finance report it prints.  The block renders the `CostRecoverySolution` fields:
+markdown finance report it prints.  The block renders the `CostRecoverySolution` fields;
+under the default `--assumptions physics`:
 
 ```markdown
 ## Cost-Recovery Analysis
 
-| Item | Value |
-|------|-------|
+| Item | Physics |
+|---|---|
 | Solved Own-Use Rate              | {r:.2f} p/kWh                    |
 | Representative Householder Outlay| £{representative_outlay_gbp:.2f} |
 | Saving vs Baseline               | £{saving:.2f} ({saving_pct:.1f}%)|
@@ -1106,13 +1113,33 @@ markdown finance report it prints.  The block renders the `CostRecoverySolution`
 
 ## Per-Home Total Outlay at Solved Rate (£)
 
-| Metric | Value |
-|--------|-------|
+| Metric | Physics |
+|---|---|
 | Min    | £{min:.2f}    |
 | Mean   | £{mean:.2f}   |
 | Median | £{median:.2f} |
 | Max    | £{max:.2f}    |
 ```
+
+Every table of the bill, project-economics and cost-recovery blocks, the bill, its
+distribution, the project economics and these two, has one value column per
+`--assumptions` mode, in `OwnUseBasis` order: *Physics* for SIMULATED, then *Spreadsheet*
+for OVERRIDE, followed by the override that column was computed under.  No heading names
+a mode.  The flexibility-value block (`--flex-band`), which no mode changes, renders once
+with its own columns.  Under `--assumptions both` each table has
+both columns, each mode's figures solved under its own `FinanceConfig` (§3, *Override
+(spreadsheet-assumption) path*):
+
+```markdown
+| Item | Physics | Spreadsheet (70% self-consumption) |
+|---|---|---|
+| Solved Own-Use Rate | {r_physics:.2f} p/kWh | {r_spreadsheet:.2f} p/kWh |
+```
+
+`generate_finance_report` takes one `board_report.AssumptionSection` per mode, keyed by
+the `own_use_basis` of its finance, and refuses an empty mapping, a key its section's
+finance is not on, sections carrying different computations, and bills annualised
+from different windows (`tests/unit/test_board_report_sections.py`).
 
 The `representative` outlay is the home whose `total_outlay_gbp` is closest to the
 fleet median — the board's single-home summary figure.

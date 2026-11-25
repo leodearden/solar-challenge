@@ -20,6 +20,8 @@ Provides:
   - ``basis_c_own_use_kwh`` — a summary's basis-C own-use, demand − import,
     over its window.
   - ``OwnUseBasis`` — enum of where a home's ledger takes its own-use from.
+  - ``own_use_basis`` — the one rule of a FinanceConfig's OwnUseBasis.
+  - ``with_own_use_basis`` — a FinanceConfig put on a given OwnUseBasis.
   - ``HomeLedger`` — frozen dataclass of one home's year as the CBS bills it,
     refusing a year whose balances L1-L4 break or whose cap disagrees with them.
   - ``home_ledger`` — the one assembly of a HomeLedger, holding every pricing rule.
@@ -42,7 +44,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence
 
@@ -756,6 +758,26 @@ class OwnUseBasis(Enum):
     """FinanceConfig.self_consumption_override splits the home's generation and demand."""
 
 
+def own_use_basis(finance: FinanceConfig) -> OwnUseBasis:
+    """The one rule of *finance*'s own-use basis: OVERRIDE when it sets a self_consumption_override, else SIMULATED."""
+    return OwnUseBasis.SIMULATED if finance.self_consumption_override is None else OwnUseBasis.OVERRIDE
+
+
+def with_own_use_basis(finance: FinanceConfig, basis: OwnUseBasis) -> FinanceConfig:
+    """*finance* on *basis*, every other field kept, so ``own_use_basis(with_own_use_basis(f, b)) is b``.
+
+    SIMULATED clears the override; OVERRIDE keeps *finance*'s own override, or
+    sets DEFAULT_SPREADSHEET_SELF_CONSUMPTION when it has none.
+    """
+    if basis is OwnUseBasis.SIMULATED:
+        return replace(finance, self_consumption_override=None)
+    override = finance.self_consumption_override
+    return replace(
+        finance,
+        self_consumption_override=DEFAULT_SPREADSHEET_SELF_CONSUMPTION if override is None else override,
+    )
+
+
 @dataclass(frozen=True)
 class HomeLedger:
     """One home's year as the CBS bills it.
@@ -845,11 +867,11 @@ def home_ledger(
     The one producer of a :class:`HomeLedger`, holding every pricing rule
     (docs/cost-recovery-finance-model.md §3, One ledger per home):
 
-    * With no ``finance.self_consumption_override`` the basis is SIMULATED:
-      own-use is *simulated_own_use_kwh*, or basis C, demand − import, when it
-      is None (0.0 when the import is above the demand), and import and
-      export are the simulated flows.
-    * With the override set the basis is OVERRIDE: own-use is
+    * The basis is :func:`own_use_basis` of *finance*.
+    * On the SIMULATED basis own-use is *simulated_own_use_kwh*, or basis C,
+      demand − import, when it is None (0.0 when the import is above the
+      demand), and import and export are the simulated flows.
+    * On the OVERRIDE basis own-use is
       min(override × generation, demand), import is demand − own-use and
       export generation − own-use; ``own_use_capped`` when override ×
       generation exceeded demand.
@@ -881,16 +903,20 @@ def home_ledger(
     if simulated_own_use_kwh is not None:
         _require_finite_and_not_negative({"simulated_own_use_kwh": simulated_own_use_kwh})
         _require_own_use_within_demand("simulated_own_use_kwh", simulated_own_use_kwh, "demand_kwh", physics.demand_kwh)
-    override = finance.self_consumption_override
-    if override is None:
-        basis = OwnUseBasis.SIMULATED
+    basis = own_use_basis(finance)
+    if basis is OwnUseBasis.SIMULATED:
         if simulated_own_use_kwh is None:
             own_use_kwh, _ = _basis_c_kwh(physics.demand_kwh, physics.import_kwh)
         else:
             own_use_kwh = simulated_own_use_kwh
         import_kwh, export_kwh, own_use_capped = physics.import_kwh, physics.export_kwh, False
     else:
-        basis = OwnUseBasis.OVERRIDE
+        override = finance.self_consumption_override
+        if override is None:
+            raise ValueError(
+                f"self_consumption_override is None on the {basis.name} basis, "
+                "which own_use_basis gives only a finance that sets one"
+            )
         implied_own_use_kwh = override * physics.generation_kwh
         own_use_kwh = min(implied_own_use_kwh, physics.demand_kwh)
         import_kwh = physics.demand_kwh - own_use_kwh
