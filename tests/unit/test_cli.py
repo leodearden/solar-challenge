@@ -57,6 +57,7 @@ from tests._cli_fleet_simulator import (
 )
 from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
+from tests._misplaced_sweeps import misplaced_sweep_refusal, sweep_moved_to
 from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 
@@ -1385,6 +1386,22 @@ class TestFleetSweepRefusesAFileItCannotSweep:
 
         assert result.exit_code == 1
         assert refusal in " ".join(result.stderr.split())
+
+
+class TestFleetRefusesASweepMultiplierOffTheBatteryCapacity:
+    """C5: `fleet run` and `fleet sweep` refuse a file whose sweep multiplier sits off battery.capacity_kwh, naming its path and the placement."""
+
+    @pytest.mark.parametrize("command", ["run", "sweep"])
+    def test_a_sweep_moved_to_the_battery_charge_rate_is_refused_naming_its_path_and_the_placement(
+        self, tmp_path: Path, command: str
+    ) -> None:
+        fleet_file = tmp_path / "fleet.yaml"
+        fleet_file.write_text(yaml.safe_dump(sweep_moved_to("battery", "max_charge_kw")))
+
+        result = _run_fleet(command, str(fleet_file))
+
+        assert result.exit_code == 1
+        assert misplaced_sweep_refusal("fleet_distribution.battery.max_charge_kw") in " ".join(result.stderr.split())
 
 
 class TestQuietOption:

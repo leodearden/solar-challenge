@@ -25,6 +25,7 @@ from solar_challenge.tariff import TariffConfig
 from tests._cli_table_text import table_text
 from tests._construction_refusals import prefixed_construction_refusal
 from tests._flex_band_refusal import flex_band_refusal
+from tests._misplaced_sweeps import misplaced_sweep_refusal, sweep_moved_to
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
@@ -757,6 +758,17 @@ home:
         assert names_as_a_word(error_row, "min")
         assert names_as_a_word(error_row, "max")
         assert not names_as_a_word(error_row, "inf")
+
+    def test_a_sweep_moved_off_the_battery_capacity_is_an_error_row_naming_its_path_and_the_placement(
+        self, tmp_path: Path
+    ) -> None:
+        """C5: the shipped proportional battery sweep, its sweep multiplier moved to battery.max_charge_kw."""
+        result = self._validate_config(tmp_path, yaml.safe_dump(sweep_moved_to("battery", "max_charge_kw")))
+
+        assert result.exit_code == 1
+        assert f"ERROR {misplaced_sweep_refusal('fleet_distribution.battery.max_charge_kw')}" in table_text(
+            result.stdout
+        )
 
     @pytest.mark.parametrize(
         ("document", "field", "value_repr"),

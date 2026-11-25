@@ -755,6 +755,21 @@ class TestFleetDistributionBlockKeys:
                 "step",
                 id="sweep-multiplier",
             ),
+            pytest.param(
+                {
+                    "battery": {
+                        "capacity_kwh": 5.0,
+                        "max_charge_kw": {
+                            "type": "proportional_to",
+                            "source": "pv.capacity_kw",
+                            "multiplier": {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3, "step": 1},
+                        },
+                    }
+                },
+                "fleet_distribution.battery.max_charge_kw.multiplier",
+                "step",
+                id="sweep-multiplier-read-before-its-placement-is-judged",
+            ),
         ],
     )
     def test_unrecognised_key_is_refused_naming_its_block(
