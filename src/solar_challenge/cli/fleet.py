@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
-import dataclasses
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
@@ -30,12 +30,13 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
+    ScenarioConfig,
     detect_fleet_sweep_spec,
     load_community_config,
     load_config,
     load_scenario,
-    parse_fleet_config,
-    parse_sweep_fleet_configs,
+    parse_scenario,
+    parse_sweep_scenarios,
     substitute_config_variables,
 )
 from solar_challenge.errors import ConfigurationError
@@ -47,7 +48,6 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -111,14 +111,6 @@ def _print_community_section(community_results: "CommunityResults") -> None:
         )
 
     console.print(table)
-
-
-def _period_in_fleet_timezone(
-    fleet: FleetConfig, start: str, end: str
-) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """The timestamps the --start and --end dates name in the timezone of fleet's homes, which FleetConfig requires they share."""
-    timezone = fleet.homes[0].location.timezone
-    return pd.Timestamp(start, tz=timezone), pd.Timestamp(end, tz=timezone)
 
 
 @app.command()
@@ -206,20 +198,8 @@ def sweep(
             dir_okay=False,
         ),
     ],
-    start: Annotated[
-        str,
-        typer.Option(
-            "--start",
-            help="Start date (YYYY-MM-DD)",
-        ),
-    ] = DEFAULT_FIRST_DAY.isoformat(),
-    end: Annotated[
-        str,
-        typer.Option(
-            "--end",
-            help="End date (YYYY-MM-DD)",
-        ),
-    ] = DEFAULT_LAST_DAY.isoformat(),
+    start: StartOption = None,
+    end: EndOption = None,
     param: Annotated[
         Optional[str],
         typer.Option(
@@ -309,27 +289,27 @@ def sweep(
 
     if param is None:
         source = "YAML"
-        param_name, sweep_spec, sweep_configs = _yaml_sweep(raw_config)
+        param_name, sweep_spec, sweep_points = _yaml_sweep(raw_config)
     else:
         source = "CLI"
-        param_name, sweep_spec, sweep_configs = _param_sweep(
+        param_name, sweep_spec, sweep_points = _param_sweep(
             raw_config, param, min_val, max_val, steps, mode
         )
+    start_date, end_date = _sweep_bounds(sweep_points, start=start, end=end)
     print_info(
         cli,
         f"{source} sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
         f"({sweep_spec.steps} steps, {sweep_spec.mode})"
     )
-
-    start_date, end_date = _period_in_fleet_timezone(sweep_configs[0][1], start, end)
+    fleets = [_point_fleet(param_name, value, scenario) for value, scenario in sweep_points]
 
     # Create output directory if needed
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
     # Calculate totals
-    n_sweeps = len(sweep_configs)
-    total_homes = sum(len(cfg.homes) for _, cfg in sweep_configs)
+    n_sweeps = len(fleets)
+    total_homes = sum(len(fleet.homes) for fleet in fleets)
 
     print_info(cli, f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
 
@@ -340,15 +320,15 @@ def sweep(
             total=total_homes
         )
         for index, fleet_results in cli.runner.simulate_each(
-            [fleet for _, fleet in sweep_configs], start_date, end_date, progress=_homes_done_on(progress, task)
+            fleets, start_date, end_date, progress=_homes_done_on(progress, task)
         ):
             sweep_results[index] = fleet_results
             if output_dir is not None:
-                _export_sweep_point(output_dir, param_name, sweep_configs[index][0], fleet_results)
+                _export_sweep_point(output_dir, param_name, sweep_points[index][0], fleet_results)
 
     results_summary = [
         _sweep_summary_row(param_name, sweep_value, sweep_results[index])
-        for index, (sweep_value, _) in enumerate(sweep_configs)
+        for index, (sweep_value, _) in enumerate(sweep_points)
     ]
 
     # Print summary table
@@ -369,34 +349,44 @@ def _param_sweep(
     max_val: Optional[float],
     steps: int,
     mode: str,
-) -> tuple[str, SweepSpec, list[tuple[float, FleetConfig]]]:
-    """The name of the sweep, param, its spec, and each sweep value with the fleet raw_config builds when that value replaces ${param}."""
+) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
+    """The name of the sweep, param, its spec, and each sweep value with the scenario raw_config reads as once that value replaces ${param}."""
     if min_val is None or max_val is None:
         raise ConfigurationError("CLI sweep requires --min and --max values")
     sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=SweepMode.parse(mode))
     return param, sweep_spec, [
-        (
-            value,
-            dataclasses.replace(
-                parse_fleet_config(substitute_config_variables(raw_config, {param: value})),
-                name=f"{param}={value:.4f}",
-            ),
-        )
+        (value, parse_scenario(substitute_config_variables(raw_config, {param: value})))
         for value in sweep_spec.get_values()
     ]
 
 
 def _yaml_sweep(
     raw_config: Mapping[str, Any],
-) -> tuple[str, SweepSpec, list[tuple[float, FleetConfig]]]:
-    """The name of the sweep, multiplier, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the fleet that sweep builds for it."""
+) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
+    """The name of the sweep, multiplier, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the scenario that sweep builds for it."""
     sweep_spec = detect_fleet_sweep_spec(raw_config)
     if sweep_spec is None:
         raise ConfigurationError(
             "No sweep spec found in config. "
             "Use --param for CLI sweep or add type: sweep to multiplier."
         )
-    return "multiplier", sweep_spec, parse_sweep_fleet_configs(raw_config)
+    return "multiplier", sweep_spec, parse_sweep_scenarios(raw_config)
+
+
+def _sweep_bounds(
+    points: list[tuple[float, ScenarioConfig]], *, start: Optional[datetime], end: Optional[datetime]
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The start and end every point of the sweep simulates over: its document's period, each flag replacing only its own day.
+
+    Every point holds the same period: block on its location's clock: no ${VAR} can stand for
+    a day or a timezone, and a YAML sweep reads the block once.
+    """
+    return with_window_options(points[0][1], start=start, end=end).simulation_bounds()
+
+
+def _point_fleet(param_name: str, value: float, scenario: ScenarioConfig) -> FleetConfig:
+    """The fleet of the sweep point at value: its scenario's simulated homes, named after the swept parameter and the value."""
+    return FleetConfig(homes=scenario.simulated_homes(), name=f"{param_name}={value:.4f}")
 
 
 def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:
