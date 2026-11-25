@@ -12,6 +12,7 @@ docs/prds/discrete-install-config-sweep.md.
 from __future__ import annotations
 
 import itertools
+from collections import Counter
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
@@ -359,6 +360,15 @@ __all__ = [
 # OAT sensitivity dataclasses
 # ---------------------------------------------------------------------------
 
+def _check_axis_values(name: str, values: Sequence[float]) -> None:
+    """Refuse an axis that sweeps no value or sweeps a value twice, naming the axis *name*."""
+    if not values:
+        raise ValueError(f"axis '{name}': values must not be empty")
+    repeated = sorted(value for value, count in Counter(values).items() if count > 1)
+    if repeated:
+        raise ValueError(f"axis '{name}' sweeps {repeated} more than once; give each value once")
+
+
 @dataclass(frozen=True)
 class SensitivityAxis:
     """One one-at-a-time (OAT) sensitivity axis.
@@ -369,7 +379,7 @@ class SensitivityAxis:
     Attributes:
         name: The swept knob's canonical name, its
             :class:`~solar_challenge.scenario_knobs.Knob`'s ``name``.
-        values: Swept values for this axis (non-empty).
+        values: Swept values for this axis (non-empty, none repeated).
         rankings: Per-value tuple of feasible ConfigPoints in ascending
             outlay order (i.e. ``run_sweep(...).results`` mapped to configs).
             Infeasible configs are absent.  Length == len(values).
@@ -384,10 +394,7 @@ class SensitivityAxis:
     top_config_per_value: "tuple[Optional[ConfigPoint], ...]"
 
     def __post_init__(self) -> None:
-        if not self.values:
-            raise ValueError(
-                f"SensitivityAxis '{self.name}': values must not be empty"
-            )
+        _check_axis_values(self.name, self.values)
         if len(self.values) != len(self.rankings):
             raise ValueError(
                 f"SensitivityAxis '{self.name}': "
@@ -407,9 +414,9 @@ class SensitivityPanel:
 
     Attributes:
         axes: One :class:`SensitivityAxis` per swept knob (non-empty).
-        baseline_top: The cheapest-feasible :class:`ConfigPoint` from the
-            baseline ``run_sweep`` (at the panel's own ``retained_cash_floor_gbp``
-            and the scenarios' original finance/tariff values).
+        baseline_top: The cheapest-feasible :class:`ConfigPoint` of the
+            caller's baseline sweep, the ``run_sweep`` of the base scenarios
+            at their own finance and tariff values.
         rank_stability: Fraction of (axis, value) points for which
             ``cheapest_feasible == baseline_top``; ``None`` tops count as
             unstable.  In [0, 1].
@@ -433,14 +440,11 @@ class SensitivityPanel:
 # OAT sensitivity bands
 # ---------------------------------------------------------------------------
 
-# The axis sensitivity_panel routes through run_sweep's floor override.
-_RETAINED_FLOOR_KNOB = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
-
 # Board-facing values to sweep per sensitivity_panel knob, headline axes first; pass the mapping,
 # or a subset, as the panel's axes. Grid services sweeps GRID_SERVICES_RATE_BANDS' flat column, low to high;
 # the other spans are provisional: docs/prds/discrete-install-config-sweep.md §12, questions 2-3.
 SENSITIVITY_BANDS: Mapping[Knob, tuple[float, ...]] = MappingProxyType({
-    _RETAINED_FLOOR_KNOB: (15.0, 27.0, 40.0),
+    KNOBS["retained_cash_floor_per_home_per_year_gbp"]: (15.0, 27.0, 40.0),
     KNOBS["grid_services_income_per_kw_per_year_gbp"]: tuple(
         GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year for band in GridServicesBand
     ),
@@ -454,33 +458,92 @@ SENSITIVITY_BANDS: Mapping[Knob, tuple[float, ...]] = MappingProxyType({
 # OAT sensitivity panel
 # ---------------------------------------------------------------------------
 
+def _baseline_top(
+    base_configs: Sequence[tuple[ConfigPoint, ScenarioConfig]], baseline: RankedSweep
+) -> ConfigPoint:
+    """*baseline*'s cheapest feasible config, refusing a baseline that is not the run_sweep of *base_configs*."""
+    evaluated = Counter([*(result.config for result in baseline.results), *baseline.infeasible])
+    expected = Counter(point for point, _ in base_configs)
+    if evaluated != expected:
+        raise ValueError(
+            "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs hold "
+            f"{list(expected.elements())} but the baseline evaluated {list(evaluated.elements())}"
+        )
+    floor = _common_floor(base_configs)
+    if baseline.retained_cash_floor_gbp != floor:
+        raise ValueError(
+            "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs set a "
+            f"retained-cash floor of {floor!r} £/home/yr but the baseline was solved at "
+            f"{baseline.retained_cash_floor_gbp!r}"
+        )
+    if baseline.cheapest_feasible is None:
+        raise ValueError(
+            "baseline run_sweep has no feasible config; cannot form a sensitivity panel"
+        )
+    return baseline.cheapest_feasible
+
+
+def _sweep_at(
+    knob: Knob,
+    value: float,
+    base_configs: Sequence[tuple[ConfigPoint, ScenarioConfig]],
+    *,
+    baseline: RankedSweep,
+    simulate: FleetSimulate,
+) -> RankedSweep:
+    """The sweep of *base_configs* with *knob* at *value*: *baseline* itself when that leaves every scenario equal."""
+    applied = [(point, knob.apply(scenario, value)) for point, scenario in base_configs]
+    if all(after == before for (_, after), (_, before) in zip(applied, base_configs, strict=True)):
+        return baseline
+    return run_sweep(applied, simulate=simulate)
+
+
+def _axis(
+    knob: Knob,
+    values: Sequence[float],
+    base_configs: Sequence[tuple[ConfigPoint, ScenarioConfig]],
+    *,
+    baseline: RankedSweep,
+    simulate: FleetSimulate,
+) -> SensitivityAxis:
+    """The panel's axis for *knob*: each of *values* swept in isolation."""
+    sweeps = [
+        _sweep_at(knob, value, base_configs, baseline=baseline, simulate=simulate) for value in values
+    ]
+    return SensitivityAxis(
+        name=knob.name,
+        values=tuple(values),
+        rankings=tuple(tuple(result.config for result in sweep.results) for sweep in sweeps),
+        top_config_per_value=tuple(sweep.cheapest_feasible for sweep in sweeps),
+    )
+
+
 def sensitivity_panel(
     base_configs: "List[tuple[ConfigPoint, ScenarioConfig]]",
     axes: "Mapping[Knob, Sequence[float]]",
     *,
-    retained_cash_floor_gbp: Optional[float] = None,
+    baseline: RankedSweep,
     simulate: FleetSimulate,
 ) -> SensitivityPanel:
     """Compute a one-at-a-time (OAT) sensitivity panel over the cost-recovery rank.
 
     For each axis (knob + values), every value is swept in isolation while
-    all other knobs stay at their baseline levels.  The panel floor
-    ``retained_cash_floor_gbp`` is held fixed for non-floor axes (OAT); the
-    ``retained_cash_floor_per_home_per_year_gbp`` axis is routed through
-    ``run_sweep``'s first-class floor override to avoid double-application.
+    all other knobs stay at their baseline levels: each value's ``knob.apply``
+    sets that knob on every base scenario, and the scenarios so set are swept
+    with :func:`run_sweep`.  A value that leaves every base scenario equal,
+    such as the floor axis at the scenarios' own floor, reuses *baseline*
+    rather than sweeping it again.
 
     Args:
         base_configs: (ConfigPoint, ScenarioConfig) pairs produced by
             :func:`enumerate_configs`.  The scenarios carry the baseline
-            finance / tariff values; each axis's ``knob.apply`` sets exactly
-            that knob on each scenario per value.
+            finance / tariff values, the retained-cash floor included.
         axes: Mapping of :class:`~solar_challenge.scenario_knobs.Knob` (a value
-            of ``scenario_knobs.KNOBS``) → non-empty sequence of float values.
-            The ``retained_cash_floor_per_home_per_year_gbp`` axis goes through
-            ``run_sweep``'s floor override instead.
-            :data:`SENSITIVITY_BANDS`, or a subset of it, holds the board-facing values.
-        retained_cash_floor_gbp: Optional panel-level floor override passed to
-            every ``run_sweep`` call (baseline and non-floor axes).
+            of ``scenario_knobs.KNOBS``) → non-empty sequence of float values,
+            none repeated.  :data:`SENSITIVITY_BANDS`, or a subset of it, holds
+            the board-facing values.
+        baseline: The :class:`RankedSweep` that ``run_sweep(base_configs)``
+            returned: the panel's baseline, never swept again.
         simulate: The fleet simulator every ``run_sweep`` call runs through,
             such as a :class:`~solar_challenge.fleet.FleetRunner`'s ``simulate``.
 
@@ -489,107 +552,30 @@ def sensitivity_panel(
         in *axes*.
 
     Raises:
-        ValueError: If *base_configs* is empty, *axes* is empty, any axis has
-            empty values, or the baseline run has no feasible config.  After
-            the baseline run, every axis but the floor's also propagates any
-            ValueError (ConfigurationError included) that its ``knob.apply``
-            raises.
+        ValueError: Before any simulation, if *base_configs* is empty, *axes*
+            is empty, an axis has no values or repeats one, *baseline*'s
+            evaluated points or retained-cash floor differ from
+            *base_configs*', or *baseline* has no feasible config.  Each axis
+            also propagates any ValueError (ConfigurationError included) that
+            its ``knob.apply`` raises.
     """
-    # -----------------------------------------------------------------------
-    # Input guards
-    # -----------------------------------------------------------------------
     if not base_configs:
         raise ValueError("base_configs must not be empty")
     if not axes:
         raise ValueError("axes mapping must not be empty")
-    for axis_knob, axis_vals in axes.items():
-        if not list(axis_vals):
-            raise ValueError(f"axis '{axis_knob.name}' must have at least one value")
-
-    # -----------------------------------------------------------------------
-    # Baseline
-    # -----------------------------------------------------------------------
-    base = run_sweep(
-        base_configs,
-        retained_cash_floor_gbp=retained_cash_floor_gbp,
-        simulate=simulate,
-    )
-    if base.cheapest_feasible is None:
-        raise ValueError(
-            "baseline run_sweep has no feasible config; cannot form a sensitivity panel"
-        )
-    baseline_top: ConfigPoint = base.cheapest_feasible
-
-    # -----------------------------------------------------------------------
-    # OAT loop
-    # Optimisations to avoid redundant run_sweep calls:
-    #   1. Floor-baseline short-circuit: when the floor axis sweeps a value
-    #      equal to the panel-level floor, the call would be identical to the
-    #      already-computed `base` sweep — reuse it directly.
-    #   2. Result cache: keyed by (knob, value); base_configs, the panel
-    #      floor, and simulate are all constant within this function call, so
-    #      (knob, v) uniquely identifies the sweep.  A value repeated within
-    #      one axis avoids re-simulation.
-    # -----------------------------------------------------------------------
-    _sweep_cache: dict[tuple[Knob, float], RankedSweep] = {}
-    axis_list: List[SensitivityAxis] = []
-    total = 0
-    stable = 0
-
     for knob, values in axes.items():
-        vals_list = list(values)
-        rankings_per_value: List[tuple[ConfigPoint, ...]] = []
-        tops_per_value: List[Optional[ConfigPoint]] = []
+        _check_axis_values(knob.name, values)
+    baseline_top = _baseline_top(base_configs, baseline)
 
-        for v in vals_list:
-            cache_key = (knob, v)
-            if cache_key in _sweep_cache:
-                ranked = _sweep_cache[cache_key]
-            # Special-case: floor axis must go through run_sweep's override to
-            # avoid panel-floor clobber / double-apply.
-            elif knob == _RETAINED_FLOOR_KNOB:
-                # Short-circuit: same floor value as the panel baseline.
-                if v == retained_cash_floor_gbp:
-                    ranked = base
-                else:
-                    ranked = run_sweep(
-                        base_configs, retained_cash_floor_gbp=v, simulate=simulate
-                    )
-                _sweep_cache[cache_key] = ranked
-            else:
-                axis_cfgs = [
-                    (point, knob.apply(scenario, v)) for point, scenario in base_configs
-                ]
-                ranked = run_sweep(
-                    axis_cfgs,
-                    retained_cash_floor_gbp=retained_cash_floor_gbp,
-                    simulate=simulate,
-                )
-                _sweep_cache[cache_key] = ranked
-
-            rankings_per_value.append(tuple(r.config for r in ranked.results))
-            top = ranked.cheapest_feasible
-            tops_per_value.append(top)
-
-            total += 1
-            if top is not None and top == baseline_top:
-                stable += 1
-
-        axis_list.append(
-            SensitivityAxis(
-                name=knob.name,
-                values=tuple(vals_list),
-                rankings=tuple(rankings_per_value),
-                top_config_per_value=tuple(tops_per_value),
-            )
-        )
-
-    rank_stability = stable / total  # total >= 1 guaranteed by guards above
-
+    panel_axes = tuple(
+        _axis(knob, values, base_configs, baseline=baseline, simulate=simulate)
+        for knob, values in axes.items()
+    )
+    tops = [top for axis in panel_axes for top in axis.top_config_per_value]
     return SensitivityPanel(
-        axes=tuple(axis_list),
+        axes=panel_axes,
         baseline_top=baseline_top,
-        rank_stability=rank_stability,
+        rank_stability=sum(top == baseline_top for top in tops) / len(tops),
     )
 
 
