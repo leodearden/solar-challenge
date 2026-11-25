@@ -878,7 +878,6 @@ def _evaluate_config(
     # Apply retained_cash_floor_gbp override if provided
     if retained_cash_floor_gbp is not None:
         finance = replace(finance, retained_cash_floor_per_home_per_year_gbp=retained_cash_floor_gbp)
-        scenario = replace(scenario, finance=finance)
 
     run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=simulate)
     solution = run.solution
