@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`fleet run` and `fleet sweep` simulate the period: of their file, each of --start and --end replacing only its own day, and timebase's default window where the file sets no period; a sweep whose points hold two windows is refused."""
+"""`fleet run` and `fleet sweep` simulate the period: of their file, each of --start and --end replacing only its own day, and timebase's default window where the file sets no period."""
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -12,7 +11,6 @@ import pytest
 import yaml
 from typer.testing import Result
 
-from solar_challenge.config import ScenarioConfig, parse_scenario
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
 from tests._cli_stderr_text import stderr_text
@@ -135,38 +133,3 @@ def test_a_flag_that_is_not_a_date_is_a_usage_error_naming_the_flag(command: _Co
     assert "Invalid value for '--start'" in stderr_text(result)
     assert recorder.fleets == []
 
-
-def _moving_the_last_day_of_the_point_at(
-    capacity_kwh: float, last_day: date, read: Callable[[object], ScenarioConfig]
-) -> Callable[[object], ScenarioConfig]:
-    """The scenario *read* gives each document, with *last_day* as its last day where its battery is *capacity_kwh*."""
-
-    def moved(document: object) -> ScenarioConfig:
-        scenario = read(document)
-        battery = scenario.simulated_homes()[0].battery_config
-        if battery is not None and battery.capacity_kwh == capacity_kwh:
-            return scenario.with_window(last_day=last_day)
-        return scenario
-
-    return moved
-
-
-def test_a_sweep_whose_points_hold_two_windows_is_refused_naming_each_and_nothing_is_simulated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A sweep simulates every point over one window. No document can yet give two points two, since no ${VAR} can stand for a day or a timezone, so the --param path's reader moves one point's last day, standing in for one that could."""
-    monkeypatch.setattr(
-        "solar_challenge.cli.fleet.parse_scenario",
-        _moving_the_last_day_of_the_point_at(10.0, date(2024, 6, 3), parse_scenario),
-    )
-    _write_fleet_file(PARAM_SWEEP.capacity_kwh, _FILE_PERIOD)
-
-    result, recorder = _fleet(_sweep_command(PARAM_SWEEP))
-
-    assert (result.exit_code, result.stdout) == (1, "")
-    assert stderr_text(result) == (
-        "Configuration error: every point of a sweep simulates over one window, the first point's, "
-        "CAP=5.0000 (2024-06-01 to 2024-06-07 on Europe/London), "
-        "but the points at CAP=10.0000 (2024-06-01 to 2024-06-03 on Europe/London) hold another"
-    )
-    assert recorder.fleets == []

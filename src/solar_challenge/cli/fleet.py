@@ -50,7 +50,6 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.timebase import SimulationWindow
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -298,7 +297,7 @@ def sweep(
         param_name, sweep_spec, sweep_points = _param_sweep(
             raw_config, param, min_val, max_val, steps, mode
         )
-    start_date, end_date = _sweep_bounds(param_name, sweep_points, start=start, end=end)
+    start_date, end_date = _sweep_bounds(sweep_points, start=start, end=end)
     print_info(
         cli,
         f"{source} sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
@@ -377,36 +376,16 @@ def _yaml_sweep(
 
 
 def _sweep_bounds(
-    param_name: str,
     points: list[tuple[float, ScenarioConfig]],
     *,
     start: Optional[datetime],
     end: Optional[datetime],
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """The start and end every point of the sweep over param_name simulates over: its document's period, each flag replacing only its own day.
+    """The start and end every point of the sweep simulates over, which is its document's period with each flag replacing only its own day.
 
-    Raises:
-        ConfigurationError: naming each point whose window is not the first point's, and both
-            windows, since one window is all a sweep simulates over.
+    Every point holds that one period: a YAML sweep reads the document's blocks once, and a ${VAR} stands only for a number, which is neither a day nor a timezone.
     """
-    (first_value, first), *rest = points
-    others = [
-        f"{param_name}={value:.4f} ({_window_text(scenario.window())})"
-        for value, scenario in rest
-        if scenario.window() != first.window()
-    ]
-    if others:
-        raise ConfigurationError(
-            f"every point of a sweep simulates over one window, the first point's, "
-            f"{param_name}={first_value:.4f} ({_window_text(first.window())}), "
-            f"but the points at {', '.join(others)} hold another"
-        )
-    return with_window_options(first, start=start, end=end).simulation_bounds()
-
-
-def _window_text(window: SimulationWindow) -> str:
-    """The days and clock of window, as a refusal names them."""
-    return f"{window.first_day} to {window.last_day} on {window.timezone}"
+    return with_window_options(points[0][1], start=start, end=end).simulation_bounds()
 
 
 def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:
