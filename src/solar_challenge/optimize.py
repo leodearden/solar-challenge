@@ -739,6 +739,32 @@ def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
 # ---------------------------------------------------------------------------
 
 
+def _required_finance(point: ConfigPoint, scenario: ScenarioConfig) -> FinanceConfig:
+    """*scenario*'s finance block, which a cost-recovery sweep of *point* requires."""
+    if scenario.finance is None:
+        raise ValueError(
+            "run_sweep requires every scenario to have a finance block; "
+            f"got scenario.finance=None for config {point!r}"
+        )
+    return scenario.finance
+
+
+def _common_floor(configs: Sequence[tuple[ConfigPoint, ScenarioConfig]]) -> float:
+    """The retained-cash floor every config's finance sets, refusing configs at two floors."""
+    first_point, first_scenario = configs[0]
+    floor = _required_finance(first_point, first_scenario).retained_cash_floor_per_home_per_year_gbp
+    for point, scenario in configs[1:]:
+        other = _required_finance(point, scenario).retained_cash_floor_per_home_per_year_gbp
+        if other != floor:
+            raise ValueError(
+                "run_sweep solves every config at one retained-cash floor; "
+                f"config {first_point!r} sets {floor!r} £/home/yr but config {point!r} sets {other!r}. "
+                "Set the floor on the base scenario, through its "
+                "retained_cash_floor_per_home_per_year_gbp knob, before enumerate_configs."
+            )
+    return floor
+
+
 def _evaluate_config(
     point: ConfigPoint,
     scenario: ScenarioConfig,
@@ -765,13 +791,7 @@ def _evaluate_config(
     Returns:
         :class:`ConfigResult` with all fields populated.
     """
-    # Validate finance block (required for cost-recovery sweep)
-    if scenario.finance is None:
-        raise ValueError(
-            "run_sweep requires every scenario to have a finance block; "
-            f"got scenario.finance=None for config {point!r}"
-        )
-    finance: FinanceConfig = scenario.finance
+    finance = _required_finance(point, scenario)
 
     # Apply retained_cash_floor_gbp override if provided
     if retained_cash_floor_gbp is not None:
@@ -828,9 +848,8 @@ def run_sweep(
             ``finance.retained_cash_floor_per_home_per_year_gbp`` before the
             solve.  The baseline (outlay, surplus) pair is floor-independent
             (the configured own-use rate stays fixed).  When None, the echoed
-            ``RankedSweep.retained_cash_floor_gbp`` comes from the **first**
-            config's finance block; the caller is responsible for ensuring a
-            homogeneous fleet when that field is used for reporting.
+            ``RankedSweep.retained_cash_floor_gbp`` is the floor every
+            config's finance block sets.
         simulate: The fleet simulator every config's projection runs
             through, such as a :class:`~solar_challenge.fleet.FleetRunner`'s
             ``simulate``.
@@ -840,7 +859,9 @@ def run_sweep(
         Pareto front, cheapest config, and the effective retained-cash floor.
 
     Raises:
-        ValueError: When *configs* is empty or any scenario's ``finance`` is None.
+        ValueError: When *configs* is empty, any scenario's ``finance`` is
+            None, or two configs' finance blocks set different retained-cash
+            floors; each is refused before any simulation.
 
     .. note::
         **Simulation cost** — each config is one projection: at least
@@ -854,6 +875,7 @@ def run_sweep(
         raise ValueError(
             "run_sweep: configs must be non-empty; received an empty list"
         )
+    common_floor = _common_floor(configs)
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [
@@ -876,25 +898,10 @@ def run_sweep(
     # Compute Pareto front over ALL evaluated configs (feasible + infeasible)
     pareto = pareto_baseline(all_results)
 
-    # Determine the effective retained-cash floor to echo.
-    # When no global override is given, we read the floor from the FIRST config's
-    # finance block.  This is a documented homogeneity assumption: callers with
-    # heterogeneous finance blocks should pass retained_cash_floor_gbp explicitly
-    # to get a well-defined reported floor (see run_sweep docstring).
-    effective_floor: float
-    if retained_cash_floor_gbp is not None:
-        effective_floor = retained_cash_floor_gbp
-    else:
-        first_finance = configs[0][1].finance
-        if first_finance is not None:
-            effective_floor = first_finance.retained_cash_floor_per_home_per_year_gbp
-        else:
-            effective_floor = 0.0  # Guard fires before here; defensive fallback
-
     return RankedSweep(
         results=tuple(ranked_feasible),
         infeasible=tuple(infeasible_pts),
-        retained_cash_floor_gbp=effective_floor,
+        retained_cash_floor_gbp=common_floor if retained_cash_floor_gbp is None else retained_cash_floor_gbp,
         cheapest_feasible=cheapest,
         pareto_baseline=pareto,
     )
