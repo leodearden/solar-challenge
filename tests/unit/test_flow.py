@@ -3,10 +3,11 @@
 import dataclasses
 import functools
 import math
+import operator
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -1577,11 +1578,27 @@ class _BatteryReportingANegativeDischarge(Battery):
         return -0.975
 
 
-# Finite powers pass a step's input checks, but 1e308 kW for two hours is 2e308 kWh, beyond a float, so the step
-# computes infinite flows.
+class _OverflowingPowers(NamedTuple):
+    """Finite powers that pass a step's input checks, but whose energy over two hours is beyond a float."""
+
+    generation_kw: float
+    demand_kw: float
+    infinite_flows: tuple[str, ...]
+    # How a battery's SOC after the step compares with its SOC before: the step charges it from the surplus, or
+    # discharges it into the shortfall, before it checks its flows.
+    soc_moved: Callable[[float, float], bool]
+
+
+# 1e308 kW for two hours is 2e308 kWh, beyond a float, so the step computes infinite flows.
 OVERFLOWING_POWERS = [
-    pytest.param(1e308, 0.0, ("generation=inf", "grid_export=inf"), id="generation-overflows"),
-    pytest.param(0.0, 1e308, ("demand=inf", "grid_import=inf"), id="demand-overflows"),
+    pytest.param(
+        _OverflowingPowers(1e308, 0.0, ("generation=inf", "grid_export=inf"), soc_moved=operator.gt),
+        id="generation-overflows",
+    ),
+    pytest.param(
+        _OverflowingPowers(0.0, 1e308, ("demand=inf", "grid_import=inf"), soc_moved=operator.lt),
+        id="demand-overflows",
+    ),
 ]
 
 
@@ -1601,7 +1618,7 @@ class TestStepRefusesAFlowThatIsNotAFiniteNumberAtLeast0:
         assert "self_consumption=-0.975" in message
         assert "battery_discharge=-0.975" in message
 
-    @pytest.mark.parametrize(("generation_kw", "demand_kw", "infinite_flows"), OVERFLOWING_POWERS)
+    @pytest.mark.parametrize("powers", OVERFLOWING_POWERS)
     @pytest.mark.parametrize(
         "new_battery",
         [
@@ -1614,20 +1631,34 @@ class TestStepRefusesAFlowThatIsNotAFiniteNumberAtLeast0:
         self,
         step: Callable[..., EnergyFlowResult],
         new_battery: Callable[[], Optional[Battery]],
-        generation_kw: float,
-        demand_kw: float,
-        infinite_flows: tuple[str, ...],
+        powers: _OverflowingPowers,
     ) -> None:
         with pytest.raises(ValueError) as refused:
             step(
-                generation_kw=generation_kw,
-                demand_kw=demand_kw,
+                generation_kw=powers.generation_kw,
+                demand_kw=powers.demand_kw,
                 battery=new_battery(),
                 timestep_minutes=120,
             )
         message = str(refused.value)
-        for flow in infinite_flows:
+        for flow in powers.infinite_flows:
             assert flow in message
+
+    @pytest.mark.parametrize("powers", OVERFLOWING_POWERS)
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_a_step_whose_energy_overflows_a_float_raises_after_its_battery_has_moved(
+        self, step: Callable[..., EnergyFlowResult], powers: _OverflowingPowers
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_before = battery.soc_kwh
+        with pytest.raises(ValueError):
+            step(
+                generation_kw=powers.generation_kw,
+                demand_kw=powers.demand_kw,
+                battery=battery,
+                timestep_minutes=120,
+            )
+        assert powers.soc_moved(battery.soc_kwh, soc_before)
 
 
 # ---------------------------------------------------------------------------
