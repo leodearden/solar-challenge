@@ -19,7 +19,6 @@ from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, ComponentLimits
 from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-from solar_challenge.web.request_boundary import NotAJsonObject
 from tests._fleet_form import valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS, whole_number_forms
@@ -61,12 +60,12 @@ class TestScenarioFromBuilderForm:
     def test_a_form_that_is_not_a_json_object_is_refused_naming_its_type(
         self, form: object, type_name: str
     ) -> None:
-        """The web's shared NotAJsonObject refuses it as the "Builder form".
+        """require_json_object refuses it as the "Builder form", with a ConfigurationError.
 
         Over HTTP this refusal is unreachable, because request_json_object refuses the
         body first, so this direct call is its only guard.
         """
-        with pytest.raises(NotAJsonObject) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             scenario_from_builder_form(form)
         assert str(exc_info.value) == f"Builder form must be a JSON object, got {type_name}"
 

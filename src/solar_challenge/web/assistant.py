@@ -48,7 +48,7 @@ from solar_challenge.web.fleet_components import (
     MAX_WINDOW_DAYS,
 )
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
+from solar_challenge.web.request_boundary import refusal_text, request_json_object
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import (
     CHAT_DELTA,
@@ -1360,8 +1360,8 @@ def chat() -> Response:
     """
     try:
         data = request_json_object()
-    except NotAJsonObject as refusal:
-        return _refused_turn(str(refusal))
+    except ValueError as refusal:
+        return _refused_turn(refusal_text(refusal))
     user_message: str = str(data.get("message", "")).strip()
     refusal_reason = _refusal(user_message)
     if refusal_reason is not None:

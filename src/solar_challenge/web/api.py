@@ -44,7 +44,7 @@ from solar_challenge.web.presets import (
     saved_fleet_presets,
 )
 from solar_challenge.web.request_boundary import (
-    NotAJsonObject,
+    answer_refusal,
     refuse_unencodable_text,
     request_json_object,
     require_encodable_text,
@@ -62,13 +62,8 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 
-@api_bp.errorhandler(NotAJsonObject)
-def _refuse_a_value_that_is_not_a_json_object(refusal: NotAJsonObject) -> tuple[Response, int]:
-    """Answer HTTP 400 with the refusal of a request value that must be a JSON object and is not one.
-
-    Any endpoint of this blueprint that reads such a value is answered this way.
-    """
-    return jsonify({"error": str(refusal)}), 400
+# Every refusal of this blueprint's endpoints is answered HTTP 400 here
+api_bp.register_error_handler(ValueError, answer_refusal)
 
 
 @api_bp.errorhandler(SavedPresetUnreadable)

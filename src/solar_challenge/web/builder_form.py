@@ -29,7 +29,7 @@ from solar_challenge.web.fleet_config import (
     keys_the_editor_holds,
 )
 from solar_challenge.web.request_boundary import (
-    NotAJsonObject,
+    refusal_text,
     refuse_unrecognised_keys,
     require_json_object,
 )
@@ -125,8 +125,8 @@ def builder_form_errors(form: object) -> list[str]:
     """
     try:
         form = require_json_object(form, _BUILDER_FORM)
-    except NotAJsonObject as refusal:
-        return [str(refusal)]
+    except ValueError as refusal:
+        return [refusal_text(refusal)]
     errors = _dashboard_limit_errors(_present_fields(form))
     try:
         document = scenario_from_builder_form(form)
