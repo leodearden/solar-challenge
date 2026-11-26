@@ -185,6 +185,16 @@ class TestExportFleetYAML:
                 "fleet_distribution.battery.capacity_kwh: requires 'min', 'max'",
                 id="battery-uniform-without-its-range",
             ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal", "mena": 4.0, "std": 1.0}}},
+                "fleet_distribution.pv.capacity_kw: unrecognised keys 'mena'",
+                id="pv-normal-with-a-misspelt-mean",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal", "mean": True, "std": 1.0}}},
+                "fleet_distribution.pv.capacity_kw",
+                id="pv-normal-boolean-mean",
+            ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(
@@ -266,12 +276,12 @@ class TestImportFleetYAML:
         [
             pytest.param(
                 {"n_homes": float("inf")},
-                "fleet_distribution.n_homes must be a finite number, got inf",
+                "fleet_distribution: n_homes must be a finite number, got inf",
                 id="infinite-fleet-size",
             ),
             pytest.param(
                 {"seed": 1.5},
-                "fleet_distribution.seed must be a whole number, got 1.5",
+                "fleet_distribution: seed must be a whole number, got 1.5",
                 id="fractional-seed",
             ),
         ],
@@ -279,7 +289,7 @@ class TestImportFleetYAML:
     def test_a_fleet_size_or_seed_that_is_not_a_whole_number_is_refused_naming_the_scenarios_setting(
         self, client: FlaskClient, settings: dict, message: str
     ) -> None:
-        """A scenario file whose n_homes or seed is not a whole number gets a 400 the fleet page shows, naming the scenario's setting and the value as written."""
+        """A scenario file whose n_homes or seed is not a whole number gets a 400 the fleet page shows: the loaders' own refusal, naming the setting under fleet_distribution and the value as written."""
         fleet = {
             "n_homes": 25,
             "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
@@ -293,6 +303,9 @@ class TestImportFleetYAML:
             content_type="text/yaml",
         )
 
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+        assert str(loader_refusal.value) == message
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}
 

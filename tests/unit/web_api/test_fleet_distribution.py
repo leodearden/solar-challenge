@@ -55,6 +55,28 @@ UNUSABLE_SHUFFLED_POOL_ENTRIES = [
     ),
 ]
 
+#: Shuffled pool entries fleet_distribution.py's grammar refuses for the 2-home fleet TestFleetFromDistribution posts: a count that is not a whole number of at least 0, or counts that do not total n_homes.
+POOL_ENTRIES_THE_GRAMMAR_REFUSES = [
+    pytest.param([{"value": 4.0, "count": float("inf")}], id="infinity"),
+    pytest.param([{"value": 4.0, "count": 2.5}], id="fraction"),
+    pytest.param([{"value": 4.0, "count": True}], id="boolean"),
+    pytest.param([{"value": 4.0, "count": -1}, {"value": 5.0, "count": 3}], id="negative"),
+    pytest.param([{"value": 4.0, "count": 1e300}], id="huge-float"),
+    pytest.param(
+        [{"value": 4.0, "count": MAX_FLEET_HOMES}, {"value": 5.0, "count": 1}],
+        id="pool-total-one-above-the-fleet-limit",
+    ),
+]
+
+
+def grammar_refusal(body: dict) -> str:
+    """The str() of fleet_distribution.py's grammar's refusal of the fleet form *body*'s distributions, which form_to_fleet_distribution_config passes on as sent."""
+    distribution = form_to_fleet_distribution_config(body)
+    with pytest.raises(ConfigurationError) as refusal:
+        parse_fleet_distribution_config(distribution)
+    return str(refusal.value)
+
+
 #: Each fleet form block a fleet cannot do without, with the distribution the 400 for its absence names.
 REQUIRED_BLOCK_DISTRIBUTIONS = {"pv": "pv.capacity_kw", "load": "load.annual_consumption_kwh"}
 
@@ -372,31 +394,33 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
 
-    def test_invalid_n_homes_returns_400(self, client: FlaskClient) -> None:
-        """n_homes < 1 returns 400."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={"n_homes": 0},
-        )
+    @pytest.mark.parametrize(
+        "patch",
+        [
+            pytest.param({"n_homes": 0}, id="n_homes-zero"),
+            pytest.param({"n_homes": 2.5}, id="n_homes-fraction"),
+            pytest.param({"n_homes": True}, id="n_homes-boolean"),
+            pytest.param({"n_homes": float("inf")}, id="n_homes-infinity"),
+            pytest.param({"seed": 1.5}, id="seed-fraction"),
+            pytest.param({"seed": True}, id="seed-boolean"),
+            pytest.param({"seed": float("inf")}, id="seed-infinity"),
+        ],
+    )
+    def test_n_homes_or_seed_the_grammar_refuses_returns_400_carrying_its_refusal(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict
+    ) -> None:
+        """An n_homes or seed that is not a whole number, or no homes, reaches fleet_distribution.py's grammar as sent, and is a 400 whose error is the grammar's refusal, naming it; no fleet is queued."""
+        body = {**self._VALID_BODY, **patch}
+        refusal = grammar_refusal(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
+        assert resp.get_json() == {"error": refusal}
+        assert next(iter(patch)) in refusal
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
         ("patch", "message"),
         [
-            pytest.param(
-                {"n_homes": float("inf")},
-                "n_homes must be a finite number, got inf",
-                id="n_homes-infinity",
-            ),
-            pytest.param(
-                {"seed": float("inf")}, "seed must be a finite number, got inf", id="seed-infinity"
-            ),
-            pytest.param(
-                {"n_homes": 2.5},
-                "n_homes must be a whole number, got 2.5",
-                id="n_homes-fraction",
-            ),
-            pytest.param({"seed": 1.5}, "seed must be a whole number, got 1.5", id="seed-fraction"),
             pytest.param(
                 {"seed": MAX_FLEET_SEED + 2},
                 f"seed must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, got {MAX_FLEET_SEED + 2}",
@@ -413,10 +437,10 @@ class TestFleetFromDistribution:
             pytest.param({"days": 2.5}, "days must be a whole number, got 2.5", id="days-fraction"),
         ],
     )
-    def test_n_homes_seed_or_days_it_cannot_use_returns_400_naming_it(
+    def test_a_fleet_beyond_the_dashboards_bounds_or_days_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict, message: str
     ) -> None:
-        """An n_homes, seed or days that is not a whole number, a seed beyond MAX_FLEET_SEED, or a fleet above the dashboard's fleet limit, is a 400 naming it and the value sent; no fleet is queued."""
+        """A seed beyond MAX_FLEET_SEED or a fleet above the dashboard's fleet limit, which the grammar accepts, or days that is not a whole number, is a 400 naming it and the value sent; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, **patch},
@@ -811,6 +835,11 @@ class TestFleetFromDistribution:
                 id="battery-uniform-without-its-range",
             ),
             pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal"}}},
+                ("mean", "std"),
+                id="pv-normal-without-its-parameters",
+            ),
+            pytest.param(
                 {"pv": {"capacity_kw": {"type": "uniform", "min": 2.0}}},
                 ("max",),
                 id="pv-uniform-without-its-max",
@@ -863,23 +892,29 @@ class TestFleetFromDistribution:
         }
         mock_job_manager.submit_fleet_job.assert_not_called()
 
-    def test_distribution_type_the_editor_does_not_offer_returns_400_naming_its_type_field(
+    def test_a_distribution_key_its_type_does_not_read_returns_400_carrying_the_grammars_refusal_naming_it(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A block setting's distribution of a type the fleet page's editor does not offer, a fixed pv.tilt, is a 400 naming its type field and the type sent, not the grammar's refusal of the spec cut down to its type; no fleet is queued."""
+        """A normal whose mean is misspelt mena reaches fleet_distribution.py's grammar with it, and is a 400 whose error is the grammar's refusal naming mena, not its refusal of a normal without a mean; no fleet is queued."""
+        body = {**self._VALID_BODY, "pv": {"capacity_kw": {"type": "normal", "mena": 4.0, "std": 1.0}}}
+        refusal = grammar_refusal(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": refusal}
+        assert "mena" in refusal
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_a_block_settings_fixed_distribution_queues_every_home_with_its_value(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A pv.tilt sent as fleet_distribution.py's fixed distribution, a type the fleet page's editor does not offer, reaches the grammar as sent, and every queued home's PV has its tilt."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
-            json={
-                **self._VALID_BODY,
-                "pv": {"capacity_kw": 4.0, "tilt": {"type": "fixed", "value": 30.0}},
-            },
+            json={**self._VALID_BODY, "pv": {"capacity_kw": 4.0, "tilt": {"type": "fixed", "value": 30}}},
         )
-        assert resp.status_code == 400
-        assert resp.get_json() == {
-            "error": "pv.tilt.type must be one of normal, uniform, weighted_discrete, "
-            "shuffled_pool, got 'fixed'"
-        }
-        mock_job_manager.submit_fleet_job.assert_not_called()
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
+        assert [config.pv_config.tilt for config in configs] == [30.0] * self._VALID_BODY["n_homes"]
 
     @pytest.mark.parametrize(
         "pv",
@@ -949,20 +984,20 @@ class TestFleetFromDistribution:
         assert message in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
-    @pytest.mark.parametrize(("entries", "message"), UNUSABLE_SHUFFLED_POOL_ENTRIES)
-    def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, entries: list, message: str
+    @pytest.mark.parametrize("entries", POOL_ENTRIES_THE_GRAMMAR_REFUSES)
+    def test_shuffled_pool_count_the_grammar_refuses_returns_400_carrying_its_refusal(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, entries: list
     ) -> None:
-        """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total. No fleet is queued."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={
-                **self._VALID_BODY,
-                "pv": {"capacity_kw": {"type": "shuffled_pool", "entries": entries}},
-            },
-        )
+        """A shuffled_pool count that is not a whole number of at least 0, a fraction included, or counts that do not total the fleet's homes, reach fleet_distribution.py's grammar as sent, and are a 400 whose error is the grammar's refusal, naming pv.capacity_kw; no fleet is queued."""
+        body = {
+            **self._VALID_BODY,
+            "pv": {"capacity_kw": {"type": "shuffled_pool", "entries": entries}},
+        }
+        refusal = grammar_refusal(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
-        assert message in resp.get_json()["error"]
+        assert resp.get_json() == {"error": refusal}
+        assert "pv.capacity_kw" in refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -1016,24 +1051,17 @@ class TestFleetFromDistribution:
                 id="battery-weighted-discrete-str-row",
             ),
             pytest.param(
-                {
-                    "load": {
-                        "annual_consumption_kwh": {
-                            "type": "shuffled_pool",
-                            "entries": [{"value": 3500.0, "count": -1}],
-                        }
-                    }
-                },
-                f"load.annual_consumption_kwh.entries[0].count must be between 0 and "
-                f"{MAX_FLEET_HOMES}, got -1",
-                id="load-shuffled-pool-negative-count",
+                {"load": {"annual_consumption_kwh": {"type": "shuffled_pool", "entries": [{"count": 2}]}}},
+                "load.annual_consumption_kwh.entries[0] must be a mapping with 'value' and 'count', "
+                "got {'count': 2}",
+                id="load-shuffled-pool-row-without-its-value",
             ),
         ],
     )
-    def test_row_or_count_it_cannot_use_returns_400_naming_its_distribution(
+    def test_row_it_cannot_use_returns_400_naming_its_distribution(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict, message: str
     ) -> None:
-        """A malformed distribution row or count is a 400 naming its field under the distribution it belongs to; no fleet is queued."""
+        """A malformed distribution row is a 400 naming its field under the distribution it belongs to; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, **patch},
@@ -1048,12 +1076,12 @@ class TestFleetFromDistribution:
         [
             pytest.param(
                 lambda v: {"battery": {"capacity_kwh": v}},
-                "battery.capacity_kwh",
+                "fleet_distribution.battery.capacity_kwh",
                 id="battery-fixed",
             ),
             pytest.param(
                 lambda v: {"pv": {"capacity_kw": {"type": "normal", "mean": v, "std": 1.0}}},
-                "pv.capacity_kw.mean",
+                "fleet_distribution.pv.capacity_kw",
                 id="pv-normal-mean",
             ),
             pytest.param(
@@ -1065,12 +1093,12 @@ class TestFleetFromDistribution:
                         }
                     }
                 },
-                "load.annual_consumption_kwh.values[0].weight",
+                "fleet_distribution.load.annual_consumption_kwh",
                 id="load-weighted-discrete-weight",
             ),
         ],
     )
-    def test_distribution_number_that_is_not_finite_returns_400_naming_it(
+    def test_distribution_number_that_is_not_finite_returns_400_carrying_the_grammars_refusal(
         self,
         client: FlaskClient,
         mock_job_manager: NonCallableMagicMock,
@@ -1078,25 +1106,25 @@ class TestFleetFromDistribution:
         field: str,
         value: object,
     ) -> None:
-        """A distribution number that is not a finite number, a boolean included, is a 400 naming its field and the value sent; no fleet is queued."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**self._VALID_BODY, **patch(value)},
-        )
+        """A distribution number that is not a finite number, a boolean included, reaches fleet_distribution.py's grammar as sent, and is a 400 whose error is the grammar's refusal, naming its distribution; no fleet is queued."""
+        body = {**self._VALID_BODY, **patch(value)}
+        refusal = grammar_refusal(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
-        assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
+        assert resp.get_json() == {"error": refusal}
+        assert field in refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
 
-    def test_block_setting_too_large_for_a_float_returns_400_naming_it(
+    def test_block_setting_too_large_for_a_float_returns_400_carrying_the_grammars_refusal(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A block setting too large for a float is a 400 naming it and the value sent, not a 500; no fleet is queued."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**self._VALID_BODY, "pv": {**self._VALID_BODY["pv"], "tilt": 10**400}},
-        )
+        """A block setting too large for a float reaches fleet_distribution.py's grammar as sent, and is a 400 whose error is the grammar's refusal naming pv.tilt, not a 500; no fleet is queued."""
+        body = {**self._VALID_BODY, "pv": {**self._VALID_BODY["pv"], "tilt": 10**400}}
+        refusal = grammar_refusal(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
-        assert resp.get_json() == {"error": f"pv.tilt must be a finite number, got {10**400!r}"}
+        assert resp.get_json() == {"error": refusal}
+        assert "fleet_distribution.pv.tilt" in refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     def test_boolean_block_setting_reaches_the_queued_homes_as_given(
@@ -1222,13 +1250,13 @@ class TestFleetFromDistribution:
     def test_a_battery_blocks_enabled_sent_as_the_string_false_returns_400_and_queues_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A battery block's enabled sent as the string "false" toggles nothing: it is a 400 naming battery.enabled, and no fleet is queued."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**self._VALID_BODY, "battery": {"capacity_kwh": 5.0, "enabled": "false"}},
-        )
+        """A battery block's enabled sent as the string "false" toggles nothing: it reaches fleet_distribution.py's grammar as sent, and is a 400 whose error is the grammar's refusal naming enabled under fleet_distribution.battery; no fleet is queued."""
+        body = {**self._VALID_BODY, "battery": {"capacity_kwh": 5.0, "enabled": "false"}}
+        refusal = grammar_refusal(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
-        assert "battery.enabled" in resp.get_json()["error"]
+        assert resp.get_json() == {"error": refusal}
+        assert "fleet_distribution.battery: unrecognised keys 'enabled'" in refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)

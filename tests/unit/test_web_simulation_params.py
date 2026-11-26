@@ -897,9 +897,9 @@ class TestParseHomeConfigSystemLosses:
     def test_a_value_pvconfig_refuses_is_refused_with_pvconfigs_own_message(
         self, value: float
     ) -> None:
-        """A system_losses PVConfig refuses is refused with PVConfig's own message, the only range check."""
+        """A system_losses PVConfig refuses is refused with PVConfig's own message for the value as sent, the only read and range check."""
         with pytest.raises(ValueError) as pv_refusal:
-            PVConfig(capacity_kw=VALID_HOME_PAYLOAD["pv_kw"], system_losses=float(value))
+            PVConfig(capacity_kw=VALID_HOME_PAYLOAD["pv_kw"], system_losses=value)
         with pytest.raises(ValueError) as refusal:
             parse_home_config({**VALID_HOME_PAYLOAD, "system_losses": value})
         assert str(refusal.value) == str(pv_refusal.value)

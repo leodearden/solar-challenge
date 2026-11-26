@@ -30,8 +30,8 @@ def _require(admitted: bool, field_name: str, requirement: str, value: object) -
         raise ValueError(f"{field_name} must {requirement}, got {value!r}")
 
 
-#: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
-#: shuffled pool that holds values for more homes, and a preview that draws more values.
+#: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, and the
+#: preview a shuffled pool that holds values for more homes or a draw of more values.
 MAX_FLEET_HOMES = 10_000
 #: The numbers of homes a dashboard fleet holds.
 FLEET_SIZE = Interval(1, MAX_FLEET_HOMES)

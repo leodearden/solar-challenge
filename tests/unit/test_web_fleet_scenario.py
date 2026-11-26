@@ -11,9 +11,10 @@ import yaml
 
 pytest.importorskip("flask")
 
-from solar_challenge.config import parse_scenario
+from solar_challenge.config import parse_scenario, read_fleet_scenario
 from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import parse_fleet_distribution_config
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
@@ -292,6 +293,27 @@ class TestParseFleetFormRefusalOrder:
             parse_fleet_form({**ungeneratable, key: value})
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
+    def test_a_fleet_above_the_dashboards_bound_is_refused_before_any_home_is_generated(self) -> None:
+        """A fleet whose pv capacity of 0 only the generation of its homes refuses gets the dashboard's bound on its size, so a fleet the page cannot run costs no home generation."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_form({**_FLEET_FORM_WITHOUT_A_POOL, "n_homes": MAX_FLEET_HOMES + 1, "pv": {"capacity_kw": 0}})
+
+        assert str(refusal.value) == f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
+
+
+#: The refused tariff and SEG parse_fleet_form's scenario reader refuses before the fleet_distribution block, each with its block reader's reading of it.
+_A_REFUSED_TARIFF_OR_SEG_WITH_ITS_READERS_READING = [
+    pytest.param("tariff", {"type": "flat_rate"}, lambda: parse_tariff_config({"type": "flat_rate"}), id="tariff"),
+    pytest.param("seg", {}, lambda: parse_seg_rate({}), id="seg"),
+]
+
+#: A battery capacity of a sweep multiplier of three points times each home's PV capacity.
+_A_SWEPT_BATTERY_CAPACITY: dict[str, Any] = {
+    "type": "proportional_to",
+    "source": "pv.capacity_kw",
+    "multiplier": {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3},
+}
+
 
 class TestParseFleetFormReadsItsDocumentThroughParseScenario:
     """parse_fleet_form's run is its scenario document as config.parse_scenario reads it, so the simulate endpoint and the export are one reading."""
@@ -331,6 +353,33 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
             read_block()
         with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
             parse_fleet_form(form)
+        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+
+    @pytest.mark.parametrize(("key", "value", "read_block"), _A_REFUSED_TARIFF_OR_SEG_WITH_ITS_READERS_READING)
+    def test_a_refused_tariff_or_seg_is_refused_before_the_dashboards_bound_on_the_fleet(
+        self, key: str, value: Any, read_block: Callable[[], object]
+    ) -> None:
+        """The reader reads the tariff and SEG before the fleet, so a fleet the dashboard cannot run gets the earlier block's refusal."""
+        form = {**_FLEET_FORM_WITHOUT_A_POOL, "n_homes": MAX_FLEET_HOMES + 1, key: value}
+        with pytest.raises(ConfigurationError) as expected:
+            read_block()
+        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+            parse_fleet_form(form)
+        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+
+    def test_a_fleet_that_sweeps_is_refused_as_parse_scenario_refuses_its_document(self) -> None:
+        """A sweep defines one fleet per point, which 'fleet sweep' runs, so the form's one fleet is refused with parse_scenario's refusal of the document the form describes, naming the swept field."""
+        battery = _FLEET_SCENARIO["fleet_distribution"]["battery"]
+        document = _with_fleet_distribution(battery={**battery, "capacity_kwh": _A_SWEPT_BATTERY_CAPACITY})
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+        assert "fleet_distribution.battery.capacity_kwh" in str(expected.value), (
+            "premise: parse_scenario refuses the sweep naming its field"
+        )
+
+        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+            parse_fleet_form({**_FLEET_FORM, "battery": {"capacity_kwh": _A_SWEPT_BATTERY_CAPACITY}})
+
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
 
@@ -680,29 +729,37 @@ class TestFleetFormFromScenario:
             fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
         assert str(exc_info.value) == message
 
+    def test_a_fractional_fleet_size_is_refused_with_the_loaders_refusal_naming_n_homes(self) -> None:
+        """An n_homes of 2.5 is refused by the loaders' own reader, naming n_homes under fleet_distribution: the page reads no fleet size ahead of the loaders."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(n_homes=2.5))
+        assert str(exc_info.value) == "fleet_distribution: n_homes must be a whole number, got 2.5"
+
     @pytest.mark.parametrize("key", ["n_homes", "seed"])
     @pytest.mark.parametrize(
-        "value", [*UNUSABLE_NUMBERS, pytest.param("x", id="non-numeric-string")]
+        "value",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="non-numeric-string"),
+            pytest.param(2.5, id="fraction"),
+        ],
     )
-    def test_a_fleet_size_or_seed_that_is_not_a_finite_number_is_refused_naming_it(
+    def test_a_fleet_size_or_seed_that_is_not_a_whole_number_is_refused_with_the_loaders_refusal(
         self, key: str, value: object
     ) -> None:
-        """An n_homes or seed that is not a finite number, a boolean included, is refused with a ValueError naming it as fleet_distribution.<key> and the value as written."""
-        with pytest.raises(ValueError) as exc_info:
-            fleet_form_from_scenario(_with_fleet_distribution(**{key: value}))
-        assert str(exc_info.value) == f"fleet_distribution.{key} must be a finite number, got {value!r}"
+        """An n_homes or seed that is not a whole number, a boolean or a fraction included, is refused with the loaders' own refusal, naming it under fleet_distribution and the value as written.
 
-    @pytest.mark.parametrize("key", ["n_homes", "seed"])
-    def test_a_fleet_size_or_seed_with_a_fractional_part_is_refused_naming_it(self, key: str) -> None:
-        """An n_homes or seed with a fractional part is refused with a ValueError naming it as fleet_distribution.<key> and the value as written.
-
-        Loading it would run a different fleet: the page runs a whole number of homes, and a seed
-        of 2.5 samples another fleet than a seed of 2, since random.Random(2.5) is not
-        random.Random(2), while the page has no seed field to show it.
+        Loading a fractional one would run a different fleet: the page runs a whole number of
+        homes, and a seed of 2.5 samples another fleet than a seed of 2, since
+        random.Random(2.5) is not random.Random(2), while the page has no seed field to show it.
         """
-        with pytest.raises(ValueError) as exc_info:
-            fleet_form_from_scenario(_with_fleet_distribution(**{key: 2.5}))
-        assert str(exc_info.value) == f"fleet_distribution.{key} must be a whole number, got 2.5"
+        document = _with_fleet_distribution(**{key: value})
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(document["fleet_distribution"])
+        with pytest.raises(ConfigurationError) as exc_info:
+            fleet_form_from_scenario(document)
+        assert str(exc_info.value) == str(loader_refusal.value)
+        assert str(exc_info.value).startswith(f"fleet_distribution: {key} ")
 
     def test_a_seed_the_fleet_page_cannot_hold_exactly_is_refused_naming_it(self) -> None:
         """A seed beyond MAX_FLEET_SEED is refused with a ValueError naming fleet_distribution.seed, the range and the value as written.
@@ -718,17 +775,16 @@ class TestFleetFormFromScenario:
             f"got {seed!r}"
         )
 
-    @pytest.mark.parametrize(
-        "n_homes",
-        [
-            pytest.param(0, id="no-homes"),
-            pytest.param(MAX_FLEET_HOMES + 1, id="more-homes-than-the-page-runs"),
-        ],
-    )
-    def test_a_fleet_size_outside_1_to_max_fleet_homes_is_refused_naming_it(self, n_homes: int) -> None:
-        """An n_homes outside 1 to the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written."""
+    def test_a_fleet_size_above_max_fleet_homes_is_refused_by_the_dashboards_bound_naming_it(self) -> None:
+        """An n_homes the loaders accept but above the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written.
+
+        The battery's pool, sized to the scenario's 3 homes, becomes a fixed capacity, since the
+        loaders' F6 would refuse it first.
+        """
+        n_homes = MAX_FLEET_HOMES + 1
+        battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "capacity_kwh": 5.0}
         with pytest.raises(ValueError) as exc_info:
-            fleet_form_from_scenario(_with_fleet_distribution(n_homes=n_homes))
+            fleet_form_from_scenario(_with_fleet_distribution(n_homes=n_homes, battery=battery))
         assert str(exc_info.value) == (
             f"fleet_distribution.n_homes must be between 1 and {MAX_FLEET_HOMES}, got {n_homes!r}"
         )
@@ -744,15 +800,19 @@ class TestFleetFormFromScenario:
                 id="absent",
             ),
             pytest.param(_with_fleet_distribution(n_homes=None), id="null"),
+            pytest.param(_with_fleet_distribution(n_homes=0), id="no-homes"),
         ],
     )
-    def test_a_fleet_without_a_size_is_refused_naming_fleet_distribution_n_homes(
+    def test_a_fleet_without_a_size_the_loaders_accept_is_refused_with_their_refusal(
         self, document: dict[str, Any]
     ) -> None:
-        """A fleet_distribution that leaves n_homes out or sets it null is refused with a ValueError naming fleet_distribution.n_homes: a missing size reads as None, as a missing period date does."""
-        with pytest.raises(ValueError) as exc_info:
+        """A fleet_distribution that leaves n_homes out, sets it null or sets it to no homes is refused with the loaders' own refusal, which names n_homes."""
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(document["fleet_distribution"])
+        with pytest.raises(ConfigurationError) as exc_info:
             fleet_form_from_scenario(document)
-        assert str(exc_info.value) == "fleet_distribution.n_homes must be a finite number, got None"
+        assert str(exc_info.value) == str(loader_refusal.value)
+        assert "n_homes" in str(exc_info.value)
 
     def test_a_fleet_size_and_seed_written_as_whole_floats_load_as_the_ints_they_equal(self) -> None:
         """An n_homes of 3.0 and a seed of 7.0 load as the ints 3 and 7, the fleet they run: random.Random(7.0) draws as random.Random(7) does."""
@@ -1008,3 +1068,98 @@ class TestFleetFormFromScenario:
             ),
         ):
             fleet_form_from_scenario(document)
+
+    def test_a_refused_tariff_is_refused_before_the_dashboards_bound_as_parse_scenario_reads_them(self) -> None:
+        """The import reads the scenario's tariff before its fleet, as parse_scenario does, so a fleet above the dashboard's bound gets the tariff's refusal."""
+        battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "capacity_kwh": 5.0}
+        document = {
+            **_with_fleet_distribution(n_homes=MAX_FLEET_HOMES + 1, battery=battery),
+            "tariff": {"type": "flat_rate"},
+        }
+        with pytest.raises(ConfigurationError) as expected:
+            parse_tariff_config({"type": "flat_rate"})
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
+
+    def test_a_setting_the_form_cannot_hold_is_refused_before_any_home_is_generated(self) -> None:
+        """A scenario whose 0 kW PV only the generation of its homes refuses gets the form's refusal of its custom tariff, so the import generates no home before the form reads the scenario."""
+        ungeneratable = _with_fleet_distribution(pv={"capacity_kw": 0})
+        with pytest.raises(ConfigurationError) as generation_refusal:
+            parse_scenario(ungeneratable)
+        assert str(generation_refusal.value) == (
+            "fleet_distribution.pv: home 1: capacity_kw must be greater than 0, got 0.0"
+        ), "premise: only generation refuses the scenario's PV"
+        custom_tariff = {
+            "type": "custom",
+            "periods": [{"start_time": "00:00", "end_time": "00:00", "rate_per_kwh": 0.25}],
+        }
+
+        with pytest.raises(ValueError) as refusal:
+            fleet_form_from_scenario({**ungeneratable, "tariff": custom_tariff})
+
+        assert str(refusal.value) == (
+            "tariff.type must be one the fleet page holds (flat_rate, economy_7, economy_10), got 'custom'"
+        )
+
+    def test_a_battery_whose_dispatch_reaches_its_tariffs_cheap_period_is_refused_as_parse_scenario_refuses_it(
+        self,
+    ) -> None:
+        """A tou_optimized peak window reaching into Economy 7's off-peak is refused only by generating a home, which the import leaves to the form it loads."""
+        battery = {
+            **_FLEET_SCENARIO["fleet_distribution"]["battery"],
+            "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[7, 9]]},
+        }
+        document = _with_fleet_distribution(battery=battery)
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
+
+    def test_a_null_in_a_pv_pool_is_refused_naming_the_value(self) -> None:
+        document = _with_fleet_distribution(
+            pv={"capacity_kw": {"type": "shuffled_pool", "values": [None, 4.0], "counts": [1, 2]}}
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == "fleet_distribution.pv.capacity_kw.values[0] must be a finite number, got None"
+
+    @pytest.mark.parametrize(
+        ("blocks", "form", "not_loaded"),
+        [
+            pytest.param(
+                {"pv": {**_FLEET_SCENARIO["fleet_distribution"]["pv"], "azimuth": 400}},
+                _FLEET_FORM,
+                ("fleet_distribution.pv.azimuth",),
+                id="pv-azimuth-outside-0-to-360",
+            ),
+            pytest.param(
+                {
+                    "battery": {
+                        "capacity_kwh": _FLEET_SCENARIO["fleet_distribution"]["battery"]["capacity_kwh"],
+                        "grid_charging": {"target_soc_fraction": 0.8},
+                    }
+                },
+                _without(_FLEET_FORM, "dispatch_strategy"),
+                ("fleet_distribution.battery.grid_charging",),
+                id="grid-charging-under-self-consumption",
+            ),
+        ],
+    )
+    def test_a_setting_only_generation_refuses_loads_the_rest_and_is_named_when_the_form_does_not_hold_it(
+        self, blocks: dict[str, Any], form: dict[str, Any], not_loaded: tuple[str, ...]
+    ) -> None:
+        """The import generates only the form it loads, so a setting the form does not hold is never generated: a scenario that parse_scenario, fleet run and validate config refuse only while generating its homes, for such a setting, loads the rest and names the setting, which the page does not run."""
+        document = _with_fleet_distribution(**blocks)
+        with pytest.raises(ConfigurationError):
+            parse_scenario(document)
+        read_fleet_scenario(document)
+
+        assert fleet_form_from_scenario(document) == ImportedFleetForm(form=form, not_loaded=not_loaded)

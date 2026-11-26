@@ -9,7 +9,7 @@ import contextlib
 import json
 import math
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -344,8 +344,16 @@ _SWEEP_BLOCK_PATH = "fleet_distribution"
 
 
 def _generated_homes(blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -> ScenarioConfig:
-    """The fleet scenario of the homes the fleet_distribution: block at *block_path* generates, refusing a block that sweeps, which defines one fleet per point, naming the sweep's field and 'fleet sweep', which reads only the block at _SWEEP_BLOCK_PATH."""
-    distribution = parse_fleet_distribution_config(data, block_path=block_path)
+    """The fleet scenario of the homes the fleet_distribution: block at *block_path* generates, refused as _fleet_scenario_generated_by refuses it."""
+    return _fleet_scenario_generated_by(
+        blocks, parse_fleet_distribution_config(data, block_path=block_path), block_path=block_path
+    )
+
+
+def _fleet_scenario_generated_by(
+    blocks: _ScenarioLevelBlocks, distribution: FleetDistributionConfig, *, block_path: str
+) -> ScenarioConfig:
+    """The fleet scenario of the homes *distribution*, read at *block_path*, generates, refusing a fleet that sweeps, which defines one fleet per point, naming the sweep's field and 'fleet sweep', which reads only the block at _SWEEP_BLOCK_PATH."""
     found = detect_sweep_spec(distribution)
     if found is not None:
         placement, sweep = found
@@ -891,8 +899,34 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     return fleet_of(load_scenario(path))
 
 
-def _read_fleet_distribution_scenario(document: object) -> tuple[_ScenarioLevelBlocks, FleetDistributionConfig]:
-    """The scenario-level blocks and fleet_distribution: block of the bare scenario *document*, read in parse_scenario's order.
+@dataclass(frozen=True)
+class FleetScenario:
+    """A bare fleet scenario document read in parse_scenario's order up to its homes: its scenario-level blocks and its fleet, no home generated.
+
+    Only read_fleet_scenario builds one; its interface is fleet, location and scenario().
+    """
+
+    _blocks: _ScenarioLevelBlocks = field(repr=False)
+    fleet: FleetDistributionConfig
+
+    @property
+    def location(self) -> Location:
+        """The location the fleet's homes are built at: Bristol when the document sets none."""
+        return self._blocks.location
+
+    def scenario(self) -> ScenarioConfig:
+        """parse_scenario's reading of the document: the scenario holding the homes the fleet generates.
+
+        Raises:
+            ConfigurationError: as parse_scenario refuses the document's fleet_distribution:
+                block: for a fleet that sweeps, naming the sweep's field and 'fleet sweep';
+                or for a home the fleet generates that is refused.
+        """
+        return _fleet_scenario_generated_by(self._blocks, self.fleet, block_path=_SWEEP_BLOCK_PATH)
+
+
+def read_fleet_scenario(document: object) -> FleetScenario:
+    """The bare fleet scenario *document*: its scenario-level blocks and its fleet_distribution: block, read in parse_scenario's order, no home generated.
 
     Raises:
         ConfigurationError: as parse_scenario refuses the document's keys and scenario-level
@@ -903,7 +937,9 @@ def _read_fleet_distribution_scenario(document: object) -> tuple[_ScenarioLevelB
     scenario, blocks = _read_scenario_level_blocks(document, block_path="")
     require_held_keys("", scenario, ["fleet_distribution"])
     _refuse_unless_one_homes_source(scenario, block_path="")
-    return blocks, parse_fleet_distribution_config(scenario["fleet_distribution"], block_path=_SWEEP_BLOCK_PATH)
+    return FleetScenario(
+        blocks, parse_fleet_distribution_config(scenario["fleet_distribution"], block_path=_SWEEP_BLOCK_PATH)
+    )
 
 
 def detect_fleet_sweep_spec(document: object) -> Optional[tuple[FleetFieldPath, SweepSpec]]:
@@ -927,8 +963,7 @@ def detect_fleet_sweep_spec(document: object) -> Optional[tuple[FleetFieldPath, 
     document = require_mapping("", document)
     if "fleet_distribution" not in document:
         return None
-    _, distribution = _read_fleet_distribution_scenario(document)
-    return detect_sweep_spec(distribution)
+    return detect_sweep_spec(read_fleet_scenario(document).fleet)
 
 
 def _swept_scenarios(document: object) -> tuple[FleetFieldPath, list[tuple[float, ScenarioConfig]]]:
@@ -937,12 +972,9 @@ def _swept_scenarios(document: object) -> tuple[FleetFieldPath, list[tuple[float
     Raises:
         ConfigurationError: as parse_sweep_scenarios refuses the document
     """
-    blocks, distribution = _read_fleet_distribution_scenario(document)
-    points = [
-        (value, blocks.scenario(homes=blocks.homes_generated_by(point)))
-        for value, point in expand_sweep_configs(distribution)
-    ]
-    found = detect_sweep_spec(distribution)
+    read = read_fleet_scenario(document)
+    points = [(value, replace(read, fleet=point).scenario()) for value, point in expand_sweep_configs(read.fleet)]
+    found = detect_sweep_spec(read.fleet)
     assert found is not None, "expand_sweep_configs refuses a fleet holding no sweep"
     return found[0], points
 
