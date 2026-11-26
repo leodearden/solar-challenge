@@ -14,7 +14,11 @@ pytest.importorskip("flask")
 from solar_challenge.config import parse_scenario, read_fleet_scenario
 from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import parse_fleet_distribution_config
+from solar_challenge.fleet_distribution import (
+    NormalDistribution,
+    parse_fleet_distribution_config,
+    write_distribution_spec,
+)
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
@@ -23,7 +27,7 @@ from solar_challenge.scenario_blocks import (
 )
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
-from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
 from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
@@ -592,7 +596,7 @@ class TestFleetFormFromScenario:
     """The fleet form fleet_form_from_scenario reads from a fleet scenario, the settings it names as not loaded, and its refusals."""
 
     def test_a_fleet_scenario_is_the_fleet_form_it_describes(self) -> None:
-        """The scenario a fleet form describes reads back as that form: its distributions as the editors' rows, its battery's dispatch as the form's dispatch strategy, and its period as start and end dates."""
+        """The scenario a fleet form describes reads back as that form: its distributions as the grammar's own specs, its battery's dispatch as the form's dispatch strategy, and its period as start and end dates."""
         assert fleet_form_from_scenario(_FLEET_SCENARIO) == ImportedFleetForm(
             form=_FLEET_FORM, not_loaded=()
         )
@@ -613,10 +617,7 @@ class TestFleetFormFromScenario:
                         "capacity_kwh": {"type": "normal", "mean": 5.0, "std": 2.0, "min": 0.0, "max": 10.0}
                     },
                     "load": {
-                        "annual_consumption_kwh": {
-                            "type": "shuffled_pool",
-                            "entries": [{"value": 2900, "count": 2}, {"value": 4500, "count": 1}],
-                        }
+                        "annual_consumption_kwh": {"type": "shuffled_pool", "values": [2900, 4500], "counts": [2, 1]}
                     },
                     "tariff": {"type": "flat_rate", "rate_per_kwh": 0.28},
                     "seg": {"rate_pence_per_kwh": 4.5},
@@ -633,23 +634,39 @@ class TestFleetFormFromScenario:
                 },
                 id="fixed-values",
             ),
+            pytest.param(
+                {
+                    **_FLEET_FORM,
+                    "load": {
+                        "annual_consumption_kwh": {
+                            "type": "normal",
+                            "mean": 3400.0,
+                            "std": 800.0,
+                            "min": None,
+                            "max": None,
+                        }
+                    },
+                },
+                id="normal-without-clamps",
+            ),
         ],
     )
     def test_an_exported_fleet_form_imports_back_to_the_same_scenario(
         self, form: dict[str, Any]
     ) -> None:
-        """Every setting of a scenario the page exports is one the form holds, and the form read back describes that scenario."""
+        """Every setting of a scenario the page exports is one the form holds, and the form read back describes the scenario read_fleet_scenario reads from the export: a null clamp is written, and read as absent."""
         document = scenario_from_fleet_form(form)
 
         imported = fleet_form_from_scenario(document)
 
         assert imported.not_loaded == ()
-        assert scenario_from_fleet_form(imported.form) == document
+        assert read_fleet_scenario(scenario_from_fleet_form(imported.form)) == read_fleet_scenario(document)
 
     def test_a_scenario_file_loads_what_the_form_holds_and_names_the_rest(self) -> None:
         """A scenario file loads its name, fleet size, seed, distributions and SEG; the settings the form has no control for are named, in document order.
 
-        A null battery capacity reads as 0 kWh: either way the home has no battery.
+        Each distribution loads as the grammar's spec, and the battery pool's null value as
+        null, a home without a battery.
         """
         imported = fleet_form_from_scenario(yaml.safe_load(_BRISTOL_LIKE_SCENARIO_YAML))
 
@@ -658,25 +675,10 @@ class TestFleetFormFromScenario:
             "n_homes": 100,
             "seed": 42,
             "pv": {
-                "capacity_kw": {
-                    "type": "shuffled_pool",
-                    "entries": [
-                        {"value": 3.0, "count": 20},
-                        {"value": 4.0, "count": 40},
-                        {"value": 5.0, "count": 30},
-                        {"value": 6.0, "count": 10},
-                    ],
-                }
+                "capacity_kw": {"type": "shuffled_pool", "values": [3.0, 4.0, 5.0, 6.0], "counts": [20, 40, 30, 10]}
             },
             "battery": {
-                "capacity_kwh": {
-                    "type": "shuffled_pool",
-                    "entries": [
-                        {"value": 0.0, "count": 40},
-                        {"value": 5.0, "count": 40},
-                        {"value": 10.0, "count": 20},
-                    ],
-                }
+                "capacity_kwh": {"type": "shuffled_pool", "values": [None, 5.0, 10.0], "counts": [40, 40, 20]}
             },
             "load": {
                 "annual_consumption_kwh": {
@@ -858,7 +860,7 @@ class TestFleetFormFromScenario:
         assert type(imported.form["seed"]) is int
 
     def test_a_pools_counts_written_as_whole_floats_load_as_the_ints_they_equal(self) -> None:
-        """A battery pool's counts of 1.0 and 2.0 load as the ints 1 and 2, the counts the loaders read them as."""
+        """A battery pool's counts of 1.0 and 2.0 load as the ints 1 and 2, the counts the grammar reads them as."""
         battery = _FLEET_SCENARIO["fleet_distribution"]["battery"]
         pool = {**battery["capacity_kwh"], "counts": [1.0, 2.0]}
 
@@ -867,8 +869,64 @@ class TestFleetFormFromScenario:
         )
 
         assert imported == ImportedFleetForm(form=_FLEET_FORM, not_loaded=())
-        entries = imported.form["battery"]["capacity_kwh"]["entries"]
-        assert [type(entry["count"]) for entry in entries] == [int, int]
+        counts = imported.form["battery"]["capacity_kwh"]["counts"]
+        assert [type(count) for count in counts] == [int, int]
+
+    def test_a_fixed_spec_loads_as_its_number(self) -> None:
+        """A pv.capacity_kw written as a fixed spec loads as the number the editor's Fixed Value holds, as the grammar reads it."""
+        imported = fleet_form_from_scenario(_with_fleet_distribution(pv={"capacity_kw": {"type": "fixed", "value": 4}}))
+
+        assert imported == ImportedFleetForm(form={**_FLEET_FORM, "pv": {"capacity_kw": 4.0}}, not_loaded=())
+
+    def test_a_normal_without_clamps_loads_with_null_clamps_and_its_form_runs_the_scenarios_fleet(self) -> None:
+        """A normal that sets no min or max loads as the grammar's NormalDistribution written back, its clamps null, and the form loaded runs the fleet the scenario describes."""
+        document = _with_fleet_distribution(load={"annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800}})
+
+        imported = fleet_form_from_scenario(document)
+
+        assert imported.form["load"] == {"annual_consumption_kwh": write_distribution_spec(NormalDistribution(3400, 800))}
+        assert imported.form["load"]["annual_consumption_kwh"]["min"] is None
+        assert imported.form["load"]["annual_consumption_kwh"]["max"] is None
+        assert parse_fleet_form(imported.form).homes == read_fleet_scenario(document).scenario().simulated_homes()
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(
+                {"type": "weighted_discrete", "values": [2900, 4500], "weights": [1, 3]}, id="weighted-discrete"
+            ),
+            pytest.param({"type": "normal", "mean": 3400, "std": 800, "min": 2000, "max": 6000}, id="normal"),
+            pytest.param({"type": "uniform", "min": 2000, "max": 5000}, id="uniform"),
+            pytest.param({"type": "shuffled_pool", "values": [2900, 4500], "counts": [2.0, 1.0]}, id="shuffled-pool"),
+        ],
+    )
+    def test_each_type_the_editor_offers_loads_as_the_grammars_reading_written_back(self, spec: dict[str, Any]) -> None:
+        """A load distribution of each type the editor offers loads as write_distribution_spec of the spec the grammar read: values beside their weights or counts lists, each number as the grammar holds it."""
+        document = _with_fleet_distribution(load={"annual_consumption_kwh": spec})
+        read = read_fleet_scenario(document).fleet.load.draws["annual_consumption_kwh"]
+
+        imported = fleet_form_from_scenario(document)
+
+        assert imported.form["load"] == {"annual_consumption_kwh": write_distribution_spec(read)}
+        assert imported.not_loaded == ()
+
+    def test_a_distribution_the_editor_does_not_offer_is_refused_naming_its_path_its_type_and_the_editors_types(
+        self,
+    ) -> None:
+        """A load drawn proportional_to the home's PV is one the grammar reads but the editor cannot hold, so the import refuses it, naming its path, its type and the types the load's editor offers: loading anything else would run another fleet."""
+        document = _with_fleet_distribution(
+            load={"annual_consumption_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 800}}
+        )
+        read_fleet_scenario(document)
+        offered = ", ".join(each.name for each in FLEET_COMPONENTS["load"].editor_types)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        message = str(refusal.value)
+        assert "fleet_distribution.load.annual_consumption_kwh" in message
+        assert "'proportional_to'" in message
+        assert offered in message
 
     def test_a_tariff_key_the_form_has_no_field_for_is_not_loaded(self) -> None:
         """An Economy 7 tariff loads its type and rates, and names the off-peak start the page has no field for."""
@@ -1156,15 +1214,16 @@ class TestFleetFormFromScenario:
 
         assert str(refusal.value) == str(expected.value)
 
-    def test_a_null_in_a_pv_pool_is_refused_naming_the_value(self) -> None:
-        document = _with_fleet_distribution(
-            pv={"capacity_kw": {"type": "shuffled_pool", "values": [None, 4.0], "counts": [1, 2]}}
-        )
+    def test_a_null_in_a_pv_pool_is_refused_as_the_form_it_loads_is_refused_while_generating(self) -> None:
+        """A pool's null is held as written, so the pv pool loads with it, and the form loaded is refused while its homes are generated, as parse_fleet_form refuses it: every home has PV."""
+        pool = {"type": "shuffled_pool", "values": [None, 4.0], "counts": [1, 2]}
+        with pytest.raises(ConfigurationError) as expected:
+            parse_fleet_form({**_FLEET_FORM, "pv": {"capacity_kw": pool}})
 
         with pytest.raises(ConfigurationError) as refusal:
-            fleet_form_from_scenario(document)
+            fleet_form_from_scenario(_with_fleet_distribution(pv={"capacity_kw": pool}))
 
-        assert str(refusal.value) == "fleet_distribution.pv.capacity_kw.values[0] must be a finite number, got None"
+        assert str(refusal.value) == str(expected.value)
 
     @pytest.mark.parametrize(
         ("blocks", "form", "not_loaded"),

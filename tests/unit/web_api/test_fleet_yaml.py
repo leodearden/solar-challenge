@@ -466,19 +466,20 @@ class TestFleetPresetEndpoint:
     def test_a_fleet_preset_answers_its_form_and_what_was_not_loaded(
         self, client: FlaskClient
     ) -> None:
-        """bristol-phase1 loads its PV pool and SEG rate, and names its random order, which the form has no control for."""
+        """bristol-phase1 loads its PV and battery pools as the grammar's specs, its battery pool's null as null, a home without a battery, and its SEG rate, and names its random order, which the form has no control for."""
         resp = client.get("/api/fleet/presets/bristol-phase1")
 
         assert resp.status_code == 200, resp.get_data(as_text=True)
         answer = resp.get_json()
         assert answer["form"]["pv"]["capacity_kw"] == {
             "type": "shuffled_pool",
-            "entries": [
-                {"value": 3.0, "count": 20},
-                {"value": 4.0, "count": 40},
-                {"value": 5.0, "count": 30},
-                {"value": 6.0, "count": 10},
-            ],
+            "values": [3.0, 4.0, 5.0, 6.0],
+            "counts": [20, 40, 30, 10],
+        }
+        assert answer["form"]["battery"]["capacity_kwh"] == {
+            "type": "shuffled_pool",
+            "values": [None, 5.0, 10.0],
+            "counts": [40, 40, 20],
         }
         assert answer["form"]["seg"] == {"rate_pence_per_kwh": 4.1}
         assert "fleet_distribution.random_order" in answer["not_loaded"]
