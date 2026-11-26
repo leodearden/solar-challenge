@@ -6,7 +6,13 @@ import math
 from dataclasses import dataclass
 from typing import Final, Literal, Optional
 
-from solar_challenge.dispatch import TARGET_SOC_FRACTION, DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.dispatch import (
+    STRATEGY_CONFIG_BY_TYPE,
+    TARGET_SOC_FRACTION,
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    SelfConsumptionStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     FRACTION,
@@ -35,6 +41,15 @@ def _read_soc_limits_and_efficiencies(instance: object) -> None:
     read_field(instance, "discharge_efficiency", as_finite_float, FRACTION)
 
 
+def _require_dispatch_strategy_variant(strategy: object) -> None:
+    """Refuse a dispatch strategy that is not one of DispatchStrategyConfig's variants, None included, naming dispatch_strategy, the value and each variant's tag."""
+    if not isinstance(strategy, tuple(STRATEGY_CONFIG_BY_TYPE.values())):
+        tags = ", ".join(STRATEGY_CONFIG_BY_TYPE)
+        raise ConfigurationError(
+            f"dispatch_strategy must be the configuration of one dispatch strategy ({tags}), got {strategy!r}"
+        )
+
+
 def _require_soc_limits_in_order(min_soc_fraction: float, max_soc_fraction: float) -> None:
     """Refuse SOC limits whose minimum is not below their maximum, naming both."""
     if not min_soc_fraction < max_soc_fraction:
@@ -45,7 +60,7 @@ def _require_soc_limits_in_order(min_soc_fraction: float, max_soc_fraction: floa
 
 
 _ROUND_TRIP_EFFICIENCY: Final = FRACTION
-"""The round-trip efficiencies that BatteryConfig.efficiency and _one_way_efficiency admit."""
+"""The round-trip efficiencies that _one_way_efficiency admits."""
 
 _DEFAULT_ONE_WAY_EFFICIENCY: Final = 0.975
 """The declared default of BatteryConfig.charge_efficiency and discharge_efficiency."""
@@ -59,27 +74,6 @@ def _one_way_efficiency(round_trip_efficiency: float) -> float:
             most 1, naming round-trip efficiency and the value.
     """
     return math.sqrt(as_finite_float(round_trip_efficiency, "round-trip efficiency", _ROUND_TRIP_EFFICIENCY))
-
-
-def _refuse_a_pair_contradicting_its_round_trip(
-    efficiency: float, one_way: float, charge_efficiency: float, discharge_efficiency: float
-) -> None:
-    """Refuse a per-direction efficiency that is neither *one_way*, the square root of *efficiency*, nor its default, naming each such field."""
-    contradictions = [
-        f"{field}={value!r}"
-        for field, value in (
-            ("charge_efficiency", charge_efficiency),
-            ("discharge_efficiency", discharge_efficiency),
-        )
-        if value not in (one_way, _DEFAULT_ONE_WAY_EFFICIENCY)
-    ]
-    if contradictions:
-        raise ConfigurationError(
-            f"efficiency={efficiency!r} makes charge_efficiency and discharge_efficiency each its "
-            f"square root, {one_way!r}, but got {' and '.join(contradictions)}; use "
-            f"BatteryConfig.with_round_trip({efficiency!r}), or pass charge_efficiency and "
-            "discharge_efficiency without efficiency"
-        )
 
 
 _POWER_LIMIT_KW = POSITIVE
@@ -220,26 +214,24 @@ def _derated_soc_envelope(
 class BatteryConfig:
     """Configuration for a battery storage system.
 
-    Construction reads every number setting as a finite number inside its range and
-    holds it as a float, then refuses SOC limits whose minimum is not below their
-    maximum and a round-trip efficiency that a per-direction efficiency contradicts,
-    each with a ConfigurationError.
+    Construction refuses a dispatch_strategy that is not one of DispatchStrategyConfig's
+    variants, None included; reads every number setting as a finite number inside its
+    range and holds it as a float; then refuses SOC limits whose minimum is not below
+    their maximum, each with a ConfigurationError.
 
     Attributes:
         capacity_kwh: Total energy capacity in kilowatt-hours
         max_charge_kw: Maximum charging power in kilowatts
         max_discharge_kw: Maximum discharging power in kilowatts
         name: Optional identifier for the battery
-        dispatch_strategy: Optional dispatch strategy configuration, one of
-            dispatch.DispatchStrategyConfig's variants
+        dispatch_strategy: The battery's dispatch strategy configuration, one of
+            dispatch.DispatchStrategyConfig's variants; SelfConsumptionStrategyConfig()
+            when the battery names none
         grid_charging: Optional grid-charge (arbitrage) configuration; None means disabled
         min_soc_fraction: Minimum state of charge as fraction of capacity (default 0.1)
         max_soc_fraction: Maximum state of charge as fraction of capacity (default 0.9)
         charge_efficiency: Charging efficiency, fraction of energy stored (default 0.975)
         discharge_efficiency: Discharging efficiency, fraction of stored energy output (default 0.975)
-        efficiency: Transitional round-trip efficiency, retired at the surface bump; when set,
-            charge_efficiency and discharge_efficiency are its square root, and one set to
-            neither that nor its default is refused. Use with_round_trip instead.
         system_age_years: Age of the battery system in years (≥ 0); used to
             compute calendar fade when no ``soh`` override is provided.
         calendar_fade_rate_per_year: Linear calendar SOH fade rate per year
@@ -261,13 +253,12 @@ class BatteryConfig:
     max_charge_kw: float = 2.5
     max_discharge_kw: float = 2.5
     name: str = ""
-    dispatch_strategy: Optional[DispatchStrategyConfig] = None
+    dispatch_strategy: DispatchStrategyConfig = SelfConsumptionStrategyConfig()
     grid_charging: Optional[GridChargeConfig] = None
     min_soc_fraction: float = 0.1
     max_soc_fraction: float = 0.9
     charge_efficiency: float = _DEFAULT_ONE_WAY_EFFICIENCY
     discharge_efficiency: float = _DEFAULT_ONE_WAY_EFFICIENCY
-    efficiency: Optional[float] = None
     system_age_years: float = 0.0
     calendar_fade_rate_per_year: float = 0.02
     cycle_fade_per_equivalent_full_cycle: float = 5e-5
@@ -275,25 +266,18 @@ class BatteryConfig:
     soh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Read each number setting, then refuse SOC limits out of order, and derive the per-direction efficiencies from a set round-trip one, refusing one that contradicts it."""
+        """Refuse a dispatch strategy that is no variant, read each number setting, then refuse SOC limits out of order."""
+        _require_dispatch_strategy_variant(self.dispatch_strategy)
         read_field(self, "capacity_kwh", as_finite_float, POSITIVE)
         read_field(self, "max_charge_kw", as_finite_float, _POWER_LIMIT_KW)
         read_field(self, "max_discharge_kw", as_finite_float, _POWER_LIMIT_KW)
         _read_soc_limits_and_efficiencies(self)
-        read_field(self, "efficiency", as_finite_float, _ROUND_TRIP_EFFICIENCY, optional=True)
         read_field(self, "system_age_years", as_finite_float, NON_NEGATIVE)
         read_field(self, "calendar_fade_rate_per_year", as_finite_float, NON_NEGATIVE)
         read_field(self, "cycle_fade_per_equivalent_full_cycle", as_finite_float, NON_NEGATIVE)
         read_field(self, "soh_floor", as_finite_float, FRACTION)
         read_field(self, "soh", as_finite_float, FRACTION, optional=True)
         _require_soc_limits_in_order(self.min_soc_fraction, self.max_soc_fraction)
-        if self.efficiency is not None:
-            one_way = _one_way_efficiency(self.efficiency)
-            _refuse_a_pair_contradicting_its_round_trip(
-                self.efficiency, one_way, self.charge_efficiency, self.discharge_efficiency
-            )
-            object.__setattr__(self, "charge_efficiency", one_way)
-            object.__setattr__(self, "discharge_efficiency", one_way)
 
     @property
     def nominal_usable_capacity_kwh(self) -> float:
@@ -302,7 +286,7 @@ class BatteryConfig:
 
     @property
     def resolved_soh(self) -> float:
-        """The state of health a Battery built from this config holds, resolved once.
+        """The state of health a Battery holds while this config is its own, built from it or assigned to it.
 
         The ``soh`` override wins and is used as given, without clamping to
         ``soh_floor``: supply one consistent with ``soh_floor`` if the
@@ -328,9 +312,7 @@ class BatteryConfig:
                 and at most 1, naming round-trip efficiency and the value.
         """
         one_way = _one_way_efficiency(round_trip_efficiency)
-        return dataclasses.replace(
-            self, efficiency=None, charge_efficiency=one_way, discharge_efficiency=one_way
-        )
+        return dataclasses.replace(self, charge_efficiency=one_way, discharge_efficiency=one_way)
 
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":
@@ -373,12 +355,19 @@ class Battery:
     While the SOC is below min_soc_kwh, discharge() moves no energy and returns
     0.0; while it is above max_soc_kwh, charge() does the same.
 
-    Attributes:
-        config: BatteryConfig defining capacity and power limits
+    Its config can be reassigned too. Before the assignment returns, soh (the new
+    config's resolved_soh), soc_envelope and every value read from it,
+    grid_charge_target_kwh and the power limits follow the new config. The
+    battery's own min_soc_fraction, max_soc_fraction, charge_efficiency and
+    discharge_efficiency survive it: the new config's values for them are not
+    applied. soc_kwh is untouched and not checked against the new envelope. A
+    config whose envelope cannot be built raises a ConfigurationError and leaves
+    the battery unchanged.
     """
 
-    config: BatteryConfig
+    _config: BatteryConfig
     _soc_limits_and_efficiencies: _SocLimitsAndEfficiencies
+    _soh: float
     _soc_envelope: SocEnvelope
     _grid_charge_target_kwh: Optional[float]
 
@@ -401,15 +390,14 @@ class Battery:
             charge_efficiency: Charging efficiency (0-1); defaults to config.charge_efficiency
             discharge_efficiency: Discharging efficiency (0-1); defaults to config.discharge_efficiency
         """
-        self.config = config
-        self._soh: float = config.resolved_soh
-        self._set_soc_limits_and_efficiencies(
+        self._set_config_and_limits(
+            config,
             _SocLimitsAndEfficiencies(
                 min_soc_fraction=config.min_soc_fraction if min_soc_fraction is None else min_soc_fraction,
                 max_soc_fraction=config.max_soc_fraction if max_soc_fraction is None else max_soc_fraction,
                 charge_efficiency=config.charge_efficiency if charge_efficiency is None else charge_efficiency,
                 discharge_efficiency=config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency,
-            )
+            ),
         )
 
         # Set initial SOC
@@ -424,18 +412,28 @@ class Battery:
                 )
             self._soc_kwh = initial_soc_kwh
 
-    def _set_soc_limits_and_efficiencies(self, limits: _SocLimitsAndEfficiencies) -> None:
-        """Hold *limits*, the envelope at their SOC fractions and that envelope's grid-charge target, all built before any is stored."""
-        envelope = _derated_soc_envelope(
-            self.config.capacity_kwh, self._soh, limits.min_soc_fraction, limits.max_soc_fraction
-        )
-        grid_charging = self.config.grid_charging
+    def _set_config_and_limits(self, config: BatteryConfig, limits: _SocLimitsAndEfficiencies) -> None:
+        """Hold *config*, *limits*, and the SOH, envelope and grid-charge target derived from them, all built before any is stored."""
+        soh = config.resolved_soh
+        envelope = _derated_soc_envelope(config.capacity_kwh, soh, limits.min_soc_fraction, limits.max_soc_fraction)
+        grid_charging = config.grid_charging
         grid_charge_target_kwh = (
             None if grid_charging is None else envelope.target_kwh(grid_charging.target_soc_fraction)
         )
+        self._config = config
         self._soc_limits_and_efficiencies = limits
+        self._soh = soh
         self._soc_envelope = envelope
         self._grid_charge_target_kwh = grid_charge_target_kwh
+
+    @property
+    def config(self) -> BatteryConfig:
+        """The BatteryConfig the battery's capacity, SOH, grid charging and power limits come from."""
+        return self._config
+
+    @config.setter
+    def config(self, value: BatteryConfig) -> None:
+        self._set_config_and_limits(value, self._soc_limits_and_efficiencies)
 
     @property
     def min_soc_fraction(self) -> float:
@@ -444,8 +442,8 @@ class Battery:
 
     @min_soc_fraction.setter
     def min_soc_fraction(self, value: float) -> None:
-        self._set_soc_limits_and_efficiencies(
-            dataclasses.replace(self._soc_limits_and_efficiencies, min_soc_fraction=value)
+        self._set_config_and_limits(
+            self._config, dataclasses.replace(self._soc_limits_and_efficiencies, min_soc_fraction=value)
         )
 
     @property
@@ -455,8 +453,8 @@ class Battery:
 
     @max_soc_fraction.setter
     def max_soc_fraction(self, value: float) -> None:
-        self._set_soc_limits_and_efficiencies(
-            dataclasses.replace(self._soc_limits_and_efficiencies, max_soc_fraction=value)
+        self._set_config_and_limits(
+            self._config, dataclasses.replace(self._soc_limits_and_efficiencies, max_soc_fraction=value)
         )
 
     @property
@@ -466,8 +464,8 @@ class Battery:
 
     @charge_efficiency.setter
     def charge_efficiency(self, value: float) -> None:
-        self._set_soc_limits_and_efficiencies(
-            dataclasses.replace(self._soc_limits_and_efficiencies, charge_efficiency=value)
+        self._set_config_and_limits(
+            self._config, dataclasses.replace(self._soc_limits_and_efficiencies, charge_efficiency=value)
         )
 
     @property
@@ -477,18 +475,18 @@ class Battery:
 
     @discharge_efficiency.setter
     def discharge_efficiency(self, value: float) -> None:
-        self._set_soc_limits_and_efficiencies(
-            dataclasses.replace(self._soc_limits_and_efficiencies, discharge_efficiency=value)
+        self._set_config_and_limits(
+            self._config, dataclasses.replace(self._soc_limits_and_efficiencies, discharge_efficiency=value)
         )
 
     @property
     def soh(self) -> float:
-        """The battery's state of health as a fraction, its config's resolved_soh."""
+        """The battery's state of health as a fraction, its config's resolved_soh, which follows an assignment to config."""
         return self._soh
 
     @property
     def soc_envelope(self) -> SocEnvelope:
-        """The SOH-derated envelope at the battery's current SOC fractions, which follows an assignment to either."""
+        """The SOH-derated envelope of its config at its current SOC fractions, which follows an assignment to config or to either fraction."""
         return self._soc_envelope
 
     @property
@@ -521,7 +519,7 @@ class Battery:
         """The SOC, in kWh, that grid charging fills the battery to, None when config.grid_charging is None.
 
         It is soc_envelope's target_kwh at config.grid_charging's target_soc_fraction, so it is at
-        most max_soc_kwh. It is built with the envelope, so it follows an assignment to max_soc_fraction.
+        most max_soc_kwh. It is built with the envelope, so it follows an assignment to config or max_soc_fraction.
         """
         return self._grid_charge_target_kwh
 
@@ -543,7 +541,7 @@ class Battery:
     @property
     def max_charge_kw(self) -> float:
         """The maximum charging power in kW, the limit charge() applies."""
-        return self.config.max_charge_kw
+        return self._config.max_charge_kw
 
     def charge(self, power_kw: float, duration_minutes: float) -> float:
         """Charge the battery.
@@ -604,7 +602,7 @@ class Battery:
         _require_valid_request("discharge", power_kw, duration_minutes)
 
         # Limit to max discharge rate
-        actual_power = min(power_kw, self.config.max_discharge_kw)
+        actual_power = min(power_kw, self._config.max_discharge_kw)
 
         # Calculate energy requested
         duration_hours = duration_minutes * HOURS_PER_MINUTE

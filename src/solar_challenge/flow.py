@@ -14,9 +14,9 @@ from solar_challenge.dispatch import (
     GridChargeContext,
     SelfConsumptionStrategy,
     StepLimits,
-    TOUOptimizedStrategy,
     require_valid_step_powers,
 )
+from solar_challenge.number_fields import NON_NEGATIVE
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE, require_valid_duration
 
@@ -129,9 +129,9 @@ class EnergyFlowResult:
     """Results of energy flow simulation for a single timestep.
 
     Every field but battery_soc is a flow: an energy the timestep moved, in kWh,
-    so never negative. Construction raises ValueError naming each flow below 0
-    or NaN, and its value. battery_soc is the state of charge after the
-    timestep, in kWh.
+    so a finite number at least 0. Construction raises ValueError naming each
+    flow below 0, NaN or infinite, and its value. battery_soc is the state of
+    charge after the timestep, in kWh.
 
     Every flow is an energy at the home's bus: battery_charge is what the battery
     drew, before its charge losses, and battery_discharge what it delivered, after
@@ -152,12 +152,12 @@ class EnergyFlowResult:
     grid_charge: float = 0.0  # informational: kWh the battery drew from the grid, a part of battery_charge and grid_import
 
     def __post_init__(self) -> None:
-        """Refuse a flow that is negative or NaN, naming each such flow and its value."""
-        refused = [f"{flow}={value!r}" for flow in _FLOWS if not (value := getattr(self, flow)) >= 0.0]
+        """Refuse a flow NON_NEGATIVE does not admit (below 0, NaN or infinite), naming each such flow and its value."""
+        refused = NON_NEGATIVE.refused({flow: getattr(self, flow) for flow in _FLOWS})
         if refused:
             raise ValueError(
-                "EnergyFlowResult's flows are the energies its timestep moved, so each is at least 0: "
-                f"got {', '.join(refused)}"
+                f"EnergyFlowResult's flows are the energies its timestep moved, so each is a finite number {NON_NEGATIVE}: "
+                f"got {', '.join(f'{flow}={value!r}' for flow, value in refused.items())}"
             )
 
 
@@ -167,11 +167,12 @@ _FLOWS = tuple(field.name for field in fields(EnergyFlowResult) if field.name !=
 def _build_grid_charge_context(
     battery: "Battery",
     tariff: TariffConfig,
-    timestamp: pd.Timestamp,
+    timestamp: datetime,
     *,
     target_soc_kwh: float,
+    useful_charge_ceiling_kwh: Optional[float],
 ) -> GridChargeContext:
-    """Build a GridChargeContext from a battery and tariff for the given timestamp, filling the battery to target_soc_kwh.
+    """Build a GridChargeContext from a battery and tariff for the given timestamp, filling the battery to target_soc_kwh, or to useful_charge_ceiling_kwh when that is lower.
 
     Its cheap-period classification is TariffConfig.is_cheap_at's, the clock of a
     TOUOptimizedStrategy built with the tariff; a tariff with no rate spread has no cheap minute.
@@ -184,6 +185,7 @@ def _build_grid_charge_context(
         max_charge_kw=battery.max_charge_kw,
         round_trip_efficiency=battery.charge_efficiency * battery.discharge_efficiency,
         charge_efficiency=battery.charge_efficiency,
+        useful_charge_ceiling_kwh=useful_charge_ceiling_kwh,
     )
 
 
@@ -271,11 +273,12 @@ def simulate_timestep(
     generation_kw: float,
     demand_kw: float,
     battery: Optional[Battery],
-    timestep_minutes: float = 1.0,
+    timestep_minutes: float,
     timestamp: Optional[datetime] = None,
     strategy: Optional[DispatchStrategy] = None,
     *,
     tariff: Optional[TariffConfig] = None,
+    useful_charge_ceiling_kwh: Optional[float] = None,
 ) -> EnergyFlowResult:
     """Simulate energy flow for a single timestep.
 
@@ -301,16 +304,25 @@ def simulate_timestep(
             can emit ``grid_charge_kw > 0``.  When ``None`` (default), the
             grid-charge context is not built and results are bit-identical to
             omitting the argument entirely.
+        useful_charge_ceiling_kwh: Optional SOC in kWh above which this step's grid
+            charge is forecast to be stranded by PV, carried in the grid-charge context
+            as ``GridChargeContext.useful_charge_ceiling_kwh``: grid charging then fills
+            to the lower of it and ``battery.grid_charge_target_kwh``.  ``None``
+            (default) means no ceiling.  It has no effect when no context is built.
 
     Returns:
         EnergyFlowResult with all energy flows in kWh
 
     Raises:
         ValueError: If timestep_minutes is not positive and finite, naming it; then if generation_kw
-            or demand_kw is not finite and at least 0, naming it; then if the strategy's decision
-            asks for more than the step allows (StepLimits.require_admissible), naming the
-            strategy and each power above its limit. Each check runs before any battery moves
-            energy.
+            or demand_kw is not finite and at least 0, naming it; then, when a grid-charge context
+            is built, if useful_charge_ceiling_kwh is neither None nor finite and at least 0,
+            naming it; then if the strategy's decision asks for more than the step allows
+            (StepLimits.require_admissible), naming the strategy and each power above its limit.
+            These checks run before any battery moves energy. Then, after any battery has moved,
+            if a flow the step computes is not a finite number at least 0 (an energy beyond a
+            float, or one its battery reports), naming each such flow and its value
+            (EnergyFlowResult).
     """
     require_valid_duration(timestep_minutes, "Timestep")
     step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
@@ -325,7 +337,13 @@ def simulate_timestep(
 
     target_soc_kwh = battery.grid_charge_target_kwh
     grid_charge_ctx = (
-        _build_grid_charge_context(battery, tariff, pd.Timestamp(timestamp), target_soc_kwh=target_soc_kwh)
+        _build_grid_charge_context(
+            battery,
+            tariff,
+            timestamp,
+            target_soc_kwh=target_soc_kwh,
+            useful_charge_ceiling_kwh=useful_charge_ceiling_kwh,
+        )
         if tariff is not None and target_soc_kwh is not None
         else None
     )
@@ -345,42 +363,6 @@ def simulate_timestep(
 
     exchange = _execute(decision, battery, timestep_minutes)
     return _settle(step, exchange, battery.soc_kwh)
-
-
-def simulate_timestep_tou(
-    generation_kw: float,
-    demand_kw: float,
-    battery: Optional[Battery],
-    timestamp: pd.Timestamp,
-    tariff: TariffConfig,
-    timestep_minutes: float = 1.0,
-) -> EnergyFlowResult:
-    """Simulate energy flow for a single timestep, the battery dispatched by TOUOptimizedStrategy on the tariff's clock through simulate_timestep.
-
-    It is retired at the next release. Call what it returns instead:
-    ``simulate_timestep(generation_kw, demand_kw, battery, timestep_minutes, timestamp,
-    TOUOptimizedStrategy(tariff=tariff), tariff=tariff)``.
-
-    Args:
-        generation_kw: PV generation power in kW
-        demand_kw: Demand power in kW
-        battery: Battery object (or None for no battery)
-        timestamp: Current timestamp for tariff rate lookup
-        tariff: Tariff configuration with rate periods
-        timestep_minutes: Duration of timestep in minutes
-
-    Returns:
-        EnergyFlowResult with all energy flows in kWh
-
-    Raises:
-        ValueError: As simulate_timestep raises: if timestep_minutes is not positive and finite,
-            naming it; then if generation_kw or demand_kw is not finite and at least 0, naming it;
-            then for a decision StepLimits refuses, which TOUOptimizedStrategy never makes. Each
-            check runs before any battery moves energy.
-    """
-    return simulate_timestep(
-        generation_kw, demand_kw, battery, timestep_minutes, timestamp, TOUOptimizedStrategy(tariff=tariff), tariff=tariff
-    )
 
 
 def validate_energy_balance(

@@ -10,7 +10,7 @@ import random
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING, TypeAlias
+from typing import Optional, TypeAlias
 
 import numpy as np
 import numpy.typing as npt
@@ -18,11 +18,7 @@ import pandas as pd
 
 from solar_challenge.boolean_fields import as_boolean
 from solar_challenge.number_fields import POSITIVE, Interval, as_finite_float, as_whole_number, read_field
-from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, ONE_MINUTE, LocalDay, SimulationWindow
-
-if TYPE_CHECKING:
-    from solar_challenge.ev import EVConfig
 
 logger = logging.getLogger(__name__)
 
@@ -407,12 +403,10 @@ def _simulated_household_kw(
 def generate_load_profile(
     config: LoadConfig,
     window: SimulationWindow,
-    ev_config: "Optional[EVConfig]" = None,
     *,
     household_model: HouseholdModel = richardsonpy_household,
-    tariff: Optional[TariffConfig] = None,
 ) -> pd.Series:
-    """The household's demand in kW on window.rows(), EV charging included when ev_config is set.
+    """The household's demand in kW on window.rows().
 
     Each of the window's local days takes a profile of the minutes of its wall clock from 00:00
     to 23:59, placed on its rows by each row's local minute of the day: a day the clocks go
@@ -431,49 +425,28 @@ def generate_load_profile(
     E_d. The Elexon profile also stands in, with a warning, when the household model itself
     fails: it raises, or gives a day that is not 1,440 minutes long.
 
-    The EV charging profile is laid out a minute to a row from the window's first midnight,
-    1,440 minutes a day, and read on the window's rows, so it needs one-minute rows.
-
     Args:
         config: Load configuration with consumption and household parameters
         window: The calendar days to generate, how long each of their rows lasts, and their
             clock's zone
-        ev_config: Optional EV configuration for charging load
         household_model: Called once per stochastic window with config and the window's
             dates; the day simulator it returns is called once per date. Unused when
             config.use_stochastic is False.
-        tariff: The home's tariff, whose cheap minutes an off_peak EV charges in; unused
-            without ev_config.
 
     Returns:
         Series of power in kW on window.rows(), named demand_kw
 
     Raises:
         ValueError: Naming window's cadence, before any household is built, if it is not a
-            whole number of minutes dividing one hour, or, with ev_config, not one minute; or
-            if a stochastic window's simulated days have no energy.
-        ConfigurationError: ev_config's smart_charging_mode is 'off_peak' and there is no
-            tariff (generate_ev_charging_profile).
+            whole number of minutes dividing one hour; or if a stochastic window's simulated
+            days have no energy.
     """
-    if ev_config is not None and window.cadence != ONE_MINUTE:
-        raise ValueError(
-            "EV charging is laid out a minute to a row, so a profile with ev_config needs one-minute rows: "
-            f"got cadence={window.cadence!r}, {window.step_minutes:g} minutes"
-        )
     household_kw = None
     if config.use_stochastic:
         household_kw = _simulated_household_kw(config, window, household_model)
     if household_kw is None:
         household_kw = _elexon_household_kw(config.get_annual_consumption(), window)
-    if ev_config is None:
-        return household_kw
-
-    from solar_challenge.ev import generate_ev_charging_profile
-
-    ev_kw = generate_ev_charging_profile(
-        ev_config, pd.Timestamp(window.first_day), pd.Timestamp(window.last_day), window.timezone, tariff=tariff
-    ).reindex(household_kw.index, fill_value=0.0)
-    return (household_kw + ev_kw).rename("demand_kw")
+    return household_kw
 
 
 def energy_kwh(profile: pd.Series) -> float:

@@ -13,12 +13,13 @@ import pytest
 
 pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.home import SimulationResults
 from solar_challenge.web.charts import (
     battery_soc_chart,
     fleet_aggregate_timeline,
     fleet_grid_impact,
-    heat_pump_analysis,
+    load_panels,
     power_flow_timeline,
 )
 from tests._finance_builders import make_fleet_results_of, make_sim_results
@@ -72,12 +73,13 @@ def test_a_chart_of_more_than_2000_steps_draws_the_mean_of_each_evenly_spaced_wi
 def test_every_chart_of_a_runs_time_series_draws_it_at_the_same_instants() -> None:
     """Each chart of a downsampled year draws every trace at the power-flow timeline's instants."""
     base = make_sim_results(days=365)
-    year = dataclasses.replace(base, heat_pump_load=pd.Series(0.3, index=base.demand.index))
+    heat_pump = pd.Series(0.3, index=base.demand.index)
+    year = dataclasses.replace(base, demand=base.demand + heat_pump, additional_loads={LoadKind.HEAT_PUMP: heat_pump})
     fleet = make_fleet_results_of([year])
     figures = {
         "power_flow_timeline": power_flow_timeline(year).content,
         "battery_soc_chart": battery_soc_chart(year, battery_config=_TEN_KWH_BATTERY).content,
-        "heat_pump_load_profile": heat_pump_analysis(year)[1].content,
+        "heat_pump_load_profile": load_panels(year)[1].content,
         "fleet_aggregate_timeline": fleet_aggregate_timeline(fleet).content,
         "fleet_grid_impact": fleet_grid_impact(fleet).content,
     }

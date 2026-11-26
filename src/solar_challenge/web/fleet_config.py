@@ -21,35 +21,14 @@ from typing import Any, TypeGuard
 from solar_challenge.fleet_distribution import FleetDistributionConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_blocks import child_path
-
-#: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, and the
-#: preview a shuffled pool that holds values for more homes or a draw of more values.
-MAX_FLEET_HOMES = 10_000
-
-
-def read_fleet_size(value: Any, field: str) -> int:
-    """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
-
-    Raises:
-        ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
-            naming *field* and the value sent.
-    """
-    return as_whole_number(value, field, within=Interval(1, MAX_FLEET_HOMES))
-
-
-#: The largest seed, positive or negative, a dashboard fleet holds: Number.MAX_SAFE_INTEGER,
-#: past which the JavaScript number the fleet page holds its seed in rounds some whole numbers.
-MAX_FLEET_SEED = 2**53 - 1
-
-
-def read_fleet_seed(value: Any, field: str) -> int:
-    """Read *value*, the setting named *field*, as a dashboard fleet's seed, a whole number from -:data:`MAX_FLEET_SEED` to :data:`MAX_FLEET_SEED`.
-
-    Raises:
-        ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
-            naming *field* and the value sent.
-    """
-    return as_whole_number(value, field, within=Interval(-MAX_FLEET_SEED, MAX_FLEET_SEED))
+from solar_challenge.web.fleet_components import (
+    FLEET_SIZE,
+    FLEET_SIZE_DEFAULT,
+    MAX_FLEET_HOMES,
+    SEED_DEFAULT,
+    read_fleet_seed,
+    read_fleet_size,
+)
 
 
 def refuse_a_fleet_the_dashboard_cannot_run(fleet: FleetDistributionConfig, path: str) -> None:
@@ -116,7 +95,7 @@ def sample_distribution(
             a finite number, as finite params whose draws overflow a float can; that error
             names params and the sample.
     """
-    n_samples = as_whole_number(n_samples, "n_samples", within=Interval(1, MAX_FLEET_HOMES))
+    n_samples = as_whole_number(n_samples, "n_samples", within=FLEET_SIZE)
     params = _require_dict(params, "params")
     fields = {**_fields_under("params"), "type": "type"}
     distribution = {**params, "type": dist_type}
@@ -221,11 +200,11 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     Returns:
         Fleet distribution config dict.
 
-    Its n_homes and seed, 100 and 42 when the form leaves them out, and each block's
-    distributions, fixed values and other settings pass on as sent, the blocks' as
-    :func:`_parse_component_distribution` writes them, for fleet_distribution.py's grammar
-    to read or refuse naming them; the dashboard's bounds apply to the fleet it reads (see
-    :func:`refuse_a_fleet_the_dashboard_cannot_run`).
+    Its n_homes and seed, FLEET_SIZE_DEFAULT and SEED_DEFAULT when the form leaves them
+    out, and each block's distributions, fixed values and other settings pass on as sent,
+    the blocks' as :func:`_parse_component_distribution` writes them, for
+    fleet_distribution.py's grammar to read or refuse naming them; the dashboard's bounds
+    apply to the fleet it reads (see :func:`refuse_a_fleet_the_dashboard_cannot_run`).
 
     Raises:
         ValueError: If a pv/battery/load block is neither null nor a dict (see
@@ -236,8 +215,8 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             names its field as a dot path from the form's root.
     """
     config: dict[str, Any] = {
-        "n_homes": form_data.get("n_homes", 100),
-        "seed": form_data.get("seed", 42),
+        "n_homes": form_data.get("n_homes", FLEET_SIZE_DEFAULT),
+        "seed": form_data.get("seed", SEED_DEFAULT),
     }
 
     # Process PV distribution

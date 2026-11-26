@@ -2,12 +2,20 @@
 """Tests for grid charging a home battery on a time-of-use tariff."""
 
 import dataclasses
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
+from solar_challenge.dispatch import (
+    GRID_CHARGE_FORECASTS,
+    GridChargeConfig,
+    GridChargeForecast,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategy,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
@@ -532,15 +540,16 @@ class TestSimulateHomeGridCharge:
         """A run without a tariff cannot grid charge, and has no grid_charge series, as it has no grid_charge_cost.
 
         Its home is the arbitrage home without the settings a tariff is needed for: its tariff,
-        its battery's grid_charging and its tou_optimized dispatch.
+        and its battery's grid_charging and tou_optimized dispatch on the tariff's clock.
         """
         arbitrage = bristol_arbitrage_home()
         assert arbitrage.battery_config is not None
         home = dataclasses.replace(
             arbitrage,
-            battery_config=dataclasses.replace(arbitrage.battery_config, grid_charging=None),
+            battery_config=dataclasses.replace(
+                arbitrage.battery_config, grid_charging=None, dispatch_strategy=SelfConsumptionStrategyConfig()
+            ),
             tariff_config=None,
-            dispatch_strategy="greedy",
         )
         results = simulate_home(
             home,
@@ -579,3 +588,114 @@ class TestSimulateHomeDispatchesOnTheTariffSchedule:
             five.total_grid_import_kwh,
             five.total_import_cost_gbp,
         )
+
+
+# ---------------------------------------------------------------------------
+# The forecast that sizes a home's grid charge
+# ---------------------------------------------------------------------------
+
+_FORECAST_DAYS = 16
+_FIRST_FORECAST_DAY = pd.Timestamp("2024-06-01")
+_DAY_15 = pd.Timestamp("2024-06-15", tz="Europe/London")
+"""Local midnight of the run's 15th day, whose cheap window is the first with 14 earlier ones to read."""
+
+
+def _forecast_home(grid_charging: Optional[GridChargeConfig]) -> HomeConfig:
+    """An Economy 7 home with 4 kW of PV, a deterministic 3,400 kWh load and a 5 kWh battery dispatched on the tariff's clock, grid-charging as grid_charging says."""
+    return HomeConfig(
+        pv_config=PVConfig.default_4kw(),
+        load_config=LoadConfig(3400.0, seed=42, use_stochastic=False),
+        battery_config=BatteryConfig(5.0, dispatch_strategy=TOUOptimizedStrategyConfig(), grid_charging=grid_charging),
+        tariff_config=TariffConfig.economy_7(),
+    )
+
+
+def _clear_days(home: HomeConfig, days: int = _FORECAST_DAYS, **simulate: object) -> SimulationResults:
+    """home simulated over its first days of clear June days, from _FIRST_FORECAST_DAY."""
+    weather = synthetic_june_weather(_FIRST_FORECAST_DAY, irradiance_scale_per_day=(1.0,) * days)
+    last_day = _FIRST_FORECAST_DAY + pd.Timedelta(days=days - 1)
+    return simulate_home(home, _FIRST_FORECAST_DAY, last_day, weather=weather_for(home, weather), **simulate)
+
+
+def _sized_by(forecast: GridChargeForecast) -> HomeConfig:
+    """The forecast home grid-charging to 90% in each cheap period, its fill sized by forecast."""
+    return _forecast_home(GridChargeConfig(0.9, forecast=forecast))
+
+
+@pytest.fixture(scope="module")
+def pv_blind_run() -> SimulationResults:
+    """The forecast home over 16 clear June days, each cheap period filling to the target."""
+    return _clear_days(_sized_by("pv_blind"))
+
+
+@pytest.fixture(scope="module")
+def trailing_run() -> SimulationResults:
+    """The forecast home over 16 clear June days, each cheap period's fill sized by the 14 days before it."""
+    return _clear_days(_sized_by("trailing_14_days"))
+
+
+@pytest.mark.filterwarnings("ignore:tariff_config is set but seg_tariff is None:UserWarning")
+class TestGridChargeForecast:
+    """simulate_home sizes each cheap period's grid charge by the battery's GridChargeConfig.forecast, and its results record that forecast."""
+
+    def test_trailing_14_days_fills_as_pv_blind_does_until_it_has_14_days_to_read(
+        self, pv_blind_run: SimulationResults, trailing_run: SimulationResults
+    ) -> None:
+        """No cheap window of the first 14 days has 14 earlier ones, so each fills to the target, minute for minute."""
+        first_14_days = pv_blind_run.generation.index < _DAY_15
+
+        pd.testing.assert_frame_equal(
+            trailing_run.to_dataframe()[first_14_days], pv_blind_run.to_dataframe()[first_14_days]
+        )
+
+    def test_after_14_clear_days_trailing_14_days_grid_charges_less_and_pays_less_for_its_import(
+        self, pv_blind_run: SimulationResults, trailing_run: SimulationResults
+    ) -> None:
+        """Fourteen clear days say day 15's and 16's PV fills the battery, so the fill buys less charge PV would strand."""
+        assert pv_blind_run.grid_charge is not None and trailing_run.grid_charge is not None
+        assert trailing_run.grid_charge[_DAY_15:].sum() < pv_blind_run.grid_charge[_DAY_15:].sum()
+        assert trailing_run.import_cost[_DAY_15:].sum() < pv_blind_run.import_cost[_DAY_15:].sum()
+
+    def test_a_strategy_given_to_simulate_home_is_offered_the_same_ceilings(
+        self, trailing_run: SimulationResults
+    ) -> None:
+        """The battery's own TOU dispatch, given as strategy, is sized by the battery's forecast as the one the home selects is."""
+        given = _clear_days(_sized_by("trailing_14_days"), strategy=TOUOptimizedStrategy(tariff=TariffConfig.economy_7()))
+
+        pd.testing.assert_frame_equal(given.to_dataframe(), trailing_run.to_dataframe())
+
+    @pytest.mark.parametrize("forecast", GRID_CHARGE_FORECASTS)
+    def test_the_results_and_their_summary_record_the_forecast_that_sized_the_grid_charge(
+        self, forecast: GridChargeForecast
+    ) -> None:
+        results = _clear_days(_sized_by(forecast), days=1)
+
+        assert results.grid_charge_forecast == forecast
+        assert calculate_summary(results).grid_charge_forecast == forecast
+
+    @pytest.mark.parametrize(
+        "home",
+        [
+            pytest.param(_forecast_home(None), id="battery-without-grid-charging"),
+            pytest.param(dataclasses.replace(_forecast_home(None), battery_config=None), id="no-battery"),
+        ],
+    )
+    def test_a_run_that_does_not_grid_charge_records_no_forecast(self, home: HomeConfig) -> None:
+        results = _clear_days(home, days=1)
+
+        assert results.grid_charge_forecast is None
+        assert calculate_summary(results).grid_charge_forecast is None
+
+    def test_from_dataframe_keeps_the_forecast_it_is_given(self, trailing_run: SimulationResults) -> None:
+        rebuilt = SimulationResults.from_dataframe(
+            trailing_run.to_dataframe(),
+            strategy_name=trailing_run.strategy_name,
+            grid_charge_forecast=trailing_run.grid_charge_forecast,
+        )
+
+        assert rebuilt.grid_charge_forecast == "trailing_14_days"
+
+    def test_from_dataframe_given_no_forecast_records_none(self, trailing_run: SimulationResults) -> None:
+        rebuilt = SimulationResults.from_dataframe(trailing_run.to_dataframe(), strategy_name=trailing_run.strategy_name)
+
+        assert rebuilt.grid_charge_forecast is None

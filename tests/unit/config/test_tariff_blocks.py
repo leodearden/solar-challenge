@@ -107,7 +107,7 @@ class TestTariffNames:
     ) -> None:
         """A tariff or period name that is not a string is refused, naming the key by its path and the value given."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{name_path} must be a string, got {name!r}")
+            ConfigurationError, match=re.escape(f"{name_path}: must be a string, got {name!r}")
         ):
             parse_tariff_config(named_block(name))
 
@@ -135,7 +135,7 @@ class TestTariffNames:
         path.write_text(yaml.safe_dump({"home": {"pv": {"capacity_kw": 4.0}, "tariff": tariff}}))
 
         with pytest.raises(
-            ConfigurationError, match=re.escape("home.tariff.name must be a string, got 5")
+            ConfigurationError, match=re.escape("home.tariff.name: must be a string, got 5")
         ):
             load_home_config(path)
 
@@ -177,7 +177,7 @@ class TestScenarioSegBlock:
             return load_scenarios(path)[0].seg_tariff_pence_per_kwh
 
         def through_community_billing(seg: object) -> float | None:
-            community = {"sharing_mode": "p2p", "billing": {"seg": seg}}
+            community = {"billing": {"seg": seg}}
             path.write_text(yaml.safe_dump({"community": community}))
             config = load_community_config(path)
             assert config is not None
@@ -238,10 +238,31 @@ class TestScenarioSegBlock:
     ) -> None:
         """``community.billing.seg_rate_pence_per_kwh`` refuses every rate the ``seg`` block refuses."""
         path = tmp_path / "seg.yaml"
-        community = {"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": rate}}
+        community = {"billing": {"seg_rate_pence_per_kwh": rate}}
         path.write_text(yaml.safe_dump({"community": community}))
         with pytest.raises(ConfigurationError, match="seg_rate_pence_per_kwh"):
             load_community_config(path)
+
+    @pytest.mark.parametrize(
+        "seg",
+        [
+            pytest.param({}, id="neither"),
+            pytest.param({"preset": "Octopus", "rate_pence_per_kwh": 4.1}, id="both"),
+        ],
+    )
+    def test_a_block_naming_both_forms_or_neither_is_refused_naming_it(self, seg: dict[str, object]) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            parse_seg_rate(seg)
+        assert str(excinfo.value) == (
+            f"seg: must specify exactly one of 'preset' or 'rate_pence_per_kwh', got {seg!r}"
+        )
+
+    def test_an_unknown_preset_is_refused_naming_the_preset_key(self) -> None:
+        """The refusal is the preset table's own, prefixed by the preset's path, and raised from it."""
+        with pytest.raises(ConfigurationError) as excinfo:
+            parse_seg_rate({"preset": "Nonexistent"}, block_path="scenarios[0].seg")
+        assert excinfo.value.__cause__ is not None
+        assert str(excinfo.value) == f"scenarios[0].seg.preset: {excinfo.value.__cause__}"
 
     def test_unknown_preset_error_names_the_available_presets(
         self, read_seg_rate: Callable[[object], float | None]

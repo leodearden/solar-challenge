@@ -22,6 +22,7 @@ from solar_challenge.number_fields import Interval, as_finite_float, as_whole_nu
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
+from solar_challenge.web.dashboard import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
@@ -49,7 +50,6 @@ from solar_challenge.web.request_boundary import (
     require_encodable_text,
     require_json_object,
 )
-from solar_challenge.web.shared import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
@@ -381,14 +381,16 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
 
 @api_bp.route("/fleet/export-yaml", methods=["POST"])
 def export_fleet_yaml() -> Response | tuple[Response, int]:
-    """Export the fleet page's form as the fleet scenario load_fleet_config reads back.
+    """Export the fleet page's form as the fleet scenario load_scenario reads back as the homes POST /api/simulate/fleet-from-distribution runs.
 
     Expects the JSON body the fleet page posts to /api/simulate/fleet-from-distribution.
+    Both endpoints read the form with
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`, whose homes are
+    config.parse_scenario's reading of the document written here.
 
     Returns:
         The scenario's YAML file as a download, HTTP 200; or the ``error``, HTTP 400, for a
-        form the simulate endpoint refuses, with its message: both read the form with
-        :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
+        form the simulate endpoint refuses, with its message.
     """
     data = request_json_object()
     try:
@@ -868,7 +870,7 @@ def scenarios_preview_yaml() -> tuple[Response, int]:
 
 @api_bp.route("/scenarios/validate", methods=["POST"])
 def scenarios_validate_scenario() -> tuple[Response, int]:
-    """Validate a builder form against the dashboard's limits and the scenario readers.
+    """Validate a builder form against the dashboard's limits and config.parse_scenario.
 
     Expects a JSON body with the scenario builder's form fields.
 

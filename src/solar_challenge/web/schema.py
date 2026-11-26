@@ -27,8 +27,8 @@ past the schema version (D-S19-2), and a store at SCHEMA_VERSION holds only runs
 are in the current format or runs a migration reported it could not migrate. Such a store has no
 step to apply, but migrate_store still catches up each run still in an older format, such as one
 an earlier migration left once its documents are fixed, and reports again each it still cannot.
-A run's time series have no format version, and migration reads none of them, as
-migrate_stored_run_files says.
+A run's time series have no format version, and migration reads one only where a step needs it,
+as migrate_stored_run_files says.
 """
 
 import sqlite3
@@ -376,6 +376,12 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
     _carrying(2),
     _carrying(3),
     _carrying(4),
+    _carrying(5),
+    _carrying(6),
+    _carrying(7),
+    _carrying(8),
+    _carrying(9),
+    _carrying(10),
 )
 """Every step of the store's schema, in order: MIGRATIONS[N - 1] is the step to version N."""
 
@@ -609,7 +615,7 @@ def _apply_step(
                 RunDocumentsOutcome()
                 if document_step is None
                 else migrate_runs_table_documents(
-                    conn, _run_format_at(step.version - 1), document_step.version, earlier
+                    conn, data_dir, _run_format_at(step.version - 1), document_step.version, earlier
                 )
             )
             conn.execute(f"PRAGMA user_version = {step.version}")
@@ -637,7 +643,7 @@ def _bring_lagging_runs_forward(database: Database, data_dir: Path, earlier: Run
     try:
         with database.transaction() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            rows = migrate_runs_table_documents(conn, RUN_FORMAT_VERSION, RUN_FORMAT_VERSION, earlier)
+            rows = migrate_runs_table_documents(conn, data_dir, RUN_FORMAT_VERSION, RUN_FORMAT_VERSION, earlier)
     except sqlite3.Error as fault:
         raise _CatchUpRefused(fault, files) from fault
     return files + rows

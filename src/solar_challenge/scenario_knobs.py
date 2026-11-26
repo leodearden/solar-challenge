@@ -1,0 +1,247 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The settings of a scenario that a sweep or a sensitivity axis varies, each named, and the one edit that sets it."""
+
+from __future__ import annotations
+
+import dataclasses
+import typing
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, replace
+from enum import Enum
+from types import MappingProxyType
+from typing import Optional
+
+from solar_challenge.battery import BatteryConfig, has_battery
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import FlatGridServices, GridServicesEventsConfig, GridServicesModel, NoGridServices
+from solar_challenge.home import HomeConfig
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float
+
+
+class KnobTarget(Enum):
+    """The part of a scenario a knob's edit sets."""
+
+    HOMES = "each stored home"
+    SEG_RATE = "the scenario's SEG rate"
+    FINANCE = "the scenario's finance block"
+
+
+@dataclass(frozen=True)
+class Knob:
+    """A setting of a scenario that a sweep or a sensitivity axis varies.
+
+    Attributes:
+        name: The knob's canonical name, under which KNOBS holds it and
+            knob_named resolves it; it need not be the name of a field the knob edits.
+        apply: The knob's one edit, pure: a new scenario with the setting at the
+            value given, in the form (home or homes) of the scenario given, which
+            it leaves unchanged.
+        target: The part of a scenario apply edits; a consumer that reports only
+            simulated energy sweeps only HOMES knobs.
+    """
+
+    name: str
+    apply: Callable[[ScenarioConfig, float], ScenarioConfig]
+    target: KnobTarget
+
+
+def _home_knob(name: str, edit: Callable[[HomeConfig, float], HomeConfig]) -> Knob:
+    """The knob *name* that makes *edit* to each stored home of a scenario."""
+
+    def apply(scenario: ScenarioConfig, value: float) -> ScenarioConfig:
+        return scenario.map_homes(lambda home: edit(home, value))
+
+    return Knob(name, apply, target=KnobTarget.HOMES)
+
+
+def _with_pv_capacity(home: HomeConfig, kw: float) -> HomeConfig:
+    """*home* with its array's DC capacity at *kw*."""
+    return replace(home, pv_config=replace(home.pv_config, capacity_kw=kw))
+
+
+def _with_inverter_capacity(home: HomeConfig, kw: float) -> HomeConfig:
+    """*home* with its array's AC inverter capacity at *kw*."""
+    return replace(home, pv_config=replace(home.pv_config, inverter_capacity_kw=kw))
+
+
+def _with_battery_capacity(home: HomeConfig, kwh: float) -> HomeConfig:
+    """*home* with a battery of nameplate capacity *kwh*, or with none at exactly 0.
+
+    Only the capacity is set.  A battery the home has keeps its power, state of
+    charge, grid-charging and dispatch settings, so two homes at one capacity can
+    cycle different windows; a home without one gains BatteryConfig's defaults at
+    that capacity.  Any capacity above 0, however small, means a battery.
+    """
+    if not has_battery(kwh, "battery_capacity_kwh"):
+        return replace(home, battery_config=None)
+    if home.battery_config is not None:
+        return replace(home, battery_config=replace(home.battery_config, capacity_kwh=kwh))
+    return replace(home, battery_config=BatteryConfig(capacity_kwh=kwh))
+
+
+def _with_annual_consumption(home: HomeConfig, kwh: float) -> HomeConfig:
+    """*home* with its household consuming *kwh* a year."""
+    return replace(home, load_config=replace(home.load_config, annual_consumption_kwh=kwh))
+
+
+def _with_pv_degradation(home: HomeConfig, rate: float) -> HomeConfig:
+    """*home* with its array degrading at *rate* a year."""
+    return replace(home, pv_config=replace(home.pv_config, degradation_rate_per_year=rate))
+
+
+def _with_seg_rate(scenario: ScenarioConfig, rate: float) -> ScenarioConfig:
+    """*scenario* exporting at *rate* p/kWh from each home without a SEG tariff of its own; construction refuses a home whose own tariff sets another rate."""
+    return replace(scenario, seg_tariff_pence_per_kwh=rate)
+
+
+def _required_finance(scenario: ScenarioConfig, knob_name: str, field: str) -> FinanceConfig:
+    """*scenario*'s finance block, which the knob *knob_name* edits at *field*, refusing a scenario without one by the knob's, the field's and the scenario's names."""
+    if scenario.finance is None:
+        raise ConfigurationError(
+            f"Knob {knob_name!r} sets finance.{field}, but scenario {scenario.name!r} has no finance block"
+        )
+    return scenario.finance
+
+
+def _finance_knob(field: str) -> Knob:
+    """The knob that sets the FinanceConfig field *field* of a scenario's finance block."""
+
+    def apply(scenario: ScenarioConfig, value: float) -> ScenarioConfig:
+        finance = _required_finance(scenario, field, field)
+        return replace(scenario, finance=replace(finance, **{field: value}))  # type: ignore[arg-type]  # debt: ticket tkt_0RXDDPSS2PASXMGCK3XCD1FW0A
+
+    return Knob(field, apply, target=KnobTarget.FINANCE)
+
+
+_FLAT_GRID_SERVICES_KNOB = "grid_services_income_per_kw_per_year_gbp"
+
+FLAT_RATE_UNREAD_UNDER_EVENTS = (
+    f"the flat grid-services rate, {_FLAT_GRID_SERVICES_KNOB}, "
+    "which the scenario's capacity_at_events grid_services_model does not read"
+)
+"""Why the flat grid-services knob, and every flag or axis that sets it, has nothing to set under capacity-at-events pricing: the clause each such refusal quotes."""
+
+FLAT_PRICING_REMEDY = "set the scenario's finance.grid_services_model to type: flat"
+"""The form to write that each refusal of the flat rate under capacity-at-events pricing ends with."""
+
+
+def flat_rate_pricing(rate: float) -> GridServicesModel:
+    """The grid-services pricing the flat rate *rate* (£/kW/yr) stands for: NoGridServices() at exactly 0, else FlatGridServices(rate).
+
+    Raises:
+        ConfigurationError: If *rate* is not a finite number at least 0,
+            naming the flat grid-services knob.
+    """
+    income = as_finite_float(rate, _FLAT_GRID_SERVICES_KNOB, NON_NEGATIVE)
+    return NoGridServices() if income == 0 else FlatGridServices(income)
+
+
+def _with_flat_grid_services(scenario: ScenarioConfig, rate: float) -> ScenarioConfig:
+    """*scenario* priced at :func:`flat_rate_pricing` of *rate*.
+
+    Raises:
+        ConfigurationError: If *scenario* has no finance block, or its
+            finance prices capacity at events, which reads no flat rate; or
+            if flat_rate_pricing refuses *rate*.
+    """
+    finance = _required_finance(scenario, _FLAT_GRID_SERVICES_KNOB, "grid_services_model")
+    if isinstance(finance.grid_services_model, GridServicesEventsConfig):
+        raise ConfigurationError(
+            f"Scenario {scenario.name!r} cannot take {FLAT_RATE_UNREAD_UNDER_EVENTS}; {FLAT_PRICING_REMEDY}"
+        )
+    return replace(scenario, finance=replace(finance, grid_services_model=flat_rate_pricing(rate)))
+
+
+def _real_number_finance_fields() -> tuple[str, ...]:
+    """FinanceConfig's fields annotated float or Optional[float], in field order."""
+    hints = typing.get_type_hints(FinanceConfig)
+    return tuple(
+        field.name for field in dataclasses.fields(FinanceConfig) if hints[field.name] in (float, Optional[float])
+    )
+
+
+def _registry(
+    knobs: Iterable[Knob], aliases: Mapping[str, str]
+) -> tuple[Mapping[str, Knob], Mapping[str, str]]:
+    """*knobs* by name, in order, and *aliases*, each read-only.
+
+    Raises:
+        RuntimeError: Naming the names involved, if two knobs share a name, an
+            alias is a knob's name, or an alias names no knob: a defect of this
+            module, not of a scenario or a command line.
+    """
+    by_name: dict[str, Knob] = {}
+    for knob in knobs:
+        if knob.name in by_name:
+            raise RuntimeError(f"Two knobs are named {knob.name!r}")
+        by_name[knob.name] = knob
+    canonical = sorted(alias for alias in aliases if alias in by_name)
+    if canonical:
+        raise RuntimeError(f"Aliases {canonical} are knobs' canonical names")
+    dangling = sorted(f"{alias} -> {name}" for alias, name in aliases.items() if name not in by_name)
+    if dangling:
+        raise RuntimeError(f"Aliases name no knob: {', '.join(dangling)}")
+    return MappingProxyType(by_name), MappingProxyType(dict(aliases))
+
+
+KNOBS, ALIASES = _registry(
+    (
+        _home_knob("pv_capacity_kw", _with_pv_capacity),
+        _home_knob("inverter_capacity_kw", _with_inverter_capacity),
+        _home_knob("battery_capacity_kwh", _with_battery_capacity),
+        _home_knob("annual_consumption_kwh", _with_annual_consumption),
+        _home_knob("degradation_rate_per_year", _with_pv_degradation),
+        Knob("seg_tariff_pence_per_kwh", _with_seg_rate, target=KnobTarget.SEG_RATE),
+        Knob(_FLAT_GRID_SERVICES_KNOB, _with_flat_grid_services, target=KnobTarget.FINANCE),
+        *(_finance_knob(field) for field in _real_number_finance_fields()),
+    ),
+    {
+        "degradation": "degradation_rate_per_year",
+        "seg": "seg_tariff_pence_per_kwh",
+        "grid_services": _FLAT_GRID_SERVICES_KNOB,
+        "retained_floor": "retained_cash_floor_per_home_per_year_gbp",
+        "battery_cost": "battery_cost_per_kwh_gbp",
+        "pv_cost": "pv_cost_per_kwp_gbp",
+        "inverter_cost": "inverter_cost_per_kw_gbp",
+    },
+)
+"""KNOBS holds each knob under its canonical name, install and load settings first; ALIASES maps each alias to a canonical name."""
+
+
+def names_with_aliases(knobs: Iterable[Knob]) -> str:
+    """Each of *knobs*' canonical name, its aliases after it in parentheses, comma-separated in the order given."""
+    return ", ".join(_name_with_aliases(knob) for knob in knobs)
+
+
+def knob_listing() -> str:
+    """The clause naming every knob of the registry, each with its aliases, that a refusal or a help text ends with."""
+    return f"the knobs, each with its aliases: {names_with_aliases(KNOBS.values())}"
+
+
+def _name_with_aliases(knob: Knob) -> str:
+    """*knob*'s canonical name, its aliases after it in parentheses when it has any."""
+    aliases = [alias for alias, name in ALIASES.items() if name == knob.name]
+    return f"{knob.name} ({', '.join(aliases)})" if aliases else knob.name
+
+
+def _canonical_name(name: str) -> str:
+    """The canonical name *name* resolves to: an alias's knob name, else *name* itself."""
+    return ALIASES.get(name, name)
+
+
+def is_knob_name(name: str) -> bool:
+    """Whether *name* names a knob, as its canonical name or as an alias."""
+    return _canonical_name(name) in KNOBS
+
+
+def knob_named(name: str) -> Knob:
+    """The knob *name* names, as its canonical name or as an alias.
+
+    Raises:
+        ConfigurationError: If *name* names no knob, listing every knob with its aliases.
+    """
+    if not is_knob_name(name):
+        raise ConfigurationError(f"Unknown knob {name!r}; {knob_listing()}")
+    return KNOBS[_canonical_name(name)]

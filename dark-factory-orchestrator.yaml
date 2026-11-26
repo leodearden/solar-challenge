@@ -19,8 +19,8 @@ escalation:
   queue_dir: "data/escalations"
   port: 8106
 
-# Verify commands run in a fresh worktree via `uv run --locked`.
-test_command: "uv run --locked --extra dev --extra web pytest -m 'not slow' --ignore=tests/e2e"
+# Verify commands run in a fresh worktree via `uv run --locked`; restart tier.
+test_command: "uv run --locked --extra dev --extra web pytest -m 'not slow' --ignore=tests/e2e -n auto --dist loadgroup"
 lint_command: "true"
 type_check_command: "uv run --locked --extra dev --extra web mypy src/solar_challenge"
 
@@ -41,6 +41,11 @@ verify_runners:
 verify_host_policy: prefer_remote
 verify_drift_check_every_n_lands: 10
 verify_cross_check_remote_green: false
+# Caps test_command's -n auto. Uncapped, auto takes one worker per host core, and every
+# concurrent verify on the shared workstation does so at once (Leo 2026-11-24: 8).
+# Green tier: mcp__escalation__reload_config applies it with no restart.
+verify_env:
+  PYTEST_XDIST_AUTO_NUM_WORKERS: "8"
 verify_env_probes:
   - key: uv
     argv: ["uv", "--version"]

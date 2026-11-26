@@ -2,7 +2,7 @@
 """Parse the web dashboard's flat simulation-parameter dicts into engine configuration."""
 
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -13,7 +13,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
-from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
+from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
@@ -21,7 +21,13 @@ from solar_challenge.scenario_blocks import (
     parse_tariff_config,
 )
 from solar_challenge.seg import SEGTariff
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
+    MAX_WINDOW_DAYS,
+    WINDOW_DAYS,
+    days_window,
+)
 from solar_challenge.web.request_boundary import (
     refuse_unencodable_text,
     refuse_unrecognised_keys,
@@ -30,26 +36,6 @@ from solar_challenge.web.request_boundary import (
 )
 
 _HOME_CONFIG = "Home config"
-
-#: The first day of the full year that days=FULL_YEAR_DAYS_SENTINEL runs, and the date a start
-#: that is not sent reads as.
-FULL_YEAR_START = date(2024, 1, 1)
-#: The last day of the full year that days=FULL_YEAR_DAYS_SENTINEL runs, and the date an end
-#: that is not sent reads as.
-FULL_YEAR_END = date(2024, 12, 31)
-#: The days value that runs FULL_YEAR_START to FULL_YEAR_END, all MAX_WINDOW_DAYS days of the
-#: year, rather than that many days from DAYS_WINDOW_START.
-FULL_YEAR_DAYS_SENTINEL: int = 365
-#: The first day of the window a days value other than FULL_YEAR_DAYS_SENTINEL runs.
-DAYS_WINDOW_START = date(2024, 6, 1)
-
-#: The most days a simulation window may span: the full 2024 calendar year that
-#: days=FULL_YEAR_DAYS_SENTINEL and a request without dates run; rationale in
-#: docs/web-ui-design.md (Simulation window).
-MAX_WINDOW_DAYS: int = (FULL_YEAR_END - FULL_YEAR_START).days + 1
-#: The most days a body may send: FULL_YEAR_DAYS_SENTINEL, so the full year is the one
-#: year-long window days runs; rationale in docs/web-ui-design.md (Simulation window).
-MAX_DAYS: int = FULL_YEAR_DAYS_SENTINEL
 
 # Each parser's recognised top-level keys, and the value each reads as when absent.
 _DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
@@ -112,13 +98,6 @@ def _read_date(value: Any, field: str, default: date) -> date:
     return read_iso_date(value, field)
 
 
-def _days_window(days: int) -> tuple[date, date]:
-    """The window a ``days`` request runs: FULL_YEAR_START to FULL_YEAR_END for FULL_YEAR_DAYS_SENTINEL, else *days* days from DAYS_WINDOW_START."""
-    if days == FULL_YEAR_DAYS_SENTINEL:
-        return FULL_YEAR_START, FULL_YEAR_END
-    return DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=days - 1)
-
-
 def refuse_reversed_or_overlong_window(
     start: date, end: date, *, start_field: str, end_field: str
 ) -> None:
@@ -160,18 +139,22 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 
     A body sets its window in one of two ways, never both:
 
-    - ``days``: a whole number from 1 to :data:`MAX_DAYS`.
-      :data:`FULL_YEAR_DAYS_SENTINEL`, the largest, is the sentinel for the
-      full year, :data:`FULL_YEAR_START` to :data:`FULL_YEAR_END`. Any other
-      runs that many days from :data:`DAYS_WINDOW_START`, on past
-      :data:`FULL_YEAR_END` when it is longer than the rest of that year.
+    - ``days``: a whole number from 1 to
+      :data:`~solar_challenge.web.fleet_components.MAX_DAYS`, run as
+      :func:`~solar_challenge.web.fleet_components.days_window` runs it.
+      :data:`~solar_challenge.web.fleet_components.FULL_YEAR_DAYS_SENTINEL`,
+      the largest, is the sentinel for the full year,
+      :data:`~solar_challenge.timebase.DEFAULT_FIRST_DAY` to
+      :data:`~solar_challenge.timebase.DEFAULT_LAST_DAY`. Any other runs that
+      many days from :data:`~solar_challenge.timebase.SHORT_WINDOW_START`, on
+      past DEFAULT_LAST_DAY when it is longer than the rest of that year.
     - ``start`` / ``end``: ISO 8601 dates (``YYYY-MM-DD``); one not sent reads
-      as :data:`FULL_YEAR_START` / :data:`FULL_YEAR_END`.
+      as :data:`DEFAULT_FIRST_DAY` / :data:`DEFAULT_LAST_DAY`.
 
     A null ``days``, and an empty or null ``start`` or ``end``, read as not sent.
 
     Whichever way sets it, the window must end on or after its start and span
-    at most :data:`MAX_WINDOW_DAYS` days.
+    at most :data:`~solar_challenge.web.fleet_components.MAX_WINDOW_DAYS` days.
 
     Args:
         data: Parsed JSON body from the request.
@@ -191,10 +174,10 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     days = sent.pop("days", None)
     _refuse_days_with_dates(days, sent)
     if days is not None:
-        start, end = _days_window(as_whole_number(days, "days", within=Interval(1, MAX_DAYS)))
+        start, end = days_window(as_whole_number(days, "days", within=WINDOW_DAYS))
     else:
-        start = _read_date(sent.get("start"), "start", FULL_YEAR_START)
-        end = _read_date(sent.get("end"), "end", FULL_YEAR_END)
+        start = _read_date(sent.get("start"), "start", DEFAULT_FIRST_DAY)
+        end = _read_date(sent.get("end"), "end", DEFAULT_LAST_DAY)
     refuse_reversed_or_overlong_window(start, end, start_field="start", end_field="end")
     return start.isoformat(), end.isoformat()
 
@@ -263,7 +246,7 @@ def _read_efficiency(value: Any) -> float | None:
 
 
 def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryConfig | None:
-    """Read the battery a home body describes: none when ``capacity_kwh`` is 0; a negative one is refused by has_battery, naming battery_kwh.
+    """Read the battery a home body describes, its ``capacity_kwh`` read within the battery component's value_range: none when that is 0.
 
     Each setting is read whatever ``capacity_kwh`` is, so a value a battery refuses is
     refused without one too; a null setting is unset, leaving BatteryConfig's default.
@@ -275,9 +258,11 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
         settings["max_discharge_kw"] = max_discharge_kw
     round_trip = _read_efficiency(params["efficiency_pct"])
     try:
-        settings["dispatch_strategy"] = parse_dispatch_strategy_config(params["dispatch_strategy"])
+        dispatch_strategy = parse_dispatch_strategy_config(params["dispatch_strategy"])
     except ConfigurationError as exc:
         raise ValueError(str(exc)) from exc
+    if dispatch_strategy is not None:
+        settings["dispatch_strategy"] = dispatch_strategy
     if has_battery(capacity_kwh, "battery_kwh"):
         battery = BatteryConfig(capacity_kwh=capacity_kwh, **settings)
         return battery if round_trip is None else battery.with_round_trip(round_trip)
@@ -329,11 +314,10 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             heat-pump number, and the value sent), if its days, start or
             end is one parse_date_range refuses, if location is one
             read_location refuses (the error is its own refusal), if
-            battery_kwh is negative
-            (the error names battery_kwh and the value sent), if a sent
-            consumption_kwh lies outside the fleet load component's fixed
-            range (the error names consumption_kwh, the range and the value
-            sent), or if required fields are missing or invalid. The battery
+            pv_kw, battery_kwh or a sent consumption_kwh lies outside its
+            fleet component's value_range, PV's, the battery's or the load's
+            (the error names the field, the range and the value sent), or if
+            required fields are missing or invalid. The battery
             settings (max_charge_kw, max_discharge_kw, efficiency_pct and
             dispatch_strategy) are read, and refused, whatever battery_kwh
             is; a null setting reads as unset. A null system_losses also
@@ -348,9 +332,11 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     data = require_json_object(data, _HOME_CONFIG)
     refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, _HOME_CONFIG)
     params = {**_HOME_CONFIG_DEFAULTS, **data}
-    pv_kw = as_finite_float(params["pv_kw"], "pv_kw")
+    pv_kw = as_finite_float(params["pv_kw"], "pv_kw", within=FLEET_COMPONENTS["pv"].value_range)
     system_losses_setting = _system_losses_setting(params["system_losses"])
-    battery_kwh_val = as_finite_float(params["battery_kwh"], "battery_kwh")
+    battery_kwh_val = as_finite_float(
+        params["battery_kwh"], "battery_kwh", within=FLEET_COMPONENTS["battery"].value_range
+    )
     consumption_kwh_raw = params["consumption_kwh"]
     occupants = as_whole_number(params["occupants"], "occupants")
     stochastic = bool(params["stochastic"])
@@ -359,10 +345,6 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
 
     # Parse date range using shared helper
     start, end = parse_date_range(data)
-
-    # Validate inputs
-    if not (0.5 <= pv_kw <= 20.0):
-        raise ValueError(f"PV capacity must be 0.5-20 kW, got {pv_kw}")
 
     loc = read_location(params["location"])
 
@@ -381,7 +363,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     annual_consumption: float | None = None
     if consumption_kwh_raw is not None:
         annual_consumption = as_finite_float(
-            consumption_kwh_raw, "consumption_kwh", within=Interval(*FLEET_COMPONENTS["load"].fixed_range)
+            consumption_kwh_raw, "consumption_kwh", within=FLEET_COMPONENTS["load"].value_range
         )
 
     load_config = LoadConfig(

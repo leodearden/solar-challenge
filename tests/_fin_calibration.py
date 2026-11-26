@@ -49,10 +49,13 @@ from types import MappingProxyType
 
 import pandas as pd
 
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
-from solar_challenge.finance import FinanceConfig, MultiYearCurve, spreadsheet_revenue_curve
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, default_runner
+from solar_challenge.gridservices import NoGridServices
 from solar_challenge.load import LoadConfig
+from solar_challenge.projection import MultiYearCurve, spreadsheet_revenue_curve
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import make_sized_home
 from tests._seeded_tmy import ClearJuneDays
 
@@ -124,7 +127,7 @@ def make_fin_finance(*, self_consumption_override: float | None) -> FinanceConfi
         asset_life_years=25,
         own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
         retained_cash_floor_per_home_per_year_gbp=27.0,
-        grid_services_income_per_kw_per_year_gbp=0.0,
+        grid_services_model=NoGridServices(),
     )
 
 
@@ -156,9 +159,7 @@ def make_physics_column_scenario() -> ScenarioConfig:
     first_day, last_day = PHYSICS_COLUMN_DAYS.window()
     return ScenarioConfig(
         name="FIN-Physics-Column",
-        period=SimulationPeriod(
-            start_date=first_day.date().isoformat(), end_date=last_day.date().isoformat()
-        ),
+        period=SimulationWindow(first_day.date(), last_day.date(), ONE_MINUTE, home.location.timezone),
         homes=(home,) * 2,
     )
 

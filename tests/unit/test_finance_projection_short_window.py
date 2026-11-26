@@ -16,9 +16,11 @@ from collections.abc import Sequence
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.finance import householder_bill, project_multi_year
+from solar_challenge.finance import householder_bill
 from solar_challenge.fleet import FleetResults
+from solar_challenge.gridservices import FlatGridServices
 from solar_challenge.home import HomeConfig, RunPricing, calculate_summary
+from solar_challenge.projection import project_multi_year
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 
@@ -58,7 +60,7 @@ def _make_full_year_and_short_window_fleets() -> tuple:
     scenario, finance = make_scenario_and_finance(
         n_homes=2, asset_life_years=25, battery_config=battery_config
     )
-    finance = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=10.0)
+    finance = dataclasses.replace(finance, grid_services_model=FlatGridServices(10.0))
     return (
         scenario,
         finance,
@@ -138,9 +140,8 @@ class TestProjectMultiYearAnnualisesShortWindow:
             bills = [
                 householder_bill(
                     s,
-                    annual_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
+                    window_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
                     finance=finance,
-                    simulation_days=s.simulation_days,
                 )
                 for s in summaries
             ]

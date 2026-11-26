@@ -243,9 +243,9 @@ def test_a_config_value_of_a_type_its_field_cannot_be_is_refused_naming_its_path
         ),
         pytest.param(
             "summary.json",
-            _set("seg_revenue_gbp", value=-(10**400)),
-            "seg_revenue_gbp",
-            id="an-optional-summary-figure-below-every-float",
+            _set("load_energy_kwh", "household", value=-(10**400)),
+            "load_energy_kwh.household",
+            id="a-load-energy-below-every-float",
         ),
         pytest.param(
             "config.json",

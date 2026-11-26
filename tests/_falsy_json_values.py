@@ -9,10 +9,10 @@ Usage::
     from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 
     @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
-    def test_a_falsy_tariff_is_refused_naming_its_type(value: object, type_name: str) -> None:
-        refusal = re.escape(f"tariff must be a mapping, got {type_name}")
+    def test_a_falsy_pv_block_is_refused_naming_its_type(value: object, type_name: str) -> None:
+        refusal = re.escape(f"pv must be a mapping, got {type_name}")
         with pytest.raises(ValueError, match=refusal):
-            parse_home_config({**VALID_HOME_PAYLOAD, "tariff": value})
+            parse_home_config({**VALID_HOME_PAYLOAD, "pv": value})
 """
 
 import pytest

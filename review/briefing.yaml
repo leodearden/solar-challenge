@@ -121,7 +121,9 @@ conventions:
   - rule: "A battery's grid_charging is honoured or refused when its HomeConfig is built, never run and ignored: building a home whose dispatch would ignore it (a strategy that does not grid-charge, no tariff, or a tariff with no cheap period), or a battery home asking for tou_optimized with no tariff, raises ConfigurationError (tests/unit/test_grid_charge_refusals.py)"
     why: >
       Three of f44's five combinations ran and stored 0 kWh from the grid with no warning:
-      default dispatch, a battery's self_consumption, and home tou_optimized without a tariff.
+      default dispatch, a battery's self_consumption, and (before task 790 retired the home key)
+      a home's tou_optimized without a tariff, which a battery's tou_optimized on its tariff's
+      clock is today.
       The grid_charging refusals sit in build_dispatch_strategy, which HomeConfig.__post_init__
       and simulate_home both call, so a later dispatch variant states once whether it
       grid-charges; the same factory refuses tou_optimized's missing tariff, its no-clock refusal
@@ -139,15 +141,27 @@ conventions:
       times, the nominal capacity_kwh among them; reading only the Battery's answers keeps one
       definition of each limit and basis (docs/prds/dispatch-configuration-below-config.md §4).
 
-  - rule: "The day count a bill is computed over is the summaries' own (INV-8): householder_bill and bill_distribution refuse a simulation_days other than their summaries' (tests/unit/test_finance_window.py::TestDayCountIsTheSummariesOwn), and bill_distribution summaries over different windows, naming both (tests/unit/test_finance_window.py::TestOneWindowPerDistribution)"
+  - rule: "The day count a bill is computed over is the summaries' own (INV-8): householder_bill and bill_distribution take no day count and bill each summary over its own window (tests/unit/test_finance_window.py::TestDayCountIsTheSummariesOwn::test_the_summaries_own_day_count_bills), and bill_distribution refuses summaries over different windows, naming both (tests/unit/test_finance_window.py::TestOneWindowPerDistribution)"
     why: >
       householder_bill and bill_distribution used to take the day count as an argument nobody
       checked against the summaries, and cli/finance.run computed it from tz-aware midnights,
       which undercounted across the spring-forward, so a bill could annualise its summaries by a
       day count they did not cover (fk-1cd332300623). Each summary now carries the window its
-      totals cover (SummaryStatistics.window, set by calculate_summary), and finance.py checks the
-      day count in _require_summary_days and the one window in _one_window, at every use (D27
-      invariant 8; docs/prds/simulation-window-and-cadence.md, Resolved design decisions 8).
+      totals cover (SummaryStatistics.window, set by calculate_summary), so the bill functions
+      read the days from it and take none, and finance.py checks the one window in one_window
+      (D27 invariant 8; docs/prds/simulation-window-and-cadence.md, Resolved design decisions 8
+      and the lead's ruling D31).
+
+  - rule: "The dashboard's and the CLI's defaults are the engine's (INV-11): both simulate pages start each economy tariff type at tariff.PRESET_RATES' rates (tests/unit/test_web_tariff_presets.py); every CLI --start/--end option defaults to timebase.DEFAULT_FIRST_DAY's or DEFAULT_LAST_DAY's ISO string or to None, `config template home` and `config template scenario` write that pair as their period, and no module of src/solar_challenge outside timebase.py holds an ISO-date string literal (tests/unit/test_window_defaults.py); `home quick` starts at timebase.SHORT_WINDOW_START (tests/unit/test_cli_home_quick.py::test_home_quick_saves_the_minutes_from_midnight_on_the_short_window_start)"
+    why: >
+      The 2024 default window and the 2024-06-01 n-day start were restated as literals in the
+      CLI's option defaults, its optimize fallback, its config templates, home quick and
+      web/simulation_params, and each form restated the economy rates, so a change to either
+      took many independent edits that no test tied together (fk-94cab00e114e; D27 invariant 11;
+      docs/prds/dashboard-limits-and-distribution-table.md §4.2;
+      docs/prds/tariff-coverage-classifier-presets.md). β's text scan of web/static/js and
+      web/templates, W2's other half, and its page test, W3, extend the window half when they
+      land.
 
   - rule: "Every dataclass the public-API contract pins, in FROZEN_SURFACE or FROZEN_CLOSURE, is frozen, unless UNFROZEN_PINNED_DATACLASSES names it with the task that freezes it (tests/unit/test_public_api_surface.py::test_every_pinned_dataclass_is_frozen). Config and domain objects check their domain constraints in __post_init__, at construction, and must stay picklable."
     why: >
@@ -260,18 +274,34 @@ conventions:
       (the methods, classmethods, properties, class constants and instance attributes each class
       body defines or declares) are consumed by a separate, pinned repo. The contract also covers
       the classes outside __all__ that the exported surface names, directly or through another
-      such class, such as HomeConfig, SimulationResults, SimulationPeriod and GridChargeConfig:
+      such class, such as HomeConfig, SimulationResults, SimulationWindow and GridChargeConfig:
       their constructors and public members. For each class the contract covers that is a
       dataclass, the contract also covers which of the dataclass parameters eq, order,
-      unsafe_hash and frozen it sets. Each exported constant is in the contract by its
+      unsafe_hash and frozen it sets. For every class the contract covers, an Enum aside, it
+      also covers whether a positional class pattern matches its instances by the
+      constructor's positional parameters (match_args), whether they hold no __dict__ (slots)
+      and, if so, whether they take a weakref (weakref_slot). These are spelled as qualifiers
+      of the class's kind, e.g. 'dataclass[eq, frozen, match_args] (...)' or
+      'class[slots] (...)'. Each exported constant is in the contract by its
       structure, not by its type name: a mapping by its keys, in order, and the type of each
       value; a list or tuple by its length and the type of each item (task 915). Its numbers
       are data, so a changed preset rate is a change to what a public name returns, not a
       surface change. An Enum is pinned by every member name, aliases included. Other names
       importable only from submodules stay
       outside it; this refines the freeze policy in docs/prds/domain-library-extraction.md §3.1.
-      Adding, removing, renaming, or changing the signature of a public symbol or member is a
-      BREAKING CHANGE that requires a deliberate version/tag bump — never a silent edit. Each class
+      Each surface-lock failure labels each drifted entry additive or breaking, as
+      tests/_surface_forms.py's is_additive_change and is_additive_member_change classify it:
+      their _ADDITIVE_PARTS table lists the additive parts, and anything it does not prove
+      additive is breaking. An additive entry lands in its own leaf with its FROZEN_* row and its
+      release note, docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
+      A breaking entry, such as a removed, renamed or retyped name, parameter or member, lands
+      only with a deliberate version/tag bump — never a silent edit: under D29
+      (plans/review-all-program-solar_challenge-20261014.md), a leaf whose own edit prints
+      `breaking` is a held leaf for S29's release. The one exception, ruled by Leo on
+      esc-review-20261120T232056-5, is a member form change that needs no consumer edit, such as a
+      plain attribute becoming a settable property still read and assigned as before (tasks 540
+      and 1691): it lands in-leaf with its FROZEN_* row and its release note in the same commit,
+      although the lock prints it `breaking`. Each class
       the contract covers declares in its class body each public attribute it sets on its
       instances, as an annotation such as `cache_dir: Path`.
     why: >
@@ -281,7 +311,13 @@ conventions:
       DispatchStrategy.decide_action and name, and the consumption guide's own recipe calls
       WeatherCache.put. Public instance attributes are members too (task 426): the platform reads
       Battery.config and max_soc_fraction, and reads and assigns min_soc_fraction. Battery.config
-      stays a plain attribute declared as an annotation. Battery's SOC limits and efficiencies are
+      is a settable property (task 1691): assigning a BatteryConfig makes soh, soc_envelope and
+      what reads it, grid_charge_target_kwh and the power limits follow the new config before the
+      assignment returns, keeps the battery's own SOC limits, efficiencies and SOC, and refuses
+      with ConfigurationError, leaving the battery unchanged, a config whose envelope cannot be
+      built (tests/unit/test_battery.py::TestBatteryConfigAssignment). Its form is pinned by
+      tests/unit/test_public_api_surface.py::test_every_pinned_class_member_matches_frozen_members.
+      Battery's SOC limits and efficiencies are
       settable properties (task 540): their setters refuse, with ValueError, a value outside the
       bounds Battery() checks for them, and do not check a new SOC limit against the current SOC.
       Keep both: the platform assigns min_soc_fraction, and may raise the floor above the SOC, as a
@@ -289,20 +325,23 @@ conventions:
       exported surface names are in the contract too (task 505): the closure rule of
       docs/prds/domain-library-extraction.md §2 puts a frozen function's parameter and return
       types in the frozen surface, and consumers need these classes to use exported names. A
-      ScenarioConfig needs a SimulationPeriod and HomeConfigs, FleetResults.per_home_results holds
+      ScenarioConfig needs a SimulationWindow and HomeConfigs, FleetResults.per_home_results holds
       SimulationResults, and BatteryConfig takes a GridChargeConfig; the platform constructs
-      HomeConfig, SimulationPeriod, SimulationResults and GridChargeConfig. A dataclass's
+      HomeConfig, SimulationWindow, SimulationResults and GridChargeConfig. A dataclass's
       parameters are in the contract too (task 567), because they decide what a consumer can do
       with an instance: frozen whether it can assign a field (task 436 froze SimulationResults and
       had to record that break by hand, sending consumers to dataclasses.replace), eq and
       unsafe_hash how instances compare and hash, and order whether <, <=, > and >= work. The
       decorator generates these as dunders, which member forms leave out (task 404), so a
-      dataclass's class form spells them as its kind, e.g. 'dataclass[eq, frozen] (...)'. init
-      and kw_only already show in the constructor's signature, and repr is text no form pins.
-      match_args, slots and weakref_slot are not pinned yet, because CPython 3.11's
-      __dataclass_params__, which the kind is read from, does not record them. They too change
-      what a consumer can do (match_args=False breaks a positional class pattern, and slots=True
-      removes an instance's __dict__), and task 668 decides whether the contract covers them.
+      dataclass's class form spells them as its kind, e.g.
+      'dataclass[eq, frozen, match_args] (...)'. init and kw_only already show in the
+      constructor's signature, and repr is text no form pins.
+      match_args, slots and weakref_slot are in the contract too (task 668), for every class but
+      an Enum, because they change what a consumer can do with an instance: match_args=False
+      breaks `case Location(lat, lon)`, slots removes vars() and attributes set ad hoc, and
+      weakref_slot decides whether weakref.ref takes one. They are read from the class itself on
+      every admitted minor, as what its instances can do, because CPython 3.11's
+      __dataclass_params__ does not record them, and no class but a dataclass has one.
       A constant's structure is in the contract too (task 915), because the platform indexes
       the exported constants, as in SEG_PRESETS['Octopus'] or ELEXON_PROFILE_CLASS_1[47]: a
       dropped key or item breaks it while the type name stays dict or list.
@@ -321,7 +360,8 @@ conventions:
       is the isolated external-wheel install test (imports every __all__ name in a fresh
       interpreter). All three tables are spelled alike
       on every admitted Python minor, and each fails until its table edit lands, naming every
-      drifted symbol and asking for the change's release note, one file per task under
+      drifted symbol, labelled additive or breaking, and asking for an additive change's
+      release note, one file per task under
       docs/unreleased/ (docs/domain-library-consumption.md, "Changes merged since the last
       tag"), in the same commit.
       `__init__.py` is
@@ -368,6 +408,25 @@ conventions:
       into the headline own-use rate). This is the v0.4.0 "arbitrage fix"; a reviewer seeing
       _cbs_own_use_kwh diverge from self-consumption should know it's correct by design.
 
+  - rule: >
+      Home run, fleet run, finance run and optimize configs read their file through
+      config.load_scenario, validate config reads its through config.load_scenarios, and the
+      dashboard's fleet import and fleet form read theirs through config.parse_scenario. Home run,
+      fleet run, finance run and the fleet form simulate the reader's simulated_homes() over its
+      simulation_bounds(). Optimize configs simulates those homes in every field its install
+      point and the projection's ages leave alone. The --start and --end of home run, fleet run,
+      finance run and optimize configs, and the fleet form's start and end, replace only their
+      own day. Home run, fleet run, finance run, optimize configs, validate config and the fleet
+      import refuse a document the reader refuses, with the reader's message
+      (tests/integration/test_one_scenario_reader.py).
+    why: >
+      Before the one reader, each command decided for itself which top-level blocks reached the
+      homes and which window ran: fleet run dropped seg:, finance run ignored period:, home run
+      ran a fleet file's default home, and the fleet import accepted a misspelt finanse:. One
+      reader makes a file mean the same to every command, and the matrix turns a command's
+      private re-reading red instead of letting it drift
+      (docs/prds/one-scenario-reader.md §4.5).
+
   # --- Standing review invariants (recorded per /review-briefing policy) ---
   - rule: >
       TODO-tracking invariant: every real TODO/FIXME/HACK marker (and stub idioms like
@@ -410,7 +469,7 @@ subprojects:
       - "A heterogeneous 100-home fleet is generated by sampling per-component distributions (weighted-discrete / normal / uniform / shuffled-pool / proportional), run in parallel, and aggregated; aggregate totals equal the sum of per-home results."
       - "The same home is run under each dispatch strategy (self-consumption / TOU-optimised / peak-shaving) to quantify grid-import reduction and peak shaving."
       - "A home on a TOU tariff with grid-charging enabled charges the battery FROM THE GRID during cheap periods when the round-trip price spread is profitable and the battery is below target SOC (arbitrage), with grid-charge energy and cost accounted separately so the energy balance still closes."
-      - "A home with an EV (none / solar-shifted / off-peak smart charging) or a heat pump (ASHP/GSHP, outdoor-temperature-driven COP) adds the corresponding load to base demand before dispatch."
+      - "A home with an EV (none / solar-shifted / off-peak smart charging) or a heat pump (ASHP/GSHP, outdoor-temperature-driven COP) adds the corresponding load to base demand before dispatch. The results carry each load by name: SimulationResults.loads and SummaryStatistics.load_energy_kwh, keyed by demand.LoadKind."
       - "PV generation is degraded for the array's age (system_age_years × degradation_rate_per_year) inside the live simulation, so long-run yield reflects ageing."
       - "A fleet's results are passed to the community layer and netted either instantaneously P2P or through a shared community battery, with VNM £ billing — without re-simulating any home."
       - "A parameter sweep runs many fleet variants in one process pool for sensitivity analysis."
@@ -426,10 +485,10 @@ subprojects:
         why: "Work is CPU-bound numpy/pvlib; the GIL would serialise threads. Frozen dataclass configs pickle cleanly to workers; workers receive their weather in the job, a PrefetchedWeather of their home's location fetched once in the calling process, so no worker reads the cache or the network under any start method. FleetRunner's one fan-out is the only pool; a failed home's exception carries a note naming the home and its fleet, and the homes still pending are cancelled."
       - decision: "Weather is TMY-based and aligned to the simulation period by UTC month-day-time, discarding the TMY's own year; a UTC 29 February the TMY lacks repeats the TMY's 28 February, for PV and air temperature alike; hourly PV/temperature is expanded to 1-minute by forward-fill (repeat each hour's value)."
         why: "The TMY is a synthetic 'typical year', so aligning by time of year lets a sim over real dates use typical conditions; that is intentional, not a date bug. The match uses the UTC clock because the PVGIS TMY is UTC-indexed and pvlib places the sun at those UTC instants. Matching the demand's local wall clock ran BST PV output and heat-pump temperature an hour early (fixed by task 166). Forward-fill preserves hourly energy totals exactly and deliberately does NOT synthesise sub-hourly variability. Repeating 28 February is the usual TMY practice for a leap year; the former 0.0 fill gave every default (leap-year 2024) run a 29 February with no PV and 0 °C air for the heat pump (task 190)."
-      - decision: "get_tmy_data scales the PVGIS TMY's ghi, dni and dhi by one factor, so its annual GHI equals PVGIS's 2005-2020 mean at the point."
+      - decision: "PvgisTmy.get scales the PVGIS TMY's ghi, dni and dhi by one factor, so its annual GHI equals PVGIS's 2005-2020 mean at the point."
         why: "PVGIS's TMY month picks do not preserve annual irradiation, and Bristol's sat below every year (992 vs a mean of 1069 kWh/m²), so the scaling is deliberate, not a bug. With the PV model's system losses, Bristol's per-kWp yields sit inside validation's band (the default 4 kW reads about 1012 kWh/kWp under NOCT-SAM, re-measured by task 823). docs/tmy-irradiation-scaling.md has the measurements and scripts/measure_tmy_irradiation.py re-measures them; re-measure before re-flagging."
       - decision: "One dispatch engine: every dispatcher is a DispatchStrategy run through flow.simulate_timestep with one settle function and one grid-charge gate"
-        why: "Every home is dispatched by what home._dispatch_strategy_config selects, which HomeConfig.__post_init__ and simulate_home both read: the battery's own strategy when it names one (when both levels are set the battery's strategy wins, lead ruling L7), else TOUOptimizedStrategyConfig() on the tariff's clock for the home-level tou_optimized key, else self-consumption. A setting the chosen dispatch would ignore is refused when the HomeConfig is built, by build_dispatch_strategy, the factory simulate_home calls: grid_charging under self-consumption, without a tariff or on a tariff with no cheap period, and tou_optimized on the tariff's clock with no tariff; an unknown home-level dispatch_strategy is refused beside them (D3). Such homes used to run and store 0 kWh from the grid with no warning (f44). Runs stored before it load as they ran, through the stored-run format's v3 step and, for a tariff with no cheap period, its v4 step (task 839). A stored tou_optimized battery whose peak_hours reach a cheap minute of its tariff no longer loads, because no accepted configuration dispatches as it ran; `solar-challenge web migrate` names it as a run it cannot migrate. flow.simulate_timestep_tou is a one-call delegate to simulate_timestep with TOUOptimizedStrategy(tariff=tariff) until S29's bump retires it (S3 ζ); tests/unit/test_one_dispatch_engine.py pins the equivalence. There are also TWO unrelated TariffPeriod symbols (dispatch.py enum vs tariff.py dataclass). Both are intentional; don't unify them."
+        why: "One vocabulary: a battery's dispatch is its own BatteryConfig.dispatch_strategy, self_consumption when it names none (BatteryConfig's default, SelfConsumptionStrategyConfig()), which HomeConfig.__post_init__ and simulate_home both build through home._battery_strategy. HomeConfig and FleetDistributionConfig have no dispatch key: a scenario's home.dispatch_strategy, homes[i].dispatch_strategy or fleet_distribution.dispatch_strategy, of any value, is refused when it is read, naming `battery.dispatch_strategy: {strategy_type: tou_optimized}` in its place (task 790, S2 ε). A setting the chosen dispatch would ignore is refused when the HomeConfig is built, by build_dispatch_strategy, the factory simulate_home calls: grid_charging under self-consumption, without a tariff or on a tariff with no cheap period, and tou_optimized on the tariff's clock with no tariff (D3). Such homes used to run and store 0 kWh from the grid with no warning (f44). Runs stored before it load as they ran, through the stored-run format's v3 step and, for a tariff with no cheap period, its v4 step (task 839); runs stored with a home-level dispatch_strategy come forward through format v8, carried by schema version 8 (`solar-challenge web migrate`), which moves it into the home's battery. A stored tou_optimized battery whose peak_hours reach a cheap minute of its tariff no longer loads, because no accepted configuration dispatches as it ran; `solar-challenge web migrate` names it as a run it cannot migrate. There are also TWO unrelated TariffPeriod symbols (dispatch.py enum vs tariff.py dataclass). Both are intentional; don't unify them."
       - decision: "community.py is a POST-HOC aggregation layer: it consumes FleetResults' public aggregate API and does NOT re-simulate homes or feed back into per-home dispatch; fleet.py's public API is left unchanged."
         why: "Sharing is a value-allocation/aggregation layer over independently-simulated homes (matches the Energy-Local legal model). A reviewer expecting community results to influence home dispatch should know it's intentionally downstream. The community battery runs dispatch.build_dispatch_strategy with the billing tariff: it dispatches by the strategy its dispatch_strategy names, and CommunityConfig refuses a grid_charging that strategy would ignore."
       - decision: "PV degradation lives on PVConfig (system_age_years, degradation_rate_per_year), not HomeConfig; applied linearly inside simulate_pv_output."
@@ -453,11 +512,11 @@ subprojects:
 
     # (RESOLVED — no live gap) The former CommunityMetrics.sharing_mode HEURISTIC
     # ('community_battery' if the battery was active, else 'p2p') was retired by
-    # Task 86 (commit 2f0350a4, merged 2026-06-30): CommunityResults now carries an
-    # authoritative sharing_mode field (community.py:138, set at construction in
-    # community.py:300/354), and output.py reads it directly (output.py:470;
-    # docstring output.py:438). No output.py TODO remains — /review should NOT
-    # re-flag the retired heuristic.
+    # Task 86 (commit 2f0350a4, merged 2026-06-30): CommunityResults.sharing_mode is
+    # an authoritative field that simulate_community sets from
+    # CommunityConfig.sharing_mode, a property derived from community_battery, and
+    # output.compute_community_metrics copies it into CommunityMetrics.sharing_mode.
+    # No output.py TODO remains — /review should NOT re-flag the retired heuristic.
     known_gaps: []
 
     exclude:
@@ -492,20 +551,20 @@ subprojects:
       - decision: "The objective is 'minimise householder total outlay (grid import + own-use payment) SUBJECT TO CBS surplus ≥ a board floor', solving for the own-use rate — NOT 'minimise the bill'."
         why: "Minimising a free-retail-rate bill biases toward the largest install (it ignores the capex feedback). The cost-recovery objective couples capex → own-use rate → outlay, so bigger installs are penalised correctly. A reviewer seeing optimize.py rank by representative_outlay_gbp with surplus pinned at the floor should know THIS is the intended objective (a deliberate 2026-06-17 redesign)."
       - decision: "25-year economics via representative-age sim + PCHIP interpolation (forward-march, cumulative-throughput integral) rather than per-timestep dispatch instrumentation; combined calendar+cycle battery SOH."
-        why: "Keeps the projection cheap (a handful of fleet sims, not 25) while capturing degradation. Each solve_cost_recovery_rate costs one project_multi_year (3-12 fleet sims) plus one extra age-0 fleet sim for the per-home distribution."
+        why: "Keeps the projection cheap (a handful of fleet sims, not 25) while capturing degradation. Each run_cost_recovery (and so each solve_cost_recovery_rate, each optimize config and finance run's --cost-recovery) costs one projection, projection.fewest_simulated_ages(asset_life) fleet sims or more, up to MAX_NODES accepted ages; the per-home distribution bills the projection's age-0 summaries, with no extra simulation."
       - decision: "Flat per-kW grid-services and the structured capacity-at-events model COEXIST behind FinanceConfig.grid_services_model; capacity-at-events does NOT replace flat."
         why: "Flat (grid_services_income_per_kw_per_year_gbp × Σ battery max_discharge_kw) is the default, θ-safe (0.0) topper; capacity-at-events is the richer follow-on. flex.py holds reporting-only Low/Central/High bands and does NOT feed the solver — the caller passes a resolved band value into the flat field."
       - decision: "Battery own-use is billed on Basis C (see top-level conventions)."
         why: "Arbitrage-immune CBS revenue; the CBS bears the round-trip loss."
 
-    known_gaps:
-      # (RESOLVED — no live gap) The former "capacity-at-events grid-services
-      # income is memoized from the age-0 simulation" gap was retired by Task 801,
-      # which prices grid-services income from each simulated age's own fleet in
-      # project_multi_year. /review should NOT re-flag it.
-      - what: "BillDistribution.per_home_net_bill_gbp is a deprecated-but-live name that actually holds total_outlay (Task 88's F-NAME-1 explicitly left this out-of-scope; the other two sub-claims formerly bundled here — stale doc line numbers and finance.py's docstring count — were fixed by Task 88's F-DOC-4/F-DOC-5 and are dropped from this gap)."
-        why: "Doc/naming drift, not by design — confusing to a maintainer or new consumer expecting the name to match what it holds. Intentional back-compat decision to keep the name, but still worth surfacing. tracking: null"
-        tracking: null
+    # (RESOLVED — no live gap) The former "capacity-at-events grid-services
+    # income is memoized from the age-0 simulation" gap was retired by Task 801,
+    # which prices grid-services income from each simulated age's own fleet in
+    # project_multi_year. /review should NOT re-flag it.
+    # (RESOLVED — no live gap) The former "BillDistribution.per_home_net_bill_gbp
+    # holds total outlay despite its name" gap was retired by Task 941, which
+    # renamed the field per_home_total_outlay_gbp. /review should NOT re-flag it.
+    known_gaps: []
 
     # (RESOLVED — no live gap) The former "solve_cost_recovery_rate's affine
     # reconstruction can be a few pence off true breakeven under severe-loss
@@ -546,6 +605,8 @@ subprojects:
         why: "fk-484952247bb6: the job state was overwritten unchecked, finished_at was stamped whatever the status, and the save wrote 'completed' before the job reported completion, which let a later failure report a saved run failed. J3: a job reports completed only after its run row reads completed; the save, mark_run_completed and the in-memory move run under the job's cancellation lock. A failure is always reported in memory; its row write is best-effort and logged at ERROR naming the job and run, with the next start's fail_interrupted_runs as the backstop. That is the G7 waiver of docs/prds/job-events-and-sse-framing.md §15, with §3.4 as the design. The guards are tests/unit/web_jobs/test_job_transitions.py and tests/unit/test_web_run_lifecycle.py."
       - decision: "D21's limit and quiet reopen (S20 δ, task 888). A job progress stream ends at JobStreamPolicy.limit_seconds (600 s) with a named timeout event, and the browser reopens it after the policy's retry (1000 ms), resuming after the last state's id. web/sse.py's job catalogue is the stream's vocabulary: progress, completed, failed and cancelled each carry the job's whole JobState, with its snapshot version as id; timeout {limit_seconds} and untracked {job_id} carry no id; every frame carries the policy's retry. create_app builds the policy, and the progress route reads it through shared.get_job_stream_policy. static/js/job-progress-stream.js's followJobProgress is the only code that opens a job EventSource and parses its frames: the break after a timeout shows no reconnecting indicator, task 648's give-up timer stays armed, and a native error event is only ever the transport."
         why: "fk-0097b5aaa45c: a 70-minute fleet was shown failed at minute 10, when its stream reached the limit. A stream's age is a stream fact, never a job fact, so the limit ends the stream with timeout and the job goes on. fk-7eb56fda0b1c: the stream had one producer and two consumers, with no shared definition of its events; the pages now pass callbacks to the one reader and switch on the JobState's status. Task 564 removed the limit instead; D21 kept it, and D43 cancelled 564. The guards are tests/unit/test_web_sse.py, tests/unit/web_jobs/test_job_endpoints.py (B11 to B13), and the e2e tests/e2e/test_progress_tracker.py and tests/e2e/test_parameter_sweep.py (B14 to B16), whose fakes are built with sse_frame from the server's catalogue."
+      - decision: "One Dashboard per app, closed by the root that built it (S16 δ, task 889). create_app(test_config, *, jobs) takes the store lock, opens the database and the RunStorage, builds the JobManager by calling the jobs factory on that storage, and holds all four in one frozen web/dashboard.py Dashboard(storage, jobs, database, lock) under one extensions key; shared.get_storage, get_job_manager and get_database read it through dashboard_of(app). The root that built the app, `web start`'s _serve or a test's harness, calls dashboard_of(app).close(): it drops the queued jobs, waits for the running ones, then releases the store lock. There is no job-manager registry and no atexit hook. A fleet job runs its homes through its runner's simulate, reporting 'Homes k/N' as each home finishes."
+        why: "fk-7aaa879bf0ac: a module-level WeakSet registry, and an atexit hook that ran too late to drop a queued job, let `web start` shut down every manager in the process although it held its app, and tests swapped app.extensions['job_manager']. C9 (fk-e29393df0cd4; steward ruling on esc-820-3): a close that released the lock before the running jobs finished would let a second `web start` pass recovery and fail a run still being written, so close() has no wait=False arm. The guards are tests/unit/test_web_dashboard.py, tests/unit/test_web_app.py (B13), tests/unit/test_cli_web.py (B14) and tests/unit/test_web_jobs_drain_scope.py (B15)."
       - decision: "SQLite holds metadata/summaries/config; time-series go to on-disk parquet under ~/.solar-challenge/runs/<id>/; Jinja + Alpine.js (no SPA, no HTMX); compiled Tailwind (dist/style.css)."
         why: "Keeps SQLite small/fast and avoids BLOBbing arrays; a deliberate 'no SPA' stance. NOTE: compiled Tailwind means dist/style.css must be rebuilt when new utility classes are used, or they render unstyled."
       - decision: "JSON endpoints are consolidated under /api/ (api.py blueprint); the page routes in routes.py are FULL Jinja page renderers."
@@ -575,14 +636,15 @@ subprojects:
 # Treat as orientation for review, and flag any that have become outright wrong:
 #   - `import solar_challenge` is pvlib-free and fast; accessing ANY pv/weather
 #     symbol lazily triggers a heavy pvlib import (PEP-562 by design).
-#   - weather.get_tmy_data makes LIVE outbound HTTPS calls to PVGIS at call time — on a
+#   - PvgisTmy(cache).get makes LIVE outbound HTTPS calls to PVGIS at call time — on a
 #     cache miss two, the TMY and the 2005-2020 hourly series — so downstream tests
-#     must inject a WeatherCache mock. Cache files written before task 815 are ignored
+#     must pass simulations a PvgisTmy over a pre-seeded WeatherCache, or set
+#     SOLAR_CHALLENGE_WEATHER_CACHE_DIR to its directory; there is no process-wide
+#     cache to install (task 827). Cache files written before task 815 are ignored
 #     (WeatherCache key version 3), so a pre-built cache must be rebuilt with put().
 #   - FlatRateTariff is a CamelCase FACTORY FUNCTION, not a class (a documented gotcha).
 #   - Two TariffPeriod symbols: tariff.TariffPeriod (dataclass) vs dispatch.TariffPeriod
 #     (enum, re-exported as DispatchTariffPeriod). Easy to import the wrong one.
-#   - BillDistribution.per_home_net_bill_gbp holds TOTAL OUTLAY despite the name.
 #   (RESOLVED — no live gaps) The following three footguns were fixed by Task 88
 #   (commit d650077b1850a56129b1a3536c4a6811c329fbb6, merged 2026-06-30) and
 #   re-verified directly against the live files on 2026-07-04; /review should NOT

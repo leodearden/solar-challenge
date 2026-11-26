@@ -57,7 +57,8 @@ In outline:
 - **Weather.** The PVGIS TMY for `Location.bristol()`: year 1990, UTC-indexed, 8760
   hours, minimum air temperature −6.2 °C, cached as `tmy_5dc8c8bca218`. The script
   reads it through the weather cache and prints those facts, so a different TMY shows.
-  **[Amended 2026-10-03, task 285: that was the unscaled TMY. `get_tmy_data` now scales
+  **[Amended 2026-10-03, task 285: that was the unscaled TMY. `get_tmy_data`
+  (task 827 retired it; `PvgisTmy(WeatherCache()).get` serves the same year) now scales
   its irradiance by 1.078 ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)), so
   the figures here and in §4 and §6 describe the unscaled year, and the script now reads
   the scaled one; the facts it prints stay the same, since the scaling leaves the year,

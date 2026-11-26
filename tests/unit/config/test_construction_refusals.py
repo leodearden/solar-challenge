@@ -12,7 +12,7 @@ from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
+from solar_challenge.gridservices import EventWindow, FlatGridServices, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
@@ -265,28 +265,42 @@ _SEG_AND_COMMUNITY_ROWS = [
         id="scenario-seg-rate-boolean",
     ),
     pytest.param(
-        _community({"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": None}}),
+        _community({"billing": {"seg_rate_pence_per_kwh": None}}),
         "community.billing.seg_rate_pence_per_kwh",
         lambda: SEGTariff(name="", rate_pence_per_kwh=None),
         id="billing-scalar-rate-null",
     ),
     pytest.param(
-        _community({"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": True}}),
+        _community({"billing": {"seg_rate_pence_per_kwh": True}}),
         "community.billing.seg_rate_pence_per_kwh",
         lambda: SEGTariff(name="", rate_pence_per_kwh=True),
         id="billing-scalar-rate-boolean",
     ),
     pytest.param(
-        _community({"sharing_mode": "p2p", "billing": {"seg": {"rate_pence_per_kwh": True}}}),
+        _community({"billing": {"seg": {"rate_pence_per_kwh": True}}}),
         "community.billing.seg",
         lambda: SEGTariff(name="", rate_pence_per_kwh=True),
         id="billing-seg-rate-boolean",
     ),
     pytest.param(
-        _community({"sharing_mode": "p3"}),
+        _community(
+            {
+                "community_battery": {
+                    "capacity_kwh": 20.0,
+                    "dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 3.0},
+                    "grid_charging": {"target_soc_fraction": 0.9},
+                }
+            }
+        ),
         "community",
-        lambda: CommunityConfig(sharing_mode="p3"),
-        id="community-sharing-mode-unknown",
+        lambda: CommunityConfig(
+            community_battery=BatteryConfig(
+                capacity_kwh=20.0,
+                dispatch_strategy=PeakShavingStrategyConfig(3.0),
+                grid_charging=GridChargeConfig(0.9),
+            ),
+        ),
+        id="community-battery-grid-charging-without-a-billing-tariff",
     ),
 ]
 
@@ -298,17 +312,21 @@ def _finance(block: dict[str, Any]) -> Callable[[], object]:
 
 _STANDING_CHARGE = {"standing_charge_pence_per_day": 60.0}
 
-_PRICED_AT_EVENTS = {**_STANDING_CHARGE, "grid_services_model": "capacity_at_events"}
 
 _EVENT_WINDOW = {"months": [1, 2], "weekdays": [0, 1], "hours": [17, 18], "events_per_year": 5, "event_hours": 2.0}
+
+
+def _priced_at_events(events_block: dict[str, object]) -> dict[str, object]:
+    """A finance block whose grid_services_model block prices capacity at events, setting *events_block*'s keys."""
+    return {**_STANDING_CHARGE, "grid_services_model": {"type": "capacity_at_events", **events_block}}
 
 
 def _event_window_row(key: str, value: object, row_id: str) -> Any:
     """The row of a finance block priced at events whose one event window sets *key* to *value*, which EventWindow refuses."""
     window = {**_EVENT_WINDOW, key: value}
     return pytest.param(
-        _finance({**_PRICED_AT_EVENTS, "grid_services_events": {"event_windows": [window]}}),
-        "finance.grid_services_events.event_windows[0]",
+        _finance(_priced_at_events({"event_windows": [window]})),
+        "finance.grid_services_model.event_windows[0]",
         lambda: EventWindow(**window),
         id=row_id,
     )
@@ -322,21 +340,21 @@ _FINANCE_ROWS = [
         id="finance-vat-rate-boolean",
     ),
     pytest.param(
-        _finance({**_STANDING_CHARGE, "grid_services_model": 5}),
-        "finance",
-        lambda: FinanceConfig(**_STANDING_CHARGE, grid_services_model=5),
-        id="finance-grid-services-model-a-number",
+        _finance({**_STANDING_CHARGE, "grid_services_model": {"type": "flat", "income_per_kw_per_year_gbp": True}}),
+        "finance.grid_services_model",
+        lambda: FlatGridServices(income_per_kw_per_year_gbp=True),
+        id="flat-rate-boolean",
     ),
     pytest.param(
-        _finance({**_PRICED_AT_EVENTS, "grid_services_events": {"aggregator_share": True}}),
-        "finance.grid_services_events",
+        _finance(_priced_at_events({"aggregator_share": True})),
+        "finance.grid_services_model",
         lambda: GridServicesEventsConfig(aggregator_share=True),
         id="events-aggregator-share-boolean",
     ),
     pytest.param(
-        _finance({**_PRICED_AT_EVENTS, "grid_services_events": {"band": 5}}),
-        "finance.grid_services_events",
-        lambda: GridServicesEventsConfig(band=5),
+        _finance(_priced_at_events({"band": 5})),
+        "finance.grid_services_model",
+        lambda: GridServicesEventsConfig(band=5),  # type: ignore[arg-type]
         id="events-band-a-number",
     ),
     _event_window_row("event_hours", math.inf, "event-window-hours-infinite"),

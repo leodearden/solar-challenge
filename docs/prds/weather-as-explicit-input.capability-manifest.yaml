@@ -135,9 +135,9 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "simulate_home\\(home_config, start_date, end_date\\)"
+          pattern: "runner\\.simulate_home\\(home_config, start_date, end_date\\)"
           paths: ["src/solar_challenge/cli/home.py"]
-          expect: absent
+          expect: present
       - name: "job-manager-default-simulator-gone"
         binding: "grep:web/jobs.py::JobManager.__init__ simulate_home: HomeSimulator = _default_simulate_home today"
         verdict: PASS
@@ -151,7 +151,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "default_weather\\(\\)"
+          pattern: "default_runner\\(\\)"
           paths: ["src/solar_challenge/web/app.py"]
           expect: present
       - name: "missing-weather-refused"

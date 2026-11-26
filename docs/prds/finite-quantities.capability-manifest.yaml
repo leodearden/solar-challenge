@@ -169,7 +169,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "not 0\\.0 <?= value < math\\.inf"
+          pattern: "_(positive|non_negative)_fields|not 0\\.0 <?= value < math\\.inf:"
           paths: ["src/solar_challenge/finance.py"]
           expect: absent
       - name: "community-billing-rate-read"
@@ -337,7 +337,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "float\\(data\\.get\\(\"(min|max)\""
+          pattern: "(^|[^_[:alnum:]])float\\(data\\.get\\(\"(min|max)\""
           paths: ["src/solar_challenge/web/"]
           expect: absent
       - name: "pv-field-pre-read-comment-deleted"

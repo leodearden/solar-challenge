@@ -4,6 +4,7 @@
 import json
 import re
 import warnings
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -13,16 +14,25 @@ import yaml
 from solar_challenge.config import (
     detect_fleet_sweep_spec,
     load_fleet_config,
+    load_scenario,
+    load_scenarios,
     parse_fleet_config,
+    parse_scenario,
     parse_sweep_fleet_configs,
+    parse_sweep_scenarios,
+    sweep_point_fleet,
+    sweep_value_labels,
 )
-from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
+from solar_challenge.dispatch import GridChargeConfig, SelfConsumptionStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig
-from solar_challenge.fleet_distribution import SweepSpec
+from solar_challenge.fleet_distribution import FleetFieldPath, SweepSpec, swept_parameter_path
 from solar_challenge.pv import calculate_degradation_factor
+from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+from tests._misplaced_sweeps import misplaced_sweep_refusal, sweep_moved_to
 from tests._repository_paths import SCENARIOS_DIR
+from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
 
 def _assert_refused_naming_tou_optimized_and_the_tariff(read: Callable[[], object]) -> None:
@@ -63,10 +73,9 @@ class TestLoadFleetConfig:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(
-            ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
-        ):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "the top level: requires the scenario's homes, from exactly one of 'home', 'homes', 'fleet_distribution'"
 
     def test_a_location_block_without_its_longitude_is_refused_naming_it(
         self, tmp_path: Path
@@ -95,8 +104,49 @@ fleet_distribution:
         path = tmp_path / "fleet.yaml"
         path.write_text(yaml_content)
 
-        with pytest.raises(ConfigurationError, match=re.escape("location.longitude")):
+        with pytest.raises(ConfigurationError, match=re.escape("location: requires 'longitude'")):
             load_fleet_config(path)
+
+
+_A_HOME = {"pv": {"capacity_kw": 4.0}}
+
+
+def _fleet_loaded(tmp_path: Path, document: Mapping[str, Any]) -> FleetConfig:
+    """The fleet load_fleet_config reads from *document*, written as YAML."""
+    path = tmp_path / "fleet.yaml"
+    path.write_text(yaml.safe_dump(dict(document)))
+    return load_fleet_config(path)
+
+
+class TestLoadFleetConfigReadsTheScenariosTopLevelBlocks:
+    """load_fleet_config is the fleet projection of parse_scenario: every home gets the file's tariff and SEG rate, and every top-level key is read or refused."""
+
+    def test_a_homes_file_gives_every_home_its_top_level_tariff(self, tmp_path: Path) -> None:
+        fleet = _fleet_loaded(tmp_path, {"tariff": {"type": "economy_7"}, "homes": [_A_HOME, {}]})
+
+        assert [home.tariff_config for home in fleet.homes] == [TariffConfig.economy_7()] * 2
+
+    @pytest.mark.parametrize(
+        "homes",
+        [
+            pytest.param({"homes": [_A_HOME, {}]}, id="homes"),
+            pytest.param({"fleet_distribution": {"n_homes": 2, "pv": {"capacity_kw": 4.0}}}, id="fleet_distribution"),
+        ],
+    )
+    def test_every_home_exports_at_the_files_seg_rate(self, tmp_path: Path, homes: dict[str, Any]) -> None:
+        fleet = _fleet_loaded(tmp_path, {"seg": {"rate_pence_per_kwh": 15.0}, **homes})
+
+        assert [home.seg_tariff for home in fleet.homes] == [SEGTariff("", 15.0)] * 2
+
+    def test_a_top_level_key_no_scenario_reads_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigurationError, match=re.escape("the top level: unrecognised keys 'finanse'")):
+            _fleet_loaded(tmp_path, {"finanse": {}, "homes": [_A_HOME]})
+
+    def test_a_home_document_loads_as_a_one_home_fleet_named_by_its_name(self, tmp_path: Path) -> None:
+        fleet = _fleet_loaded(tmp_path, {"name": "Solo", "home": _A_HOME})
+
+        assert fleet.name == "Solo"
+        assert [home.pv_config.capacity_kw for home in fleet.homes] == [4.0]
 
 
 class TestBristolPhase1Scenario:
@@ -272,10 +322,9 @@ fleet_distribution:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(
-            ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
-        ):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "the top level: requires the scenario's homes, from exactly one of 'home', 'homes', 'fleet_distribution'"
 
     def test_load_fleet_empty_homes_list_raises(self, tmp_path: Path) -> None:
         """Test that empty homes list raises error."""
@@ -283,8 +332,9 @@ fleet_distribution:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(ConfigurationError, match="cannot be empty"):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "homes: must list at least one home"
 
 
 class TestBristolPhase1DistributionEquivalence:
@@ -404,11 +454,12 @@ fleet_distribution:
     capacity_kw: 4.0
   battery:
     capacity_kwh: 5.0
+    dispatch_strategy:
+      strategy_type: tou_optimized
     grid_charging:
       target_soc_fraction: 0.9
   load:
     annual_consumption_kwh: 3400
-  dispatch_strategy: tou_optimized
 tariff:
   type: economy_7
   off_peak_rate: 0.09
@@ -425,56 +476,40 @@ tariff:
             assert home.battery_config.grid_charging is not None, "grid_charging should be threaded"
             assert home.battery_config.grid_charging.target_soc_fraction == 0.9
 
-    def test_fleet_yaml_dispatch_strategy_threaded(self, tmp_path: Path) -> None:
-        """fleet_distribution.dispatch_strategy: tou_optimized threads to all homes via load_fleet_config, beside the tariff it dispatches by."""
-        yaml_content = """
-name: Dispatch Strategy Threading Test
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param("tou_optimized", id="tou_optimized"),
+            pytest.param("greedy", id="greedy"),
+            pytest.param("null", id="null"),
+            pytest.param("tou-optimised", id="misspelt"),
+        ],
+    )
+    def test_a_fleet_level_dispatch_strategy_is_refused_naming_the_batterys(
+        self, tmp_path: Path, dispatch_strategy: str
+    ) -> None:
+        """The dispatch strategy is the battery's own setting, so a fleet_distribution that sets one, of any value, is refused naming where it goes."""
+        path = tmp_path / "fleet.yaml"
+        path.write_text(f"""
+name: Retired Dispatch Strategy Test
 fleet_distribution:
-  n_homes: 4
-  seed: 11
+  n_homes: 2
+  seed: 42
   pv:
     capacity_kw: 4.0
   battery:
     capacity_kwh: 5.0
   load:
     annual_consumption_kwh: 3400
-  dispatch_strategy: tou_optimized
+  dispatch_strategy: {dispatch_strategy}
 tariff:
   type: economy_7
-"""
-        path = tmp_path / "fleet.yaml"
-        path.write_text(yaml_content)
+""")
 
-        fleet = load_fleet_config(path)
-        assert len(fleet.homes) == 4
-        for home in fleet.homes:
-            assert home.dispatch_strategy == "tou_optimized", (
-                "dispatch_strategy should be threaded from YAML to every home"
-            )
-
-    def test_fleet_yaml_no_dispatch_strategy_defaults_greedy(self, tmp_path: Path) -> None:
-        """fleet YAML without dispatch_strategy key: all homes default to dispatch_strategy='greedy'."""
-        yaml_content = """
-name: Dispatch Strategy Default Guard
-fleet_distribution:
-  n_homes: 4
-  seed: 22
-  pv:
-    capacity_kw: 4.0
-  battery:
-    capacity_kwh: 5.0
-  load:
-    annual_consumption_kwh: 3400
-"""
-        path = tmp_path / "fleet.yaml"
-        path.write_text(yaml_content)
-
-        fleet = load_fleet_config(path)
-        assert len(fleet.homes) == 4
-        for home in fleet.homes:
-            assert home.dispatch_strategy == "greedy", (
-                "dispatch_strategy must default to 'greedy' when key is absent"
-            )
+        with pytest.raises(
+            ConfigurationError, match=retired_dispatch_strategy_refusal("fleet_distribution.dispatch_strategy")
+        ):
+            load_fleet_config(path)
 
     def test_theta_calibration_regression_no_tariff_no_grid_charging(self, tmp_path: Path) -> None:
         """θ regression pin: fleet YAML without tariff: or grid_charging is bit-identical (both None).
@@ -500,8 +535,7 @@ seg:
 finance:
   loan_term_years: 15
   loan_rate: 0.05
-  equity_share: 0.20
-  capex_per_home_gbp: 3000
+  equity_fraction: 0.20
   standing_charge_pence_per_day: 60.0
 """
         path = tmp_path / "fleet.yaml"
@@ -517,52 +551,6 @@ finance:
             assert home.battery_config.grid_charging is None, (
                 "grid_charging must be None when no battery.grid_charging key is present"
             )
-
-    def test_fleet_yaml_invalid_dispatch_strategy_raises(self, tmp_path: Path) -> None:
-        """A typo in fleet_distribution.dispatch_strategy raises ConfigurationError.
-
-        Catches config errors early rather than silently falling back to
-        self-consumption at simulation time (e.g. 'tou-optimised' instead of
-        'tou_optimized').
-        """
-        yaml_content = """
-name: Invalid Strategy Test
-fleet_distribution:
-  n_homes: 2
-  seed: 42
-  pv:
-    capacity_kw: 4.0
-  battery:
-    capacity_kwh: 5.0
-  load:
-    annual_consumption_kwh: 3400
-  dispatch_strategy: tou-optimised
-"""
-        path = tmp_path / "fleet.yaml"
-        path.write_text(yaml_content)
-
-        with pytest.raises(ConfigurationError, match="tou-optimised"):
-            load_fleet_config(path)
-
-    def test_dispatch_strategy_tou_without_tariff_is_refused(self, tmp_path: Path) -> None:
-        """tou_optimized dispatches each battery by the file's tariff, so a fleet of batteries without a tariff: block is refused."""
-        yaml_content = """
-name: TOU No Tariff Test
-fleet_distribution:
-  n_homes: 2
-  seed: 42
-  pv:
-    capacity_kw: 4.0
-  battery:
-    capacity_kwh: 5.0
-  load:
-    annual_consumption_kwh: 3400
-  dispatch_strategy: tou_optimized
-"""
-        path = tmp_path / "fleet.yaml"
-        path.write_text(yaml_content)
-
-        _assert_refused_naming_tou_optimized_and_the_tariff(lambda: load_fleet_config(path))
 
 
 class TestLoadFleetConfigBatteryDispatchStrategy:
@@ -606,15 +594,15 @@ fleet_distribution:
         for battery in with_battery:
             assert battery.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 21),))
 
-    def test_a_fleet_battery_block_without_dispatch_strategy_gives_its_batteries_none(
+    def test_a_fleet_battery_block_without_dispatch_strategy_gives_its_batteries_self_consumption(
         self, tmp_path: Path
     ) -> None:
-        """Pins the default the new key leaves alone; it passes before the key exists too."""
+        """A battery that names no strategy dispatches self_consumption, BatteryConfig's default."""
         fleet = self._load_fleet(tmp_path, None)
 
         with_battery = [home.battery_config for home in fleet.homes if home.battery_config is not None]
         assert len(with_battery) == 2, "premise: the pool gives two homes a battery"
-        assert all(battery.dispatch_strategy is None for battery in with_battery)
+        assert all(battery.dispatch_strategy == SelfConsumptionStrategyConfig() for battery in with_battery)
 
     @pytest.mark.parametrize(
         ("dispatch_strategy", "reason"),
@@ -752,21 +740,92 @@ def _proportional_to_pv(multiplier: object) -> dict[str, object]:
 
 
 def _fleet_file(capacity_kwh: object, **top_level_blocks: object) -> dict[str, Any]:
-    """A fleet file of two tou_optimized homes with _PV_KW of PV and a battery of *capacity_kwh* that grid-charges to 0.9, beside *top_level_blocks*."""
+    """A fleet file of two homes with _PV_KW of PV and a battery of *capacity_kwh* that dispatches tou_optimized on the tariff's clock and grid-charges to 0.9, beside *top_level_blocks*."""
     return {
         "fleet_distribution": {
             "n_homes": 2,
             "seed": 7,
             "pv": {"capacity_kw": _PV_KW},
             "load": {"annual_consumption_kwh": 3400},
-            "dispatch_strategy": "tou_optimized",
             "battery": {
+                "dispatch_strategy": {"strategy_type": "tou_optimized"},
                 "grid_charging": {"target_soc_fraction": 0.9},
                 "capacity_kwh": capacity_kwh,
             },
         },
         **top_level_blocks,
     }
+
+
+class TestParseSweepScenarios:
+    """parse_sweep_scenarios builds each point of a fleet file's sweep as load_scenario reads that point's file."""
+
+    def test_every_sweep_points_scenario_is_the_scenario_load_scenario_reads_at_that_point(
+        self, tmp_path: Path
+    ) -> None:
+        top_level_blocks = {
+            "name": "Sweep street",
+            "period": {"start_date": "2024-06-01", "end_date": "2024-06-07"},
+            "tariff": _ECONOMY_7,
+            "seg": {"rate_pence_per_kwh": 4.1},
+        }
+        sweep = {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"}
+
+        points = parse_sweep_scenarios(_fleet_file(_proportional_to_pv(sweep), **top_level_blocks))
+
+        assert [value for value, _ in points] == [1.25, 2.5]
+        for value, scenario in points:
+            fixed_capacity_file = tmp_path / f"fleet-{value}.yaml"
+            fixed_capacity_file.write_text(
+                yaml.safe_dump(_fleet_file(_PV_KW * value, **top_level_blocks))
+            )
+            assert (scenario.window().first_day, scenario.window().last_day) == (
+                date(2024, 6, 1),
+                date(2024, 6, 7),
+            )
+            assert scenario == load_scenario(fixed_capacity_file)
+
+
+class TestSweepValueLabels:
+    """sweep_value_labels names each point of a sweep at four decimals, or at the fewest more that tell its distinct values apart."""
+
+    def test_values_four_decimals_tell_apart_are_labelled_at_four(self) -> None:
+        assert sweep_value_labels((5.0, 10.0)) == ("5.0000", "10.0000")
+
+    def test_values_four_decimals_do_not_tell_apart_are_labelled_at_the_fewest_more_that_do(self) -> None:
+        assert sweep_value_labels((0.0001, 0.000125, 0.00015)) == ("0.00010", "0.00013", "0.00015")
+
+    def test_a_fine_degradation_sweep_labels_each_point_apart_and_near_its_value(self) -> None:
+        """A 41-step sweep from 0.004 to 0.006 steps by 5e-5, which four decimals cannot tell apart."""
+        values = SweepSpec(min=0.004, max=0.006, steps=41, mode="linear").get_values()
+
+        labels = sweep_value_labels(values)
+
+        assert len(set(labels)) == 41
+        assert [
+            (label, value) for label, value in zip(labels, values, strict=True) if abs(float(label) - value) > 5e-6
+        ] == []
+
+    def test_equal_values_share_a_label(self) -> None:
+        assert sweep_value_labels((1.0, 1.0)) == ("1.0000", "1.0000")
+
+    @pytest.mark.parametrize(
+        ("values", "labels"),
+        [
+            pytest.param((1e-300, 2e-300), ("1e-300", "2e-300"), id="tiny"),
+            pytest.param((1e30, 2e30), ("1e+30", "2e+30"), id="huge"),
+        ],
+    )
+    def test_values_whose_fixed_point_labels_would_outrun_a_floats_repr_are_labelled_by_repr(
+        self, values: tuple[float, ...], labels: tuple[str, ...]
+    ) -> None:
+        """No label is longer than a float's repr, so each fits in the CSV file name fleet sweep writes."""
+        assert sweep_value_labels(values) == labels
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"])
+    def test_a_value_that_is_not_finite_is_refused_naming_it(self, value: float) -> None:
+        with pytest.raises(ConfigurationError, match=re.escape(f"values[1] must be a finite number, got {value!r}")):
+            sweep_value_labels((1.0, value, float("nan")))
 
 
 class TestParseSweepFleetConfigs:
@@ -786,9 +845,10 @@ class TestParseSweepFleetConfigs:
         assert [value for value, _ in points] == [1.25, 2.5]
         for _, fleet in points:
             for home in fleet.homes:
+                assert home.seg_tariff == SEGTariff("", 4.1)
                 assert home.tariff_config == TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
-                assert home.dispatch_strategy == "tou_optimized"
                 assert home.battery_config is not None
+                assert home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig()
                 assert home.battery_config.grid_charging == GridChargeConfig(target_soc_fraction=0.9)
         for value, fleet in points:
             fixed_capacity_file = tmp_path / f"fleet-{value}.yaml"
@@ -796,6 +856,36 @@ class TestParseSweepFleetConfigs:
                 yaml.safe_dump(_fleet_file(_PV_KW * value, **top_level_blocks))
             )
             assert fleet.homes == load_fleet_config(fixed_capacity_file).homes
+
+    def test_every_sweep_points_fleet_is_the_sweep_point_fleet_of_its_scenario(self) -> None:
+        """`validate config` reads a sweep's fleets here, and `fleet sweep` simulates sweep_point_fleet of each point parse_sweep_scenarios builds, so both see the same homes under the same names."""
+        sweep = {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"}
+        document = _fleet_file(_proportional_to_pv(sweep), tariff=_ECONOMY_7, seg={"rate_pence_per_kwh": 4.1})
+
+        fleets = parse_sweep_fleet_configs(document)
+
+        swept_parameter = swept_parameter_path(FleetFieldPath("battery", "capacity_kwh"))
+        points = parse_sweep_scenarios(document)
+        assert fleets == [
+            (value, sweep_point_fleet(swept_parameter, label, scenario))
+            for label, (value, scenario) in zip(sweep_value_labels([v for v, _ in points]), points, strict=True)
+        ]
+        assert [fleet.name for _, fleet in fleets] == [
+            "battery.capacity_kwh.multiplier=1.2500",
+            "battery.capacity_kwh.multiplier=2.5000",
+        ]
+
+    def test_points_closer_than_four_decimals_are_named_at_the_fewest_more_that_tell_them_apart(self) -> None:
+        """Three points 5e-5 apart would share the name ...=1.0000 at four decimals, so each is named at five."""
+        sweep = {"type": "sweep", "min": 1.0, "max": 1.0001, "steps": 3, "mode": "linear"}
+
+        fleets = parse_sweep_fleet_configs(_fleet_file(_proportional_to_pv(sweep), tariff=_ECONOMY_7))
+
+        assert [fleet.name for _, fleet in fleets] == [
+            "battery.capacity_kwh.multiplier=1.00000",
+            "battery.capacity_kwh.multiplier=1.00005",
+            "battery.capacity_kwh.multiplier=1.00010",
+        ]
 
     @pytest.mark.parametrize(
         ("document", "refusal"),
@@ -805,17 +895,42 @@ class TestParseSweepFleetConfigs:
                     _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
                     tariff={"type": "economy_8"},
                 ),
-                re.escape("Unknown tariff type 'economy_8'"),
+                re.escape("tariff.type: unknown tariff type 'economy_8'; supported types: "),
                 id="a-tariff-the-loader-refuses",
             ),
             pytest.param(
                 {"homes": [{"pv": {"capacity_kw": _PV_KW}}]},
-                "fleet_distribution",
+                re.escape("the top level: requires 'fleet_distribution'"),
                 id="no-fleet-distribution",
             ),
             pytest.param(
+                {"name": "no homes"},
+                re.escape("the top level: requires 'fleet_distribution'"),
+                id="no-homes-source",
+            ),
+            pytest.param(
+                {
+                    **_fleet_file(_proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3})),
+                    "homes": [{"pv": {"capacity_kw": _PV_KW}}],
+                },
+                re.escape("the top level: sets 'homes', 'fleet_distribution', but a scenario's homes come from exactly one of "),
+                id="a-second-homes-source",
+            ),
+            pytest.param(
+                _fleet_file(
+                    _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
+                    tariff=_ECONOMY_7,
+                    finanse={},
+                ),
+                re.escape("the top level: unrecognised keys 'finanse'"),
+                id="a-key-no-scenario-reads",
+            ),
+            pytest.param(
                 _fleet_file(5.0, tariff=_ECONOMY_7),
-                "No sweep specification found",
+                re.escape(
+                    "fleet_distribution: holds no sweep: "
+                    "give battery.capacity_kwh a proportional_to whose multiplier has type: sweep"
+                ),
                 id="no-sweep",
             ),
         ],
@@ -833,10 +948,13 @@ class TestParseSweepFleetConfigs:
             tariff=_ECONOMY_7,
         )
 
-        sweep_spec = detect_fleet_sweep_spec(document)
+        found = detect_fleet_sweep_spec(document)
 
+        assert found is not None
+        placement, sweep_spec = found
+        assert placement == ("battery", "capacity_kwh")
         assert sweep_spec == SweepSpec(min=0.5, max=2.0, steps=3)
-        assert [value for value, _ in parse_sweep_fleet_configs(document)] == sweep_spec.get_values()
+        assert tuple(value for value, _ in parse_sweep_fleet_configs(document)) == sweep_spec.get_values()
 
     @pytest.mark.parametrize(
         "document",
@@ -853,6 +971,96 @@ class TestParseSweepFleetConfigs:
             parse_sweep_fleet_configs(document)
 
 
+def _written_to(tmp_path: Path, document: Mapping[str, Any]) -> Path:
+    """*document* written as a YAML file under *tmp_path*."""
+    path = tmp_path / "fleet.yaml"
+    path.write_text(yaml.safe_dump(dict(document)))
+    return path
+
+
+# Each reader of one fleet, given the document and a directory to write it to as a file.
+_ONE_FLEET_READERS = (
+    pytest.param(lambda document, tmp_path: parse_fleet_config(document), id="parse_fleet_config"),
+    pytest.param(lambda document, tmp_path: parse_scenario(document), id="parse_scenario"),
+    pytest.param(lambda document, tmp_path: load_fleet_config(_written_to(tmp_path, document)), id="load_fleet_config"),
+    pytest.param(lambda document, tmp_path: load_scenario(_written_to(tmp_path, document)), id="load_scenario"),
+)
+
+
+class TestASweepDocumentIsReadOnlyAsASweep:
+    """A document whose fleet sweeps is read only by the sweep readers: a one-fleet reader refuses it, naming the sweep's placement and `fleet sweep`, and every reader refuses a sweep off battery.capacity_kwh."""
+
+    @pytest.mark.parametrize("read", _ONE_FLEET_READERS)
+    def test_a_one_fleet_reader_refuses_a_sweep_document_naming_its_placement_and_fleet_sweep(
+        self, tmp_path: Path, read: Callable[[Mapping[str, Any], Path], object]
+    ) -> None:
+        document = _fleet_file(
+            _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}), tariff=_ECONOMY_7
+        )
+
+        with pytest.raises(ConfigurationError) as refused:
+            read(document, tmp_path)
+
+        assert str(refused.value) == (
+            "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points, "
+            "so the file defines one fleet per point; run it with 'fleet sweep'"
+        )
+
+    @pytest.mark.parametrize(
+        ("read", "scenario_path"),
+        [
+            pytest.param(
+                lambda scenario, tmp_path: parse_fleet_config({"scenario": scenario}),
+                "scenario",
+                id="parse_fleet_config-scenario-block",
+            ),
+            pytest.param(
+                lambda scenario, tmp_path: load_scenario(_written_to(tmp_path, {"scenario": scenario})),
+                "scenario",
+                id="load_scenario-scenario-block",
+            ),
+            pytest.param(
+                lambda scenario, tmp_path: load_scenarios(_written_to(tmp_path, {"scenarios": [scenario]})),
+                "scenarios[0]",
+                id="load_scenarios-scenarios-entry",
+            ),
+        ],
+    )
+    def test_a_nested_sweep_is_refused_saying_fleet_sweep_reads_the_scenario_as_a_file_of_its_own(
+        self, tmp_path: Path, read: Callable[[Mapping[str, Any], Path], object], scenario_path: str
+    ) -> None:
+        scenario = _fleet_file(
+            _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}), tariff=_ECONOMY_7
+        )
+
+        with pytest.raises(ConfigurationError) as refused:
+            read(scenario, tmp_path)
+
+        assert str(refused.value) == (
+            f"{scenario_path}.fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points, "
+            "but only a bare scenario document's top-level fleet_distribution sweeps: "
+            "give the scenario a file of its own, unwrapped, and run that with 'fleet sweep'"
+        )
+        assert len(parse_sweep_fleet_configs(scenario)) == 3
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(parse_fleet_config, id="parse_fleet_config"),
+            pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
+            pytest.param(parse_sweep_scenarios, id="parse_sweep_scenarios"),
+            pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+        ],
+    )
+    def test_each_document_reader_refuses_a_misplaced_sweep_naming_its_path_and_the_placement(
+        self, read: Callable[[object], object]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            read(sweep_moved_to("battery", "max_charge_kw"))
+
+        assert str(refused.value) == misplaced_sweep_refusal("fleet_distribution.battery.max_charge_kw")
+
+
 # Each document-level reader of a fleet_distribution file, with the battery capacity_kwh of
 # a file it reads: a fixed capacity, or a three-point sweep.
 _FLEET_DISTRIBUTION_READERS = (
@@ -865,27 +1073,50 @@ _FLEET_DISTRIBUTION_READERS = (
 )
 
 
-class TestFleetDistributionFileReaders:
-    """parse_fleet_config and parse_sweep_fleet_configs read a fleet_distribution file's top-level blocks alike: location:, then fleet_distribution:, then tariff:."""
+# The document-level readers of a fleet_distribution file's top-level blocks, sweep detection
+# included, with the battery capacity_kwh of a file each reads.
+_FLEET_DISTRIBUTION_TOP_LEVEL_READERS = (
+    *_FLEET_DISTRIBUTION_READERS,
+    pytest.param(detect_fleet_sweep_spec, 5.0, id="detect_fleet_sweep_spec-no-sweep"),
+    pytest.param(
+        detect_fleet_sweep_spec,
+        _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
+        id="detect_fleet_sweep_spec-a-sweep",
+    ),
+)
 
-    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
+
+class TestFleetDistributionFileReaders:
+    """parse_fleet_config, parse_sweep_fleet_configs and detect_fleet_sweep_spec read a fleet_distribution file's top-level blocks alike, in parse_scenario's order: its keys, location:, then tariff:, then fleet_distribution:."""
+
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_TOP_LEVEL_READERS)
+    def test_a_file_refused_on_every_block_is_refused_on_a_key_no_scenario_reads(
+        self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
+    ) -> None:
+        document = _fleet_file(capacity_kwh, location={"latitud": 51.45}, tariff={"type": "economy_8"}, finanse={})
+        document["fleet_distribution"]["n_homez"] = 2
+
+        with pytest.raises(ConfigurationError, match="the top level: unrecognised keys 'finanse'"):
+            read(document)
+
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_TOP_LEVEL_READERS)
     def test_a_file_refused_on_every_block_is_refused_on_its_location(
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:
         document = _fleet_file(capacity_kwh, location={"latitud": 51.45}, tariff={"type": "economy_8"})
         document["fleet_distribution"]["n_homez"] = 2
 
-        with pytest.raises(ConfigurationError, match="Unrecognised keys in location: 'latitud'"):
+        with pytest.raises(ConfigurationError, match="location: unrecognised keys 'latitud'"):
             read(document)
 
-    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
-    def test_a_file_refused_on_its_fleet_distribution_and_tariff_is_refused_on_its_fleet_distribution(
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_TOP_LEVEL_READERS)
+    def test_a_file_refused_on_its_fleet_distribution_and_tariff_is_refused_on_its_tariff(
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:
         document = _fleet_file(capacity_kwh, tariff={"type": "economy_8"})
         document["fleet_distribution"]["n_homez"] = 2
 
-        with pytest.raises(ConfigurationError, match="Unrecognised keys in fleet_distribution: 'n_homez'"):
+        with pytest.raises(ConfigurationError, match="tariff.type: unknown tariff type 'economy_8'"):
             read(document)
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
@@ -893,3 +1124,59 @@ class TestFleetDistributionFileReaders:
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:
         _assert_refused_naming_tou_optimized_and_the_tariff(lambda: read(_fleet_file(capacity_kwh)))
+
+
+class TestParseFleetConfigNamesTheBlockItRefuses:
+    """Each refusal parse_fleet_config writes reads '<block label>: <problem>'."""
+
+    def test_a_home_whose_heat_pump_leaves_out_its_type_is_refused_naming_its_place(self) -> None:
+        """R1: a heat_pump block without heat_pump_type in the second home names homes[1].heat_pump and the key."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_config({"homes": [{}, {"heat_pump": {"thermal_capacity_kw": 8}}]})
+
+        assert str(refusal.value) == "homes[1].heat_pump: requires 'heat_pump_type'"
+
+    def test_a_homes_value_that_is_no_list_is_refused_naming_it(self) -> None:
+        """R2: a homes: 5 was iterated, a TypeError no caller reports as a configuration error."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_config({"homes": 5})
+
+        assert str(refusal.value) == "homes: must be a list, got int"
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(parse_fleet_config, id="parse_fleet_config"),
+            pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
+            pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+        ],
+    )
+    def test_a_document_that_is_no_mapping_is_refused_naming_the_top_level(
+        self, read: Callable[[Any], object]
+    ) -> None:
+        """R3: a web or CLI caller may hand a fleet document reader a list, as a YAML file of one gives."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read([{"pv": {"capacity_kw": _PV_KW}}])
+
+        assert str(refusal.value) == "the top level: must be a mapping, got list"
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(parse_fleet_config, id="parse_fleet_config"),
+            pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
+            pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("fleet_distribution", "type_name"),
+        [pytest.param(None, "NoneType", id="null"), pytest.param(5, "int", id="a-number")],
+    )
+    def test_a_fleet_distribution_that_is_no_mapping_is_refused_naming_it(
+        self, read: Callable[[Any], object], fleet_distribution: object, type_name: str
+    ) -> None:
+        """A YAML file's empty or scalar fleet_distribution: is refused as no mapping, not iterated into a bare TypeError."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read({"fleet_distribution": fleet_distribution})
+
+        assert str(refusal.value) == f"fleet_distribution: must be a mapping, got {type_name}"

@@ -17,9 +17,10 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults
 from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results
+from tests._markdown_tables import row_cells
 from tests.integration._helpers import SCENARIO
 
 
@@ -33,20 +34,19 @@ def _write_scenario(
     *,
     name: str = "Flex CLI Test",
     flex_band: object = None,
-    grid_services_events: dict[str, object] | None = None,
+    events_block: dict[str, object] | None = None,
     n_homes: int = 5,
 ) -> Path:
     """Write a minimal fleet scenario YAML to tmp_path.
 
     When flex_band is not None, the top-level ``flex_band`` key is written so
     the CLI can pick it up as the scenario-level default.  When
-    grid_services_events is not None, the finance block prices grid services
-    at events (``grid_services_model: capacity_at_events``) with that block.
+    events_block is not None, the finance block prices grid services at events
+    (a grid_services_model block of ``type: capacity_at_events``) with its keys.
     """
     finance: dict[str, object] = {"standing_charge_pence_per_day": 28.0}
-    if grid_services_events is not None:
-        finance["grid_services_model"] = "capacity_at_events"
-        finance["grid_services_events"] = grid_services_events
+    if events_block is not None:
+        finance["grid_services_model"] = {"type": "capacity_at_events", **events_block}
     scenario: dict = {  # type: ignore[type-arg]
         "name": name,
         "location": {
@@ -183,6 +183,52 @@ class TestFinanceFlexCLIBehaviour:
             f"'Flexibility Value' should NOT appear when no band is set:\n{result.output}"
         )
 
+    def test_with_no_grid_services_pricing_the_grid_services_row_is_the_consulting_band_not_booked(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        """B11: a scenario that prices no grid services renders the central band's grid-services figure, labelled not booked, and no Grid Services Income section."""
+        scenario_file = _write_scenario(tmp_path / "not-booked")
+
+        result = invoke_finance_run(["--flex-band", "central", str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 0, result.output
+        lines = result.output.splitlines()
+        assert (
+            "| Grid services (consulting planning band, not booked: the scenario prices no grid services) "
+            "| £30 | £12.0/kW |"
+        ) in lines, result.output
+        assert "| **Headline total** | **£280** | — |" in lines, result.output
+        assert "## Grid Services Income" not in result.output
+        assert "PRD §6" not in result.output
+        assert "docs/flexibility-buildability.md" in result.output
+
+    def test_under_flat_pricing_the_booked_row_divides_the_income_by_the_battery_homes_alone(
+        self, tmp_path: Path
+    ) -> None:
+        """B11 on three 2.5 kW battery homes and two PV-only homes priced flat at £4.0/kW-yr: £30 a year, £10 per battery home, not £6 per home."""
+        load = {"annual_consumption_kwh": 3500}
+        battery_home = {"pv": {"capacity_kw": 4.0}, "battery": {"capacity_kwh": 5.0, "max_discharge_kw": 2.5}, "load": load}
+        pv_only_home = {"pv": {"capacity_kw": 4.0}, "load": load}
+        finance = {
+            "standing_charge_pence_per_day": 28.0,
+            "grid_services_model": {"type": "flat", "income_per_kw_per_year_gbp": 4.0},
+        }
+        path = tmp_path / "mixed_fleet.yaml"
+        path.write_text(
+            yaml.safe_dump({"name": "Mixed fleet", "homes": [battery_home] * 3 + [pv_only_home] * 2, "finance": finance})
+        )
+
+        def simulate(fleet_config: FleetConfig, _start: object, _end: object) -> FleetResults:
+            return make_fleet_results(homes=fleet_config.homes, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+
+        result = invoke_cli(["finance", "run", str(path), "--flex-band", "central"], answering(simulate))
+
+        assert result.exit_code == 0, result.output
+        assert row_cells(
+            result.output, "### This window's fleet, the same under every assumption", "Annual fleet income"
+        ) == ["£30"]
+        assert "| Grid services (booked) | £10 | £4.0/kW |" in result.output.splitlines(), result.output
+
     def test_invalid_flex_band_exits_nonzero(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
@@ -279,29 +325,28 @@ class TestFinanceFlexCLIBandEntryPoints:
             in _whitespace_normalised(result.output)
         ), result.output
 
-    def test_a_scenario_flex_band_that_is_not_a_string_is_refused(
-        self, tmp_path: Path, flex_fleet_results: FleetResults
-    ) -> None:
-        scenario_file = _write_scenario(tmp_path, flex_band=5)
+    @pytest.mark.parametrize("value", [1, 5])
+    def test_a_scenario_flex_band_that_is_not_a_string_is_refused(self, tmp_path: Path, value: int) -> None:
+        scenario_file = _write_scenario(tmp_path, flex_band=value)
 
-        result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
+        result = invoke_cli(["finance", "run", str(scenario_file)], answering(_simulate_must_not_run))
 
         assert result.exit_code == 1, result.output
         assert (
-            "Configuration error: flex_band must be one of low, central, high, got 5"
+            f"Configuration error: flex_band must be one of low, central, high, got {value!r}"
             in _whitespace_normalised(result.output)
         ), result.output
 
     def test_an_events_band_medium_is_refused(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
-        scenario_file = _write_scenario(tmp_path, grid_services_events={"band": "medium"})
+        scenario_file = _write_scenario(tmp_path, events_block={"band": "medium"})
 
         result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
 
         assert result.exit_code == 1, result.output
         assert (
-            "Configuration error: finance.grid_services_events: "
+            "Configuration error: finance.grid_services_model: "
             "GridServicesEventsConfig.band must be one of low, central, high, got 'medium'"
         ) in _whitespace_normalised(result.output), result.output
 
@@ -344,13 +389,13 @@ class TestFinanceRunEventsDeliveryBaseline:
     def test_an_events_delivery_baseline_metered_is_refused(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
-        scenario_file = _write_scenario(tmp_path, grid_services_events={"delivery_baseline": "metered"})
+        scenario_file = _write_scenario(tmp_path, events_block={"delivery_baseline": "metered"})
 
         result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
 
         assert result.exit_code == 1, result.output
         assert (
-            "Configuration error: finance.grid_services_events: "
+            "Configuration error: finance.grid_services_model: "
             "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
         ) in _whitespace_normalised(result.output), result.output
 

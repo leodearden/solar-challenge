@@ -25,11 +25,12 @@ from solar_challenge.dispatch import (
     StepLimits,
     TOUOptimizedStrategy,
 )
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
+from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 NOT_FINITE_AND_AT_LEAST_0 = [
     pytest.param(math.nan, id="nan"),
@@ -43,14 +44,18 @@ STEP_POWERS = [
     pytest.param("demand_kw", "Demand", id="demand_kw"),
 ]
 
-# Both engines, simulate_timestep_tou at Economy 7's 18:00 peak rate.
-ENGINES = [
-    pytest.param(simulate_timestep, id="simulate_timestep"),
+_E7 = TariffConfig.economy_7()
+
+# simulate_timestep under self-consumption dispatch, and under TOU dispatch on Economy 7's clock at its 18:00 peak rate.
+DISPATCHES = [
+    pytest.param(simulate_timestep, id="self_consumption"),
     pytest.param(
         functools.partial(
-            simulate_timestep_tou, timestamp=pd.Timestamp("2024-01-01 18:00"), tariff=TariffConfig.economy_7()
+            simulate_timestep,
+            timestamp=pd.Timestamp("2024-01-01 18:00"),
+            **on_the_tariff_s_clock(_E7),
         ),
-        id="simulate_timestep_tou",
+        id="tou_on_the_tariff_s_clock-peak",
     ),
 ]
 
@@ -75,7 +80,7 @@ class _ConsumerStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
@@ -105,29 +110,29 @@ class TestADecisionRefusesAPowerThatIsNotFiniteAndAtLeast0:
 
 
 class TestTheStepRefusesAPowerThatIsNotFiniteAndAtLeast0:
-    """§9 row 11, the input half: both engines refuse a generation or demand that is not finite and at least 0, naming it, before any strategy decides or any battery moves."""
+    """§9 row 11, the input half: simulate_timestep refuses, under either dispatch, a generation or demand that is not finite and at least 0, naming it, before any strategy decides or any battery moves."""
 
     @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
     @pytest.mark.parametrize(("power", "quantity"), STEP_POWERS)
-    @pytest.mark.parametrize("engine", ENGINES)
+    @pytest.mark.parametrize("step", DISPATCHES)
     def test_a_step_without_a_battery_refuses_the_power(
-        self, engine: Callable[..., EnergyFlowResult], power: str, quantity: str, value: float
+        self, step: Callable[..., EnergyFlowResult], power: str, quantity: str, value: float
     ) -> None:
         refusal = f"{quantity} must be non-negative and finite, got {value} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
-            engine(**{"generation_kw": 1.0, "demand_kw": 1.0, power: value}, battery=None, timestep_minutes=1.0)
+            step(**{"generation_kw": 1.0, "demand_kw": 1.0, power: value}, battery=None, timestep_minutes=1.0)
 
     @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
     @pytest.mark.parametrize(("power", "quantity"), STEP_POWERS)
-    @pytest.mark.parametrize("engine", ENGINES)
+    @pytest.mark.parametrize("step", DISPATCHES)
     def test_a_step_with_a_battery_refuses_the_power_and_leaves_its_soc_unchanged(
-        self, engine: Callable[..., EnergyFlowResult], power: str, quantity: str, value: float
+        self, step: Callable[..., EnergyFlowResult], power: str, quantity: str, value: float
     ) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
         refusal = f"{quantity} must be non-negative and finite, got {value} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
-            engine(**{"generation_kw": 1.0, "demand_kw": 1.0, power: value}, battery=battery, timestep_minutes=1.0)
+            step(**{"generation_kw": 1.0, "demand_kw": 1.0, power: value}, battery=battery, timestep_minutes=1.0)
         assert battery.soc_kwh == soc_kwh
 
     @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
@@ -383,8 +388,9 @@ BUILT_IN_STRATEGIES: dict[str, DispatchStrategy] = {
     ),
 }
 
-# Every built-in strategy but self-consumption, which ignores grid_charge_ctx, charges from the grid toward the
-# target its battery's grid_charging sets.
+# Every built-in strategy but self-consumption charges from the grid toward the target its battery's grid_charging
+# sets. Self-consumption ignores grid_charge_ctx, so simulate_home refuses it on a battery that sets grid_charging,
+# and it runs only the runs without one.
 GRID_CHARGING_STRATEGIES = ["tou_optimized", "peak_shaving", "scheduled_charge"]
 
 _SCENARIO_HOME = bristol_arbitrage_home()
@@ -430,6 +436,16 @@ HOME_RUNS = GRID_CHARGING_RUNS | {
     for day, home, weather, start, end in _DAYS
 }
 
+# Each built-in strategy's runs: every run for one that charges from the grid, only those without grid_charging else.
+_RUNS_OF: dict[str, list[str]] = {
+    strategy_id: [
+        run_id
+        for run_id in HOME_RUNS
+        if strategy_id in GRID_CHARGING_STRATEGIES or run_id not in GRID_CHARGING_RUNS
+    ]
+    for strategy_id in BUILT_IN_STRATEGIES
+}
+
 
 @functools.cache
 def _run(strategy_id: str, run_id: str) -> SimulationResults:
@@ -459,12 +475,21 @@ def _pv_charge_kw(results: SimulationResults) -> pd.Series:
 class TestNoBuiltInStrategyTripsABound:
     """§9 row 12: each built-in strategy keeps every decision within its step's limits, so each of its runs, its balance checked every minute, completes.
 
+    Self-consumption ignores grid_charge_ctx, so simulate_home refuses it on a battery that sets grid_charging, and it
+    runs only the runs without one; every other strategy runs every run.
+
     Every bound meets decisions that reach it: each grid-charging strategy charges from the grid in each run whose
     battery sets a target, and between its runs each strategy charges from PV and discharges.
     """
 
-    @pytest.mark.parametrize("run_id", list(HOME_RUNS))
-    @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
+    @pytest.mark.parametrize(
+        ("strategy_id", "run_id"),
+        [
+            pytest.param(strategy_id, run_id, id=f"{strategy_id}-{run_id}")
+            for strategy_id, run_ids in _RUNS_OF.items()
+            for run_id in run_ids
+        ],
+    )
     def test_the_run_completes(self, strategy_id: str, run_id: str) -> None:
         assert _run(strategy_id, run_id).strategy_name == BUILT_IN_STRATEGIES[strategy_id].name
 
@@ -478,8 +503,8 @@ class TestNoBuiltInStrategyTripsABound:
     @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
     def test_between_its_runs_the_strategy_charges_from_pv(self, strategy_id: str) -> None:
         """A battery that a strategy fills from the grid overnight takes no PV the next day, so not every sunny run charges from PV."""
-        assert any(_pv_charge_kw(_run(strategy_id, run_id)).gt(0).any() for run_id in HOME_RUNS)
+        assert any(_pv_charge_kw(_run(strategy_id, run_id)).gt(0).any() for run_id in _RUNS_OF[strategy_id])
 
     @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
     def test_between_its_runs_the_strategy_discharges(self, strategy_id: str) -> None:
-        assert any(_run(strategy_id, run_id).battery_discharge.gt(0).any() for run_id in HOME_RUNS)
+        assert any(_run(strategy_id, run_id).battery_discharge.gt(0).any() for run_id in _RUNS_OF[strategy_id])

@@ -6,7 +6,7 @@ fleet page's counterpart of builder_form.py.
 """
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from types import MappingProxyType
 from typing import Any
@@ -14,26 +14,16 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from solar_challenge.dispatch import DispatchStrategyConfig
+from solar_challenge.config import parse_scenario
+from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import (
-    ComponentDistribution,
-    FleetDistributionConfig,
-    generate_homes_from_distribution,
-    parse_fleet_distribution_config,
-)
+from solar_challenge.fleet_distribution import FleetDistributionConfig, parse_fleet_distribution_config
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
-from solar_challenge.scenario_blocks import (
-    child_path,
-    parse_dispatch_strategy_config,
-    parse_location_block,
-    parse_seg_rate,
-    parse_tariff_config,
-)
+from solar_challenge.scenario_blocks import child_path, parse_dispatch_strategy_config
 from solar_challenge.scenario_writer import location_block
-from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig
+from solar_challenge.tariff import PRESET_RATES, PresetRates
+from solar_challenge.web.fleet_components import refuse_homes_outside_ranges
 from solar_challenge.web.fleet_config import (
     FLEET_DISTRIBUTION_FORM_KEYS,
     distribution_form_spec,
@@ -49,7 +39,6 @@ from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.simulation_params import (
     DATE_RANGE_KEYS,
     parse_date_range,
-    parse_seg_tariff,
     read_iso_date,
     refuse_reversed_or_overlong_window,
 )
@@ -73,11 +62,11 @@ class ParsedFleetForm:
         name: The form's name, None when it sends none or one that cannot name a run
             (is_run_name), so the run submitted takes its kind's default name.
         homes: The fleet's homes, each with the form's tariff and SEG and, given a battery,
-            its dispatch strategy.
+            its dispatch strategy: the scenario's homes as parse_scenario reads them.
         start_date: The first day simulated, at the fleet's location.
         end_date: The last day simulated, at the fleet's location.
-        scenario: The fleet scenario document, which load_fleet_config reads back as these
-            homes.
+        scenario: The fleet scenario document, which load_scenario reads back as these homes
+            and dates.
     """
 
     name: str | None
@@ -90,26 +79,26 @@ class ParsedFleetForm:
 def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     """The fleet the fleet *form* describes, as POST /api/simulate/fleet-from-distribution runs it, with its scenario document.
 
-    The form's distributions, with its dispatch strategy in the battery block, are the
-    fleet_distribution: block in fleet_distribution.py's grammar that the document writes,
-    where load_fleet_config gives that strategy to every battery; a form without a battery
-    gives it to none.  The homes are generated once, from the form's distributions as
-    fleet_distribution.py's grammar reads them, each battery given the form's dispatch
-    strategy as parse_dispatch_strategy_config reads it, at the form's location with its
-    tariff, and each home is then given its SEG.  The document writes the form's name only when it can
-    name a run, and the tariff: and seg: blocks as given, null when the form sends none.
+    The run's homes and dates are config.parse_scenario's reading of the scenario document
+    returned, so the run and the export are one reading.  The form's distributions, with its
+    dispatch strategy in the battery block, are the document's fleet_distribution: block in
+    fleet_distribution.py's grammar, which gives that strategy to every battery; a form
+    without a battery gives it to none.  The document writes the form's name only when it
+    can name a run, and the tariff: and seg: blocks as given, null when the form sends none.
 
     The form's six blocks, the pv, battery and load distributions and the tariff,
     dispatch_strategy and seg overlays, share one presence rule: absent or null means none,
     which pv and load refuse as a missing distribution, and any other value must be a
     mapping its grammar reads.
 
-    Each value is read as given by the reader the loaders read it with, so the simulate
-    endpoint and the export, which both read the form here, refuse it at the same value
-    with the same message.  A form with a top-level key the fleet form does not have is
-    refused, naming it, before any value is read.  Each value is read once, in the order
-    Raises lists them, the name first, and every one before any home is generated, so a
-    value a reader refuses costs no home generation.
+    The form's own keys are read first: a top-level key the fleet form does not have is
+    refused, naming it, then the name, the distributions, the dashboard's bounds on the
+    fleet they describe, the location, the dispatch strategy, at the form's own key whether
+    or not a battery carries it, and the window.
+    parse_scenario then reads the document's location, period, tariff and SEG before its
+    fleet, and every value before any home is generated, so a value a reader refuses costs
+    no home generation.  The simulate endpoint and the export both read the form here, so
+    they refuse it at the same value with the same message.
 
     Raises:
         ValueError: For a top-level key the fleet form does not have, naming each one and
@@ -117,48 +106,58 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
         ValueError: For a name sent as text holding a lone surrogate, require_encodable_text's
             refusal naming name.
         ValueError, TypeError, ConfigurationError: From the readers of the form's
-            distributions, fleet_distribution.py's grammar reading its n_homes and seed among
-            them, the dashboard's bounds on the fleet it reads (see
-            refuse_a_fleet_the_dashboard_cannot_run, naming n_homes or seed), and the
-            readers of its location, tariff, dispatch strategy, SEG and window, read in that
-            order, a date that does not parse included.
-        ConfigurationError: For homes the loaders cannot generate from the distributions.
+            distributions, the dashboard's bounds on the fleet fleet_distribution.py's
+            grammar reads from them (see refuse_a_fleet_the_dashboard_cannot_run, naming
+            n_homes or seed), and the readers of its location, dispatch strategy and window,
+            read in that order, a date that does not parse included.
+        ConfigurationError: From parse_scenario, for a tariff, SEG or fleet the scenario
+            grammar refuses, or homes it cannot generate.
+        ConfigurationError: For a generated home whose PV, battery or load value lies
+            outside its fleet component's value_range, from refuse_homes_outside_ranges,
+            naming the component's form path, the range, the value and the home's number.
     """
     refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
     sent_name = form.get("name")
     refuse_unencodable_text(sent_name, "name")
     name = sent_name if is_run_name(sent_name) else None
     distribution = form_to_fleet_distribution_config(dict(form))
-    fleet = parse_fleet_distribution_config(distribution)
-    refuse_a_fleet_the_dashboard_cannot_run(fleet, "")
+    _refuse_a_fleet_the_dashboard_cannot_run_before_its_homes(distribution)
     location = _fleet_form_location(form)
-    overlay = _read_fleet_overlay(form)
+    parse_dispatch_strategy_config(form.get("dispatch_strategy"))
     start, end = parse_date_range(form)
-    homes = generate_homes_from_distribution(
-        _fleet_with_battery_dispatch_strategy(fleet, overlay.dispatch_strategy),
-        location,
-        fleet_tariff=overlay.tariff_config,
-    )
-    return ParsedFleetForm(
-        name=name,
-        homes=tuple(replace(home, seg_tariff=overlay.seg_tariff) for home in homes),
-        start_date=pd.Timestamp(start, tz=location.timezone),
-        end_date=pd.Timestamp(end, tz=location.timezone),
-        scenario={
-            **({} if name is None else {"name": name}),
-            "period": {"start_date": start, "end_date": end},
-            "location": location_block(location),
-            "fleet_distribution": _document_fleet_distribution(
-                distribution, form.get("dispatch_strategy")
-            ),
-            "tariff": form.get("tariff"),
-            "seg": form.get("seg"),
-        },
-    )
+    document = {
+        **({} if name is None else {"name": name}),
+        "period": {"start_date": start, "end_date": end},
+        "location": location_block(location),
+        "fleet_distribution": _document_fleet_distribution(distribution, form.get("dispatch_strategy")),
+        "tariff": form.get("tariff"),
+        "seg": form.get("seg"),
+    }
+    scenario = parse_scenario(document)
+    homes = scenario.simulated_homes()
+    refuse_homes_outside_ranges(homes)
+    start_date, end_date = scenario.simulation_bounds()
+    return ParsedFleetForm(name=name, homes=homes, start_date=start_date, end_date=end_date, scenario=document)
+
+
+def _refuse_a_fleet_the_dashboard_cannot_run_before_its_homes(distribution: Mapping[str, Any]) -> None:
+    """Refuse the fleet *distribution* describes, as fleet_distribution.py's grammar reads it, when the dashboard cannot run it (see refuse_a_fleet_the_dashboard_cannot_run), before parse_scenario generates its homes.
+
+    A *distribution* the grammar refuses is left to parse_scenario, which refuses it in its
+    own order, after the document's tariff and SEG.
+
+    Raises:
+        ConfigurationError: From refuse_a_fleet_the_dashboard_cannot_run, naming n_homes or seed.
+    """
+    try:
+        fleet = parse_fleet_distribution_config(distribution)
+    except ConfigurationError:
+        return
+    refuse_a_fleet_the_dashboard_cannot_run(fleet, "")
 
 
 def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
-    """The fleet scenario document the fleet *form* describes, which load_fleet_config reads back as its fleet: :func:`parse_fleet_form`'s.
+    """The fleet scenario document the fleet *form* describes, which load_scenario reads back as its homes and dates: :func:`parse_fleet_form`'s.
 
     Raises:
         ValueError, TypeError, ConfigurationError: As :func:`parse_fleet_form`, for a form
@@ -170,44 +169,6 @@ def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
 def _fleet_form_location(form: Mapping[str, Any]) -> Location:
     """The location of the fleet *form* describes: its 'location' as read_location reads it, 'bristol' when absent."""
     return read_location(form.get("location", "bristol"))
-
-
-@dataclass(frozen=True)
-class _FleetOverlay:
-    """The tariff, battery dispatch strategy and SEG a fleet form gives the homes it describes."""
-
-    tariff_config: TariffConfig | None
-    dispatch_strategy: DispatchStrategyConfig | None
-    seg_tariff: SEGTariff | None
-
-
-def _read_fleet_overlay(form: Mapping[str, Any]) -> _FleetOverlay:
-    """The tariff, dispatch strategy and SEG of the fleet *form*.
-
-    Raises:
-        ValueError, ConfigurationError: For a tariff, dispatch strategy or SEG the loaders
-            refuse, read in that order; the dispatch strategy is read even when no battery
-            carries it.
-    """
-    tariff_config = parse_tariff_config(form.get("tariff"))
-    dispatch_strategy = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
-    return _FleetOverlay(
-        tariff_config=tariff_config,
-        dispatch_strategy=dispatch_strategy,
-        seg_tariff=parse_seg_tariff(form.get("seg")),
-    )
-
-
-def _fleet_with_battery_dispatch_strategy(
-    fleet: FleetDistributionConfig, dispatch_strategy: DispatchStrategyConfig | None
-) -> FleetDistributionConfig:
-    """*fleet* with *dispatch_strategy* given to every battery it draws; *fleet* as it is without a battery or a strategy."""
-    if dispatch_strategy is None or fleet.battery is None:
-        return fleet
-    battery = ComponentDistribution(
-        fleet.battery.draws, {**fleet.battery.settings, "dispatch_strategy": dispatch_strategy}
-    )
-    return replace(fleet, battery=battery)
 
 
 def _document_fleet_distribution(
@@ -237,41 +198,54 @@ class ImportedFleetForm:
 def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     """The fleet form the fleet scenario *document* describes, naming the settings of it the form has no control for.
 
-    The document must be a fleet_distribution scenario the loaders accept: their refusal of
-    its fleet, location, tariff or SEG is the refusal.  The form loads exactly what it
+    The document must be a fleet_distribution scenario config.parse_scenario accepts: its
+    refusal, of a top-level key no scenario reads included, is the refusal.  Its
+    fleet_distribution block is read first, by fleet_distribution.py's grammar, and the
+    dashboard's bounds on the fleet it reads, so no home is generated for a fleet the page
+    cannot run; then the period, with the page's own rules, which are stricter than the
+    reader's, so its refusals name the scenario's setting.  The form loads exactly what it
     holds: the name, the period's dates, the fleet size and seed, the pv, battery and load
     distributions, the battery's dispatch strategy, the tariff and the SEG.  A name, period
     or seed the scenario leaves out is left out of the form too, and the fleet page runs its
     own default for it.  A null battery capacity reads as 0 kWh, a home with no battery
-    either way.  An economy tariff's rate the scenario leaves out loads as its PRESET_RATES
-    rate, the rate the loaders charge it.  A setting the form needs but cannot hold exactly
-    is refused, naming it, since loading it anyway would run a different fleet.  A period
+    either way.  A battery dispatch strategy on its tariff's clock, which the form has no
+    control for, is named in not_loaded, and the page runs self-consumption.  An economy
+    tariff's rate the scenario leaves out loads as its PRESET_RATES rate, the rate
+    parse_scenario charges it.  A setting the form needs but cannot hold exactly is
+    refused, naming it, since loading it anyway would run a different fleet.  A period
     the page cannot run, ending before it starts or longer than MAX_WINDOW_DAYS days, is
-    refused naming period.start_date and period.end_date.  The loaders' reader refuses a
-    fleet size or seed that is not a whole number; the dashboard's bounds then refuse a
-    fleet size above MAX_FLEET_HOMES, or a seed beyond -MAX_FLEET_SEED to MAX_FLEET_SEED,
-    naming fleet_distribution.n_homes or fleet_distribution.seed, and the form holds the
-    size and seed the loaders read.  Every other setting, and a location other than the page's, is
-    named in not_loaded.  A form the page could not run, as parse_fleet_form refuses it, is
-    refused too.
+    refused naming period.start_date and period.end_date.  fleet_distribution.py's grammar
+    refuses a fleet size or seed that is not a whole number; the dashboard's bounds then
+    refuse a fleet size above MAX_FLEET_HOMES, or a seed beyond -MAX_FLEET_SEED to
+    MAX_FLEET_SEED, naming fleet_distribution.n_homes or fleet_distribution.seed, and the
+    form holds the size and seed the grammar read.  Every other setting, and a location
+    other than the page's, is named in not_loaded.  A form the page could not run, as
+    parse_fleet_form refuses it, is refused too.
 
     Raises:
-        ValueError: For a document that is not a fleet_distribution scenario, or a setting
-            the form needs but cannot hold exactly, naming it.
-        ValueError, TypeError, ConfigurationError: From the loaders, for a scenario they
-            refuse, or from parse_fleet_form, for a form the page could not run.
+        ValueError: For a document that is not a fleet_distribution scenario, a period the
+            page cannot run, or a setting the form needs but cannot hold exactly, naming it.
+        ConfigurationError: From fleet_distribution.py's grammar, for a fleet_distribution
+            block it refuses; from refuse_a_fleet_the_dashboard_cannot_run, for a fleet size
+            or seed the page cannot run, naming it; from parse_scenario, for a scenario it
+            refuses.
+        ValueError, TypeError, ConfigurationError: From parse_fleet_form, for a form the page
+            could not run.
     """
     scenario = _fleet_scenario(document)
-    parsed = _fleet_the_loaders_read(scenario)
+    fleet = scenario["fleet_distribution"]
+    parsed = parse_fleet_distribution_config(fleet)
     refuse_a_fleet_the_dashboard_cannot_run(parsed, "fleet_distribution")
+    period = _read_period(scenario.get("period"))
+    accepted = parse_scenario(scenario)
     form, not_loaded = _read_blocks(
         scenario,
         "",
         {
             "name": _read_name(scenario.get("name")),
-            "period": _read_period(scenario.get("period")),
-            "location": _read_location_block(scenario.get("location")),
-            "fleet_distribution": _read_fleet_distribution(scenario["fleet_distribution"], parsed),
+            "period": period,
+            "location": _read_location(accepted.get_location()),
+            "fleet_distribution": _read_fleet_distribution(fleet, parsed),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),
         },
@@ -321,15 +295,6 @@ def _fleet_scenario(document: object) -> dict[str, Any]:
     return document
 
 
-def _fleet_the_loaders_read(scenario: Mapping[str, Any]) -> FleetDistributionConfig:
-    """The fleet the loaders read from *scenario*, refusing it where they refuse its location, fleet, tariff or SEG, in that order, with their message; the readers below read only what they accept."""
-    parse_location_block(scenario.get("location"))
-    fleet = parse_fleet_distribution_config(scenario["fleet_distribution"])
-    parse_tariff_config(scenario.get("tariff"))
-    parse_seg_rate(scenario.get("seg"))
-    return fleet
-
-
 def _not_loaded(
     block: Mapping[str, Any], path: str, held: Mapping[str, tuple[str, ...]]
 ) -> tuple[str, ...]:
@@ -352,16 +317,10 @@ def _read_blocks(block: Mapping[str, Any], path: str, reads: Mapping[str, _Block
     return form, _not_loaded(block, path, held)
 
 
-def _read_name(name: Any) -> _BlockRead:
-    """The fleet form's name: the scenario's, none when it is absent or null.
-
-    Raises:
-        ValueError: For a name that is not a string.
-    """
+def _read_name(name: str | None) -> _BlockRead:
+    """The fleet form's name: the scenario's, which parse_scenario accepted as a string, none when it is absent or null."""
     if name is None:
         return {}, ()
-    if not isinstance(name, str):
-        raise ValueError(f"name must be a string, got {name!r}")
     return {"name": name}, ()
 
 
@@ -407,9 +366,9 @@ def _read_day(value: Any, path: str) -> date:
     return read_iso_date(value, path)
 
 
-def _read_location_block(location: Any) -> _BlockRead:
-    """Nothing of the fleet form, which has no location control: a location other than the one it runs at is not loaded."""
-    if parse_location_block(location) == _fleet_form_location({}):
+def _read_location(location: Location) -> _BlockRead:
+    """Nothing of the fleet form, which has no location control: a scenario *location*, as parse_scenario reads it, other than the one the form runs at is not loaded."""
+    if location == _fleet_form_location({}):
         return {}, ()
     return {}, ("location",)
 
@@ -454,7 +413,8 @@ def _read_component(
 def _read_battery(battery: Any, path: str) -> _BlockRead:
     """The fleet form's battery capacity and dispatch strategy: the *path* battery block's, none when it is absent or null.
 
-    A null capacity reads as 0 kWh: a home with no battery either way.
+    A null capacity reads as 0 kWh: a home with no battery either way. A dispatch strategy on its
+    tariff's clock loads none, and its path is named not loaded.
 
     Raises:
         ValueError: From distribution_form_spec, for a capacity the editor cannot hold, or
@@ -547,15 +507,26 @@ def _read_tariff(tariff: Any) -> _BlockRead:
 def _read_dispatch(dispatch: Any, path: str) -> _BlockRead:
     """The fleet form's dispatch strategy: the *path* dispatch block, none when it is absent or null.
 
+    A tou_optimized on its tariff's clock, which the form has no control for, loads none and
+    names *path* not loaded.
+
     Raises:
         ValueError: For a dispatch strategy the form cannot hold, naming its setting.
     """
     if dispatch is None:
         return {}, ()
+    if _on_its_tariffs_clock(dispatch, path):
+        return {}, (path,)
     form_dispatch, not_loaded = _read_typed_block(
         dispatch, path, "strategy_type", _FORM_DISPATCH_SETTINGS
     )
     return {"dispatch_strategy": form_dispatch}, not_loaded
+
+
+def _on_its_tariffs_clock(dispatch: dict[str, Any], path: str) -> bool:
+    """Whether the *path* dispatch block, one parse_scenario accepted, is tou_optimized on its tariff's clock: it sets no peak_hours."""
+    strategy = parse_dispatch_strategy_config(dispatch, block_path=path)
+    return isinstance(strategy, TOUOptimizedStrategyConfig) and strategy.peak_hours is None
 
 
 def _read_typed_block(
@@ -587,7 +558,7 @@ def _read_typed_block(
 def _read_seg(seg: Any) -> _BlockRead:
     """The fleet form's SEG: the scenario's seg block as given, none when it is absent or null.
 
-    The loaders accepted it, so it names exactly one preset or rate, both of which the form holds.
+    parse_scenario accepted it, so it names exactly one preset or rate, both of which the form holds.
     """
     if seg is None:
         return {}, ()

@@ -31,6 +31,7 @@ from solar_challenge.dispatch import (
     DispatchStrategy,
     ScheduledChargeStrategy,
     SelfConsumptionStrategy,
+    SelfConsumptionStrategyConfig,
     TOUOptimizedStrategy,
 )
 from solar_challenge.finance import BillBreakdown, FinanceConfig, bill
@@ -92,9 +93,12 @@ def arms(home: HomeConfig) -> Iterator[Arm]:
     yield Arm("A", "as configured", home, None)
     yield Arm("B", "windows over tou_optimized", home, ScheduledChargeStrategy(TOUOptimizedStrategy(TOU_PEAK_HOURS), WINDOWS, tz))
     no_grid_charging = dataclasses.replace(
-        home, dispatch_strategy="greedy", battery_config=dataclasses.replace(battery, grid_charging=None)
+        home,
+        battery_config=dataclasses.replace(
+            battery, grid_charging=None, dispatch_strategy=SelfConsumptionStrategyConfig()
+        ),
     )
-    yield Arm("C", "greedy, no grid charging", no_grid_charging, None)
+    yield Arm("C", "self-consumption, no grid charging", no_grid_charging, None)
     yield Arm("D", "windows over self-consumption", home, ScheduledChargeStrategy(SelfConsumptionStrategy(), WINDOWS, tz))
 
 
@@ -107,7 +111,7 @@ def bill_arm(arm: Arm, start: pd.Timestamp, end: pd.Timestamp, *, weather: Weath
     """arm's run from start to end on weather, billed at FINANCE against its demand priced at the run's tariff rates."""
     results = simulate_home(arm.home, start, end, weather=weather, strategy=arm.strategy)
     summary = calculate_summary(results)
-    baseline_import_cost_gbp = float((results.per_minute_amounts()["demand_kwh"] * results.tariff_rate).sum())
+    baseline_import_cost_gbp = float((results.per_step_amounts()["demand_kwh"] * results.tariff_rate).sum())
     breakdown = bill(
         period_days=summary.simulation_days,
         generation_kwh=summary.total_generation_kwh,

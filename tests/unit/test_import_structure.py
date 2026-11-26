@@ -51,44 +51,19 @@ from pathlib import Path
 import pytest
 
 from tests._declared_dependencies import WEB_SUBPACKAGE
+from tests._exemption_reasons import Permanent, Transitional
+from tests._module_sources import module_source
 from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
 from tests._repository_paths import REPOSITORY_ROOT
+from tests._scenario_grammar import GRAMMAR_MODULES, GRAMMAR_STRATA
 
 _PACKAGE = "solar_challenge"
 _TEST_SUITE = "tests"
 _WEB_DATABASE = f"{WEB_SUBPACKAGE}.database"
 _WEB_FIELD_TREE = f"{WEB_SUBPACKAGE}.field_tree"
-_SCENARIO_BLOCKS = f"{_PACKAGE}.scenario_blocks"
-_FLEET_DISTRIBUTION = f"{_PACKAGE}.fleet_distribution"
-_CONFIG = f"{_PACKAGE}.config"
-#: The scenario grammar's strata, lowest first: no module of one imports a module of a higher one.
-_GRAMMAR_STRATA: tuple[tuple[str, ...], ...] = (
-    (f"{_PACKAGE}.errors", f"{_PACKAGE}.number_fields"),
-    (_SCENARIO_BLOCKS,),
-    (_FLEET_DISTRIBUTION,),
-    (_CONFIG,),
-)
-#: The grammar modules: those of every stratum above the lowest, whose leaves the grammar imports.
-_GRAMMAR_MODULES: tuple[str, ...] = tuple(
-    module for stratum in _GRAMMAR_STRATA[1:] for module in stratum
-)
 _RUNNER_PREFIX = "simulate_"
 _DISPATCH = f"{_PACKAGE}.dispatch"
 _SRC_DIR = REPOSITORY_ROOT / "src"
-
-
-@dataclass(frozen=True)
-class Permanent:
-    """The documented contract that requires an import to stay inside a function."""
-
-    contract: str
-
-
-@dataclass(frozen=True)
-class Transitional:
-    """The task or program stream that moves an import to module top or deletes it."""
-
-    owner: str
 
 
 _CLI_WITHOUT_THE_WEB_EXTRA = Permanent(
@@ -96,10 +71,6 @@ _CLI_WITHOUT_THE_WEB_EXTRA = Permanent(
     "of the web subpackage may import the extra at module top "
     "(tests/unit/test_dependency_declarations.py), so the CLI reaches the web subpackage only "
     "inside `web start` and `web migrate`"
-)
-_FINANCE_PARTITION = Transitional(
-    "program stream S8, the finance partition "
-    "(plans/review-all-program-solar_challenge-20261014.md)"
 )
 
 ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] = {
@@ -109,8 +80,8 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "(docs/domain-library-consumption.md, Cheap top-level import; "
         "tests/unit/test_public_api_surface.py::test_import_is_pvlib_free)"
     ),
-    ("solar_challenge.cli.web", "solar_challenge.web"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.app"): _CLI_WITHOUT_THE_WEB_EXTRA,
+    ("solar_challenge.cli.web", "solar_challenge.web.dashboard"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.jobs"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.reloader"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.schema"): _CLI_WITHOUT_THE_WEB_EXTRA,
@@ -120,14 +91,6 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "submodules that need no Flask import without the extra "
         "(tests/unit/test_conftests_need_no_web_extra.py) only while create_app defers web.app, "
         "which imports Flask"
-    ),
-
-    ("solar_challenge.finance", "solar_challenge.battery"): _FINANCE_PARTITION,
-    ("solar_challenge.finance", "solar_challenge.fleet"): _FINANCE_PARTITION,
-    ("solar_challenge.finance", "solar_challenge.home"): _FINANCE_PARTITION,
-    ("solar_challenge.finance", "solar_challenge.pv"): _FINANCE_PARTITION,
-    ("solar_challenge.load", "solar_challenge.ev"): Transitional(
-        "program stream S12, load composition"
     ),
 }
 
@@ -269,9 +232,9 @@ def _imports_by(importer: str, package: str, sites: Iterable[_ImportSite]) -> li
 
 def _grammar_modules_above(module: str) -> tuple[str, ...]:
     """Return the modules of every grammar stratum above *module*'s, lowest first; () for a module of the top stratum or of none."""
-    for level, stratum in enumerate(_GRAMMAR_STRATA):
+    for level, stratum in enumerate(GRAMMAR_STRATA):
         if module in stratum:
-            return tuple(above for higher in _GRAMMAR_STRATA[level + 1 :] for above in higher)
+            return tuple(above for higher in GRAMMAR_STRATA[level + 1 :] for above in higher)
     return ()
 
 
@@ -311,7 +274,7 @@ def _grammar_layering_violations(sites: Iterable[_ImportSite]) -> list[_GrammarV
                     f"{site.importer} imports {site.imported}",
                 )
             )
-        if site.importer in _GRAMMAR_MODULES and _in_package(site.imported, _PACKAGE):
+        if site.importer in GRAMMAR_MODULES and _in_package(site.imported, _PACKAGE):
             violations.extend(
                 _GrammarViolation(
                     site.path,
@@ -394,7 +357,7 @@ def _one_spelling_violations(sites: Iterable[_ImportSite], src_dir: Path) -> lis
     definers = _definers(src_dir)
     violations: list[_GrammarViolation] = []
     for site in sites:
-        if site.imported not in _GRAMMAR_MODULES:
+        if site.imported not in GRAMMAR_MODULES:
             continue
         for name in site.names:
             imports = f"{site.importer} imports {name} from {site.imported}"
@@ -424,11 +387,6 @@ def _is_dataclass_decorator(decorator: ast.expr) -> bool:
     )
 
 
-def _module_source(src_dir: Path, module: str) -> Path:
-    """Return the file under *src_dir* that holds *module*, a module of the package that is no package itself."""
-    return src_dir.joinpath(*module.split(".")).with_suffix(".py")
-
-
 def _top_level_classes(source: Path) -> list[ast.ClassDef]:
     """Return the classes the module in *source* defines at top level, in source order."""
     tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
@@ -439,7 +397,7 @@ def _dispatch_dataclass_names(src_dir: Path) -> frozenset[str]:
     """Return the names of the top-level classes dispatch.py, under *src_dir*, decorates as dataclasses."""
     return frozenset(
         cls.name
-        for cls in _top_level_classes(_module_source(src_dir, _DISPATCH))
+        for cls in _top_level_classes(module_source(src_dir, _DISPATCH))
         if any(_is_dataclass_decorator(decorator) for decorator in cls.decorator_list)
     )
 
@@ -455,8 +413,8 @@ def _dispatch_types_defined_in_the_grammar(src_dir: Path) -> list[_GrammarViolat
             cls.name,
             f"{module} defines {cls.name}, a dataclass {_DISPATCH} defines",
         )
-        for module in _GRAMMAR_MODULES
-        for source in [_module_source(src_dir, module)]
+        for module in GRAMMAR_MODULES
+        for source in [module_source(src_dir, module)]
         for cls in _top_level_classes(source)
         if cls.name in dispatch_dataclasses
     ]
@@ -646,7 +604,7 @@ def test_the_scan_reads_the_imports_of_web_field_tree(
     "module",
     [
         pytest.param(module, id=module.rpartition(".")[2])
-        for module in _GRAMMAR_MODULES
+        for module in GRAMMAR_MODULES
         if _grammar_modules_above(module)
     ],
 )
@@ -686,11 +644,11 @@ def test_the_scan_reads_the_imports_of_every_grammar_module(
     """The scan reads the import statements of every grammar module, so the layering rules cannot pass by reading none once a module is renamed or moved."""
     importers = {site.importer for site in real_tree_imports}
 
-    unread = [module for module in _GRAMMAR_MODULES if module not in importers]
+    unread = [module for module in GRAMMAR_MODULES if module not in importers]
     assert not unread, (
         f"the scan of src/solar_challenge read no import statement of {', '.join(unread)}, so "
         "test_the_scenario_grammar_imports_in_one_direction_and_imports_no_runner checks "
-        "nothing of it. If a module was renamed or moved, update _GRAMMAR_STRATA with it, and "
+        "nothing of it. If a module was renamed or moved, update GRAMMAR_STRATA with it, and "
         "docs/prds/scenario-grammar-partition.md §4.1"
     )
 
@@ -735,12 +693,12 @@ def test_the_one_spelling_scan_reads_grammar_imports_in_src_and_tests(
     read = {
         (site.path.parts[0], site.imported)
         for site in real_tree_src_and_test_imports
-        if site.imported in _GRAMMAR_MODULES and site.names
+        if site.imported in GRAMMAR_MODULES and site.names
     }
 
     unread = [
         f"{module} in {tree}"
-        for module in _GRAMMAR_MODULES
+        for module in GRAMMAR_MODULES
         for tree in ("src", _TEST_SUITE)
         if (tree, module) not in read
     ]
@@ -748,7 +706,7 @@ def test_the_one_spelling_scan_reads_grammar_imports_in_src_and_tests(
         f"the scan read no from-import of {', '.join(unread)}, so "
         "test_every_grammar_import_names_a_public_name_its_module_defines checks nothing of it. "
         "If the scan no longer finds src/solar_challenge or tests, point _src_and_test_import_sites "
-        "at them; if a grammar module was renamed, update _GRAMMAR_STRATA"
+        "at them; if a grammar module was renamed, update GRAMMAR_STRATA"
     )
 
 
@@ -823,15 +781,15 @@ def test_an_allowed_pair_no_function_imports_is_reported_stale(tmp_path: Path) -
         tmp_path / "src",
         {
             "finance.py": (
-                "from solar_challenge.battery import compute_soh\n"
+                "from solar_challenge.projection import solve_cost_recovery_rate\n"
                 "\n"
                 "\n"
-                "def aged(homes):\n"
-                "    return compute_soh(homes)\n"
+                "def solve(scenario, finance, simulate):\n"
+                "    return solve_cost_recovery_rate(scenario, finance, simulate=simulate)\n"
             ),
         },
     )
-    pair = ("solar_challenge.finance", "solar_challenge.battery")
+    pair = ("solar_challenge.finance", "solar_challenge.projection")
 
     assert _stale(_function_local_package_imports(_import_sites(src_dir)), {pair}) == [pair]
 

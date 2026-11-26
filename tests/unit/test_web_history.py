@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 pytest.importorskip("flask")
-from flask import Flask, template_rendered
+from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.battery import BatteryConfig
@@ -47,11 +47,10 @@ from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, 
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._stored_run_fixtures import pre_dispatch_union_home_config
 from tests._web_app import (
-    build_test_app,
+    BuildApp,
     database_of,
     database_path_in,
     point_store_config_at_a_missing_directory,
-    release_store_lock,
 )
 from tests._web_runs import store_fleet_run, store_home_run
 
@@ -356,7 +355,7 @@ class TestRunsAPI:
         ("damaged_summary_json", "field"),
         [
             pytest.param(
-                json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+                json.dumps({**field_tree(home_summary()), "retired_figure": 12.5}),
                 "retired_figure",
                 id="summary-holds-a-key-no-field-has",
             ),
@@ -799,7 +798,7 @@ class TestExportAPI:
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
         path.write_bytes(response.data)
-        assert load_fleet_config(path).homes == home_configs
+        assert load_fleet_config(path).homes == tuple(home_configs)
 
     def test_export_of_a_fleet_run_reads_its_homes_from_its_record_and_none_of_its_time_series(
         self, storage: RunStorage, client: FlaskClient, tmp_path: Path
@@ -820,7 +819,7 @@ class TestExportAPI:
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
         path.write_bytes(response.data)
-        assert load_fleet_config(path).homes == home_configs
+        assert load_fleet_config(path).homes == tuple(home_configs)
 
     @pytest.mark.parametrize(
         ("strategy", "grid_charging"),
@@ -856,7 +855,6 @@ class TestExportAPI:
                 grid_charging=grid_charging,
             ),
             tariff_config=TariffConfig.economy_7(),
-            dispatch_strategy="tou_optimized",
         )
         _store_home_run(storage, "tou-battery-home", config)
 
@@ -900,17 +898,18 @@ class TestExportAPI:
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
         path.write_bytes(response.data)
-        assert load_fleet_config(path).homes == home_configs
+        assert load_fleet_config(path).homes == tuple(home_configs)
 
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
     def test_export_of_a_run_stored_before_the_dispatch_union_answers_its_variant_once_migrated(
-        self, tmp_path: Path, strategy: object
+        self, build_app: BuildApp, tmp_path: Path, strategy: object
     ) -> None:
         """Such a run stores all three strategy keys, the ones its strategy does not read null.
 
         The strict reader refuses a key no field has, null or not, so the run's row is migrated
         first, as `solar-challenge web migrate` migrates a store at schema version 1, which drops
-        those keys.
+        those keys. home_summary holds a window, so v5 needs no time series for the run, which has
+        no directory.
         """
         store = tmp_path / "store"
         database = write_database_at_schema_version(database_path_in(store), 1)
@@ -922,11 +921,7 @@ class TestExportAPI:
             )
         migrate_store(database, store)
 
-        app = build_test_app(store)
-        try:
-            response = app.test_client().get("/api/history/runs/pre-union/export/yaml")
-        finally:
-            release_store_lock(app)
+        response = build_app(store).test_client().get("/api/history/runs/pre-union/export/yaml")
 
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
@@ -1000,6 +995,18 @@ class TestExportAPI:
 # ---------------------------------------------------------------------------
 
 
+def _compare_a_home_run_and_a_fleet_run(storage: RunStorage, client: FlaskClient) -> str:
+    """Save B11's one-day home run "Home A" and two-home fleet run "Fleet B", and return their comparison page."""
+    store_home_run(storage, "cmp-home", make_home_config(), make_sim_results(days=1), name="Home A")
+    store_fleet_run(
+        storage,
+        "cmp-fleet",
+        make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1),
+        name="Fleet B",
+    )
+    return client.get("/history/compare?ids=cmp-home,cmp-fleet").get_data(as_text=True)
+
+
 class TestComparisonRoute:
     """Tests for the comparison page route."""
 
@@ -1057,26 +1064,6 @@ class TestComparisonRoute:
         ]
         assert texts_after(page, "Total Generation", 4) == ["100.0 kWh", "120.0 kWh", "+20.0 kWh", "+20.0%"]
 
-    def test_compare_of_runs_whose_summaries_carry_a_window_gives_the_page_each_summary_as_its_field_tree(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
-        """Each run's summary reaches the page as its field tree: a window's dates and cadence as JSON text, not as a date range and a timedelta."""
-        summary_a = home_summary(total_generation_kwh=100.0, window=JUNE_WEEK_WINDOW)
-        summary_b = home_summary(total_generation_kwh=120.0, window=JUNE_WEEK_WINDOW)
-        _insert_test_run(app, run_id="cmp-a", name="Compare A", summary=summary_a)
-        _insert_test_run(app, run_id="cmp-b", name="Compare B", summary=summary_b)
-        contexts: list[dict] = []
-
-        def keep_context(sender: Flask, context: dict, **rendering: object) -> None:
-            contexts.append(context)
-
-        with template_rendered.connected_to(keep_context, app):
-            response = client.get("/history/compare?ids=cmp-a,cmp-b")
-
-        assert response.status_code == 200
-        [context] = contexts
-        assert [run["summary"] for run in context["runs"]] == [field_tree(summary_a), field_tree(summary_b)]
-
     @pytest.mark.parametrize(
         ("damaged_summary_json", "field"),
         [
@@ -1125,19 +1112,36 @@ class TestComparisonRoute:
         self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """B11: the fleet was drawn at 0 % on every axis while the radar read a fleet summary by a home summary's names."""
-        store_home_run(storage, "cmp-home", make_home_config(), make_sim_results(days=1), name="Home A")
-        store_fleet_run(
-            storage,
-            "cmp-fleet",
-            make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1),
-            name="Fleet B",
-        )
-
-        page = client.get("/history/compare?ids=cmp-home,cmp-fleet").get_data(as_text=True)
+        page = _compare_a_home_run_and_a_fleet_run(storage, client)
 
         radar = chart_figures(page)["chart-comparison-radar"]
         assert traces_by_name(radar)["Fleet B"]["r"] == [25.0, 60.0, 75.0, 25.0]
         assert annotation_texts(radar) == ["PV stored in battery % is left out: no figure for Fleet B"]
+
+    def test_compare_of_a_home_run_and_a_fleet_run_shows_the_fleet_s_figures_in_every_key_metrics_row(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """Task 1269: the Self-Consumption Ratio row read a fleet summary by a home summary's key, so the fleet's cell, its Delta and its % Change showed '-'."""
+        page = _compare_a_home_run_and_a_fleet_run(storage, client)
+
+        assert {
+            label: texts_after(page, label, 4)
+            for label in (
+                "Total Generation",
+                "Total Demand",
+                "Self-Consumption",
+                "Grid Import",
+                "Grid Export",
+                "Self-Consumption Ratio",
+            )
+        } == {
+            "Total Generation": ["72.0 kWh", "144.0 kWh", "+72.0 kWh", "+100.0%"],
+            "Total Demand": ["36.0 kWh", "90.0 kWh", "+54.0 kWh", "+150.0%"],
+            "Self-Consumption": ["24.0 kWh", "36.0 kWh", "+12.0 kWh", "+50.0%"],
+            "Grid Import": ["12.0 kWh", "54.0 kWh", "+42.0 kWh", "+350.0%"],
+            "Grid Export": ["48.0 kWh", "108.0 kWh", "+60.0 kWh", "+125.0%"],
+            "Self-Consumption Ratio": ["33.3%", "25.0%", "-8.3 pp", "-25.0%"],
+        }
 
     def test_compare_of_a_run_with_no_summary_redirects_to_the_runs_page_flashing_that_it_has_none(
         self, app: Flask, storage: RunStorage, client: FlaskClient

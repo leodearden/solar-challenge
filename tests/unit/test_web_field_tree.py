@@ -4,21 +4,24 @@
 field_tree writes a dataclass's field tree. read_field_tree reads one back as its class's
 annotations declare, refusing a value with a FieldTreeRefused that names the value's dotted path,
 with [i] for an item and None for the root, and the reason. without_unknown_keys drops each key
-the reader refuses as one no field has, reporting each as an UnknownKey. The tests drive those
-names over this module's dataclasses, which hold every shape the codec reads, a date and a
-timedelta among them, and shapes no stored dataclass has today: a list, a dict of dataclasses, a
-pd.Timestamp and Any. The agreement test pins the drop to the reader: a key no field has, added
-to each dataclass's object, is refused by the reader at exactly the path where the drop reports
-it.
+the reader refuses as one no field has, reporting each as an UnknownKey, unless the predicate
+it is given, asked with the dataclass whose object holds the key, spares it. The tests drive those
+names over this module's dataclasses, which hold every shape the codec reads, a date, a
+timedelta and a str-Enum among them, and shapes no stored dataclass has today: a list, a dict of
+dataclasses, a pd.Timestamp and Any. The agreement test pins the drop to the reader: a key no
+field has, added to each dataclass's object, is refused by the reader at exactly the path where
+the drop reports it.
 """
 
 import copy
 import json
 import math
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
+from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 
 import pandas as pd
@@ -577,6 +580,79 @@ def test_without_unknown_keys_keeps_whole_a_value_the_reader_refuses(keys: Keys,
     _refusal(content, _EveryShape)
 
 
+@dataclass(frozen=True)
+class _Inner:
+    """A dataclass held at depth, in an Optional field and in a list's items."""
+
+    x: float
+
+
+@dataclass(frozen=True)
+class _Outer:
+    """A dataclass holding an _Inner in an Optional field and _Inners in a list."""
+
+    inner: _Inner | None
+    items: list[_Inner]
+
+
+def _outer_holding_unknown_keys() -> dict[str, Any]:
+    """An _Outer's object whose root holds the unknown key "old", and each _Inner object the unknown keys "extra" and "spare"."""
+    return {
+        "old": 0,
+        "inner": {"x": 1.0, "extra": 1, "spare": 10},
+        "items": [{"x": 2.0, "extra": 2, "spare": 20}, {"x": 3.0, "extra": 3, "spare": 30}],
+    }
+
+
+def test_without_unknown_keys_keeps_as_it_is_each_unknown_key_its_predicate_spares_at_any_depth() -> None:
+    content = _outer_holding_unknown_keys()
+
+    assert without_unknown_keys(content, _Outer, drops=lambda owner, key: owner is _Outer) == (
+        {key: value for key, value in content.items() if key != "old"},
+        (UnknownKey("old", 0),),
+    )
+
+
+def test_without_unknown_keys_drops_and_reports_each_unknown_key_its_predicate_drops_by_its_path() -> None:
+    kept, dropped = without_unknown_keys(_outer_holding_unknown_keys(), _Outer, drops=lambda owner, key: key == "extra")
+
+    assert kept == {
+        "old": 0,
+        "inner": {"x": 1.0, "spare": 10},
+        "items": [{"x": 2.0, "spare": 20}, {"x": 3.0, "spare": 30}],
+    }
+    assert dropped == (UnknownKey("inner.extra", 1), UnknownKey("items[0].extra", 2), UnknownKey("items[1].extra", 3))
+
+
+def test_without_unknown_keys_asks_its_predicate_about_each_unknown_key_with_the_dataclass_whose_object_holds_it() -> None:
+    asked: list[tuple[type, str]] = []
+
+    def drops(owner: type, key: str) -> bool:
+        asked.append((owner, key))
+        return False
+
+    without_unknown_keys(_outer_holding_unknown_keys(), _Outer, drops=drops)
+
+    assert asked == [
+        (_Outer, "old"),
+        (_Inner, "extra"),
+        (_Inner, "spare"),
+        (_Inner, "extra"),
+        (_Inner, "spare"),
+        (_Inner, "extra"),
+        (_Inner, "spare"),
+    ]
+
+
+def test_without_unknown_keys_drops_every_unknown_key_with_no_predicate() -> None:
+    kept, dropped = without_unknown_keys(_outer_holding_unknown_keys(), _Outer)
+
+    assert read_field_tree(kept, _Outer) == _Outer(_Inner(1.0), [_Inner(2.0), _Inner(3.0)])
+    assert [key.path for key in dropped] == [
+        "old", "inner.extra", "inner.spare", "items[0].extra", "items[0].spare", "items[1].extra", "items[1].spare"
+    ]
+
+
 def test_without_unknown_keys_changes_none_of_its_input() -> None:
     content = _with_value(_with_value(_TREE, ("retired",), 1), ("points", 0, "retired"), 2)
     before = copy.deepcopy(content)
@@ -584,3 +660,87 @@ def test_without_unknown_keys_changes_none_of_its_input() -> None:
     without_unknown_keys(content, _EveryShape)
 
     assert content == before
+
+
+class _Colour(StrEnum):
+    RED = "red"
+    BLUE = "blue"
+
+
+@dataclass(frozen=True)
+class _Weights:
+    """Weights held in a read-only mapping, as SummaryStatistics holds its load energies."""
+
+    weights: Mapping[str, float]
+
+    def __post_init__(self) -> None:
+        """Hold a read-only copy of weights, whatever Mapping it was given."""
+        object.__setattr__(self, "weights", MappingProxyType(dict(self.weights)))
+
+
+@dataclass(frozen=True)
+class _Shaded:
+    """A dataclass with a field annotated with a str-Enum, as EVConfig's charger_type is."""
+
+    colour: _Colour
+
+
+class TestAStrEnumField:
+    """A field annotated with a str-Enum is stored as its member's value, and read back as the member that value names."""
+
+    def test_a_member_is_written_as_its_value(self) -> None:
+        assert json.loads(json.dumps(field_tree(_Shaded(_Colour.RED)))) == {"colour": "red"}
+
+    def test_a_value_is_read_back_as_the_member_it_names(self) -> None:
+        shaded = _Shaded(_Colour.BLUE)
+
+        read = read_field_tree({"colour": "blue"}, _Shaded)
+
+        assert read.colour is _Colour.BLUE
+        assert read == shaded
+
+    @pytest.mark.parametrize(
+        ("stored", "reason"),
+        [
+            pytest.param("green", "is the string 'green', not one of ['red', 'blue']", id="a-string-naming-no-member"),
+            pytest.param(1, "is the number 1, not one of ['red', 'blue']", id="a-number"),
+            pytest.param(None, "is null, not one of ['red', 'blue']", id="null"),
+        ],
+    )
+    def test_a_value_naming_no_member_is_refused_naming_the_members_values(self, stored: object, reason: str) -> None:
+        with pytest.raises(FieldTreeRefused) as refusal:
+            read_field_tree({"colour": stored}, _Shaded)
+
+        assert (refusal.value.path, refusal.value.reason) == ("colour", reason)
+
+
+class TestAMappingField:
+    """A field annotated Mapping[K, V] whose value is no dict is stored as an object of its keys, and read back from one."""
+
+    def test_a_read_only_mapping_is_written_as_an_object_of_its_keys_and_values(self) -> None:
+        tree = field_tree(_Weights({"a": 1.0, "b": 2.0}))
+
+        assert json.loads(json.dumps(tree)) == {"weights": {"a": 1.0, "b": 2.0}}
+
+    def test_a_str_enum_key_is_written_as_its_value(self) -> None:
+        tree = field_tree(_Weights({_Colour.RED: 1.0}))
+
+        assert json.loads(json.dumps(tree)) == {"weights": {"red": 1.0}}
+
+    def test_the_object_is_read_back_into_the_class(self) -> None:
+        weights = _Weights({"a": 1.0, "b": 2.0})
+
+        assert read_field_tree(json.loads(json.dumps(field_tree(weights))), _Weights) == weights
+
+    def test_a_null_is_refused_naming_its_path_as_no_object(self) -> None:
+        with pytest.raises(FieldTreeRefused) as refusal:
+            read_field_tree({"weights": None}, _Weights)
+
+        assert (refusal.value.path, refusal.value.reason) == ("weights", "is null, not an object")
+
+    def test_an_array_is_refused_as_no_object(self) -> None:
+        with pytest.raises(FieldTreeRefused) as refusal:
+            read_field_tree({"weights": [1.0]}, _Weights)
+
+        assert refusal.value.path == "weights"
+        assert refusal.value.reason.endswith("not an object")

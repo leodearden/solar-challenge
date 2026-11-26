@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import sqlite3
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -32,10 +33,8 @@ from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.builder_form import scenario_from_builder_form
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import require_encodable_text
-from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_names
@@ -105,7 +104,7 @@ class TestScenarioBuilderRoute:
                     "key": component.key,
                     "fixed_field": component.fixed_field,
                     "grammar_key": component.grammar_key,
-                    "dist": component.builder_default.editor_state(),
+                    "dist": component.start.editor_state(),
                 }
                 for component in FLEET_COMPONENTS.values()
             ]
@@ -280,7 +279,7 @@ class TestScenarioAPI:
             pytest.param(
                 ("pv_capacity_kw",),
                 {"pv_distribution_type": "normal", "pv_mean": 4},
-                "requires 'mean' and 'std'",
+                "fleet_distribution.pv.capacity_kw: requires 'std'",
                 id="PV normal without its std",
             ),
             pytest.param(
@@ -328,6 +327,27 @@ class TestScenarioAPI:
         assert data["valid"] is False
         assert any(error_text in error for error in data["errors"]), data["errors"]
 
+    def test_validate_reports_a_drawn_value_outside_its_components_range(
+        self, client: FlaskClient
+    ) -> None:
+        """P15: the default form with its PV a normal around 50 kW, which every home draws above the pv component's range, is invalid, naming pv.capacity_kw and the range."""
+        form = {
+            **TestBuilderScenarioYaml._DEFAULT_FORM,
+            "pv_distribution_type": "normal",
+            "pv_mean": 50,
+            "pv_std": 1,
+        }
+
+        response = client.post("/api/scenarios/validate", json=form)
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["valid"] is False
+        assert any(
+            error.startswith("pv.capacity_kw must be between 0.5 and 20 for every home, got ")
+            for error in data["errors"]
+        ), data["errors"]
+
     def test_validate_reports_a_shuffled_pool_too_small_for_the_fleet(
         self, client: FlaskClient
     ) -> None:
@@ -348,10 +368,25 @@ class TestScenarioAPI:
         assert validation_with_pv_pool_counts((20, 40, 30)) == {
             "valid": False,
             "errors": [
-                "fleet_distribution: FleetDistributionConfig: shuffled_pool counts for 'pv.capacity_kw' "
-                "must total n_homes (100), got 90"
+                "fleet_distribution: pv.capacity_kw: shuffled_pool counts must total n_homes (100), got 90"
             ],
         }
+
+    def test_validate_answers_the_readers_refusal_of_a_seg_block_without_a_temp_directory(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The builder's document is judged in memory, so with the temp directory missing the answer is still parse_seg_rate's refusal of the negative rate."""
+        with pytest.raises(ConfigurationError) as seg_refusal:
+            parse_seg_rate({"rate_pence_per_kwh": -1.0})
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "absent"))
+
+        response = client.post(
+            "/api/scenarios/validate",
+            json={**TestBuilderScenarioYaml._DEFAULT_FORM, "seg_rate_pence_per_kwh": -1},
+        )
+
+        assert response.status_code == 200
+        assert response.get_json() == {"valid": False, "errors": [str(seg_refusal.value)]}
 
     def test_validate_missing_name_returns_errors(self, client: FlaskClient) -> None:
         """Test POST /api/scenarios/validate with missing name returns errors."""
@@ -890,8 +925,8 @@ class TestBuilderScenarioYaml:
         """A custom location the form sends without its latitude or its longitude is reported by the key it leaves out, not loaded as Bristol's.
 
         The form sends the *omitted* coordinate as ''.  The preview writes the coordinates
-        given as the document's location: block, which the loader refuses by the missing
-        key's path.
+        given as the document's location: block, which the loader refuses naming the key it
+        leaves out.
         """
         coordinates = {"latitude": 53.4, "longitude": -2.2, "altitude": 38.0}
         given = {key: value for key, value in coordinates.items() if key != omitted}
@@ -902,7 +937,7 @@ class TestBuilderScenarioYaml:
 
         assert document["location"] == given
         assert validation["valid"] is False
-        assert any(f"location.{omitted}" in error for error in validation["errors"]), validation
+        assert validation["errors"] == [f"location: requires {omitted!r}"], validation
 
     def test_a_form_key_the_builder_does_not_read_is_refused(self, client: FlaskClient) -> None:
         """A key the builder does not read gets 400 naming it, instead of being dropped from the YAML."""

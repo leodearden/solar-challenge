@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Pins on how the suite runs on pytest-xdist workers."""
 
+from pathlib import Path
+
 import pytest
+
+from tests._orchestrator_config import pytest_arguments, verify_command, verify_env
 
 
 def test_a_console_the_cli_builds_at_import_follows_a_columns_set_after_it_on_an_xdist_worker(
@@ -67,9 +71,9 @@ def test_a_child_a_test_starts_inherits_no_terminal_size(
 
 
 def test_a_pytest_session_a_test_not_marked_slow_starts_runs_n_auto_in_its_own_process(pytester: pytest.Pytester) -> None:
-    """A session that a test not marked slow starts with `-n auto`, as a copy of pyproject's addopts gives it, starts no workers.
+    """A session that a test not marked slow starts with `-n auto`, as a test that runs the verify's test command verbatim passes it, starts no workers.
 
-    The suite already spreads its tests over every core. A child session that
+    The verify already spreads the suite over workers. A child session that
     started a worker per core would multiply the run's workers, and would break
     the tests that count a session's outcomes or need its tests run in order.
     """
@@ -124,6 +128,68 @@ def test_a_pytest_session_a_slow_test_starts_runs_n_auto_on_workers(
     result = pytester_under_root_conftest.runpytest_subprocess("-p", "no:cacheprovider")
 
     result.assert_outcomes(passed=1)
+
+
+def test_a_pytest_session_that_reads_the_project_ini_and_passes_no_n_runs_in_its_own_process(
+    pytester: pytest.Pytester, pytester_sessions_read_the_project_ini: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session that reads this project's pytest ini and passes no `-n` starts no xdist worker, though `auto` would give it two.
+
+    So an agent's or a person's pytest run rooted at the repo never starts a
+    worker per core of the shared host; the verify's test command asks for its
+    workers itself.
+
+    PYTEST_XDIST_AUTO_NUM_WORKERS=2 stands in for a worker per core. It also
+    overrides the "0" that tests/conftest.py's window sets for every test not
+    marked slow, which would otherwise resolve an `-n auto` in the ini's addopts
+    to no workers by itself and let this test pass without pinning the ini.
+
+    The scenario asks its own session's config whether it is a worker, because
+    PYTEST_XDIST_WORKER in os.environ cannot answer: the verify runs this test on
+    a worker, and every session that test starts inherits that worker's variable.
+    The session names the scenario's module, since the ini's testpaths name a
+    tests/ directory pytester's lacks.
+    """
+    monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "2")
+    scenario = pytester.makepyfile(
+        """
+        from xdist import is_xdist_worker
+
+
+        def test_runs_in_the_sessions_own_process(request):
+            assert not is_xdist_worker(request)
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", scenario)
+
+    result.assert_outcomes(passed=1)
+
+
+def test_the_verify_test_command_asks_for_xdist_workers_grouped_by_xdist_group(project_root: Path) -> None:
+    """The verify's test command passes pytest `-n auto --dist loadgroup`, so the verify runs the suite on pytest-xdist workers, asking `--dist loadgroup` to keep the tests of each xdist_group on one worker."""
+    test_command = verify_command(project_root, "test_command")
+    arguments = pytest_arguments(test_command)
+    adjacent_arguments = set(zip(arguments, arguments[1:]))
+    missing = [f"`{' '.join(pair)}`" for pair in [("-n", "auto"), ("--dist", "loadgroup")] if pair not in adjacent_arguments]
+
+    assert not missing, (
+        f"the {test_command.label} {test_command.command!r} does not pass pytest {' and '.join(missing)}. Without "
+        "`-n auto`, the verify, and the interpreter-matrix and newest-releases lanes that re-run its suite verbatim, "
+        "run serially, since pyproject's addopts start no worker; without `--dist loadgroup`, an xdist_group mark "
+        "asks for nothing"
+    )
+
+
+def test_the_verify_env_caps_the_workers_n_auto_starts(project_root: Path) -> None:
+    """dark-factory-orchestrator.yaml's verify_env sets PYTEST_XDIST_AUTO_NUM_WORKERS to a positive count, so `-n auto` in a verify never takes one worker per core of the shared workstation."""
+    cap = verify_env(project_root).get("PYTEST_XDIST_AUTO_NUM_WORKERS")
+
+    assert cap is not None and cap.isdecimal() and int(cap) > 0, (
+        f"dark-factory-orchestrator.yaml's verify_env sets PYTEST_XDIST_AUTO_NUM_WORKERS to {cap!r} (None if it "
+        "sets none), not a positive count of workers, so the verify test command's `-n auto` takes one worker per "
+        "host core, and every concurrent verify on the shared workstation does so at once"
+    )
 
 
 def test_dist_loadgroup_spreads_the_tests_of_an_xdist_group_over_workers(pytester: pytest.Pytester) -> None:

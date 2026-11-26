@@ -17,7 +17,7 @@ from tests.unit.web_jobs._fakes import BlockingSimulation, SaveGate
 
 @pytest.fixture
 def blocking_simulation() -> Iterator[BlockingSimulation]:
-    """A BlockingSimulation released at teardown, before tests/conftest.py drains the job managers."""
+    """A BlockingSimulation released at teardown, before closes_at_teardown closes the test's job managers and apps."""
     simulation = BlockingSimulation()
     yield simulation
     simulation.release()
@@ -25,7 +25,7 @@ def blocking_simulation() -> Iterator[BlockingSimulation]:
 
 @pytest.fixture
 def save_gate() -> Iterator[SaveGate]:
-    """A SaveGate opened at teardown, before tests/conftest.py drains the job managers, as blocking_simulation is released."""
+    """A SaveGate opened at teardown, before closes_at_teardown closes the test's job managers and apps, as blocking_simulation is released."""
     gate = SaveGate()
     yield gate
     gate.open()

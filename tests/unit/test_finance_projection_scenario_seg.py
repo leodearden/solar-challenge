@@ -16,13 +16,10 @@ import pandas as pd
 import pytest
 
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import (
-    FinanceConfig,
-    project_multi_year,
-    solve_cost_recovery_rate,
-)
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import RunPricing
+from solar_challenge.projection import project_multi_year, solve_cost_recovery_rate
 from solar_challenge.seg import SEGTariff
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_period, make_sim_results
 

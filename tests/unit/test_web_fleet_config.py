@@ -15,10 +15,9 @@ from solar_challenge.fleet_distribution import (
     parse_fleet_distribution_config,
 )
 from solar_challenge.web import fleet_config
+from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_config import (
     DISTRIBUTION_KEYS,
-    MAX_FLEET_HOMES,
-    MAX_FLEET_SEED,
     distribution_form_spec,
     distribution_grammar_spec,
     form_to_fleet_distribution_config,

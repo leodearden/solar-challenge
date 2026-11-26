@@ -2,23 +2,27 @@
 """A dataclass's field tree in JSON, written by field_tree and read back strictly by read_field_tree, as the class's annotations declare.
 
 A field tree is a dataclass's fields as a JSON object, each value in its JSON form: a dataclass
-as an object, a list or tuple as an array, a dict as an object of its keys, a pd.Timestamp or a
-date as its ISO 8601 text, a timedelta as its ISO 8601 duration. read_field_tree reads one
+as an object, a list or tuple as an array, a dict or other Mapping as an object of its keys, a pd.Timestamp or a
+date as its ISO 8601 text, a timedelta as its ISO 8601 duration, a str-Enum member as its value.
+read_field_tree reads one
 strictly: each JSON value must be one its field's annotation can be, and the dataclass built
 from them must accept them. A key no field has, a missing field that has no default, a value
 its annotation cannot be (an object for a dataclass, an array for a sequence, a number but no
 bool for an int, such a number a float can hold for a float, null only for an Optional field,
-one of a Literal's values), an unknown union tag, or a dataclass that refuses its values is
+one of a Literal's or a str-Enum's values), an unknown union tag, or a dataclass that refuses its values is
 refused with a FieldTreeRefused naming the value's dotted path, with [i] for an item and None
 for the root, and the reason. A missing field that has a default takes it.
 without_unknown_keys drops each key the reader would refuse as one no field has, reporting each
-as an UnknownKey.
+as an UnknownKey, unless its predicate, asked with the dataclass whose object holds the key,
+spares it. is_json_number is the reader's test of a JSON number: an int or a float, but no bool.
 
 The reader and the drop both walk a value by its _shape: a dataclass's object, an array, a dict's
 object or a leaf, each child with the annotation it is read as and its path. The writer, _shape
 and _stored_form all take the containers stored as an array from _ARRAY_CONTAINERS, so a new such
-container is one entry of it. A leaf codec, as the pd.Timestamp, date and timedelta ones, is a
-branch of _read_leaf, of _field_tree_value, and of _stored_form unless it is stored as a string.
+container is one entry of it; _shape and _stored_form take the annotations read from an object
+from _OBJECT_MAPPINGS. A leaf codec, as the pd.Timestamp, date, timedelta and str-Enum ones, is a
+branch of _read_leaf, of _field_tree_value unless json writes the value itself, as it writes a
+str-Enum member as its value, and of _stored_form unless it is stored as a string.
 Neither needs an edit of the drop.
 
 The module imports no solar_challenge module. web/stored_runs.py writes and reads a run's
@@ -30,8 +34,9 @@ import functools
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import date, timedelta
+from enum import Enum
 from types import MappingProxyType, UnionType
-from typing import Any, Literal, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeAlias, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -39,6 +44,9 @@ T = TypeVar("T")
 
 _ARRAY_CONTAINERS: tuple[type[Collection[Any]], ...] = (list, tuple)
 """The containers a field tree stores as an array: field_tree writes each as one, and an annotation of one, as list[X], is read from an array into it."""
+
+_OBJECT_MAPPINGS: tuple[type[Mapping[Any, Any]], ...] = (dict, Mapping)
+"""The annotation origins read from a JSON object of keys: an annotation of one, as dict[K, V] or Mapping[K, V], is read into a dict, which the dataclass's own construction may hold as it chooses."""
 
 
 def field_tree(obj: Any) -> dict[str, Any]:
@@ -70,8 +78,8 @@ def _field_tree_value(value: Any) -> Any:
     reader reads back as itself, so it is returned unchanged. The value's type, not its
     field's annotation, picks the form, so a pd.Timestamp in a date field becomes datetime
     text, which the reader refuses as no date. A value of one of _ARRAY_CONTAINERS becomes a
-    list, and a dict keeps its keys, with every item serialized the same way. Anything else,
-    None included, is returned unchanged.
+    list, and any Mapping a dict of its keys, a str-Enum key a str that json writes as its value,
+    with every item serialized the same way. Anything else, None included, is returned unchanged.
     """
     if is_dataclass(value):
         return field_tree(value)
@@ -83,7 +91,7 @@ def _field_tree_value(value: Any) -> Any:
         return pd.Timedelta(value).isoformat()
     if isinstance(value, _ARRAY_CONTAINERS):
         return [_field_tree_value(item) for item in value]
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {key: _field_tree_value(item) for key, item in value.items()}
     return value
 
@@ -119,12 +127,25 @@ def read_field_tree(content: Any, cls: type[T]) -> T:
     return value
 
 
-def without_unknown_keys(content: Any, cls: type) -> tuple[Any, tuple[UnknownKey, ...]]:
-    """*content*, decoded JSON read as a *cls*, without each key no field of its dataclass has; and each dropped key, in the content's order.
+DropsUnknownKey: TypeAlias = Callable[[type, str], bool]
+"""Whether without_unknown_keys drops a key no field has: asked with the dataclass whose object holds the key, and the key."""
 
-    It is walked as read_field_tree reads it, and is not itself changed.
+
+def _every_key(owner: type, key: str) -> bool:
+    """The predicate that drops every unknown key, whichever dataclass's object holds it."""
+    return True
+
+
+def without_unknown_keys(
+    content: Any, cls: type, *, drops: DropsUnknownKey = _every_key
+) -> tuple[Any, tuple[UnknownKey, ...]]:
+    """*content*, decoded JSON read as a *cls*, without each key no field of its dataclass has that *drops* drops; and each dropped key, in the content's order.
+
+    *drops* is asked of each such key at any depth; a key it spares is kept as it is,
+    unreported. By default every such key is dropped. The
+    content is walked as read_field_tree reads it, and is not itself changed.
     """
-    return _without_unknown_keys(content, cls, None)
+    return _without_unknown_keys(content, cls, None, drops)
 
 
 @dataclass(frozen=True)
@@ -198,7 +219,7 @@ def _shape(value: Any, annotation: Any, path: str | None) -> _Shape:
         return _dataclass_object(value, annotation, path)
     if origin in _ARRAY_CONTAINERS:
         return _array(value, annotation, path)
-    if origin is dict:
+    if origin in _OBJECT_MAPPINGS:
         return _mapping(value, annotation, path)
     return _Leaf(value, annotation, path)
 
@@ -345,7 +366,8 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
     Any admits anything as it is. A Literal, bool, int, float and str admit only values of their
     JSON type; an int is any number but a bool, and a float any such number a float can hold,
     each kept as decoded. A pd.Timestamp is read from its ISO text, a date from its ISO 8601
-    text, and a timedelta from its ISO 8601 duration as _timedelta_of reads it.
+    text, a timedelta from its ISO 8601 duration as _timedelta_of reads it, and a str-Enum from
+    a string that is one of its members' values, as the member that value names.
 
     Raises:
         FieldTreeRefused: *value* cannot be *annotation*, or *annotation* has no stored form.
@@ -359,10 +381,10 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
         if isinstance(value, bool):
             return value
     elif annotation is int:
-        if _is_number(value):
+        if is_json_number(value):
             return value
     elif annotation is float:
-        if _is_number(value) and _float_can_hold(value):
+        if is_json_number(value) and _float_can_hold(value):
             return value
     elif annotation is str:
         if isinstance(value, str):
@@ -382,6 +404,9 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
     elif annotation is timedelta:
         if isinstance(value, str):
             return _timedelta_of(value, path)
+    elif _is_str_enum(annotation):
+        if isinstance(value, str) and value in _member_values(annotation):
+            return annotation(value)
     else:
         raise FieldTreeRefused(path, f"has no stored form: the stored-run format reads no {annotation!r}")
     raise FieldTreeRefused(path, f"is {_json_value(value)}, not {_stored_form(annotation)}")
@@ -412,7 +437,17 @@ def _timedelta_of(text: str, path: str | None) -> timedelta:
     return converted
 
 
-def _is_number(value: Any) -> bool:
+def _is_str_enum(annotation: Any) -> bool:
+    """Whether *annotation* is a str-Enum, an Enum class whose members are strings."""
+    return isinstance(annotation, type) and issubclass(annotation, Enum) and issubclass(annotation, str)
+
+
+def _member_values(str_enum: type[Enum]) -> list[str]:
+    """The values of *str_enum*'s members, in declaration order."""
+    return [member.value for member in str_enum]
+
+
+def is_json_number(value: Any) -> bool:
     """Whether *value*, decoded JSON, is a number: an int or a float, but no bool."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -426,13 +461,15 @@ def _float_can_hold(number: int | float) -> bool:
     return True
 
 
-def _without_unknown_keys(value: Any, annotation: Any, path: str | None) -> tuple[Any, tuple[UnknownKey, ...]]:
-    """*value*, decoded JSON at *path* in its document, without each key no field of its dataclass has; and each dropped key, an UnknownKey.
+def _without_unknown_keys(
+    value: Any, annotation: Any, path: str | None, drops: DropsUnknownKey
+) -> tuple[Any, tuple[UnknownKey, ...]]:
+    """*value*, decoded JSON at *path* in its document, without each key no field of its dataclass has that *drops* drops; and each dropped key, an UnknownKey.
 
     *value* is walked by its _shape, as _read reads it: a dataclass's object keeps the keys its
-    fields name, its tag's included, and an array's items and an object's values are walked in
-    their order. A value _shape refuses is kept whole, for the strict reader to refuse. *value*
-    itself is not changed.
+    fields name, its tag's included, and each other key *drops* spares, and an array's items and
+    an object's values are walked in their order. A value _shape refuses is kept whole, for the
+    strict reader to refuse. *value* itself is not changed.
     """
     try:
         shape = _shape(value, annotation, path)
@@ -440,11 +477,11 @@ def _without_unknown_keys(value: Any, annotation: Any, path: str | None) -> tupl
         return value, ()
     match shape:
         case _DataclassObject():
-            return _dataclass_object_without_unknown_keys(shape)
+            return _dataclass_object_without_unknown_keys(shape, drops)
         case _Array(items=items):
-            return _each_without_unknown_keys(items)
+            return _each_without_unknown_keys(items, drops)
         case _Mapping(entries=entries):
-            values, dropped = _each_without_unknown_keys(child for _, child in entries)
+            values, dropped = _each_without_unknown_keys((child for _, child in entries), drops)
             return dict(zip((key for key, _ in entries), values, strict=True)), dropped
         case _Leaf():
             return value, ()
@@ -452,22 +489,28 @@ def _without_unknown_keys(value: Any, annotation: Any, path: str | None) -> tupl
             assert_never(shape)
 
 
-def _dataclass_object_without_unknown_keys(obj: _DataclassObject) -> tuple[dict[str, Any], tuple[UnknownKey, ...]]:
-    """The object *obj* without each key no field of its dataclass has, each field's value walked; and each dropped key, in the object's order."""
+def _dataclass_object_without_unknown_keys(
+    obj: _DataclassObject, drops: DropsUnknownKey
+) -> tuple[dict[str, Any], tuple[UnknownKey, ...]]:
+    """The object *obj* without each key no field of its dataclass has that *drops* drops, each field's value walked; and each dropped key, in the object's order."""
     kept: dict[str, Any] = {}
     dropped: list[UnknownKey] = []
     for key, member in obj.members:
-        if isinstance(member, UnknownKey):
+        if not isinstance(member, UnknownKey):
+            kept[key], dropped_within = _without_unknown_keys(member.value, member.annotation, member.path, drops)
+            dropped.extend(dropped_within)
+        elif drops(obj.cls, key):
             dropped.append(member)
         else:
-            kept[key], dropped_within = _without_unknown_keys(member.value, member.annotation, member.path)
-            dropped.extend(dropped_within)
+            kept[key] = member.value
     return kept, tuple(dropped)
 
 
-def _each_without_unknown_keys(children: Iterable[_Child]) -> tuple[list[Any], tuple[UnknownKey, ...]]:
-    """Each of *children*'s values without the keys no field has, in order; and each key dropped within them, in order."""
-    walked = [_without_unknown_keys(child.value, child.annotation, child.path) for child in children]
+def _each_without_unknown_keys(
+    children: Iterable[_Child], drops: DropsUnknownKey
+) -> tuple[list[Any], tuple[UnknownKey, ...]]:
+    """Each of *children*'s values without the keys no field has that *drops* drops, in order; and each key dropped within them, in order."""
+    walked = [_without_unknown_keys(child.value, child.annotation, child.path, drops) for child in children]
     return [content for content, _ in walked], tuple(key for _, dropped in walked for key in dropped)
 
 
@@ -501,7 +544,7 @@ def _stored_form(annotation: Any) -> str:
         return f"an object, as a {annotation.__name__} is stored"
     if origin in _ARRAY_CONTAINERS:
         return "an array"
-    if origin is dict:
+    if origin in _OBJECT_MAPPINGS:
         return "an object"
     if origin is Literal:
         return f"one of {list(get_args(annotation))}"
@@ -513,6 +556,8 @@ def _stored_form(annotation: Any) -> str:
         return "a number"
     if annotation is float:
         return "a number a float can hold"
+    if _is_str_enum(annotation):
+        return f"one of {_member_values(annotation)}"
     return "a string"
 
 
@@ -573,6 +618,6 @@ def _item_annotations(sequence_annotation: Any, length: int) -> tuple[Any, ...] 
 
 
 def _value_annotation(dict_annotation: Any) -> Any:
-    """The annotation of each value of dict[K, V], V; Any for a bare dict."""
+    """The annotation of each value of dict[K, V] or Mapping[K, V], V; Any for a bare dict."""
     args = get_args(dict_annotation)
     return args[1] if args else Any

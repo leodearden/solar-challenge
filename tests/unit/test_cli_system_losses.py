@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """`home run --system-losses` sets the home's PV system losses, as its pv: block's system_losses key does and over the file's own value.
 
-A value PVConfig refuses is refused as that key is, before anything is simulated.
+A value PVConfig refuses is refused with PVConfig's own message under the option's name, before anything is simulated.
 """
 
 import dataclasses
@@ -15,6 +15,7 @@ from typer.testing import CliRunner, Result
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.cli.main import app
 from solar_challenge.pv import PVConfig
+from tests._cli_stderr_text import stderr_text
 from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
@@ -90,14 +91,12 @@ def test_home_run_with_the_option_prints_what_a_pv_block_setting_it_prints(
 
 
 @pytest.mark.parametrize("value", ["1", "-0.01", "nan", "inf"])
-def test_a_value_pvconfig_refuses_is_refused_as_a_pv_block_setting_it_is(value: str) -> None:
-    """A `--system-losses` PVConfig refuses stops `home run` with the error a pv: block setting it gives, carrying PVConfig's own message, before anything is simulated."""
+def test_a_value_pvconfig_refuses_is_refused_naming_the_option(value: str) -> None:
+    """A `--system-losses` PVConfig refuses stops `home run` with PVConfig's own message under the option's name, before anything is simulated."""
     with pytest.raises(ValueError) as pv_refusal:
         PVConfig(capacity_kw=4.0, system_losses=float(value))
 
     overridden = _home_run(_write_home("override.yaml"), "--system-losses", value)
-    in_file = _home_run(_write_home("in_file.yaml", system_losses=float(value)))
 
     assert (overridden.exit_code, overridden.stdout) == (1, "")
-    assert overridden.stderr == in_file.stderr
-    assert str(pv_refusal.value) in " ".join(overridden.stderr.split())
+    assert stderr_text(overridden) == f"Configuration error: --system-losses: {pv_refusal.value}"

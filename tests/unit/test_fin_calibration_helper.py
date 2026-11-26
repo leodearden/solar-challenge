@@ -64,10 +64,7 @@ def test_physics_column_runs_over_every_one_of_physics_column_days() -> None:
     first_day, last_day = PHYSICS_COLUMN_DAYS.window()
     period = make_physics_column_scenario().period
 
-    assert (period.get_start_timestamp().date(), period.get_end_timestamp().date()) == (
-        first_day.date(),
-        last_day.date(),
-    )
+    assert (period.first_day, period.last_day) == (first_day.date(), last_day.date())
 
 
 def test_fin_golden_cells_cannot_be_reassigned() -> None:

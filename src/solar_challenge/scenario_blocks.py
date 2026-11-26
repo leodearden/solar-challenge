@@ -5,7 +5,7 @@ The component tables it reads blocks by also carry each key's fleet row and each
 writer, which the fleet grammar and scenario_writer read, so a field's key is declared once.
 """
 
-from dataclasses import MISSING, asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -13,6 +13,7 @@ from typing import (
     Callable,
     Collection,
     Generic,
+    Iterable,
     Mapping,
     Optional,
     Protocol,
@@ -27,9 +28,15 @@ from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyCo
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import CHARGER_TYPES, EVConfig
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
+from solar_challenge.gridservices import (
+    EventWindow,
+    FlatGridServices,
+    GridServicesEventsConfig,
+    GridServicesModel,
+    NoGridServices,
+)
 from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
-from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
+from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -52,12 +59,25 @@ def block_label(block_path: str) -> str:
     return block_path or "the top level"
 
 
+def refusal(block_path: str, problem: str) -> ConfigurationError:
+    """Return the refusal of the block at *block_path*, reading "<block label>: <problem>".
+
+    The caller raises it, ``from`` the exception that caused it where there is one.
+    """
+    return ConfigurationError(f"{block_label(block_path)}: {problem}")
+
+
 def require_mapping(block_path: str, data: object) -> dict[Any, Any]:
     """Return the block at *block_path*, refusing it unless it is a mapping."""
     if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"{block_label(block_path)} must be a mapping, got {type(data).__name__}"
-        )
+        raise refusal(block_path, f"must be a mapping, got {type(data).__name__}")
+    return data
+
+
+def require_list(block_path: str, data: object) -> list[Any]:
+    """Return the list at *block_path*, refusing it unless it is a list."""
+    if not isinstance(data, list):
+        raise refusal(block_path, f"must be a list, got {type(data).__name__}")
     return data
 
 
@@ -68,21 +88,41 @@ def refuse_unrecognised_keys(
     mapping = require_mapping(block_path, data)
     unrecognised = sorted(repr(key) for key in mapping.keys() - recognised)
     if unrecognised:
-        raise ConfigurationError(
-            f"Unrecognised keys in {block_label(block_path)}: {', '.join(unrecognised)}; "
-            f"recognised keys: {', '.join(sorted(recognised))}"
+        raise refusal(
+            block_path,
+            f"unrecognised keys {', '.join(unrecognised)}; "
+            f"recognised keys: {', '.join(sorted(recognised))}",
         )
     return mapping
 
 
-def _read_name(block: Mapping[str, Any], *, block_path: str) -> str:
-    """Return the name the block at *block_path* sets, "" when it sets none or a null one, refusing a name that is not a string by its path."""
-    name = block.get("name")
-    if name is None:
+def refuse_retired_keys(block_path: str, data: object, retired: Mapping[str, str]) -> dict[Any, Any]:
+    """Return the block at *block_path*, refusing it unless it is a mapping holding no key of *retired*, null or not, naming the first such key's path and why it is refused."""
+    block = require_mapping(block_path, data)
+    for key, why in retired.items():
+        if key in block:
+            raise refusal(child_path(block_path, key), why)
+    return block
+
+
+RETIRED_DISPATCH_STRATEGY_KEY: Mapping[str, str] = MappingProxyType({
+    "dispatch_strategy": (
+        "the dispatch strategy is the battery's own setting; write it in the battery block, "
+        "as battery.dispatch_strategy: {strategy_type: tou_optimized}; a battery that sets none "
+        "dispatches self_consumption, as greedy did"
+    ),
+})
+"""The home's and the fleet's retired dispatch_strategy key, with why it is refused and what replaces it."""
+
+
+def read_text(block: Mapping[str, Any], key: str, *, block_path: str) -> str:
+    """Return the text the block at *block_path* sets for *key*, "" when it sets none or a null one, refusing a value that is not a string by its path."""
+    text = block.get(key)
+    if text is None:
         return ""
-    if not isinstance(name, str):
-        raise ConfigurationError.must_be(child_path(block_path, "name"), "a string", got=name)
-    return name
+    if not isinstance(text, str):
+        raise refusal(child_path(block_path, key), f"must be a string, got {text!r}")
+    return text
 
 
 _Built = TypeVar("_Built")
@@ -98,6 +138,40 @@ class BlockType(Generic[_Built]):
 
     recognised_keys: frozenset[str]
     build: Callable[[dict[str, Any], str], _Built]
+
+
+def _read_typed_block(
+    types: Mapping[str, BlockType[_Built]],
+    data: object,
+    *,
+    block_path: str,
+    kind: str,
+    omitted_means: Optional[str] = None,
+) -> _Built:
+    """Build the block at *block_path* by the type of *types* its ``type:`` key names.
+
+    Refuses a block that is not a mapping or sets no type, a type *types* does not hold, naming
+    it a *kind* type and listing the supported ones, and a key the type does not recognise.
+    *omitted_means*, when given, is what omitting the block means, which no type names, so the
+    refusal of an unknown type says to omit the block for it.
+    """
+    block = require_mapping(block_path, data)
+    require_keys(block_path, block, ["type"])
+    type_name = block["type"]
+    block_type = types.get(type_name) if isinstance(type_name, str) else None
+    if block_type is None:
+        omission = "" if omitted_means is None else f"; omit {block_path} for {omitted_means}"
+        raise refusal(
+            child_path(block_path, "type"),
+            f"unknown {kind} type {type_name!r}; supported types: {', '.join(types)}{omission}",
+        )
+    refuse_unrecognised_keys(block_path, block, block_type.recognised_keys)
+    return block_type.build(block, block_path)
+
+
+def _without_type_key(block: Mapping[str, Any]) -> dict[str, Any]:
+    """The keys of a typed block other than its ``type:``, which name its type's fields."""
+    return {key: value for key, value in block.items() if key != "type"}
 
 
 class _SubBlockReader(Protocol):
@@ -163,14 +237,33 @@ def _any_draw_asks_for_it(drawn: object, path: str) -> bool:
 
 
 _Component = TypeVar("_Component", bound=DataclassInstance)
+_Value = TypeVar("_Value")
+
+
+@dataclass(frozen=True)
+class ReaderOnlyKey(Generic[_Component]):
+    """A key of a component's block that no field holds: the block's reader applies it to the component it builds.
+
+    *apply* gives the component with the key's value applied, setting the fields *sets* names;
+    a block may set the key or those fields, not both. *subject* and *form* name, in the
+    refusal of a block setting both, what the key and the fields are two forms of and the
+    key's form of it. tests/unit/config/test_component_blocks.py holds each one to be a key of
+    its block and no field of the dataclass (T1).
+    """
+
+    sets: tuple[str, ...]
+    apply: Callable[[_Component, Any], _Component]
+    subject: str
+    form: str
 
 
 @dataclass(frozen=True)
 class ComponentBlock(Generic[_Component]):
     """A component's block in the scenario grammar, stated against the dataclass it builds.
 
-    *config_type* is the dataclass. *keys* are the block's keys, the fields it carries, in field
-    order; *outside_grammar* maps each other field to the reason no key carries it. *sub_blocks*
+    *config_type* is the dataclass. *keys* are the block's keys: the fields it carries, in field
+    order, and its reader-only keys; *outside_grammar* maps each other field to the reason no key
+    carries it. *sub_blocks*
     holds the keys whose value is a nested block, and *when_omitted* the value an omitted key
     reads as, for each key where that is not the dataclass's declared default.
 
@@ -179,7 +272,12 @@ class ComponentBlock(Generic[_Component]):
     reason the fleet grammar does not carry it. *presence* is the fleet field whose null draw
     means the home has no such component, and *asks_for_component* says whether its non-null
     draw, at its path, asks for one.
-    tests/unit/config/test_component_blocks.py holds every table to its dataclass's fields (T1).
+
+    *reader_only* holds the keys no field holds, each with its ReaderOnlyKey: every builder
+    of the component builds it from the other keys, then applies each reader-only key set
+    non-null, and refuses a block setting one beside a field it sets; a writer writes none.
+    tests/unit/config/test_component_blocks.py holds every table to its dataclass's fields,
+    its reader-only keys among its keys and none of them a field (T1).
     """
 
     config_type: type[_Component]
@@ -191,6 +289,35 @@ class ComponentBlock(Generic[_Component]):
     not_in_fleet: Mapping[str, str]
     presence: Optional[str] = None
     asks_for_component: Callable[[object, str], bool] = _any_draw_asks_for_it
+    reader_only: Mapping[str, ReaderOnlyKey[_Component]] = field(default_factory=lambda: MappingProxyType({}))
+
+    def refuse_both_forms(self, keys: Collection[str], block_path: str) -> None:
+        """Refuse the block at *block_path* if *keys*, the keys it sets, hold a reader-only key beside a field it sets, naming the block and each key."""
+        for key, reader_only in self.reader_only.items():
+            present = [name for name in reader_only.sets if name in keys]
+            if key in keys and present:
+                raise refusal(
+                    block_path,
+                    f"sets both forms of {reader_only.subject}: {key} and {' and '.join(present)}; "
+                    f"set {key}, {reader_only.form}, or {' and '.join(reader_only.sets)}, not both",
+                )
+
+    def without_reader_only_keys(self, values: Mapping[str, _Value]) -> dict[str, _Value]:
+        """*values*, by key, without the reader-only keys: the values the dataclass is built from."""
+        return {key: value for key, value in values.items() if key not in self.reader_only}
+
+    def with_reader_only_keys(self, component: _Component, values: Mapping[str, object], block_path: str) -> _Component:
+        """*component* with each reader-only key *values* sets non-null applied, in key order.
+
+        Raises:
+            ConfigurationError: As a key's apply refuses its value, naming the key by its path
+                under *block_path*, the block's; "" names the key alone.
+        """
+        for key in self.keys:
+            value = values.get(key)
+            if key in self.reader_only and value is not None:
+                component = constructed(child_path(block_path, key), self.reader_only[key].apply, component, value)
+        return component
 
     def value_when_omitted(self, name: str) -> object:
         """The value field *name* is built with when a block does not set it, as no block sets a field outside the grammar.
@@ -216,10 +343,23 @@ def _set_keys(block: ComponentBlock[Any], data: object, block_path: str) -> dict
 
 
 def refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None:
-    """Refuse the block at *block_path* if it leaves out any of *missing_keys*, keys it needs, naming each by its path."""
+    """Refuse the block at *block_path* if it leaves out any of *missing_keys*, keys it needs, naming each in the order given."""
     if missing_keys:
-        missing = ", ".join(child_path(block_path, key) for key in missing_keys)
-        raise ConfigurationError(f"Missing required keys in {block_label(block_path)}: {missing}")
+        raise refusal(block_path, f"requires {', '.join(repr(key) for key in missing_keys)}")
+
+
+def require_keys(block_path: str, block: Mapping[str, Any], keys: Iterable[str]) -> None:
+    """Refuse the block at *block_path* unless it sets each of *keys*, a null key reading as absent, naming each it leaves out in the order given."""
+    refuse_missing_keys(block_path, [key for key in keys if block.get(key) is None])
+
+
+def require_held_keys(block_path: str, block: Mapping[str, Any], keys: Iterable[str]) -> None:
+    """Refuse the block at *block_path* unless it holds each of *keys*, null or not, naming each it leaves out in the order given.
+
+    It is require_keys for a block whose null is a value: a fleet's null spec, or a null the
+    block's type refuses as it refuses any value.
+    """
+    refuse_missing_keys(block_path, [key for key in keys if key not in block])
 
 
 def _required_keys(config_type: type[DataclassInstance]) -> tuple[str, ...]:
@@ -231,12 +371,12 @@ def _required_keys(config_type: type[DataclassInstance]) -> tuple[str, ...]:
     )
 
 
-def constructed(block_path: str, cls: Callable[..., _Built], /, **values: Any) -> _Built:
-    """cls(**values), its refusal, a ConfigurationError or a TypeError, re-raised as "<block label>: <message>" from the original."""
+def constructed(block_path: str, cls: Callable[..., _Built], /, *args: Any, **values: Any) -> _Built:
+    """cls(*args, **values), its refusal, a ConfigurationError or a TypeError, re-raised as "<block label>: <message>" from the original."""
     try:
-        return cls(**values)
-    except (ConfigurationError, TypeError) as refusal:
-        raise ConfigurationError(f"{block_label(block_path)}: {refusal}") from refusal
+        return cls(*args, **values)
+    except (ConfigurationError, TypeError) as exc:
+        raise refusal(block_path, str(exc)) from exc
 
 
 def _built_component(
@@ -245,23 +385,30 @@ def _built_component(
     """The config the block at *block_path* describes, built from the keys it sets.
 
     Each sub-block it sets is read first, in the table's order; then the dataclass is built once
-    from the set values, as written, over the table's when-omitted values.
+    from the set values of its fields, as written, over the table's when-omitted values; then
+    each reader-only key it sets is applied.
 
     Raises:
-        ConfigurationError: naming by its path each key the block leaves out that has neither a
-            declared default nor a when-omitted value; or as its dataclass refuses the values,
-            prefixed by the block's path.
+        ConfigurationError: for a block setting a reader-only key beside a field it sets, as
+            refuse_both_forms refuses it; naming the block and each key it leaves out that has
+            neither a declared default nor a when-omitted value; as its dataclass refuses the
+            values, prefixed by the block's path; or as a reader-only key's apply refuses its
+            value, prefixed by the key's path.
     """
-    refuse_missing_keys(
+    block.refuse_both_forms(set_keys, block_path)
+    require_keys(
         block_path,
-        [key for key in block.keys if key not in set_keys and block.value_when_omitted(key) is MISSING],
+        set_keys,
+        [key for key in block.keys if key not in block.reader_only and block.value_when_omitted(key) is MISSING],
     )
     sub_block_configs = {
         key: sub_block.read(set_keys[key], block_path=child_path(block_path, key))
         for key, sub_block in block.sub_blocks.items()
         if key in set_keys
     }
-    return constructed(block_path, block.config_type, **{**block.when_omitted, **set_keys, **sub_block_configs})
+    field_values = block.without_reader_only_keys(set_keys)
+    built = constructed(block_path, block.config_type, **{**block.when_omitted, **field_values, **sub_block_configs})
+    return block.with_reader_only_keys(built, set_keys, block_path)
 
 
 def _read_component_block(
@@ -271,8 +418,8 @@ def _read_component_block(
 
     A key outside the table's keys is refused, null or not; a null key reads as absent; an
     omitted key takes the table's when-omitted value, else the dataclass's declared default; a
-    key with neither is refused by its path; and a value the dataclass refuses is refused as it
-    refuses it, prefixed by the block's path.
+    block leaving out a key with neither is refused, naming the block and each key it leaves out;
+    and a value the dataclass refuses is refused as it refuses it, prefixed by the block's path.
     """
     return _built_component(block, _set_keys(block, data, block_path), block_path)
 
@@ -283,8 +430,9 @@ def parse_location_block(
     """Parse a ``location:`` block into a Location, as LOCATION_BLOCK reads it.
 
     A block that is absent or sets no key, its null keys read as absent, is Bristol. Otherwise it
-    must set latitude and longitude: a block that leaves either out is refused, naming it by its
-    path. An omitted timezone or altitude takes Bristol's, and an omitted name stays empty.
+    must set latitude and longitude: a block that leaves either out is refused, naming the block
+    and each it leaves out. An omitted timezone or altitude takes Bristol's, and an omitted name
+    stays empty.
     """
     if data is None:
         return Location.bristol()
@@ -299,7 +447,7 @@ def _parse_pv_config(data: dict[str, Any], *, block_path: str) -> PVConfig:
     return _read_component_block(PV_BLOCK, data, block_path=block_path)
 
 
-_GRID_CHARGING_BLOCK_KEYS: frozenset[str] = frozenset({"target_soc_fraction"})
+_GRID_CHARGING_BLOCK_KEYS: frozenset[str] = frozenset({"target_soc_fraction", "forecast"})
 
 
 def parse_grid_charge_config(
@@ -307,10 +455,12 @@ def parse_grid_charge_config(
 ) -> Optional[GridChargeConfig]:
     """Parse grid-charging configuration from a dict or None.
 
-    An omitted ``target_soc_fraction`` takes GridChargeConfig's declared default.
+    An omitted ``target_soc_fraction`` or ``forecast`` takes GridChargeConfig's declared
+    default, so a block that names no forecast is PV-blind.
 
     Args:
-        data: grid_charging mapping (e.g. ``{'target_soc_fraction': 0.9}``) or None.
+        data: grid_charging mapping (e.g. ``{'target_soc_fraction': 0.9, 'forecast':
+            'trailing_14_days'}``) or None.
         block_path: The block's path in its file, named in error messages.
 
     Returns:
@@ -318,8 +468,8 @@ def parse_grid_charge_config(
 
     Raises:
         ConfigurationError: If data is present but not a mapping, or carries a key
-            other than ``target_soc_fraction``; or as GridChargeConfig refuses its
-            target, prefixed by the block's path.
+            other than ``target_soc_fraction`` and ``forecast``; or as GridChargeConfig
+            refuses its target or its forecast, prefixed by the block's path.
     """
     if data is None:
         return None
@@ -330,47 +480,17 @@ def parse_grid_charge_config(
 
 def _grid_charging_block(grid_charging: GridChargeConfig) -> dict[str, Any]:
     """The grid_charging: block parse_grid_charge_config reads back as *grid_charging*."""
-    return {"target_soc_fraction": grid_charging.target_soc_fraction}
-
-
-_PER_DIRECTION_EFFICIENCY_KEYS: tuple[str, ...] = ("charge_efficiency", "discharge_efficiency")
-"""The battery: block's per-direction efficiency keys, in BATTERY_BLOCK's order, which a block setting efficiency, the round trip, may not set."""
-
-
-def _refuse_both_efficiency_forms(block_path: str, set_keys: Mapping[str, Any]) -> None:
-    """Refuse the battery: block at *block_path* if *set_keys*, the keys it sets, hold a per-direction efficiency beside efficiency, naming the block and each key."""
-    per_direction = [key for key in _PER_DIRECTION_EFFICIENCY_KEYS if key in set_keys]
-    if per_direction:
-        raise ConfigurationError(
-            f"{block_label(block_path)} sets both forms of a battery's efficiency: efficiency and "
-            f"{' and '.join(per_direction)}; set efficiency, the round trip, or charge_efficiency "
-            "and discharge_efficiency, not both"
-        )
+    return {"target_soc_fraction": grid_charging.target_soc_fraction, "forecast": grid_charging.forecast}
 
 
 def _parse_battery_config(
     data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[BatteryConfig]:
-    """Parse a battery: block into a BatteryConfig by BATTERY_BLOCK, its efficiency the round trip BatteryConfig.with_round_trip reads; a null block is no battery.
+    """Parse a battery: block into a BatteryConfig, as _read_component_block reads BATTERY_BLOCK; a null block is no battery.
 
-    Raises:
-        ConfigurationError: as _read_component_block refuses a block; for one setting
-            efficiency beside charge_efficiency or discharge_efficiency, naming the block and
-            each key; or as with_round_trip refuses the efficiency it sets, naming that key by
-            its path.
+    Its efficiency is the round trip BatteryConfig.with_round_trip splits, a reader-only key.
     """
-    if data is None:
-        return None
-    set_keys = _set_keys(BATTERY_BLOCK, data, block_path)
-    round_trip = set_keys.get("efficiency")
-    if round_trip is None:
-        return _built_component(BATTERY_BLOCK, set_keys, block_path)
-    _refuse_both_efficiency_forms(block_path, set_keys)
-    other_keys = {key: value for key, value in set_keys.items() if key != "efficiency"}
-    battery = _built_component(BATTERY_BLOCK, other_keys, block_path)
-    return constructed(
-        child_path(block_path, "efficiency"), battery.with_round_trip, round_trip_efficiency=round_trip
-    )
+    return None if data is None else _read_component_block(BATTERY_BLOCK, data, block_path=block_path)
 
 
 def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
@@ -402,15 +522,16 @@ def _strategy_variant(block: Mapping[str, Any], block_path: str) -> type[Dispatc
     """The variant of DispatchStrategyConfig the strategy_type of the dispatch_strategy: block at *block_path* names.
 
     Raises:
-        ConfigurationError: for a strategy_type that is missing or names no variant, naming its
-            path, its value and the variants' tags.
+        ConfigurationError: for a strategy_type that is missing or null, naming the block; for
+            one that names no variant, naming its path, its value and the variants' tags.
     """
-    tag = block.get("strategy_type")
+    require_keys(block_path, block, ["strategy_type"])
+    tag = block["strategy_type"]
     variant = STRATEGY_CONFIG_BY_TYPE.get(tag) if isinstance(tag, str) else None
     if variant is None:
-        raise ConfigurationError(
-            f"Invalid {child_path(block_path, 'strategy_type')} {tag!r}; "
-            f"valid values: {sorted(STRATEGY_CONFIG_BY_TYPE)}"
+        raise refusal(
+            child_path(block_path, "strategy_type"),
+            f"invalid value {tag!r}; valid values: {sorted(STRATEGY_CONFIG_BY_TYPE)}",
         )
     return variant
 
@@ -425,10 +546,10 @@ def parse_dispatch_strategy_config(
     variants, every key present and those its strategy does not read null, reads as its variant.
 
     Raises:
-        ConfigurationError: for a block that is not a mapping; a strategy_type that is missing
-            or names no variant, naming its path, its value and the variants' tags; a key the
+        ConfigurationError: for a block that is not a mapping; a strategy_type that is missing,
+            naming the block, or names no variant, naming its path, its value and the variants' tags; a key the
             variant does not read, unless it is null and another strategy reads it; a key the
-            variant needs, left out or null, naming its path; and a value the variant refuses,
+            variant needs, left out or null, naming the block and the key; and a value the variant refuses,
             as it refuses it, prefixed by the block's path.
     """
     if data is None:
@@ -441,7 +562,7 @@ def parse_dispatch_strategy_config(
         {key: value for key, value in block.items() if value is not None or key not in _KEYS_A_STRATEGY_READS},
         {"strategy_type", *(each.name for each in variant_fields)},
     )
-    refuse_missing_keys(block_path, [key for key in _required_keys(variant) if key not in set_keys])
+    require_keys(block_path, set_keys, _required_keys(variant))
     values = {each.name: _tuples(set_keys[each.name]) for each in variant_fields if each.name in set_keys}
     build_variant: Callable[..., DispatchStrategyConfig] = variant
     return constructed(block_path, build_variant, **values)
@@ -519,6 +640,14 @@ BATTERY_BLOCK: ComponentBlock[BatteryConfig] = ComponentBlock(
     not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
     presence="capacity_kwh",
     asks_for_component=has_battery,
+    reader_only=MappingProxyType({
+        "efficiency": ReaderOnlyKey(
+            sets=("charge_efficiency", "discharge_efficiency"),
+            apply=BatteryConfig.with_round_trip,
+            subject="a battery's efficiency",
+            form="the round trip",
+        ),
+    }),
 )
 
 LOAD_BLOCK: ComponentBlock[LoadConfig] = ComponentBlock(
@@ -601,11 +730,12 @@ _PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset(each.name for each in field
 
 def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     """Build the flat_rate tariff a block names, refusing it unless it gives a rate."""
-    rate = data.get("rate_per_kwh")
-    if rate is None:
-        raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
+    require_keys(block_path, data, ["rate_per_kwh"])
     return constructed(
-        block_path, TariffConfig.flat_rate, rate_per_kwh=rate, name=_read_name(data, block_path=block_path)
+        block_path,
+        TariffConfig.flat_rate,
+        rate_per_kwh=data["rate_per_kwh"],
+        name=read_text(data, "name", block_path=block_path),
     )
 
 
@@ -625,7 +755,7 @@ def _preset_tariff(
         PresetRates,
         **{**asdict(preset_rates), **{key: data[key] for key in _PRESET_TARIFF_RATE_KEYS if key in data}},
     )
-    times = {key: value for key, value in data.items() if key != "type" and key not in _PRESET_TARIFF_RATE_KEYS}
+    times = {key: value for key, value in _without_type_key(data).items() if key not in _PRESET_TARIFF_RATE_KEYS}
     return constructed(block_path, factory, **asdict(rates), **times)
 
 
@@ -642,33 +772,31 @@ def _build_economy_10_tariff(data: dict[str, Any], block_path: str) -> TariffCon
 def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
     """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate, and as TariffPeriod refuses it, prefixed by its path."""
     period = refuse_unrecognised_keys(block_path, data, _TARIFF_PERIOD_KEYS)
-    for key in ("start_time", "end_time", "rate_per_kwh"):
-        if key not in period:
-            raise ConfigurationError(f"Tariff period requires '{key}' field")
+    require_keys(block_path, period, ["start_time", "end_time", "rate_per_kwh"])
     return constructed(
         block_path,
         TariffPeriod,
         start_time=period["start_time"],
         end_time=period["end_time"],
         rate_per_kwh=period["rate_per_kwh"],
-        name=_read_name(period, block_path=block_path),
+        name=read_text(period, "name", block_path=block_path),
     )
 
 
 def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
-    """Build the custom tariff a block names from its periods, refusing it unless it gives some, and as TariffConfig refuses its periods, prefixed by the block's path."""
-    if "periods" not in data:
-        raise ConfigurationError("custom tariff requires 'periods' field")
+    """Build the custom tariff a block names from its periods, refusing it unless it gives a list of some, and as TariffConfig refuses its periods, prefixed by the block's path."""
+    require_keys(block_path, data, ["periods"])
 
-    periods_data = data["periods"]
+    periods_path = child_path(block_path, "periods")
+    periods_data = require_list(periods_path, data["periods"])
     if not periods_data:
-        raise ConfigurationError("custom tariff must have at least one period")
+        raise refusal(periods_path, "must list at least one period")
 
     periods = tuple(
         _parse_tariff_period(period, block_path=child_path(block_path, f"periods[{index}]"))
         for index, period in enumerate(periods_data)
     )
-    return constructed(block_path, TariffConfig, periods=periods, name=_read_name(data, block_path=block_path))
+    return constructed(block_path, TariffConfig, periods=periods, name=read_text(data, "name", block_path=block_path))
 
 
 _TARIFF_TYPES: Mapping[str, BlockType[TariffConfig]] = MappingProxyType({
@@ -718,19 +846,7 @@ def parse_tariff_config(
     """
     if data is None:
         return None
-    require_mapping(block_path, data)
-
-    tariff_type = data.get("type")
-    if tariff_type is None:
-        raise ConfigurationError("Tariff configuration requires 'type' field")
-    block_type = _TARIFF_TYPES.get(tariff_type) if isinstance(tariff_type, str) else None
-    if block_type is None:
-        raise ConfigurationError(
-            f"Unknown tariff type '{tariff_type}'. "
-            f"Supported types: {', '.join(_TARIFF_TYPES)}"
-        )
-    refuse_unrecognised_keys(block_path, data, block_type.recognised_keys)
-    return block_type.build(data, block_path)
+    return _read_typed_block(_TARIFF_TYPES, data, block_path=block_path, kind="tariff")
 
 
 def _parse_heat_pump_config(
@@ -752,36 +868,49 @@ def _parse_ev_config(data: Optional[dict[str, Any]], *, block_path: str) -> Opti
 _HOME_SCALAR_KEYS: tuple[str, ...] = ("name",)
 
 HOME_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_HOME_SCALAR_KEYS, "dispatch_strategy", "pv", "battery", "load", "tariff", "heat_pump", "ev",
+    *_HOME_SCALAR_KEYS, "pv", "battery", "load", "tariff", "heat_pump", "ev",
 })
 
 
-def read_dispatch_strategy_key(block: Mapping[str, Any], *, block_path: str) -> Optional[str]:
-    """The dispatch_strategy the block at *block_path* sets: None when it is absent or null, else one of HOME_DISPATCH_STRATEGIES.
-
-    Raises:
-        ConfigurationError: It is set to another value, as refuse_unknown_home_dispatch_strategy
-            refuses it, naming its key's path.
-    """
-    value = block.get("dispatch_strategy")
-    if value is None:
-        return None
-    return refuse_unknown_home_dispatch_strategy(value, field=child_path(block_path, "dispatch_strategy"))
+def _home_tariff(
+    own: Optional[TariffConfig], fleet_tariff: Optional[TariffConfig], *, block_path: str
+) -> Optional[TariffConfig]:
+    """The tariff of the home at *block_path*: its own, else *fleet_tariff*, refusing an own tariff that differs from *fleet_tariff* by its tariff's path, naming both tariffs."""
+    if own is None:
+        return fleet_tariff
+    if fleet_tariff is None or own == fleet_tariff:
+        return own
+    raise refusal(
+        child_path(block_path, "tariff"),
+        f"{own!r} differs from the scenario's top-level tariff: block, {fleet_tariff!r}, which a home "
+        "takes when it sets none; set the tariff once, or make the two equal",
+    )
 
 
 def parse_home_block(
-    data: dict[str, Any], location: Location, *, block_path: str = "home"
+    data: dict[str, Any],
+    location: Location,
+    *,
+    block_path: str = "home",
+    fleet_tariff: Optional[TariffConfig] = None,
 ) -> HomeConfig:
     """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*.
 
     A key the block omits takes HomeConfig's declared default, and so does a null scalar. An
-    omitted pv or load block reads as an empty one.
+    omitted pv or load block reads as an empty one. A block with no tariff of its own is built
+    with *fleet_tariff*, the scenario's, before HomeConfig checks it.
 
     Raises:
-        ConfigurationError: as each of its blocks' readers refuses that block; or as
-            HomeConfig refuses the home its blocks describe, prefixed by the block's path.
+        ConfigurationError: the block is not a mapping; it holds the retired dispatch_strategy
+            key, the battery's own setting, null or not, naming the battery's key in its place
+            (RETIRED_DISPATCH_STRATEGY_KEY); as each of its blocks' readers refuses that block;
+            its own tariff differs from *fleet_tariff*, naming its tariff's path and the
+            scenario's tariff: block; or as HomeConfig refuses the home its blocks describe,
+            prefixed by the block's path.
     """
-    home = refuse_unrecognised_keys(block_path, data, HOME_BLOCK_KEYS)
+    home = refuse_unrecognised_keys(
+        block_path, refuse_retired_keys(block_path, data, RETIRED_DISPATCH_STRATEGY_KEY), HOME_BLOCK_KEYS
+    )
     return constructed(
         block_path,
         HomeConfig,
@@ -793,21 +922,17 @@ def parse_home_block(
             home.get("load", {}), block_path=child_path(block_path, "load")
         ),
         location=location,
-        tariff_config=parse_tariff_config(
-            home.get("tariff"), block_path=child_path(block_path, "tariff")
+        tariff_config=_home_tariff(
+            parse_tariff_config(home.get("tariff"), block_path=child_path(block_path, "tariff")),
+            fleet_tariff,
+            block_path=block_path,
         ),
         heat_pump_config=_parse_heat_pump_config(
             home.get("heat_pump"), block_path=child_path(block_path, "heat_pump")
         ),
         ev_config=_parse_ev_config(home.get("ev"), block_path=child_path(block_path, "ev")),
         **{key: home[key] for key in _HOME_SCALAR_KEYS if home.get(key) is not None},
-        **dispatch_strategy_argument(read_dispatch_strategy_key(home, block_path=block_path)),
     )
-
-
-def dispatch_strategy_argument(dispatch_strategy: Optional[str]) -> dict[str, Any]:
-    """HomeConfig's dispatch_strategy argument for *dispatch_strategy*: none when it is None, so the field takes its default."""
-    return {} if dispatch_strategy is None else {"dispatch_strategy": dispatch_strategy}
 
 
 _SEG_BLOCK_KEYS: frozenset[str] = frozenset({"preset", "rate_pence_per_kwh"})
@@ -826,28 +951,23 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
         return None
     data = refuse_unrecognised_keys(block_path, data, _SEG_BLOCK_KEYS)
     if ("preset" in data) == ("rate_pence_per_kwh" in data):
-        raise ConfigurationError(
-            f"'{block_path}' must specify exactly one of 'preset' or "
-            f"'rate_pence_per_kwh', got {data!r}"
+        raise refusal(
+            block_path, f"must specify exactly one of 'preset' or 'rate_pence_per_kwh', got {data!r}"
         )
     if "rate_pence_per_kwh" in data:
-        return _parse_seg_rate_scalar(data["rate_pence_per_kwh"], path=block_path)
+        return _parse_seg_rate_scalar(data["rate_pence_per_kwh"], block_path=block_path)
     try:
         return resolve_seg_tariff(data["preset"]).rate_pence_per_kwh
     except (ValueError, TypeError) as exc:
-        raise ConfigurationError(f"'{block_path}' block {data!r} is invalid: {exc}") from exc
+        raise refusal(child_path(block_path, "preset"), str(exc)) from exc
 
 
-def _parse_seg_rate_scalar(value: Any, *, path: str) -> float:
-    """Read a SEG export rate in pence/kWh as :class:`SEGTariff` reads it, a refusal prefixed by *path*, the rate's place in its file."""
-    return constructed(path, SEGTariff, name="", rate_pence_per_kwh=value).rate_pence_per_kwh
+def _parse_seg_rate_scalar(value: Any, *, block_path: str) -> float:
+    """Read a SEG export rate in pence/kWh as :class:`SEGTariff` reads it, a refusal prefixed by *block_path*, the rate's place in its file."""
+    return constructed(block_path, SEGTariff, name="", rate_pence_per_kwh=value).rate_pence_per_kwh
 
 
 _FINANCE_BLOCK_KEYS: frozenset[str] = frozenset(each.name for each in fields(FinanceConfig) if each.init)
-
-_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset(
-    each.name for each in fields(GridServicesEventsConfig) if each.init
-)
 
 _EVENT_WINDOW_KEYS: frozenset[str] = frozenset(each.name for each in fields(EventWindow) if each.init)
 """The keys an event window recognises: EventWindow's init fields."""
@@ -855,42 +975,91 @@ _EVENT_WINDOW_KEYS: frozenset[str] = frozenset(each.name for each in fields(Even
 
 def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
     """Parse the event_windows list at *block_path* into EventWindows, each refused as EventWindow refuses it, prefixed by its path."""
-    if not isinstance(data, list):
-        raise ConfigurationError(f"{block_path} must be a list of window dicts")
     parsed_windows: list[EventWindow] = []
-    for i, ew_dict in enumerate(data):
+    for i, ew_dict in enumerate(require_list(block_path, data)):
         window_path = f"{block_path}[{i}]"
         window = refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
-        for req_key in _required_keys(EventWindow):
-            if req_key not in window:
-                raise ConfigurationError(f"{window_path} requires '{req_key}' field")
+        require_keys(window_path, window, _required_keys(EventWindow))
         parsed_windows.append(constructed(window_path, EventWindow, **window))
     return tuple(parsed_windows)
 
 
-def _parse_grid_services_events_config(
-    data: object, *, block_path: str
-) -> Optional[GridServicesEventsConfig]:
-    """Parse a finance block's grid_services_events block; absent or null is no events config.
+def _build_flat_grid_services(data: dict[str, Any], block_path: str) -> FlatGridServices:
+    """Build the flat pricing a grid_services_model block of type flat names, refusing it unless it sets its rate, and as FlatGridServices refuses the rate, prefixed by the block's path."""
+    require_keys(block_path, data, _required_keys(FlatGridServices))
+    return constructed(block_path, FlatGridServices, **_without_type_key(data))
+
+
+def _build_grid_services_at_events(data: dict[str, Any], block_path: str) -> GridServicesEventsConfig:
+    """Build the events pricing a grid_services_model block of type capacity_at_events names.
 
     A key the block omits takes GridServicesEventsConfig's declared default, so an omitted
     event_windows is the default schedule, DEFAULT_EVENT_WINDOWS. Its event windows are read
     first, then a value GridServicesEventsConfig refuses is refused as it refuses it, prefixed
     by the block's path.
     """
-    if data is None:
-        return None
-    gs_data = refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
+    values = _without_type_key(data)
     event_windows = (
         {
             "event_windows": _parse_event_windows(
-                gs_data["event_windows"], block_path=child_path(block_path, "event_windows")
+                values["event_windows"], block_path=child_path(block_path, "event_windows")
             )
         }
-        if "event_windows" in gs_data
+        if "event_windows" in values
         else {}
     )
-    return constructed(block_path, GridServicesEventsConfig, **{**gs_data, **event_windows})
+    return constructed(block_path, GridServicesEventsConfig, **{**values, **event_windows})
+
+
+_GRID_SERVICES_MODEL_TYPES: Mapping[str, BlockType[FlatGridServices | GridServicesEventsConfig]] = MappingProxyType({
+    "flat": BlockType(
+        frozenset({"type", *(each.name for each in fields(FlatGridServices) if each.init)}),
+        _build_flat_grid_services,
+    ),
+    "capacity_at_events": BlockType(
+        frozenset({"type", *(each.name for each in fields(GridServicesEventsConfig) if each.init)}),
+        _build_grid_services_at_events,
+    ),
+})
+"""The types a grid_services_model block names; no grid services is written by omitting the block."""
+
+
+def _parse_grid_services_model(data: object, *, block_path: str) -> GridServicesModel:
+    """Read a finance block's grid_services_model block, at *block_path*, as the pricing its type names; absent or null is NoGridServices.
+
+    A string, the retired selector, is refused naming the forms to write.
+    """
+    if data is None:
+        return NoGridServices()
+    if isinstance(data, str):
+        raise refusal(
+            block_path,
+            f"the pricing is a block naming its type, not the string {data!r}; write it as "
+            "{type: flat, income_per_kw_per_year_gbp: <rate>} or as "
+            "{type: capacity_at_events, <the events keys>}, or omit it for no grid services",
+        )
+    return _read_typed_block(
+        _GRID_SERVICES_MODEL_TYPES,
+        data,
+        block_path=block_path,
+        kind="grid_services_model",
+        omitted_means="no grid services",
+    )
+
+
+def _retired_grid_services_keys(block_path: str) -> Mapping[str, str]:
+    """The retired grid-services keys of the finance block at *block_path*, each with why it is refused and the form of its grid_services_model block to write."""
+    model_path = child_path(block_path, "grid_services_model")
+    return {
+        "grid_services_income_per_kw_per_year_gbp": (
+            f"the flat grid-services rate is the pricing's own setting; write it in {model_path}, as "
+            f"{{type: flat, income_per_kw_per_year_gbp: <rate>}}, or omit {model_path} for no grid services"
+        ),
+        "grid_services_events": (
+            f"the events configuration is the pricing itself; write its keys in {model_path}, as "
+            "{type: capacity_at_events, band: ..., event_windows: ...}"
+        ),
+    }
 
 
 def parse_finance_config(
@@ -908,25 +1077,26 @@ def parse_finance_config(
         FinanceConfig object or None if data is None
 
     Raises:
-        ConfigurationError: If the block, its grid_services_events block or an
-            event window is not a mapping or carries a key it does not read, or
-            leaves out a key it requires; or for a value FinanceConfig,
+        ConfigurationError: If the block holds a retired grid-services key,
+            naming the grid_services_model form to write; if the block, its
+            grid_services_model block or an event window is not a mapping or
+            carries a key it does not read, or leaves out a key it requires; if
+            grid_services_model is a string or names no type of flat and
+            capacity_at_events; or for a value FinanceConfig, FlatGridServices,
             GridServicesEventsConfig or an EventWindow refuses, as it refuses
             it, prefixed by its block's path
     """
     if data is None:
         return None
+    refuse_retired_keys(block_path, data, _retired_grid_services_keys(block_path))
     refuse_unrecognised_keys(block_path, data, _FINANCE_BLOCK_KEYS)
-    if "standing_charge_pence_per_day" not in data:
-        raise ConfigurationError(
-            "finance.standing_charge_pence_per_day is required"
-        )
+    require_held_keys(block_path, data, ["standing_charge_pence_per_day"])
 
-    grid_services_events = _parse_grid_services_events_config(
-        data.get("grid_services_events"),
-        block_path=child_path(block_path, "grid_services_events"),
+    grid_services_model = _parse_grid_services_model(
+        data.get("grid_services_model"),
+        block_path=child_path(block_path, "grid_services_model"),
     )
-    return constructed(block_path, FinanceConfig, **{**data, "grid_services_events": grid_services_events})
+    return constructed(block_path, FinanceConfig, **{**data, "grid_services_model": grid_services_model})
 
 
 # ---------------------------------------------------------------------------
@@ -978,16 +1148,13 @@ def _parse_community_billing_config(
     if "seg_rate_pence_per_kwh" in data:
         direct_rate = _parse_seg_rate_scalar(
             data["seg_rate_pence_per_kwh"],
-            path=child_path(block_path, "seg_rate_pence_per_kwh"),
+            block_path=child_path(block_path, "seg_rate_pence_per_kwh"),
         )
 
     seg_block = data.get("seg")
 
     if direct_rate is not None and seg_block is not None:
-        raise ConfigurationError(
-            "community billing: specify either 'seg_rate_pence_per_kwh' (scalar) "
-            "or 'seg' block — not both."
-        )
+        raise refusal(block_path, "sets both seg_rate_pence_per_kwh and seg; set one, not both")
 
     seg_rate = (
         direct_rate
@@ -1004,8 +1171,16 @@ def _parse_community_billing_config(
 
 
 _COMMUNITY_BLOCK_KEYS: frozenset[str] = frozenset({
-    "sharing_mode", "community_battery", "billing",
+    "community_battery", "billing",
 })
+
+_RETIRED_COMMUNITY_KEYS: Mapping[str, str] = MappingProxyType({
+    "sharing_mode": (
+        "the sharing mode follows community_battery; a community with a community_battery block "
+        "shares through that battery, and one without nets peer to peer, so delete sharing_mode"
+    ),
+})
+"""The community block's retired sharing_mode key, with why it is refused and what replaces it."""
 
 
 def parse_community_config(
@@ -1021,22 +1196,19 @@ def parse_community_config(
         ``CommunityConfig`` when *data* is a dict; ``None`` when *data* is ``None``.
 
     Raises:
-        ConfigurationError: For a block that is not a mapping or carries a key it
-            does not read, or a missing ``sharing_mode``; as a nested block's reader
-            refuses that block; or as CommunityConfig refuses the block, such as an
-            unknown ``sharing_mode``, p2p+battery or community_battery-without-battery,
-            prefixed by its path.
+        ConfigurationError: For a block that is not a mapping; for a block that
+            sets the retired ``sharing_mode``, null or not, naming the key's
+            path under *block_path* (``community.sharing_mode`` as
+            :func:`~solar_challenge.config.load_community_config` reads it)
+            and saying the mode follows ``community_battery``; for a block
+            that carries a key it does not
+            read; as a nested block's reader refuses that block; or as
+            CommunityConfig refuses the block, prefixed by its path.
     """
     if data is None:
         return None
+    refuse_retired_keys(block_path, data, _RETIRED_COMMUNITY_KEYS)
     refuse_unrecognised_keys(block_path, data, _COMMUNITY_BLOCK_KEYS)
-
-    sharing_mode = data.get("sharing_mode")
-    if not sharing_mode:
-        raise ConfigurationError(
-            "community: block requires a 'sharing_mode' field "
-            "('p2p' or 'community_battery')"
-        )
 
     community_battery = _parse_battery_config(
         data.get("community_battery"), block_path=child_path(block_path, "community_battery")
@@ -1048,7 +1220,6 @@ def parse_community_config(
     return constructed(
         block_path,
         CommunityConfig,
-        sharing_mode=sharing_mode,
         community_battery=community_battery,
         billing=billing,
     )

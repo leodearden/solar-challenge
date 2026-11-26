@@ -528,6 +528,35 @@ class TestGridServicesEventsConfigDefaults:
         assert pickle.loads(pickle.dumps(cfg)) == cfg
 
 
+class TestGridServicesEventsConfigBand:
+    """GridServicesEventsConfig holds its band as the GridServicesBand member it names, given a member or its value."""
+
+    def test_a_band_value_is_held_as_the_member_it_names(self) -> None:
+        cfg = GridServicesEventsConfig(band="high")
+
+        assert type(cfg.band) is GridServicesBand
+        assert cfg.band is GridServicesBand.HIGH
+
+    def test_the_default_band_is_the_central_member(self) -> None:
+        cfg = GridServicesEventsConfig()
+
+        assert type(cfg.band) is GridServicesBand
+        assert cfg.band is GridServicesBand.CENTRAL
+
+    def test_a_replaced_band_value_is_held_as_the_member_it_names(self) -> None:
+        cfg = dataclasses.replace(GridServicesEventsConfig(band="high"), band="low")
+
+        assert type(cfg.band) is GridServicesBand
+        assert cfg.band is GridServicesBand.LOW
+
+    def test_a_config_given_the_member_equals_one_given_its_value(self) -> None:
+        assert GridServicesEventsConfig(band=GridServicesBand.HIGH) == GridServicesEventsConfig(band="high")
+
+    def test_the_rate_table_resolves_a_band_member(self) -> None:
+        assert GRID_SERVICES_RATE_BANDS.resolve(GridServicesBand.HIGH) is GRID_SERVICES_RATE_BANDS.high
+        assert resolve_grid_services_rate_band(GridServicesBand.LOW) is GRID_SERVICES_RATE_BANDS.low
+
+
 # ---------------------------------------------------------------------------
 # Step-9: GridServicesEventsConfig validation
 # ---------------------------------------------------------------------------
@@ -992,6 +1021,37 @@ class TestComputeFleetSpareCapacityKw:
 # Step-1 (γ): TestGridServicesAtEvents — frozen dataclass structure
 # ---------------------------------------------------------------------------
 
+_PER_WINDOW_FIELD_NAMES = [
+    "per_window_avail_kw",
+    "per_window_income_gbp",
+    "per_window_avail_p50_kw",
+    "per_window_avail_p90_kw",
+    "per_window_displaced_self_use_kwh_per_event",
+    "per_window_displaced_import_gbp_per_year",
+]
+_FIGURE_FIELD_NAMES = ["annual_income_gbp", *_PER_WINDOW_FIELD_NAMES]
+_REFUSED_FIGURES = [
+    *(pytest.param(name, float("nan"), id=f"{name}-nan") for name in _FIGURE_FIELD_NAMES),
+    *(
+        pytest.param(name, -0.5, id=f"{name}-negative")
+        for name in _FIGURE_FIELD_NAMES
+        if name != "per_window_displaced_import_gbp_per_year"
+    ),
+]
+
+
+def _two_window_breakdown() -> GridServicesAtEvents:
+    """A breakdown of two event windows that holds every invariant GridServicesAtEvents enforces."""
+    return GridServicesAtEvents(
+        annual_income_gbp=150.0,
+        per_window_avail_kw=(1.0, 2.0),
+        per_window_income_gbp=(60.0, 90.0),
+        per_window_avail_p50_kw=(1.5, 2.5),
+        per_window_avail_p90_kw=(0.5, 1.0),
+        per_window_displaced_self_use_kwh_per_event=(2.0, 3.0),
+        per_window_displaced_import_gbp_per_year=(5.0, 7.5),
+    )
+
 
 class TestGridServicesAtEvents:
     """GridServicesAtEvents frozen dataclass: construction, immutability, pickling."""
@@ -1001,27 +1061,99 @@ class TestGridServicesAtEvents:
         assert GridServicesAtEvents.__module__ == "solar_challenge.gridservices"
 
     def test_fields_round_trip(self) -> None:
-        """All three fields survive construction and read back equal to inputs."""
-        obj = GridServicesAtEvents(
-            annual_income_gbp=150.0,
-            per_window_avail_kw=(1.0, 2.0),
-            per_window_income_gbp=(60.0, 90.0),
-        )
+        """All seven fields survive construction and read back equal to inputs."""
+        obj = _two_window_breakdown()
         assert obj.annual_income_gbp == 150.0
         assert obj.per_window_avail_kw == (1.0, 2.0)
         assert obj.per_window_income_gbp == (60.0, 90.0)
+        assert obj.per_window_avail_p50_kw == (1.5, 2.5)
+        assert obj.per_window_avail_p90_kw == (0.5, 1.0)
+        assert obj.per_window_displaced_self_use_kwh_per_event == (2.0, 3.0)
+        assert obj.per_window_displaced_import_gbp_per_year == (5.0, 7.5)
 
-    def test_a_breakdown_built_from_its_three_original_fields_has_none_of_the_added_figures(self) -> None:
-        """The reliability and displaced-self-use fields are additive: a breakdown built as before they existed holds () for each."""
-        obj = GridServicesAtEvents(
-            annual_income_gbp=150.0,
-            per_window_avail_kw=(1.0, 2.0),
-            per_window_income_gbp=(60.0, 90.0),
-        )
-        assert obj.per_window_avail_p50_kw == ()
-        assert obj.per_window_avail_p90_kw == ()
-        assert obj.per_window_displaced_self_use_kwh_per_event == ()
-        assert obj.per_window_displaced_import_gbp_per_year == ()
+    def test_a_breakdown_built_from_its_three_original_fields_is_refused(self) -> None:
+        """The reliability and displaced-self-use figures are required: a breakdown cannot be built without them."""
+        with pytest.raises(TypeError, match="per_window_displaced_import_gbp_per_year"):
+            GridServicesAtEvents(  # type: ignore[call-arg]
+                annual_income_gbp=14.958,
+                per_window_avail_kw=(1.5,),
+                per_window_income_gbp=(14.958,),
+            )
+
+    def test_a_breakdown_that_never_computed_its_displaced_value_is_refused(self) -> None:
+        """A breakdown whose displaced-import tuple holds no entry for its window is refused, so no table sums () into £0 a year."""
+        with pytest.raises(ValueError) as refusal:
+            GridServicesAtEvents(
+                annual_income_gbp=14.958,
+                per_window_avail_kw=(1.5,),
+                per_window_income_gbp=(14.958,),
+                per_window_avail_p50_kw=(2.0,),
+                per_window_avail_p90_kw=(1.0,),
+                per_window_displaced_self_use_kwh_per_event=(2.3,),
+                per_window_displaced_import_gbp_per_year=(),
+            )
+        assert "per_window_displaced_import_gbp_per_year" in str(refusal.value)
+        assert "()" in str(refusal.value)
+
+    @pytest.mark.parametrize("name", _PER_WINDOW_FIELD_NAMES)
+    @pytest.mark.parametrize(
+        "reshape",
+        [
+            pytest.param(lambda entries: (), id="empty"),
+            pytest.param(lambda entries: (*entries, 0.0), id="one-longer"),
+        ],
+    )
+    def test_a_per_window_field_without_one_entry_per_window_is_refused(
+        self, name: str, reshape: Callable[[tuple[float, ...]], tuple[float, ...]]
+    ) -> None:
+        """A per-window field holding other than one entry per event window is refused, naming it and its value."""
+        valid = _two_window_breakdown()
+        bad = reshape(getattr(valid, name))
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(valid, **{name: bad})
+        assert name in str(refusal.value)
+        assert repr(bad) in str(refusal.value)
+
+    def test_a_breakdown_of_no_event_window_is_refused(self) -> None:
+        """A breakdown prices at least one event window, as GridServicesEventsConfig requires."""
+        with pytest.raises(ValueError, match="at least one event window"):
+            GridServicesAtEvents(
+                annual_income_gbp=0.0,
+                per_window_avail_kw=(),
+                per_window_income_gbp=(),
+                per_window_avail_p50_kw=(),
+                per_window_avail_p90_kw=(),
+                per_window_displaced_self_use_kwh_per_event=(),
+                per_window_displaced_import_gbp_per_year=(),
+            )
+
+    @pytest.mark.parametrize(("name", "bad"), _REFUSED_FIGURES)
+    def test_a_nan_figure_or_a_capacity_energy_or_income_below_zero_is_refused(self, name: str, bad: float) -> None:
+        """A NaN figure, or a capacity, energy or income below 0, is refused as such, before the income sum is checked."""
+        valid = _two_window_breakdown()
+        if name == "annual_income_gbp":
+            replacement: object = bad
+            offender = f"{name}={bad!r}"
+        else:
+            replacement = (bad, *getattr(valid, name)[1:])
+            offender = f"{name}[0]={bad!r}"
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(valid, **{name: replacement})
+        assert offender in str(refusal.value)
+
+    def test_a_displaced_import_value_below_zero_is_kept(self) -> None:
+        """A displaced import's value takes its import price's sign, so a negative price makes it below 0."""
+        breakdown = dataclasses.replace(_two_window_breakdown(), per_window_displaced_import_gbp_per_year=(-0.5, 7.5))
+
+        assert breakdown.per_window_displaced_import_gbp_per_year == (-0.5, 7.5)
+
+    def test_an_annual_income_that_is_not_the_sum_of_the_per_window_incomes_is_refused(self) -> None:
+        """annual_income_gbp is sum(per_window_income_gbp): a breakdown whose total differs is refused, naming both."""
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(_two_window_breakdown(), annual_income_gbp=151.0)
+        assert "annual_income_gbp" in str(refusal.value)
+        assert "151.0" in str(refusal.value)
+        assert "150.0" in str(refusal.value)
 
     def test_single_window_fields(self) -> None:
         """Single-window construction works and fields have correct types."""
@@ -1029,6 +1161,10 @@ class TestGridServicesAtEvents:
             annual_income_gbp=9.972,
             per_window_avail_kw=(1.0,),
             per_window_income_gbp=(9.972,),
+            per_window_avail_p50_kw=(1.2,),
+            per_window_avail_p90_kw=(0.8,),
+            per_window_displaced_self_use_kwh_per_event=(1.5,),
+            per_window_displaced_import_gbp_per_year=(3.0,),
         )
         assert isinstance(obj.annual_income_gbp, float)
         assert isinstance(obj.per_window_avail_kw, tuple)
@@ -1042,17 +1178,17 @@ class TestGridServicesAtEvents:
             annual_income_gbp=10.0,
             per_window_avail_kw=(1.0,),
             per_window_income_gbp=(10.0,),
+            per_window_avail_p50_kw=(1.2,),
+            per_window_avail_p90_kw=(0.8,),
+            per_window_displaced_self_use_kwh_per_event=(1.5,),
+            per_window_displaced_import_gbp_per_year=(3.0,),
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             obj.annual_income_gbp = 20.0  # type: ignore[misc]
 
     def test_is_picklable(self) -> None:
         """GridServicesAtEvents survives a pickle round-trip equal to the original."""
-        obj = GridServicesAtEvents(
-            annual_income_gbp=150.0,
-            per_window_avail_kw=(1.5, 2.5),
-            per_window_income_gbp=(75.0, 75.0),
-        )
+        obj = _two_window_breakdown()
         assert pickle.loads(pickle.dumps(obj)) == obj
 
 
@@ -1926,26 +2062,46 @@ class TestDisplacedEveningSelfUse:
 
         assert result.per_window_displaced_self_use_kwh_per_event == pytest.approx((3.0,))
 
-    def test_the_span_stops_at_the_next_event_day_or_the_end_of_the_index(self) -> None:
-        """One home, avail 1.0 kW each day, never recharging and discharging 0.05 kW outside the window at 0.10 £/kWh.
+    @staticmethod
+    def _one_home_never_recharging(tariff_rate: float) -> FleetResults:
+        """One home, avail 1.0 kW each day, never recharging and discharging 0.05 kW outside the window at *tariff_rate* £/kWh.
 
         2 December's span runs from 19:00 to 15:59 on 3 December, 21 h × 0.05 = 1.05 kWh;
         3 December's runs to the index's end at 23:59, 5 h × 0.05 = 0.25 kWh. Per event,
-        (1.05 + 0.25) / 2 = 0.65 kWh, worth 0.65 × 0.10 × 12 = £0.78 a year.
+        (1.05 + 0.25) / 2 = 0.65 kWh.
         """
         index = _TWO_DECEMBER_EVENT_DAYS
         sim = _make_gs_sim_results(
             [3.5] * len(index),
             _by_time_of_day(index, {("16:00", "18:59"): 0.5}, elsewhere=0.05),
             index,
-            tariff_rate=[0.10] * len(index),
+            tariff_rate=[tariff_rate] * len(index),
         )
-        fleet = _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
+        return _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
 
-        result = compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+    def test_the_span_stops_at_the_next_event_day_or_the_end_of_the_index(self) -> None:
+        """0.65 kWh per event at 0.10 £/kWh is worth 0.65 × 0.10 × 12 = £0.78 a year."""
+        result = compute_grid_services_at_events(self._one_home_never_recharging(0.10), GridServicesEventsConfig())
 
         assert result.per_window_displaced_self_use_kwh_per_event == pytest.approx((0.65,))
         assert result.per_window_displaced_import_gbp_per_year == pytest.approx((0.78,))
+
+    def test_a_negative_import_price_values_the_displaced_self_use_below_zero(self) -> None:
+        """0.65 kWh per event at -0.05 £/kWh is worth 0.65 × -0.05 × 12 = -£0.39 a year; the income is the configuration's."""
+        fleet = self._one_home_never_recharging(-0.05)
+
+        result = compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+
+        assert result.per_window_displaced_import_gbp_per_year == pytest.approx((-0.39,))
+        assert result.annual_income_gbp == GridServicesEventsConfig().annual_income_gbp(fleet)
+
+    def test_a_negative_discharge_after_the_window_is_refused_only_by_the_breakdown(self) -> None:
+        """A -1.0 kW evening discharge displaces a self-use below 0, which the breakdown refuses; the income still prices the fleet."""
+        fleet = _two_event_day_fleet(evening_discharge_kw=-1.0)
+
+        with pytest.raises(ValueError, match="per_window_displaced_self_use_kwh_per_event"):
+            compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+        assert GridServicesEventsConfig().annual_income_gbp(fleet) == pytest.approx(1.5 * 9.972)
 
     def test_a_recharge_straight_after_the_window_displaces_nothing(self) -> None:
         """A charge at 19:00 leaves an empty span: 0 kWh worth £0, not a NaN mean tariff."""

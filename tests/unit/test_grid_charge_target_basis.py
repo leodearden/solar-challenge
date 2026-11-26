@@ -26,10 +26,11 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
 )
-from solar_challenge.flow import simulate_timestep, simulate_timestep_tou
+from solar_challenge.flow import simulate_timestep
 from solar_challenge.tariff import TariffConfig
+from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
-_E7 = TariffConfig.economy_7()
+_E7 =TariffConfig.economy_7()
 
 _MINUTES = pd.date_range("2024-01-15 01:00", periods=180, freq="min")
 
@@ -70,7 +71,7 @@ class _Recording(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
@@ -96,14 +97,14 @@ def _strategy_path(battery: Battery, minute: pd.Timestamp, strategy: Optional[Di
     )
 
 
-def _function_path(battery: Battery, minute: pd.Timestamp) -> None:
-    """Simulate *minute* through simulate_timestep_tou."""
-    simulate_timestep_tou(0.0, 0.3, battery, minute, _E7, 1.0)
+def _tariff_clock_path(battery: Battery, minute: pd.Timestamp) -> None:
+    """Simulate *minute* through simulate_timestep, dispatched by TOUOptimizedStrategy on Economy 7's clock."""
+    simulate_timestep(0.0, 0.3, battery, 1.0, minute.to_pydatetime(), **on_the_tariff_s_clock(_E7))
 
 
 _PATHS = [
-    pytest.param(_function_path, id="simulate_timestep_tou"),
-    pytest.param(_strategy_path, id="simulate_timestep"),
+    pytest.param(_tariff_clock_path, id="tou_on_the_tariff_s_clock"),
+    pytest.param(_strategy_path, id="tou_on_peak_hours"),
 ]
 
 
@@ -144,7 +145,7 @@ class TestDecideActionSeesTheEffectiveCapacity:
 
 
 class TestGridChargeEndsAtTheTargetFractionOfEffectiveCapacity:
-    """§9 row 9: a target of 0.5 fills the battery to half its effective capacity on both dispatch paths, from either start."""
+    """§9 row 9: a target of 0.5 fills the battery to half its effective capacity under TOU dispatch on Economy 7's clock and on peak hours 16:00 to 19:00, from either start."""
 
     @pytest.mark.parametrize("path", _PATHS)
     @pytest.mark.parametrize("soh", [1.0, 0.7])

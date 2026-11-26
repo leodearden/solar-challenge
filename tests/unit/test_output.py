@@ -1,6 +1,7 @@
 """Tests for output and reporting functions."""
 
 import tempfile
+import typing
 from dataclasses import asdict, replace
 from datetime import date
 from pathlib import Path
@@ -9,10 +10,9 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.community import CommunityConfig, simulate_community
-from solar_challenge.finance import BillDistribution
-from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
-from solar_challenge.optimize import RankedSweep
+from solar_challenge.community import CommunityConfig, SharingMode, simulate_community
+from solar_challenge.demand import LoadKind
+from solar_challenge.home import RunPricing, SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
     CommunityMetrics,
     SeasonSummary,
@@ -21,13 +21,12 @@ from solar_challenge.output import (
     calculate_seasonal_metrics,
     compute_community_metrics,
     export_to_csv,
-    generate_config_ranking_report,
-    generate_finance_report,
+    generate_community_report,
     generate_summary_report,
 )
-from solar_challenge.timebase import SimulationWindow
-from tests._factories import make_bill_distribution, make_config_result, make_ranked_sweep
-from tests._finance_builders import make_fleet_results_of, make_home_config, make_window
+from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
+from tests._grid_charge_forecast_notices import PV_BLIND_AND_TRAILING_NOTICE, TRAILING_NOTICE
+from tests._summary_report_tables import cells, energy_totals_demand_kwh, table_under
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
@@ -75,44 +74,74 @@ def _run_with_distinct_rising_series(
         import_cost=series(0.002),
         export_revenue=series(0.001),
         tariff_rate=series(0.3),
-        heat_pump_load=series(1.2) if with_optional_series else None,
+        additional_loads={LoadKind.HEAT_PUMP: series(1.2)} if with_optional_series else {},
         grid_charge_cost=series(0.0005) if with_optional_series else None,
         grid_charge=series(0.4) if with_optional_series else None,
     )
 
 
-def _seasonal_run(freq: str = "1min") -> SimulationResults:
-    """Two February days, the spring, and half a June day, each day steady at its own levels, on one index whose rows are freq apart.
+def _by_season(index: pd.DatetimeIndex, *, winter_1_kw: float, winter_2_kw: float, spring_kw: float, summer_kw: float) -> pd.Series:
+    """A series on *index* steady at its own level on each February day, in the spring and in the summer."""
+    days = index.normalize()
+    winter_1 = days == pd.Timestamp("2024-02-28", tz="Europe/London")
+    winter_2 = days == pd.Timestamp("2024-02-29", tz="Europe/London")
+    spring = index.month <= 5
+    return pd.Series(
+        np.select([winter_1, winter_2, spring], [winter_1_kw, winter_2_kw, spring_kw], default=summer_kw),
+        index=index,
+    )
+
+
+def _plain_seasonal_run(freq: str = "1min") -> SimulationResults:
+    """Two February days, the spring, and half a June day, each day steady at its own levels, on one index whose rows are freq apart, its demand the household's alone.
 
     The first February day's battery stores its PV surplus and meets part of the sunless second
     day's demand. Every row balances as a simulated one does.
     """
     index = pd.date_range("2024-02-28", "2024-06-01 11:59", freq=freq, tz="Europe/London")
-    days = index.normalize()
-    winter_1 = days == pd.Timestamp("2024-02-28", tz="Europe/London")
-    winter_2 = days == pd.Timestamp("2024-02-29", tz="Europe/London")
-    spring = index.month <= 5
-
-    def steady(*, winter_1_kw: float, winter_2_kw: float, spring_kw: float, summer_kw: float) -> pd.Series:
-        return pd.Series(
-            np.select([winter_1, winter_2, spring], [winter_1_kw, winter_2_kw, spring_kw], default=summer_kw),
-            index=index,
-        )
-
     zeros = pd.Series(0.0, index=index)
     return SimulationResults(
-        generation=steady(winter_1_kw=8.0, winter_2_kw=0.0, spring_kw=9.0, summer_kw=4.0),
-        demand=steady(winter_1_kw=5.0, winter_2_kw=5.0, spring_kw=10.0, summer_kw=1.0),
-        self_consumption=steady(winter_1_kw=5.0, winter_2_kw=1.0, spring_kw=9.0, summer_kw=1.0),
-        battery_charge=steady(winter_1_kw=1.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=2.0),
-        battery_discharge=steady(winter_1_kw=0.0, winter_2_kw=1.0, spring_kw=0.0, summer_kw=0.0),
+        generation=_by_season(index, winter_1_kw=8.0, winter_2_kw=0.0, spring_kw=9.0, summer_kw=4.0),
+        demand=_by_season(index, winter_1_kw=5.0, winter_2_kw=5.0, spring_kw=10.0, summer_kw=1.0),
+        self_consumption=_by_season(index, winter_1_kw=5.0, winter_2_kw=1.0, spring_kw=9.0, summer_kw=1.0),
+        battery_charge=_by_season(index, winter_1_kw=1.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=2.0),
+        battery_discharge=_by_season(index, winter_1_kw=0.0, winter_2_kw=1.0, spring_kw=0.0, summer_kw=0.0),
         battery_soc=zeros,
-        grid_import=steady(winter_1_kw=0.0, winter_2_kw=4.0, spring_kw=1.0, summer_kw=0.0),
-        grid_export=steady(winter_1_kw=2.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=1.0),
+        grid_import=_by_season(index, winter_1_kw=0.0, winter_2_kw=4.0, spring_kw=1.0, summer_kw=0.0),
+        grid_export=_by_season(index, winter_1_kw=2.0, winter_2_kw=0.0, spring_kw=0.0, summer_kw=1.0),
         import_cost=zeros,
         export_revenue=zeros,
         tariff_rate=zeros,
-        heat_pump_load=steady(winter_1_kw=2.0, winter_2_kw=2.0, spring_kw=9.0, summer_kw=0.25),
+    )
+
+
+def _seasonal_run(freq: str = "1min", *, heat_pump_summer_kw: float = 0.25) -> SimulationResults:
+    """_plain_seasonal_run's run whose demand holds a heat pump, at *heat_pump_summer_kw* in the summer, and a steady 0.5 kW EV.
+
+    The household's load, demand less the two, is 2.5 kW in the winter, 0.5 kW in the spring
+    and at least 0.25 kW in the summer.
+    """
+    run = _plain_seasonal_run(freq)
+    index = run.demand.index
+    return replace(
+        run,
+        additional_loads={
+            LoadKind.HEAT_PUMP: _by_season(
+                index, winter_1_kw=2.0, winter_2_kw=2.0, spring_kw=9.0, summer_kw=heat_pump_summer_kw
+            ),
+            LoadKind.EV: pd.Series(0.5, index=index),
+        },
+    )
+
+
+def _with_additional_loads(results: SimulationResults, loads: dict[LoadKind, pd.Series]) -> SimulationResults:
+    """*results* whose demand, and grid import, also hold *loads*, which become its additional loads."""
+    extra = sum(loads.values(), start=pd.Series(0.0, index=results.demand.index))
+    return replace(
+        results,
+        demand=results.demand + extra,
+        grid_import=results.grid_import + extra,
+        additional_loads=loads,
     )
 
 
@@ -200,20 +229,157 @@ class TestGenerateSummaryReport:
         assert "Grid Export Revenue" in report
         assert "Net Cost" in report
 
+    def test_a_seg_priced_run_names_its_seg_rate_after_its_grid_export_revenue(self):
+        """The Financial table of a run whose export a SEG priced names that rate on the row after Grid Export Revenue."""
+        results = make_sim_results(pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=15.0))
+
+        lines = generate_summary_report(results, "Home").splitlines()
+
+        financial_table = lines[lines.index("## Financial (£)") :]
+        export_revenue_at = next(i for i, line in enumerate(financial_table) if line.startswith("| Grid Export Revenue |"))
+        assert financial_table[export_revenue_at + 1] == "| SEG Rate | 15.0 p/kWh |"
+        assert not any(line.startswith("## ") for line in financial_table[1:export_revenue_at])
+
+    def test_a_run_a_seg_priced_at_nothing_names_its_zero_rate(self):
+        """A SEG rate of 0.0 p priced the run, so the report names it."""
+        results = make_sim_results(pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=0.0))
+
+        assert "| SEG Rate | 0.0 p/kWh |" in generate_summary_report(results, "Home").splitlines()
+
+    @pytest.mark.parametrize(
+        "pricing",
+        [RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=None), None],
+        ids=["no-seg-rate", "no-pricing"],
+    )
+    def test_a_run_no_seg_priced_names_no_seg_rate(self, pricing):
+        """A run whose export no SEG priced, or whose pricing is not recorded, has no SEG Rate row."""
+        report = generate_summary_report(make_sim_results(pricing=pricing), "Home")
+
+        assert "SEG Rate" not in report
+
+    @pytest.mark.parametrize("seg_rate_pence_per_kwh", [15.0, 0.0, None])
+    def test_no_report_has_a_second_seg_revenue_section(self, seg_rate_pence_per_kwh):
+        """The run's export revenue is its one SEG figure: no report repeats it in a SEG Revenue section."""
+        results = make_sim_results(
+            pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=seg_rate_pence_per_kwh)
+        )
+
+        assert "## SEG Revenue" not in generate_summary_report(results, "Home")
+
+    def test_generate_summary_report_takes_no_seg_rate(self):
+        """The rate the report names is the one the run was priced at, so it takes none from its caller."""
+        with pytest.raises(TypeError):
+            generate_summary_report(make_sim_results(), "Home", seg_tariff_pence_per_kwh=15.0)
+
+
+class TestDemandByLoad:
+    """The report's Demand by load table: each load's energy, share of the demand and peak, in LoadKind order."""
+
+    _HEADER = "| Load | Energy (kWh) | Share of Demand | Peak (kW) |"
+
+    def test_a_run_whose_demand_is_the_households_alone_has_one_household_row(self, sample_results) -> None:
+        lines = generate_summary_report(sample_results).splitlines()
+
+        assert table_under(lines, "## Demand by load") == [self._HEADER, "| Household | 96.0 | 100.0% | 2.00 |"]
+
+    def test_a_run_with_a_heat_pump_and_an_ev_has_a_row_for_each_load_summing_to_the_demand(self, sample_results) -> None:
+        index = sample_results.demand.index
+        ev_kw = pd.Series(np.where(index.hour < 6, 2.0, 0.0), index=index)
+        run = _with_additional_loads(
+            sample_results, {LoadKind.EV: ev_kw, LoadKind.HEAT_PUMP: pd.Series(1.5, index=index)}
+        )
+        lines = generate_summary_report(run).splitlines()
+
+        # Over 48 h: the household's 2 kW is 96 kWh, the heat pump's 1.5 kW 72 kWh and the EV's
+        # 2 kW for 6 h a day 24 kWh, of 192 kWh demanded.
+        table = table_under(lines, "## Demand by load")
+        assert table == [
+            self._HEADER,
+            "| Household | 96.0 | 50.0% | 2.00 |",
+            "| Heat pump | 72.0 | 37.5% | 1.50 |",
+            "| EV charging | 24.0 | 12.5% | 2.00 |",
+        ]
+        assert sum(float(cells(row)[1]) for row in table[1:]) == pytest.approx(energy_totals_demand_kwh(lines))
+
+    def test_the_demand_by_load_table_follows_the_energy_totals(self, sample_results) -> None:
+        lines = generate_summary_report(sample_results).splitlines()
+
+        energy_totals_end = lines.index("", lines.index("## Energy Totals (kWh)") + 1)
+        assert lines[energy_totals_end + 1] == "## Demand by load"
+
+    @pytest.mark.parametrize("with_heat_pump", [True, False], ids=["heat-pump", "no-heat-pump"])
+    def test_no_report_has_a_heat_pump_impact_section(self, sample_results, with_heat_pump: bool) -> None:
+        index = sample_results.demand.index
+        run = (
+            _with_additional_loads(sample_results, {LoadKind.HEAT_PUMP: pd.Series(1.5, index=index)})
+            if with_heat_pump
+            else sample_results
+        )
+
+        assert "Heat Pump Impact" not in generate_summary_report(run)
+
 
 class TestSeasonalBreakdowns:
     """Winter (December to February) and summer (June to August) each count only their own rows."""
 
     @pytest.mark.parametrize("freq", _SEASONAL_RUN_FREQS)
-    def test_report_tables_each_seasons_heat_pump_figures(self, freq: str) -> None:
+    def test_report_tables_each_seasons_figures_for_each_additional_load(self, freq: str) -> None:
         lines = generate_summary_report(_seasonal_run(freq)).splitlines()
 
-        # Winter: 2 kW × 48 h = 96 kWh, 40% of 5 kW × 48 h, over 2 days.
+        assert (
+            lines.index("## Seasonal demand by load")
+            < lines.index("**Winter (Dec-Feb) vs Summer (Jun-Aug)**")
+            < lines.index("### Heat pump")
+            < lines.index("### EV charging")
+        )
+        # Heat pump. Winter: 2 kW × 48 h = 96 kWh, 40% of 5 kW × 48 h, over 2 days.
         # Summer: 0.25 kW × 12 h = 3 kWh, 25% of 1 kW × 12 h, over half a day.
-        assert "| Total Heat Pump Load | 96.0 kWh | 3.0 kWh | 32.0x |" in lines
-        assert "| Peak Heat Pump Load | 2.00 kW | 0.25 kW | 8.0x |" in lines
-        assert "| HP % of Demand | 40.0% | 25.0% | - |" in lines
-        assert "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |" in lines
+        assert table_under(lines, "### Heat pump") == [
+            "| Metric | Winter | Summer | Winter/Summer Ratio |",
+            "| Energy | 96.0 kWh | 3.0 kWh | 32.0x |",
+            "| Peak | 2.00 kW | 0.25 kW | 8.0x |",
+            "| Share of Demand | 40.0% | 25.0% | - |",
+            "| Daily Average | 48.0 kWh/day | 6.0 kWh/day | 8.0x |",
+        ]
+        # EV. Winter: 0.5 kW × 48 h = 24 kWh, 10% of 240 kWh, over 2 days.
+        # Summer: 0.5 kW × 12 h = 6 kWh, 50% of 12 kWh, over half a day.
+        assert table_under(lines, "### EV charging") == [
+            "| Metric | Winter | Summer | Winter/Summer Ratio |",
+            "| Energy | 24.0 kWh | 6.0 kWh | 4.0x |",
+            "| Peak | 0.50 kW | 0.50 kW | 1.0x |",
+            "| Share of Demand | 10.0% | 50.0% | - |",
+            "| Daily Average | 12.0 kWh/day | 12.0 kWh/day | 1.0x |",
+        ]
+
+    def test_a_load_with_no_summer_energy_keeps_its_table_with_no_ratio(self) -> None:
+        lines = generate_summary_report(_seasonal_run(heat_pump_summer_kw=0.0)).splitlines()
+
+        assert table_under(lines, "### Heat pump") == [
+            "| Metric | Winter | Summer | Winter/Summer Ratio |",
+            "| Energy | 96.0 kWh | 0.0 kWh | - |",
+            "| Peak | 2.00 kW | 0.00 kW | - |",
+            "| Share of Demand | 40.0% | 0.0% | - |",
+            "| Daily Average | 48.0 kWh/day | 0.0 kWh/day | - |",
+        ]
+
+    @pytest.mark.parametrize(
+        "first_day",
+        [pytest.param(date(2024, 6, 21), id="no-winter-row"), pytest.param(date(2024, 1, 10), id="no-summer-row")],
+    )
+    def test_a_run_missing_a_season_has_no_seasonal_load_section(self, first_day: date) -> None:
+        run = make_sim_results(days=1, first_day=first_day)
+        run = _with_additional_loads(run, {LoadKind.HEAT_PUMP: pd.Series(1.0, index=run.demand.index)})
+
+        report = generate_summary_report(run)
+
+        assert "Seasonal demand by load" not in report
+        assert "Winter (Dec-Feb) vs Summer (Jun-Aug)" not in report
+
+    def test_a_run_whose_demand_is_the_households_alone_has_no_seasonal_load_section(self) -> None:
+        report = generate_summary_report(_plain_seasonal_run())
+
+        assert "Seasonal demand by load" not in report
+        assert "Winter (Dec-Feb) vs Summer (Jun-Aug)" not in report
 
     @pytest.mark.parametrize("freq", _SEASONAL_RUN_FREQS)
     def test_seasonal_metrics_total_each_seasons_own_flows_and_leave_out_the_rest(self, freq: str) -> None:
@@ -277,7 +443,7 @@ class TestCommunityMetrics:
     def test_a_half_hourly_twin_of_a_run_has_the_minute_runs_figures(self) -> None:
         minute, half_hour = (
             compute_community_metrics(
-                simulate_community(make_fleet_results_of([_seasonal_run(freq)]), CommunityConfig(sharing_mode="p2p"))
+                simulate_community(make_fleet_results_of([_seasonal_run(freq)]), CommunityConfig())
             )
             for freq in ("1min", "30min")
         )
@@ -286,6 +452,13 @@ class TestCommunityMetrics:
         assert minute.dt_h == pytest.approx(1 / 60, rel=1e-9)
         assert half_hour.dt_h == pytest.approx(0.5, rel=1e-9)
         assert half_hour.sharing_mode == minute.sharing_mode
+
+
+class TestCommunityMetricsSharingMode:
+    """CommunityMetrics.sharing_mode is typed by community.SharingMode, a type a runtime reader of the report's hints can resolve."""
+
+    def test_the_type_hints_of_community_metrics_resolve_its_sharing_mode_to_sharing_mode(self) -> None:
+        assert typing.get_type_hints(CommunityMetrics)["sharing_mode"] == SharingMode
 
 
 class TestAggregateDaily:
@@ -437,7 +610,7 @@ class TestPeriodTotalsAndPeaks:
             "battery_discharge_kwh": summary.total_battery_discharge_kwh,
             "grid_import_kwh": summary.total_grid_import_kwh,
             "grid_export_kwh": summary.total_grid_export_kwh,
-            "heat_pump_load_kwh": summary.total_heat_pump_load_kwh,
+            "heat_pump_load_kwh": summary.load_energy_kwh[LoadKind.HEAT_PUMP],
             "import_cost_gbp": summary.total_import_cost_gbp,
             "export_revenue_gbp": summary.total_export_revenue_gbp,
             "grid_charge_cost_gbp": summary.total_grid_charge_cost_gbp,
@@ -453,72 +626,40 @@ class TestPeriodTotalsAndPeaks:
         assert frame["peak_demand_kw"].max() == pytest.approx(summary.peak_demand_kw)
 
 
-def _annualised_from(window: SimulationWindow | None) -> BillDistribution:
-    """make_bill_distribution's distribution, its yearly figures annualised from *window*."""
-    return replace(make_bill_distribution(), annualised_from=window)
+class TestGridChargeForecastNotice:
+    """A run's or a community's report of results whose grid charge a forecast sized says, under its first heading, which forecast and what it is."""
 
+    def test_a_summary_report_names_its_runs_forecast_under_its_title(self, sample_results: SimulationResults) -> None:
+        report = generate_summary_report(replace(sample_results, grid_charge_forecast="trailing_14_days"))
 
-def _one_config_sweep(window: SimulationWindow | None) -> RankedSweep:
-    """A sweep of one feasible config, whose outlay's yearly figures are annualised from *window*."""
-    cr = make_config_result(outlay=_annualised_from(window))
-    return make_ranked_sweep((cr,))
+        assert report.startswith("# Simulation Report\n\n" + TRAILING_NOTICE + "## Simulation Period")
 
-
-class TestExtrapolationNotice:
-    """A board report whose bills are annualised from a window other than whole calendar years says so under its first heading."""
-
-    @pytest.mark.parametrize("side_by_side", [False, True], ids=["physics-only", "side-by-side"])
-    def test_a_finance_report_from_a_window_that_is_not_whole_calendar_years_says_so_under_its_title(
-        self, side_by_side: bool
+    def test_a_summary_report_of_a_run_that_did_not_grid_charge_has_no_notice(
+        self, sample_results: SimulationResults
     ) -> None:
-        dist = _annualised_from(make_window(days=2, first_day=date(2024, 3, 31)))
+        report = generate_summary_report(sample_results)
 
-        report = generate_finance_report(dist, dist if side_by_side else None, scenario_name="Bristol")
+        assert report.startswith("# Simulation Report\n\n## Simulation Period")
+        assert "sized by" not in report
+
+    def test_a_community_report_names_its_homes_forecasts_under_its_title(self, sample_results: SimulationResults) -> None:
+        """Its baseline is the homes' own grid flows, which their forecasts sized."""
+        fleet = make_fleet_results_of(
+            [replace(sample_results, grid_charge_forecast=each) for each in ("trailing_14_days", None, "pv_blind")]
+        )
+
+        report = generate_community_report(simulate_community(fleet, CommunityConfig()))
 
         assert report.startswith(
-            "# Finance Report: Bristol\n\n"
-            "*Yearly figures are extrapolated ×183.000 from a 2-day window (2024-03-31 to 2024-04-01), "
-            "not whole calendar years.*\n\n"
-            "## Householder Bill"
+            "# Community Energy Sharing Report\n\n" + PV_BLIND_AND_TRAILING_NOTICE + "## Sharing Mode"
         )
 
-    @pytest.mark.parametrize(
-        "window",
-        [
-            pytest.param(make_window(days=365, first_day=date(2023, 1, 1)), id="calendar-year-2023"),
-            pytest.param(make_window(days=731, first_day=date(2023, 1, 1)), id="two-calendar-years"),
-            pytest.param(None, id="hand-built"),
-        ],
-    )
-    def test_a_finance_report_from_whole_calendar_years_or_no_window_has_no_notice(
-        self, window: SimulationWindow | None
+    def test_a_community_report_whose_homes_did_not_grid_charge_has_no_notice(
+        self, sample_results: SimulationResults
     ) -> None:
-        report = generate_finance_report(_annualised_from(window), scenario_name="Bristol")
+        fleet = make_fleet_results_of([sample_results, sample_results])
 
-        assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
-        assert "extrapolated" not in report
+        report = generate_community_report(simulate_community(fleet, CommunityConfig()))
 
-    def test_a_ranking_report_from_a_30_day_window_says_so_under_its_first_heading(self) -> None:
-        sweep = _one_config_sweep(make_window(days=30, first_day=date(2024, 6, 1)))
-
-        assert generate_config_ranking_report(sweep).startswith(
-            "## Cost-Recovery Rank\n\n"
-            "*Yearly figures are extrapolated ×12.200 from a 30-day window (2024-06-01 to 2024-06-30), "
-            "not whole calendar years.*\n\n"
-            "| Config"
-        )
-
-    @pytest.mark.parametrize(
-        "window",
-        [
-            pytest.param(make_window(days=365, first_day=date(2023, 1, 1)), id="calendar-year-2023"),
-            pytest.param(None, id="hand-built"),
-        ],
-    )
-    def test_a_ranking_report_from_a_whole_calendar_year_or_no_window_has_no_notice(
-        self, window: SimulationWindow | None
-    ) -> None:
-        report = generate_config_ranking_report(_one_config_sweep(window))
-
-        assert "extrapolated" not in report
-        assert report.startswith("## Cost-Recovery Rank\n\n| Config")
+        assert report.startswith("# Community Energy Sharing Report\n\n## Sharing Mode")
+        assert "sized by" not in report

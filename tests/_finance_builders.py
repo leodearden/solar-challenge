@@ -30,7 +30,7 @@ result on a default home unless ``homes=`` is given.
 
 The window a result covers is ``make_window(days=..., first_day=..., cadence=...)``
 of the same arguments, which a hand-built ``SummaryStatistics`` names as its window.
-make_scenario's period is ``make_period()``, the default window's dates, so a
+make_scenario's period is ``make_period()``, the default window at ONE_MINUTE, so a
 builder scenario's ``simulate`` is asked for the window its default results cover.
 
 """
@@ -43,14 +43,14 @@ from datetime import date, timedelta
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, RunPricing, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.timebase import SimulationWindow
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
 
 def make_pv_config() -> PVConfig:
@@ -116,10 +116,9 @@ def make_window(
     return SimulationWindow(first_day, first_day + timedelta(days=days - 1), cadence, "Europe/London")
 
 
-def make_period() -> SimulationPeriod:
-    """The SimulationPeriod over make_window()'s local dates: the year make_sim_results covers by default."""
-    window = make_window()
-    return SimulationPeriod(start_date=window.first_day.isoformat(), end_date=window.last_day.isoformat())
+def make_period() -> SimulationWindow:
+    """make_window() at ONE_MINUTE: a scenario's period over the year make_sim_results covers by default."""
+    return dataclasses.replace(make_window(), cadence=ONE_MINUTE)
 
 
 def make_scenario(
@@ -263,7 +262,7 @@ def make_fleet_results_of(
     """
     if homes is None:
         homes = [make_home_config() for _ in per_home_results]
-    return FleetResults(per_home_results=list(per_home_results), home_configs=list(homes))
+    return FleetResults(per_home_results=tuple(per_home_results), home_configs=tuple(homes))
 
 
 def make_fleet_results(

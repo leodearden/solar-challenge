@@ -11,7 +11,7 @@ import pandas as pd
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import Interval, as_finite_float, read_field
-from solar_challenge.timebase import SimulationWindow
+from solar_challenge.timebase import SimulationWindow, year_row_counts
 
 
 @dataclass(frozen=True)
@@ -63,21 +63,13 @@ def _refuse_unknown_heat_pump_type(heat_pump_type: object) -> None:
 BASE_TEMPERATURE_C: float = 15.5
 
 
-def reference_year_lengths(rows_per_day: int) -> range:
-    """The row counts of one reference year, the year a heat pump's annual heat demand is shared out over.
-
-    That is 365 to 366 days (366 in a leap year) of rows, at rows_per_day rows a day.
-    """
-    return range(365 * rows_per_day, 366 * rows_per_day + 1)
-
-
 def _reference_year_window(annual_temperature_c: pd.Series) -> SimulationWindow:
     """The window annual_temperature_c's index describes, returned only once the series is one year of its own rows.
 
     Raises:
         ValueError: If SimulationWindow.of_index refuses the index.
         ValueError: If the window's cadence does not divide one day, naming it.
-        ValueError: If the row count is outside reference_year_lengths at that cadence,
+        ValueError: If the row count is outside year_row_counts at that cadence,
             naming the count, the cadence and the year's row counts.
     """
     window = SimulationWindow.of_index(annual_temperature_c.index)
@@ -88,7 +80,7 @@ def _reference_year_window(annual_temperature_c: pd.Series) -> SimulationWindow:
             "so no whole number of them makes a year: pass one year of temperature at a spacing "
             "that divides one day, such as the minute-interpolated TMY."
         )
-    year_lengths = reference_year_lengths(rows_per_day)
+    year_lengths = year_row_counts(rows_per_day)
     if len(annual_temperature_c) not in year_lengths:
         raise ValueError(
             f"annual_temperature_c has {len(annual_temperature_c):,} rows, not one year of rows "

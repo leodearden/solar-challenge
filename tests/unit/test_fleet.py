@@ -1,7 +1,9 @@
 """Tests for fleet simulation."""
 
+import dataclasses
 import multiprocessing
 import os
+import pickle
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
@@ -13,6 +15,7 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import parse_fleet_config
+from solar_challenge.demand import LoadKind
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
@@ -40,12 +43,17 @@ from tests._fleet_runner import (
     ProcessEndingHomeSimulator,
     finish_marker,
     finished,
+    marked_in_this_process,
     start_marker,
     started,
     wait_until_started,
 )
 from tests._seeded_tmy import ClearJuneDays
+from tests._stored_run_fixtures import PRE_975_FLEET_SEG_REVENUE_KEYS
 from tests._synthetic_weather import synthetic_june_weather
+
+_ONE_JUNE_DAY = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), ONE_MINUTE, "Europe/London")
+"""A one-day window, 1 June 2024 on a Europe/London minute clock, for summaries built by hand."""
 
 
 class TestFleetConfigBasics:
@@ -85,6 +93,21 @@ class TestFleetConfigBasics:
 
         with pytest.raises(ConfigurationError, match="timezone"):
             FleetConfig(homes=[home1, home2])
+
+    def test_homes_given_as_a_list_are_held_as_a_tuple(self):
+        home = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+        fleet = FleetConfig(homes=[home])
+
+        assert fleet.homes == (home,)
+        assert type(fleet.homes) is tuple
+
+    @pytest.mark.parametrize("field_name", [f.name for f in dataclasses.fields(FleetConfig)])
+    def test_assigning_a_field_raises_frozen_instance_error(self, field_name):
+        fleet = FleetConfig(homes=[HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())])
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(fleet, field_name, getattr(fleet, field_name))
 
 
 class TestFleetConfigCreation:
@@ -314,32 +337,32 @@ class TestFleetResults:
                 home_configs=[sample_results.home_configs[0]] * n_configs,
             )
 
-    @pytest.mark.parametrize(
-        ("break_invariant", "refusal"),
-        [
-            pytest.param(lambda fleet: fleet.per_home_results.clear(), "at least one home", id="emptied"),
-            pytest.param(
-                lambda fleet: fleet.home_configs.pop(), "got 2 per_home_results and 1 home_configs", id="unpaired"
-            ),
-        ],
-    )
-    @pytest.mark.parametrize(
-        "read",
-        [
-            pytest.param(lambda fleet: fleet.total_generation, id="total_generation"),
-            pytest.param(FleetResults.to_aggregate_dataframe, id="to_aggregate_dataframe"),
-            pytest.param(calculate_fleet_summary, id="calculate_fleet_summary"),
-            pytest.param(calculate_home_summaries, id="calculate_home_summaries"),
-        ],
-    )
-    def test_a_fleet_emptied_or_unpaired_after_construction_is_refused_where_it_is_read(
-        self, sample_results, break_invariant, refusal, read
-    ):
-        """A fleet whose per_home_results is emptied, or whose home_configs is unpaired from it, after construction is refused, naming the invariant, wherever its totals or summary are read."""
-        break_invariant(sample_results)
+    def test_results_given_as_lists_are_held_as_tuples_of_the_same_objects_unaliased(self, sample_results):
+        per_home_results = list(sample_results.per_home_results)
+        configs = list(sample_results.home_configs)
 
-        with pytest.raises(ValueError, match=refusal):
-            read(sample_results)
+        results = FleetResults(per_home_results=per_home_results, home_configs=configs)
+        configs.append(configs[0])
+
+        assert type(results.per_home_results) is tuple
+        assert type(results.home_configs) is tuple
+        assert all(held is given for held, given in zip(results.per_home_results, per_home_results, strict=True))
+        assert all(held is given for held, given in zip(results.home_configs, configs[:2], strict=True))
+        assert results.home_configs == tuple(configs[:2])
+
+    @pytest.mark.parametrize("field_name", [f.name for f in dataclasses.fields(FleetResults)])
+    def test_assigning_a_field_raises_frozen_instance_error(self, sample_results, field_name):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(sample_results, field_name, getattr(sample_results, field_name))
+
+    def test_a_pickled_fleet_unpickles_with_tuple_fields_and_the_same_homes(self, sample_results):
+        unpickled = pickle.loads(pickle.dumps(sample_results))
+
+        assert type(unpickled.per_home_results) is tuple
+        assert type(unpickled.home_configs) is tuple
+        assert unpickled.home_configs == sample_results.home_configs
+        for got, sent in zip(unpickled.per_home_results, sample_results.per_home_results, strict=True):
+            pd.testing.assert_frame_equal(got.to_dataframe(), sent.to_dataframe())
 
 
 class TestFleetSummary:
@@ -447,26 +470,14 @@ class TestFleetSummary:
         assert summary.fleet_self_consumption_ratio == pytest.approx(self_consumption_ratio)
         assert summary.fleet_grid_dependency_ratio == pytest.approx(grid_dependency_ratio)
 
-    def test_SEG_aggregates_with_tariff(self, sample_results):
-        """SEG revenue totals and mean are computed when tariff is provided."""
-        # Per-home grid_export: [1.0, 2.0, 3.0] kW constant for 24 h
-        # Per-home export kWh: [24, 48, 72]
-        # At 15p/kWh: [3.60, 7.20, 10.80] GBP
-        # total = 21.60, mean = 7.20
-        summary = calculate_fleet_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
+    def test_calculate_fleet_summary_takes_no_seg_rate(self, sample_results):
+        """Each home's export revenue is priced when it is simulated, so the fleet's summary takes no SEG rate."""
+        with pytest.raises(TypeError):
+            calculate_fleet_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
 
-        assert summary.total_seg_revenue_gbp is not None
-        assert summary.total_seg_revenue_gbp == pytest.approx(21.60, rel=0.01)
-
-        assert summary.per_home_seg_revenue_mean_gbp is not None
-        assert summary.per_home_seg_revenue_mean_gbp == pytest.approx(7.20, rel=0.01)
-
-    def test_SEG_aggregates_without_tariff(self, sample_results):
-        """SEG revenue fields are None when no tariff is provided."""
-        summary = calculate_fleet_summary(sample_results)
-
-        assert summary.total_seg_revenue_gbp is None
-        assert summary.per_home_seg_revenue_mean_gbp is None
+    def test_a_fleet_summary_has_no_seg_revenue_pair(self):
+        """A fleet's export revenue is total_export_revenue_gbp: it has no second, SEG revenue total or mean."""
+        assert {field.name for field in dataclasses.fields(FleetSummary)}.isdisjoint(PRE_975_FLEET_SEG_REVENUE_KEYS)
 
     def test_aggregates_financial_totals(self):
         """Fleet aggregates per-home financial totals correctly (P6ε §3.6/§10)."""
@@ -550,15 +561,16 @@ class TestFleetSummary:
         assert summary.total_import_cost_gbp is None
         assert summary.total_export_revenue_gbp is None
 
-    @pytest.mark.parametrize("seg_tariff_pence_per_kwh", [None, 15.0], ids=["no-seg-tariff", "seg-tariff-15p"])
-    def test_each_homes_summary_is_calculate_summary_of_its_results_in_the_fleets_order(
-        self, sample_results, seg_tariff_pence_per_kwh
-    ):
-        """Each home's summary is the one calculate_summary derives from that home's results at the same SEG tariff, listed in per_home_results' order."""
-        assert calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh) == [
-            calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
-            for results in sample_results.per_home_results
+    def test_each_homes_summary_is_calculate_summary_of_its_results_in_the_fleets_order(self, sample_results):
+        """Each home's summary is the one calculate_summary derives from that home's results, listed in per_home_results' order."""
+        assert calculate_home_summaries(sample_results) == [
+            calculate_summary(results) for results in sample_results.per_home_results
         ]
+
+    def test_calculate_home_summaries_takes_no_seg_rate(self, sample_results):
+        """Each home's export revenue is priced when it is simulated, so its summary takes no SEG rate."""
+        with pytest.raises(TypeError):
+            calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=15.0)
 
     def test_home_summaries_aggregate_into_the_fleets_totals_ratios_and_per_home_statistics(self):
         """The fleet's totals sum its homes', its ratios divide those totals, and its per-home statistics range over its homes' generation and self-consumption ratios."""
@@ -575,11 +587,11 @@ class TestFleetSummary:
             self_consumption_ratio=0.75,
             grid_dependency_ratio=0.5,
             export_ratio=0.25,
-            simulation_days=1,
+            window=_ONE_JUNE_DAY,
             total_import_cost_gbp=0.75,
             total_export_revenue_gbp=0.125,
             net_cost_gbp=0.625,
-            seg_revenue_gbp=0.125,
+            load_energy_kwh={LoadKind.HOUSEHOLD: 6.0},
         )
         medium_array = SummaryStatistics(
             total_generation_kwh=16.0,
@@ -594,11 +606,11 @@ class TestFleetSummary:
             self_consumption_ratio=0.125,
             grid_dependency_ratio=0.75,
             export_ratio=0.875,
-            simulation_days=1,
+            window=_ONE_JUNE_DAY,
             total_import_cost_gbp=1.5,
             total_export_revenue_gbp=1.75,
             net_cost_gbp=-0.25,
-            seg_revenue_gbp=1.75,
+            load_energy_kwh={LoadKind.HOUSEHOLD: 8.0},
         )
         large_array = SummaryStatistics(
             total_generation_kwh=40.0,
@@ -613,11 +625,11 @@ class TestFleetSummary:
             self_consumption_ratio=0.25,
             grid_dependency_ratio=0.375,
             export_ratio=0.75,
-            simulation_days=1,
+            window=_ONE_JUNE_DAY,
             total_import_cost_gbp=1.5,
             total_export_revenue_gbp=3.75,
             net_cost_gbp=-2.25,
-            seg_revenue_gbp=3.75,
+            load_energy_kwh={LoadKind.HOUSEHOLD: 16.0},
         )
 
         assert aggregate_home_summaries([small_array, medium_array, large_array]) == FleetSummary(
@@ -637,24 +649,10 @@ class TestFleetSummary:
             per_home_self_consumption_ratio_max=0.75,
             per_home_self_consumption_ratio_mean=0.375,
             simulation_days=1,
-            total_seg_revenue_gbp=5.625,
-            per_home_seg_revenue_mean_gbp=1.875,
             total_net_cost_gbp=-1.875,
             total_import_cost_gbp=3.75,
             total_export_revenue_gbp=5.625,
         )
-
-    def test_seg_revenue_is_aggregated_over_the_homes_whose_summary_has_one(self, sample_results):
-        """The fleet's SEG revenue total and per-home mean are taken over the homes whose summary has a SEG revenue, leaving out a home whose summary has none."""
-        first, second, third = calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=15.0)
-        assert [first.seg_revenue_gbp, second.seg_revenue_gbp, third.seg_revenue_gbp] == pytest.approx(
-            [3.60, 7.20, 10.80]
-        ), "premise: the homes export 24, 48 and 72 kWh, which earn 3.60, 7.20 and 10.80 GBP at 15p/kWh"
-
-        summary = aggregate_home_summaries([first, replace(second, seg_revenue_gbp=None), third])
-
-        assert summary.total_seg_revenue_gbp == pytest.approx(14.40)
-        assert summary.per_home_seg_revenue_mean_gbp == pytest.approx(7.20)
 
     def test_aggregating_no_home_summaries_is_refused(self):
         """A fleet summary aggregates at least one home's summary."""
@@ -668,15 +666,42 @@ bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 @pytest.fixture
 def worker_start_method(request: pytest.FixtureRequest) -> Iterator[str]:
-    """Make request.param the start method of the default multiprocessing context, which the fleet's worker pool uses, until the test ends."""
+    """Make request.param the start method of the default multiprocessing context until the test ends: the fleet's worker pool uses that start method unless it is fork, which it replaces with forkserver."""
     previous = multiprocessing.get_start_method(allow_none=True)
     multiprocessing.set_start_method(request.param, force=True)
     yield request.param
     multiprocessing.set_start_method(previous, force=True)
 
 
+_START_METHODS = [
+    pytest.param(
+        method,
+        marks=pytest.mark.skipif(
+            method not in multiprocessing.get_all_start_methods(), reason=f"{method} is not a start method here"
+        ),
+    )
+    for method in ("fork", "forkserver", "spawn")
+]
+
+
 class TestFleetRunnerPolicy:
-    """A FleetRunner's worker count is None or a whole number of at least 1, and default_runner() runs simulate_home in parallel over default_weather()."""
+    """A FleetRunner's worker count is None or a whole number of at least 1, its pool's workers never start as a fork of the calling process, and default_runner() runs simulate_home in parallel over default_weather()."""
+
+    @pytest.mark.parametrize("worker_start_method", _START_METHODS, indirect=True)
+    def test_a_parallel_calls_homes_start_in_workers_holding_none_of_the_callers_memory_whatever_the_default_start_method(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleet = FleetConfig(homes=[_home("Home 1", 2.0), _home("Home 2", 3.0)], name="Two")
+        runner = FleetRunner(
+            weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=True, max_workers=2
+        )
+
+        with marked_in_this_process("caller"):
+            runner.simulate(fleet, *_JUNE_DAYS.window())
+
+        assert {
+            name: (start.pid != os.getpid(), start.process_marks) for name, start in started(tmp_path).items()
+        } == {"Home 1": (True, ()), "Home 2": (True, ())}
 
     @pytest.mark.parametrize("max_workers", [0, -1, 1.5, True])
     def test_a_worker_count_other_than_a_whole_number_of_at_least_one_is_refused_naming_it(
@@ -792,6 +817,22 @@ class TestFleetRunnerSimulates:
             _assert_marked_results_of(results, fleets[index])
         assert told == [(done, 6) for done in range(1, 7)]
 
+    def test_a_fleets_results_hold_tuples_not_its_configurations_list(self, tmp_path: Path) -> None:
+        homes = [_home("Home 1", 2.0), _home("Home 2", 3.0)]
+        fleet = FleetConfig(homes=homes, name="Two")
+
+        results = FleetRunner(
+            weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=False
+        ).simulate(fleet, *_JUNE_DAYS.window())
+
+        assert type(results.home_configs) is tuple
+        assert results.home_configs == tuple(homes)
+        assert type(results.per_home_results) is tuple
+        with pytest.raises(AttributeError):
+            results.home_configs.append(homes[0])
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            results.home_configs = ()
+
     def test_no_fleets_yield_nothing_and_fetch_no_weather(self, tmp_path: Path) -> None:
         weather = _CountingWeather()
         runner = FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path))
@@ -903,7 +944,7 @@ def _with_a_5kwh_battery(home: HomeConfig) -> HomeConfig:
 
 
 def _battery_at_soh(home: HomeConfig, soh: float) -> HomeConfig:
-    """*home* with its battery's soh override set to *soh*, as finance._aged_homes sets it: 1.0 at age 0."""
+    """*home* with its battery's soh override set to *soh*, as the projection's aged homes set it: 1.0 at age 0."""
     assert home.battery_config is not None, f"{home.name!r} has no battery whose soh to set"
     return replace(home, battery_config=replace(home.battery_config, soh=soh))
 

@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
-import dataclasses
 import json
 import logging
 import time
@@ -29,6 +28,7 @@ from solar_challenge.web.assistant import (
     suggest_config,
 )
 from solar_challenge.web.database import Database
+from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.storage import RunStorage
@@ -606,7 +606,7 @@ class TestListRecentRuns:
         [
             pytest.param("{not json", id="summary-not-json"),
             pytest.param(
-                json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+                json.dumps({**field_tree(home_summary()), "retired_figure": 12.5}),
                 id="summary-with-a-key-no-field-has",
             ),
             pytest.param(
@@ -1099,12 +1099,12 @@ bristol_june_tmy = _REAL_JOB_DAYS.bristol_tmy_fixture()
 class TestRunHomeSimulationWithRealJobManager:
     """A real 1-day Bristol home simulation through the app's JobManager: the end-to-end proof that run_home_simulation's job completes and that get_run_results reads it.
 
-    Its one day is the clear June day on DAYS_WINDOW_START that bristol_june_tmy seeds as Bristol's TMY.
+    Its one day is the clear June day on SHORT_WINDOW_START that bristol_june_tmy seeds as Bristol's TMY.
     """
 
     def test_run_home_simulation_real_job_lands_in_runs(self, app: Flask) -> None:
         """run_home_simulation() with the real JobManager creates a completed run in the app's RunStorage."""
-        job_manager = app.extensions["job_manager"]
+        job_manager = dashboard_of(app).jobs
         storage = run_storage_of(app)
 
         result = run_home_simulation(

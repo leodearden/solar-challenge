@@ -12,11 +12,13 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.battery import Battery
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.main import app
 from solar_challenge.finance import BillDistribution
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig
-from solar_challenge.output import generate_finance_report
+from solar_challenge.projection import fewest_simulated_ages
+from tests._assumption_sections import make_assumption_section, sections_of
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
 from tests._factories import (
     make_bill_breakdown,
@@ -25,6 +27,8 @@ from tests._factories import (
     make_cost_recovery_solution,
 )
 from tests._finance_builders import make_fleet_results
+from tests._markdown_tables import row_cells
+from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
 
 
 # ---------------------------------------------------------------------------
@@ -44,26 +48,13 @@ def _make_bill_distribution() -> BillDistribution:
 
 
 def _value_cell(report: str, heading: str, label: str) -> str:
-    """The Value cell of the row labelled *label* in the table of *heading*'s own section.
-
-    A section ends at the next heading, so the bill's own Min, Mean, Median and Max rows are never read as the cost-recovery block's.
-    """
-    assert f"{heading}\n" in report, f"No {heading!r} heading in the report:\n{report}"
-    section = report.split(f"{heading}\n", 1)[1].split("\n#", 1)[0]
-    rows = [
-        [cell.strip() for cell in line.strip("|").split("|")]
-        for line in section.splitlines()
-        if line.startswith("|")
-    ]
-    matching_rows = [row for row in rows if row[0] == label]
-    assert len(matching_rows) == 1, f"Expected one {label!r} row under {heading!r}:\n{section}"
-    row = matching_rows[0]
-    assert len(row) == 2, f"Expected the {label!r} row under {heading!r} to be a label and a value, got {row!r}:\n{section}"
-    return row[1]
+    """The one value cell of the row labelled *label* in the table under *heading*: a one-mode report's."""
+    (cell,) = row_cells(report, heading, label)
+    return cell
 
 
 # ---------------------------------------------------------------------------
-# §B — output.py cost-recovery block
+# §B — board_report.py cost-recovery block
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +69,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         assert "cost-recovery" in report.lower(), (
             f"Expected 'Cost-Recovery' heading in report but got:\n{report}"
@@ -92,7 +83,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         shown = _value_cell(report, "## Cost-Recovery Analysis", "Solved Own-Use Rate")
         assert shown == "18.75 p/kWh", f"solved rate not shown in its row:\n{report}"
@@ -105,7 +96,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         shown = _value_cell(report, "## Cost-Recovery Analysis", "CBS Net Surplus / home / yr")
         assert shown == "£27.00", f"net surplus not shown in its row:\n{report}"
@@ -118,7 +109,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         # Should contain some form of feasibility indicator
         assert "feasible" in report.lower() or "floor" in report.lower(), (
@@ -129,8 +120,8 @@ class TestGenerateFinanceReportCostRecoveryBasic:
         """generate_finance_report(bill) without cost_recovery must match cost_recovery=None."""
         bill = _make_bill_distribution()
 
-        report_default = generate_finance_report(bill)
-        report_none = generate_finance_report(bill, cost_recovery=None)
+        report_default = generate_finance_report(sections_of(make_assumption_section(bill=bill)))
+        report_none = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=None)))
 
         assert report_default == report_none, (
             "generate_finance_report() and generate_finance_report(cost_recovery=None) "
@@ -141,7 +132,7 @@ class TestGenerateFinanceReportCostRecoveryBasic:
         """generate_finance_report without cost_recovery must NOT contain a Cost-Recovery heading."""
         bill = _make_bill_distribution()
 
-        report = generate_finance_report(bill)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill)))
 
         assert "cost-recovery" not in report.lower(), (
             f"'Cost-Recovery' heading should not appear without cost_recovery param:\n{report}"
@@ -176,7 +167,9 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=True, binding="floor",
             outlay=cr_outlay,
         )
-        return generate_finance_report(_make_bill_distribution(), cost_recovery=sol)
+        return generate_finance_report(
+            sections_of(make_assumption_section(bill=_make_bill_distribution(), cost_recovery=sol)),
+        )
 
     def test_outlay_distribution_renders(self) -> None:
         """Cost-recovery block must render the per-home total-outlay distribution at solved rate."""
@@ -218,7 +211,7 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=True, binding="floor",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         # Should show a human-readable label for 'floor' (surplus meets floor)
         assert "surplus meets floor" in report.lower(), (
@@ -233,7 +226,7 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=True, binding="rate_clamped_zero",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         # Should show a human-readable label for 'rate_clamped_zero'
         assert "over-feasible" in report.lower() or "clamped" in report.lower(), (
@@ -248,7 +241,7 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=False, binding="infeasible_above_retail",
         )
 
-        report = generate_finance_report(bill, cost_recovery=sol)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol)))
 
         # Should contain an explicit infeasible warning
         report_lower = report.lower()
@@ -273,9 +266,13 @@ class TestGenerateFinanceReportCostRecoveryFull:
             feasible=False, binding="infeasible_above_retail",
         )
 
-        r_floor = generate_finance_report(bill, cost_recovery=sol_floor)
-        r_clamped = generate_finance_report(bill, cost_recovery=sol_clamped)
-        r_infeasible = generate_finance_report(bill, cost_recovery=sol_infeasible)
+        r_floor = generate_finance_report(sections_of(make_assumption_section(bill=bill, cost_recovery=sol_floor)))
+        r_clamped = generate_finance_report(
+            sections_of(make_assumption_section(bill=bill, cost_recovery=sol_clamped)),
+        )
+        r_infeasible = generate_finance_report(
+            sections_of(make_assumption_section(bill=bill, cost_recovery=sol_infeasible)),
+        )
 
         # All three must differ (at minimum in the binding-label section)
         assert r_floor != r_clamped, "floor and rate_clamped_zero must produce different reports"
@@ -320,8 +317,21 @@ class TestFinanceCLICostRecoveryHelp:
 
 
 # ---------------------------------------------------------------------------
-# §E — The fast CLI tests' scenario writer
+# §E — The fast CLI tests' scenario writers
 # ---------------------------------------------------------------------------
+
+_INTERIOR_FINANCE: dict[str, float | int] = {
+    "standing_charge_pence_per_day": 28.0,
+    # Interior-regime cost-recovery params: high capex, no grant, floor=100, retail=30p
+    "pv_cost_per_kwp_gbp": 2000.0,
+    "grant_gbp": 0.0,
+    "own_use_rate_pence_per_kwh": 15.0,
+    "retained_cash_floor_per_home_per_year_gbp": 100.0,
+    "retail_baseline_rate_pence_per_kwh": 30.0,
+    "asset_life_years": 25,
+    "vat_rate": 0.05,
+}
+"""The interior-regime finance block every scenario writer here writes: the --cost-recovery solve binds at the floor."""
 
 
 def _write_interior_scenario(tmp_path: Path, n_homes: int = 5, *, battery_kwh: float | None = None) -> Path:
@@ -343,17 +353,7 @@ def _write_interior_scenario(tmp_path: Path, n_homes: int = 5, *, battery_kwh: f
             "battery": {"capacity_kwh": battery_kwh},
             "load": {"annual_consumption_kwh": 3500},
         },
-        "finance": {
-            "standing_charge_pence_per_day": 28.0,
-            # Interior-regime cost-recovery params: high capex, no grant, floor=100, retail=30p
-            "pv_cost_per_kwp_gbp": 2000.0,
-            "grant_gbp": 0.0,
-            "own_use_rate_pence_per_kwh": 15.0,
-            "retained_cash_floor_per_home_per_year_gbp": 100.0,
-            "retail_baseline_rate_pence_per_kwh": 30.0,
-            "asset_life_years": 25,
-            "vat_rate": 0.05,
-        },
+        "finance": _INTERIOR_FINANCE,
     }
     path = tmp_path / "interior_scenario.yaml"
     path.write_text(yaml.dump(scenario))
@@ -363,6 +363,22 @@ def _write_interior_scenario(tmp_path: Path, n_homes: int = 5, *, battery_kwh: f
 def _write_unaged_battery_scenario(tmp_path: Path) -> Path:
     """Write _write_interior_scenario's scenario of two homes, each with a 5 kWh battery: its age-0 fleet differs from its configured homes only in each battery's soh."""
     return _write_interior_scenario(tmp_path, n_homes=2, battery_kwh=5.0)
+
+
+def _write_aged_pv_scenario(tmp_path: Path) -> Path:
+    """Write a homes-list scenario of two homes under _INTERIOR_FINANCE, each with 6-year-old 4 kW PV and a 5 kWh battery.
+
+    Its age-0 fleet resets the PV's age, so it differs from the bill run's homes
+    and no projection age is answered by the bill run.
+    """
+    home = {
+        "pv": {"capacity_kw": 4.0, "system_age_years": 6.0},
+        "battery": {"capacity_kwh": 5.0},
+        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+    }
+    path = tmp_path / "aged_pv_scenario.yaml"
+    path.write_text(yaml.safe_dump({"name": "Aged PV", "homes": [home, home], "finance": _INTERIOR_FINANCE}))
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -486,3 +502,33 @@ class TestFinanceRunSimulatesTheAge0FleetOnce:
         assert len(recorder.fleets) > 1, "the projection's other ages reach the simulator"
         assert "## Project Economics" in result.stdout, result.output
         assert "## Cost-Recovery Analysis" in result.stdout, result.output
+
+
+_PROJECT_AND_COST_RECOVERY_OVER_A_WEEK = ["finance", "run", "--project", "--cost-recovery", "--start", "2024-06-01", "--end", "2024-06-07"]
+"""`finance run` with both economics blocks over the first week of June 2024, its scenario file to follow."""
+
+
+class TestFinanceRunMakesOneProjection:
+    """`finance run --project --cost-recovery` asks its simulator for its bill run and one projection's ages, no more."""
+
+    def test_an_aged_fleet_is_simulated_for_its_bill_and_one_projection(self, tmp_path: Path) -> None:
+        recorder = RecordingSimulate()
+
+        result = invoke_cli([*_PROJECT_AND_COST_RECOVERY_OVER_A_WEEK, str(_write_aged_pv_scenario(tmp_path))], answering(recorder))
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        assert tuple(fleet.name for fleet in recorder.fleets[1:]) == PROJECTION_AGES_OVER_25_YEARS
+        assert len(recorder.fleets) == 1 + fewest_simulated_ages(25)
+        assert "## Project Economics" in result.stdout, result.output
+        assert "## Cost-Recovery Analysis" in result.stdout, result.output
+
+    def test_an_unaged_fleets_age_0_projection_age_is_answered_by_its_bill_run(self, tmp_path: Path) -> None:
+        """The bill run, then the projection's four later ages."""
+        recorder = RecordingSimulate()
+
+        result = invoke_cli(
+            [*_PROJECT_AND_COST_RECOVERY_OVER_A_WEEK, str(_write_unaged_battery_scenario(tmp_path))], answering(recorder)
+        )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        assert len(recorder.fleets) == fewest_simulated_ages(25), [fleet.name for fleet in recorder.fleets]

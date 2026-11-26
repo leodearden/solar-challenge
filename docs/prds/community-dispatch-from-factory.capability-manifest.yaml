@@ -108,7 +108,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "\"CommunityResults\": \"dataclass\\[eq, frozen\\]"
+          pattern: "\"CommunityResults\": \"dataclass\\[eq, frozen, match_args\\]"
           paths: ["tests/unit/test_public_api_surface.py", "tests/_surface_forms.py"]
           expect: present
       - name: "s16-alpha-one-assembly"

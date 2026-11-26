@@ -15,6 +15,7 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 
+from solar_challenge import dispatch
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import (
     STRATEGY_CONFIG_BY_TYPE,
@@ -172,6 +173,47 @@ class TestGridChargeConfig:
             GridChargeConfig().target_soc_fraction = 0.5  # type: ignore[misc]
 
 
+_FORECASTS = ("pv_blind", "trailing_14_days", "perfect_foresight")
+"""The forecasts a grid-charging battery may be sized by, in GRID_CHARGE_FORECASTS' order."""
+
+
+class TestGridChargeForecast:
+    """GridChargeConfig's forecast is one of GRID_CHARGE_FORECASTS, 'pv_blind' by default."""
+
+    def test_the_forecasts_are_the_three_named(self) -> None:
+        assert dispatch.GRID_CHARGE_FORECASTS == _FORECASTS
+
+    def test_the_default_forecast_is_pv_blind(self) -> None:
+        assert GridChargeConfig().forecast == "pv_blind"
+
+    @pytest.mark.parametrize("forecast", _FORECASTS)
+    def test_each_forecast_is_accepted_and_held(self, forecast: str) -> None:
+        assert GridChargeConfig(forecast=forecast).forecast == forecast  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("oracle", id="unknown-name"),
+            pytest.param("PV_BLIND", id="wrong-case"),
+            pytest.param(True, id="bool"),
+            pytest.param(1, id="number"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_value_that_is_not_a_forecast_is_refused_naming_it_and_every_forecast(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            GridChargeConfig(forecast=value)  # type: ignore[arg-type]
+
+        assert str(refusal.value) == (
+            f"forecast must be one of 'pv_blind', 'trailing_14_days', 'perfect_foresight', got {value!r}"
+        )
+
+    def test_a_positional_target_still_sets_target_soc_fraction(self) -> None:
+        config = GridChargeConfig(0.8)
+
+        assert (config.target_soc_fraction, config.forecast) == (0.8, "pv_blind")
+
+
 class TestOneValidatorPerRule:
     """A variant and its strategy's constructor refuse the same values with the same ConfigurationError."""
 
@@ -250,6 +292,7 @@ class TestOneValidatorPerRule:
                 demand_kw=1.0,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
             for hour in (17, 12)
         ]
@@ -300,6 +343,7 @@ class TestOneValidatorPerRule:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
         assert held == 2.0

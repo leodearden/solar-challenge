@@ -23,7 +23,8 @@
   the request body's `system_losses`. Left blank, the form sends none and the run takes
   the default, which the field shows as its placeholder (`pv.PVWATTS_DEFAULT_SYSTEM_LOSSES`).
   `home run --system-losses` overrides a scenario file's value. Both refuse a value
-  outside [0, 1) with `PVConfig`'s own error, as a scenario file does.
+  outside [0, 1) with `PVConfig`'s own error. `home run` gives it under the option's name,
+  `--system-losses:`, as a scenario file's refusal is under its `pv:` block.
 - **Performance ratio**, as this note and its measurements use it: a year's AC energy
   divided by the in-plane irradiation (kWh/m², before angle-of-incidence losses) times
   the wired DC capacity (`pv.wired_dc_capacity_kw`, the denominator of validation's
@@ -88,8 +89,9 @@ This is a dated record. Re-measure with the script before relying on it.
 
 - **Provenance.** 2026-10-09, on task 252's branch from main cf6af55, and again from
   main 5325093 with identical output: CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy
-  2.4.6. TMYs through `get_tmy_data`, scaled to PVGIS v5_3's 2005–2020 mean GHI
-  ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)). PVGIS-14% is pvlib's
+  2.4.6. TMYs through `get_tmy_data` (task 827 retired it;
+  `PvgisTmy(WeatherCache()).get` serves the same year), scaled to PVGIS v5_3's 2005–2020
+  mean GHI ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)). PVGIS-14% is pvlib's
   `get_pvgis_hourly(pvcalculation=True, peakpower=1, loss=14)` from the same release
   and years (PVGIS-SARAH3), at 35° facing south, free-standing, with the horizon.
 - **Bristol, default 4 kW** (4.00428 wired kWp; GHI 1069.46 and in-plane 1236.12

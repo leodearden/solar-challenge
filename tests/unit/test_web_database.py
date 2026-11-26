@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.load import LoadConfig
@@ -19,6 +20,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.web.storage import RUN_STATUSES, RunQuery, RunRecord
 from solar_challenge.web.stored_runs import RUN_TYPES
 
+from tests._finance_builders import make_window
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage
 
@@ -84,11 +86,12 @@ def sample_summary():
         self_consumption_ratio=0.60,
         grid_dependency_ratio=0.25,
         export_ratio=0.40,
-        simulation_days=1,
+        window=make_window(days=1),
         total_import_cost_gbp=5.0,
         total_export_revenue_gbp=4.0,
         net_cost_gbp=1.0,
         strategy_name="greedy",
+        load_energy_kwh={LoadKind.HOUSEHOLD: 80.0},
     )
 
 

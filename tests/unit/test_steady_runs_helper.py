@@ -3,6 +3,7 @@
 
 import pandas as pd
 
+from solar_challenge.demand import LoadKind
 from tests._steady_runs import steady_run
 
 
@@ -55,5 +56,5 @@ def test_a_run_given_no_levels_has_every_series_at_zero_and_no_heat_pump() -> No
     results = steady_run("2024-06-01", "2024-06-01")
     frame = results.to_dataframe()
 
-    assert results.heat_pump_load is None
+    assert LoadKind.HEAT_PUMP not in results.additional_loads
     assert sorted(column for column in frame.columns if (frame[column] != 0.0).any()) == []

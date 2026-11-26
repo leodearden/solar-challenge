@@ -3,6 +3,7 @@
 
 import dataclasses
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ pytest.importorskip("pyarrow")
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RunType
@@ -25,6 +27,10 @@ def storage(tmp_path: Path) -> RunStorage:
     return empty_run_storage(tmp_path)
 
 
+_THREE_JUNE_DAYS = SimulationWindow(date(2025, 6, 1), date(2025, 6, 3), ONE_MINUTE, "Europe/London")
+"""A window other than home_summary's JUNE_WEEK_WINDOW: 1 to 3 June 2025."""
+
+
 def _stored_summary_json(storage: RunStorage, run_id: str) -> str:
     """The summary_json text of run *run_id*'s row, which the test has written with one."""
     record = storage.run_record(run_id)
@@ -36,7 +42,7 @@ def _stored_summary_json(storage: RunStorage, run_id: str) -> str:
     ("run_type", "summary"),
     [
         pytest.param("home", home_summary(total_generation_kwh=987.65), id="home"),
-        pytest.param("home", home_summary(window=JUNE_WEEK_WINDOW), id="home-with-a-window"),
+        pytest.param("home", home_summary(window=_THREE_JUNE_DAYS), id="home-over-another-window"),
         pytest.param("fleet", fleet_summary(fleet_self_consumption_ratio=0.25), id="fleet"),
     ],
 )
@@ -74,9 +80,9 @@ def test_a_fleet_summary_s_json_is_the_text_a_fleet_run_s_save_writes(storage: R
     ("given", "fixed", "figures"),
     [
         pytest.param(
-            home_summary(total_generation_kwh=987.65, simulation_days=3),
+            home_summary(total_generation_kwh=987.65, window=_THREE_JUNE_DAYS),
             home_summary(),
-            {"total_generation_kwh": 987.65, "simulation_days": 3},
+            {"total_generation_kwh": 987.65, "window": dataclasses.asdict(_THREE_JUNE_DAYS)},
             id="home",
         ),
         pytest.param(
@@ -100,8 +106,9 @@ def test_a_home_summary_is_100_kwh_generated_60_of_it_self_consumed_over_7_days_
         summary.total_generation_kwh,
         summary.total_self_consumption_kwh,
         summary.self_consumption_ratio,
+        summary.window,
         summary.simulation_days,
-    ) == (100.0, 60.0, 0.6, 7)
+    ) == (100.0, 60.0, 0.6, JUNE_WEEK_WINDOW, 7)
 
 
 def test_a_fleet_summary_is_2_homes_200_kwh_generated_120_of_it_self_consumed_over_7_days_unless_given_other_figures() -> None:

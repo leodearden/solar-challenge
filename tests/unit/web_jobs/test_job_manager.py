@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.jobs: JobManager, live_managers and shutdown_all_managers."""
+"""Tests for solar_challenge.web.jobs' JobManager."""
 
 import logging
 import sqlite3
@@ -14,33 +14,32 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
-from flask import Flask
 
 from solar_challenge.error_text import error_text_with_notes
+from solar_challenge.fleet import HomeSimulator
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.jobs import (
-    HomeSimulator,
-    JobManager,
-    JobSnapshot,
-    JobState,
-    live_managers,
-    shutdown_all_managers,
-)
+from solar_challenge.weather import WeatherProvider
+from solar_challenge.web.dashboard import dashboard_of
+from solar_challenge.web.jobs import JobManager, JobSnapshot, JobState
 from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
+from tests._fleet_runner import MarkingHomeSimulator, started, wait_until_started
 from tests._manual_clock import ManualClock
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage
-from tests._web_app import run_storage_of
-from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
+from tests._web_app import BuildApp
+from tests._web_job_runner import NewJobManager, NewJobManagerWithRunner, jobs_running, runner_of
+from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST
 from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
     CountingIds,
+    RecordingFleetSimulator,
     RecordingSimulation,
     RunStorageWithGatedCompletion,
     RunStorageWithGatedHomeSaves,
     SaveGate,
+    SteppedSimulation,
     a_failing_simulation,
 )
 
@@ -51,7 +50,9 @@ _A_MESSAGE_SQLITE_CANNOT_STORE = "the simulation failed on " + chr(0xDCFF)  # a 
 def _a_simulation_raising(error: Callable[[], BaseException]) -> HomeSimulator:
     """Stands in for simulate_home: every job it runs raises error(), built anew for each call so no notes are shared between jobs."""
 
-    def simulate(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+    def simulate(
+        config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
         raise error()
 
     return simulate
@@ -85,8 +86,10 @@ class _AnErrorWhoseMessageIsInterrupted(BaseException):
 def _released_then_raising(blocking_simulation: BlockingSimulation, error: Callable[[], BaseException]) -> HomeSimulator:
     """Stands in for simulate_home: every job waits in *blocking_simulation* until it is released, then raises error()."""
 
-    def simulate(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
-        blocking_simulation(config, start_date, end_date)
+    def simulate(
+        config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
+        blocking_simulation(config, start_date, end_date, weather=weather)
         raise error()
 
     return simulate
@@ -99,19 +102,21 @@ def storage(tmp_path: Path) -> RunStorage:
 
 
 class TestJobManagerConstruction:
-    """A JobManager is built with the RunStorage and the home simulation its jobs use; it has neither of its own."""
+    """A JobManager is built with the RunStorage and the runner its jobs use; it has neither of its own."""
 
-    def test_a_manager_is_given_its_home_simulator(self, storage: RunStorage) -> None:
-        with pytest.raises(TypeError, match="simulate_home"):
+    def test_a_manager_is_given_its_runner(self, storage: RunStorage) -> None:
+        with pytest.raises(TypeError, match="runner"):
             JobManager(storage)
 
 
 class TestJobManagerSnapshots:
     """Tests for the snapshot a JobManager keeps of each job: its state at that state's version, read with job_snapshot."""
 
-    def test_thread_safety_concurrent_access(self, blocking_simulation: BlockingSimulation, storage: RunStorage) -> None:
+    def test_thread_safety_concurrent_access(
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
         """Test that concurrent job_state and job_snapshot calls are thread-safe."""
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         job_ids = [_submit_home_job(manager) for _ in range(10)]
         blocking_simulation.wait_until_started()
 
@@ -138,9 +143,9 @@ class TestJobManagerSnapshots:
         assert len(errors) == 0, f"Thread safety errors: {errors}"
 
     def test_each_state_a_job_reports_takes_the_next_version(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         held = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
         queued = _submit_home_job(manager)
@@ -156,8 +161,10 @@ class TestJobManagerSnapshots:
         assert manager.job_snapshot(held) == JobSnapshot(version=5, state=manager.job_state(held))
         assert manager.job_snapshot(queued) == JobSnapshot(version=5, state=manager.job_state(queued))
 
-    def test_a_job_the_manager_does_not_track_has_no_snapshot(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+    def test_a_job_the_manager_does_not_track_has_no_snapshot(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
 
         assert manager.job_snapshot("nonexistent-job-id") is None
 
@@ -179,10 +186,14 @@ class TestJobManagerSnapshotWaits:
     """
 
     def test_a_waiter_is_woken_with_the_jobs_newer_snapshot_as_soon_as_the_job_moves(
-        self, blocking_simulation: BlockingSimulation, save_gate: SaveGate, storage: RunStorage
+        self,
+        blocking_simulation: BlockingSimulation,
+        save_gate: SaveGate,
+        storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
         gated_storage = RunStorageWithGatedHomeSaves(storage.database, storage.data_dir, save_gate)
-        manager = JobManager(gated_storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(gated_storage, blocking_simulation, max_workers=1)
         held = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
         release = threading.Timer(0.2, blocking_simulation.release)
@@ -197,9 +208,9 @@ class TestJobManagerSnapshotWaits:
         assert waited < 30.0
 
     def test_a_waiter_whose_job_does_not_move_gets_the_same_snapshot_once_its_timeout_has_passed(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         held = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
 
@@ -209,9 +220,9 @@ class TestJobManagerSnapshotWaits:
         assert waited >= 0.05
 
     def test_a_wait_for_a_version_the_job_has_already_passed_returns_its_snapshot_at_once(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         held = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
 
@@ -220,8 +231,10 @@ class TestJobManagerSnapshotWaits:
         assert current == manager.job_snapshot(held)
         assert waited < 30.0
 
-    def test_a_wait_on_a_job_the_manager_does_not_track_returns_none_at_once(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+    def test_a_wait_on_a_job_the_manager_does_not_track_returns_none_at_once(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
 
         untracked, waited = _waited_for_snapshot(manager, "nonexistent-job-id", newer_than=0, timeout=60.0)
 
@@ -229,7 +242,7 @@ class TestJobManagerSnapshotWaits:
         assert waited < 30.0
 
     def test_a_waiter_is_woken_with_none_as_soon_as_the_manager_stops_tracking_its_job(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
         """The waiter's job was cancelled in the queue a day before a later submit, which stops tracking it.
 
@@ -237,7 +250,7 @@ class TestJobManagerSnapshotWaits:
         before that submit has queued its job, so the test waits for the submit to return before the manager shuts down.
         """
         clock = ManualClock()
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation, clock=clock)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1, clock=clock)
         _submit_home_job(manager)
         blocking_simulation.wait_until_started()
         cancelled = _submit_home_job(manager)
@@ -372,12 +385,116 @@ def _submit_fleet_job(manager: JobManager) -> str:
     return job_id
 
 
-class TestJobManagerSimulation:
-    """Tests for the simulation a JobManager runs."""
+def _three_homes() -> list[HomeConfig]:
+    """Three homes named Home 0, Home 1 and Home 2, of 4, 3 and 2 kW of PV."""
+    return [
+        HomeConfig(
+            pv_config=PVConfig(capacity_kw=kw), load_config=LoadConfig(annual_consumption_kwh=3500), name=f"Home {index}"
+        )
+        for index, kw in enumerate((4.0, 3.0, 2.0))
+    ]
 
-    def test_a_home_job_runs_the_simulation_the_manager_was_given(self, storage: RunStorage) -> None:
+
+class TestJobManagerSimulation:
+    """Tests for the simulation a JobManager runs through its runner."""
+
+    def test_a_home_job_simulates_its_home_once_through_the_runner(
+        self, storage: RunStorage, new_job_manager_with_runner: NewJobManagerWithRunner
+    ) -> None:
+        runner = RecordingFleetSimulator()
+        manager = new_job_manager_with_runner(storage, runner, max_workers=1)
+
+        job_id, _ = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
+
+        assert _wait_until_finished(manager, job_id).status == "completed"
+        assert (runner.home_calls, runner.fleet_calls) == ([(_A_HOME, _JUNE_1, _JUNE_2)], [])
+
+    def test_a_fleet_job_simulates_its_homes_as_one_fleet_named_as_its_run_and_saves_what_the_runner_returns(
+        self, storage: RunStorage, new_job_manager_with_runner: NewJobManagerWithRunner
+    ) -> None:
+        runner = RecordingFleetSimulator()
+        manager = new_job_manager_with_runner(storage, runner, max_workers=1)
+
+        job_id, run_id = manager.submit_fleet_job(
+            configs=_three_homes(), start_date=_JUNE_1, end_date=_JUNE_2, name="Three Roofs"
+        )
+
+        assert _wait_until_finished(manager, job_id).status == "completed"
+        [call] = runner.fleet_calls
+        assert (call.fleet.homes, call.fleet.name, call.start_date, call.end_date) == (
+            tuple(_three_homes()),
+            "Three Roofs",
+            _JUNE_1,
+            _JUNE_2,
+        )
+        assert call.progress is not None
+        assert runner.home_calls == []
+        [answer] = runner.answers
+        saved = storage.load_run(run_id).fleet_results
+        assert saved.home_configs == answer.home_configs
+        for saved_home, answered_home in zip(saved.per_home_results, answer.per_home_results, strict=True):
+            pd.testing.assert_series_equal(saved_home.generation, answered_home.generation, check_freq=False)
+
+    def test_a_fleet_job_reports_how_many_of_its_homes_have_finished_as_each_finishes(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
+        simulation = SteppedSimulation()
+        manager = new_job_manager(storage, simulation, max_workers=1)
+        job_id, _ = manager.submit_fleet_job(configs=_three_homes(), start_date=_JUNE_1, end_date=_JUNE_2)
+
+        reported = []
+        for finished in range(3):
+            simulation.wait_until_entered(finished + 1)
+            state = manager.job_state(job_id)
+            assert state is not None
+            reported.append((state.current_step, state.progress_pct))
+            simulation.allow_one()
+
+        assert reported == [("Homes 0/3", 5.0), ("Homes 1/3", 35.0), ("Homes 2/3", 65.0)]
+        assert _wait_until_finished(manager, job_id).status == "completed"
+        assert [config for config, _, _ in simulation.calls] == _three_homes()
+
+    def test_a_fleet_job_whose_run_is_cancelled_while_its_first_home_simulates_simulates_no_other_home_and_saves_nothing(
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
+        job_id, run_id = manager.submit_fleet_job(configs=_three_homes(), start_date=_JUNE_1, end_date=_JUNE_2)
+        blocking_simulation.wait_until_started()
+        created = storage.run_record(run_id)
+
+        assert manager.cancel_run(run_id) is True
+        blocking_simulation.release()
+        assert manager.wait_until_idle(timeout=30)
+
+        assert _status_of(manager, job_id) == "cancelled"
+        assert [config for config, _, _ in blocking_simulation.calls] == _three_homes()[:1]
+        assert storage.run_record(run_id) == created
+        assert not stored_run_dir(storage, run_id).exists()
+
+    def test_a_fleet_job_on_a_pool_whose_run_is_cancelled_while_its_first_home_simulates_never_starts_a_home_not_yet_handed_to_the_pool(
+        self, storage: RunStorage, tmp_path: Path, new_job_manager_with_runner: NewJobManagerWithRunner
+    ) -> None:
+        markers, release = tmp_path / "markers", tmp_path / "release"
+        markers.mkdir()
+        held = MarkingHomeSimulator(markers, held_until=(("Home 0", release),), hold_limit_seconds=60.0)
+        runner = replace(runner_of(held), parallel=True, max_workers=1)
+        manager = new_job_manager_with_runner(storage, runner, max_workers=1)
+        job_id, run_id = manager.submit_fleet_job(configs=_three_homes(), start_date=_JUNE_1, end_date=_JUNE_2)
+        wait_until_started(markers, at_least=1, within=60)
+
+        assert manager.cancel_run(run_id) is True
+        release.touch()
+        assert manager.wait_until_idle(timeout=60)
+
+        assert _status_of(manager, job_id) == "cancelled"
+        assert "Home 2" not in started(markers)
+        assert not stored_run_dir(storage, run_id).exists()
+
+    def test_a_home_job_runs_the_simulation_the_manager_was_given(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
         simulation = RecordingSimulation()
-        manager = JobManager(storage, max_workers=1, simulate_home=simulation)
+        manager = new_job_manager(storage, simulation, max_workers=1)
 
         job_id, run_id = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
 
@@ -387,9 +504,11 @@ class TestJobManagerSimulation:
         summary = storage.load_run(run_id).summary
         assert summary.total_generation_kwh == pytest.approx(4.0)
 
-    def test_a_fleet_job_runs_the_managers_simulation_once_per_home(self, storage: RunStorage) -> None:
+    def test_a_fleet_job_runs_the_managers_simulation_once_per_home(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
         simulation = RecordingSimulation()
-        manager = JobManager(storage, max_workers=1, simulate_home=simulation)
+        manager = new_job_manager(storage, simulation, max_workers=1)
         homes = [
             _A_HOME,
             HomeConfig(pv_config=PVConfig(capacity_kw=2.0), load_config=LoadConfig(annual_consumption_kwh=3500)),
@@ -409,10 +528,10 @@ class TestJobManagerIds:
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_job_and_its_run_take_their_ids_from_the_managers_id_source(
-        self, submit_job: Callable[[JobManager], str], storage: RunStorage
+        self, submit_job: Callable[[JobManager], str], storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
         ids = CountingIds()
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation(), new_id=ids)
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1, new_id=ids)
 
         job_id = submit_job(manager)
 
@@ -426,8 +545,10 @@ class TestJobManagerIds:
 class TestJobManagerState:
     """Tests for the state a JobManager reports for a job: only while it tracks the job in memory."""
 
-    def test_a_jobs_state_holds_its_ids_its_progress_and_its_runs_creation_time(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+    def test_a_jobs_state_holds_its_ids_its_progress_and_its_runs_creation_time(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
 
         job_id, run_id = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
         assert manager.wait_until_idle(timeout=30)
@@ -443,9 +564,9 @@ class TestJobManagerState:
         )
 
     def test_a_state_the_manager_reported_stays_as_it_was_after_the_job_moves_on(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         job_id = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
         running = manager.job_state(job_id)
@@ -463,13 +584,13 @@ class TestJobManagerState:
         assert _status_of(manager, job_id) == "completed"
 
     def test_a_manager_does_not_know_a_job_another_manager_ran_although_its_run_remains(
-        self, storage: RunStorage
+        self, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        first = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+        first = new_job_manager(storage, RecordingSimulation(), max_workers=1)
         job_id = _submit_home_job(first)
         assert first.wait_until_idle(timeout=30)
 
-        assert JobManager(storage, max_workers=1, simulate_home=RecordingSimulation()).job_state(job_id) is None
+        assert new_job_manager(storage, RecordingSimulation(), max_workers=1).job_state(job_id) is None
         assert _run_of_job(first, job_id, storage).status == "completed"
 
 
@@ -482,8 +603,9 @@ class TestRunLabelsEditedWhileItsJobRuns:
         submit_job: Callable[[JobManager], str],
         blocking_simulation: BlockingSimulation,
         storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         job_id = submit_job(manager)
         blocking_simulation.wait_until_started()
         run_id = _run_of_job(manager, job_id, storage).id
@@ -538,8 +660,9 @@ class TestRunNames:
         run_name: str,
         blocking_simulation: BlockingSimulation,
         storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
 
         job_id, _ = manager.submit_home_job(
             config=replace(_A_HOME, name=home_name), start_date=_JUNE_1, end_date=_JUNE_2, name=name
@@ -556,9 +679,14 @@ class TestRunNames:
         ids=["no-name", "a-blank-name", "a-name"],
     )
     def test_a_fleet_jobs_run_is_named_at_its_submit_and_keeps_that_name_once_completed(
-        self, name: str | None, run_name: str, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self,
+        name: str | None,
+        run_name: str,
+        blocking_simulation: BlockingSimulation,
+        storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         homes = [replace(_A_HOME, name="Home 1"), replace(_A_HOME, name="Home 2")]
 
         job_id, _ = manager.submit_fleet_job(configs=homes, start_date=_JUNE_1, end_date=_JUNE_2, name=name)
@@ -576,9 +704,11 @@ _A_DAY = 24 * 60 * 60.0
 class TestJobManagerAgeLimit:
     """Tests for how long a JobManager tracks a job: until it finishes, and for a while after."""
 
-    def test_a_finished_job_is_still_tracked_at_a_submit_a_minute_after_it_finished(self, storage: RunStorage) -> None:
+    def test_a_finished_job_is_still_tracked_at_a_submit_a_minute_after_it_finished(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
         clock = ManualClock()
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation(), clock=clock)
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1, clock=clock)
         job_id = _submit_home_job(manager)
         assert manager.wait_until_idle(timeout=30)
         clock.advance(_A_MINUTE)
@@ -587,9 +717,11 @@ class TestJobManagerAgeLimit:
 
         assert _status_of(manager, job_id) == "completed"
 
-    def test_a_finished_job_is_not_tracked_after_a_submit_a_day_after_it_finished(self, storage: RunStorage) -> None:
+    def test_a_finished_job_is_not_tracked_after_a_submit_a_day_after_it_finished(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
         clock = ManualClock()
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation(), clock=clock)
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1, clock=clock)
         job_id = _submit_home_job(manager)
         assert manager.wait_until_idle(timeout=30)
         clock.advance(_A_DAY)
@@ -599,14 +731,11 @@ class TestJobManagerAgeLimit:
         assert manager.job_state(job_id) is None
 
     def test_a_job_that_failed_with_an_error_whose_message_cannot_be_read_is_not_tracked_after_a_submit_a_day_after_it_finished(
-        self, storage: RunStorage
+        self, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
         clock = ManualClock()
-        manager = JobManager(
-            storage,
-            max_workers=1,
-            simulate_home=_a_simulation_raising_an_error_whose_message_cannot_be_read,
-            clock=clock,
+        manager = new_job_manager(
+            storage, _a_simulation_raising_an_error_whose_message_cannot_be_read, max_workers=1, clock=clock
         )
         with _errors_logged_by_jobs_py_kept_out_of_the_report():
             job_id = _submit_home_job(manager)
@@ -619,10 +748,10 @@ class TestJobManagerAgeLimit:
         assert manager.job_state(job_id) is None
 
     def test_a_job_that_finished_a_minute_ago_is_still_tracked_though_it_was_submitted_a_day_before(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
         clock = ManualClock()
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation, clock=clock)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1, clock=clock)
         job_id = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
         clock.advance(_A_DAY)
@@ -635,11 +764,12 @@ class TestJobManagerAgeLimit:
         assert _status_of(manager, job_id) == "completed"
 
     def test_a_job_still_running_a_day_after_it_was_submitted_is_still_reported_after_a_later_submit(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
         clock = ManualClock()
-        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, clock=clock)
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(blocking_simulation, clock=clock))
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         job_id = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["job_id"]
         blocking_simulation.wait_until_started()
         clock.advance(_A_DAY)
@@ -652,11 +782,12 @@ class TestJobManagerAgeLimit:
         assert response.get_json()["status"] == "running"
 
     def test_the_progress_stream_of_a_job_that_ran_past_a_later_submit_a_day_on_ends_with_its_completion(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
         clock = ManualClock()
-        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, clock=clock)
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(blocking_simulation, clock=clock))
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         submitted = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
         blocking_simulation.wait_until_started()
         clock.advance(_A_DAY)
@@ -679,8 +810,9 @@ class TestJobManagerQueuedJobs:
         submit_job: Callable[[JobManager], str],
         blocking_simulation: BlockingSimulation,
         storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         _submit_home_job(manager)
         blocking_simulation.wait_until_started()
 
@@ -707,8 +839,9 @@ class TestJobManagerRuns:
         submit_job: Callable[[JobManager], str],
         blocking_simulation: BlockingSimulation,
         storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         job_id = submit_job(manager)
         blocking_simulation.wait_until_started()
 
@@ -718,9 +851,9 @@ class TestJobManagerRuns:
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_completed_jobs_run_is_completed_with_a_completion_time_and_no_error(
-        self, submit_job: Callable[[JobManager], str], storage: RunStorage
+        self, submit_job: Callable[[JobManager], str], storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
         job_id = submit_job(manager)
         assert manager.wait_until_idle(timeout=30)
 
@@ -730,10 +863,10 @@ class TestJobManagerRuns:
         assert run.completed_at is not None
 
     def test_a_job_reports_completed_only_once_its_run_reads_completed(
-        self, storage: RunStorage, save_gate: SaveGate
+        self, storage: RunStorage, save_gate: SaveGate, new_job_manager: NewJobManager
     ) -> None:
         gated = RunStorageWithGatedCompletion(storage.database, storage.data_dir, save_gate)
-        manager = JobManager(gated, max_workers=1, simulate_home=RecordingSimulation())
+        manager = new_job_manager(gated, RecordingSimulation(), max_workers=1)
         job_id = _submit_home_job(manager)
         save_gate.wait_until_a_save_waits()
 
@@ -743,17 +876,31 @@ class TestJobManagerRuns:
         assert manager.wait_until_idle(timeout=30)
         assert _status_of(manager, job_id) == "completed"
 
-    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    @pytest.mark.parametrize(
+        ("submit_job", "message"),
+        [
+            pytest.param(_submit_home_job, "the simulation failed", id="home"),
+            pytest.param(
+                _submit_fleet_job,
+                "the simulation failed\nsimulating home 0 ('') of fleet 0 ('Fleet Simulation')",
+                id="fleet, with the runner's note naming the home that failed",
+            ),
+        ],
+    )
     def test_a_failed_jobs_run_is_failed_with_the_jobs_error_and_a_completion_time(
-        self, submit_job: Callable[[JobManager], str], storage: RunStorage
+        self,
+        submit_job: Callable[[JobManager], str],
+        message: str,
+        storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=a_failing_simulation)
+        manager = new_job_manager(storage, a_failing_simulation, max_workers=1)
         job_id = submit_job(manager)
         assert manager.wait_until_idle(timeout=30)
 
         run = _run_of_job(manager, job_id, storage)
 
-        assert (run.status, run.error_message) == ("failed", "the simulation failed")
+        assert (run.status, run.error_message) == ("failed", message)
         assert run.completed_at is not None
 
 
@@ -762,11 +909,11 @@ class TestJobManagerRefusedRows:
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_job_whose_runs_row_the_database_refuses_leaves_no_record(
-        self, submit_job: Callable[[JobManager], str], storage: RunStorage
+        self, submit_job: Callable[[JobManager], str], storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
         _refuse_new_runs_rows(storage)
         ids = CountingIds()
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation(), new_id=ids)
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1, new_id=ids)
 
         with pytest.raises(sqlite3.IntegrityError, match="refuses new runs rows"):
             submit_job(manager)
@@ -780,10 +927,10 @@ class TestJobManagerUnrecordedFailures:
     """Tests for a failed job whose failure the database does not record in its run's row."""
 
     def test_a_failure_the_runs_table_refuses_to_record_is_logged_naming_the_job_its_run_and_the_refusal(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, new_job_manager: NewJobManager
     ) -> None:
         _refuse_failed_runs_rows(storage)
-        manager = JobManager(storage, max_workers=1, simulate_home=a_failing_simulation, new_id=CountingIds())
+        manager = new_job_manager(storage, a_failing_simulation, max_workers=1, new_id=CountingIds())
 
         with caplog.at_level(logging.ERROR, logger=_JOBS_LOGGER):
             _submit_home_job(manager)
@@ -802,10 +949,10 @@ class TestJobManagerUnrecordedFailures:
         assert (type(refusal.__context__), str(refusal.__context__)) == (RuntimeError, "the simulation failed")
 
     def test_a_job_whose_failure_the_runs_table_refuses_to_record_is_still_reported_failed(
-        self, storage: RunStorage
+        self, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
         _refuse_failed_runs_rows(storage)
-        manager = JobManager(storage, max_workers=1, simulate_home=a_failing_simulation)
+        manager = new_job_manager(storage, a_failing_simulation, max_workers=1)
         job_id = _submit_home_job(manager)
         assert manager.wait_until_idle(timeout=30)
 
@@ -814,12 +961,11 @@ class TestJobManagerUnrecordedFailures:
         assert state is not None
         assert (state.status, state.message) == ("failed", "the simulation failed")
 
-    def test_a_failure_whose_message_sqlite_cannot_store_is_logged_and_still_reported(self, storage: RunStorage) -> None:
-        manager = JobManager(
-            storage,
-            max_workers=1,
-            simulate_home=_a_simulation_failing_with_a_message_sqlite_cannot_store,
-            new_id=CountingIds(),
+    def test_a_failure_whose_message_sqlite_cannot_store_is_logged_and_still_reported(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
+        manager = new_job_manager(
+            storage, _a_simulation_failing_with_a_message_sqlite_cannot_store, max_workers=1, new_id=CountingIds()
         )
 
         with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
@@ -837,9 +983,9 @@ class TestJobManagerUnrecordedFailures:
         assert _status_of(manager, job_id) == "failed"
 
     def test_a_job_whose_database_cannot_be_opened_when_it_saves_its_run_is_reported_failed_at_its_save_with_the_databases_error(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         job_id = _hold_a_job_whose_database_cannot_be_opened_when_it_saves_its_run(
             manager, blocking_simulation, storage
         )
@@ -857,9 +1003,9 @@ class TestJobManagerUnrecordedFailures:
         )
 
     def test_a_job_whose_database_cannot_be_opened_when_it_saves_its_run_is_logged_with_the_failure_it_could_not_record(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation, new_id=CountingIds())
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1, new_id=CountingIds())
         _hold_a_job_whose_database_cannot_be_opened_when_it_saves_its_run(manager, blocking_simulation, storage)
 
         with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
@@ -879,9 +1025,9 @@ class TestJobManagerEscapedErrors:
     """Tests for a job whose runner raises an error that the runner's own failure handling does not catch."""
 
     def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_reported_failed_at_the_progress_it_had_reached_as_its_next_state(
-        self, storage: RunStorage
+        self, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=_a_simulation_that_exits)
+        manager = new_job_manager(storage, _a_simulation_that_exits, max_workers=1)
         with _errors_logged_by_jobs_py_kept_out_of_the_report():
             job_id, run_id = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
             assert manager.wait_until_idle(timeout=30)
@@ -901,9 +1047,9 @@ class TestJobManagerEscapedErrors:
         assert manager.job_snapshot(job_id) == JobSnapshot(4, failed)
 
     def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_recorded_failed_in_its_runs_row(
-        self, storage: RunStorage
+        self, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=_a_simulation_that_exits)
+        manager = new_job_manager(storage, _a_simulation_that_exits, max_workers=1)
         with _errors_logged_by_jobs_py_kept_out_of_the_report():
             job_id = _submit_home_job(manager)
             assert manager.wait_until_idle(timeout=30)
@@ -914,9 +1060,9 @@ class TestJobManagerEscapedErrors:
         assert run.completed_at is not None
 
     def test_a_job_whose_simulation_raises_an_error_that_is_not_an_exception_is_logged_naming_the_job_and_its_run(
-        self, storage: RunStorage
+        self, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=_a_simulation_that_exits, new_id=CountingIds())
+        manager = new_job_manager(storage, _a_simulation_that_exits, max_workers=1, new_id=CountingIds())
 
         with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
             _submit_home_job(manager)
@@ -934,13 +1080,10 @@ class TestJobManagerEscapedErrors:
         assert (type(error), str(error)) == (SystemExit, "the simulation exited")
 
     def test_a_job_whose_error_has_a_message_that_cannot_be_read_is_reported_failed_naming_the_errors_type(
-        self, storage: RunStorage
+        self, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(
-            storage,
-            max_workers=1,
-            simulate_home=_a_simulation_raising_an_error_whose_message_cannot_be_read,
-            new_id=CountingIds(),
+        manager = new_job_manager(
+            storage, _a_simulation_raising_an_error_whose_message_cannot_be_read, max_workers=1, new_id=CountingIds()
         )
 
         with _errors_logged_by_jobs_py_kept_out_of_the_report() as records:
@@ -961,10 +1104,10 @@ class TestJobManagerEscapedErrors:
 
 
 def _assert_a_job_raising_is_reported_failed_with(
-    storage: RunStorage, error: Callable[[], BaseException], message: str
+    new_job_manager: NewJobManager, storage: RunStorage, error: Callable[[], BaseException], message: str
 ) -> None:
-    """Run one home job whose simulation raises error(), then assert that its state and its run's row both report it failed with *message*."""
-    manager = JobManager(storage, max_workers=1, simulate_home=_a_simulation_raising(error))
+    """Run one home job of a manager new_job_manager builds over *storage* whose simulation raises error(), then assert that its state and its run's row both report it failed with *message*."""
+    manager = new_job_manager(storage, _a_simulation_raising(error), max_workers=1)
 
     with _errors_logged_by_jobs_py_kept_out_of_the_report():
         job_id = _submit_home_job(manager)
@@ -988,13 +1131,15 @@ class TestJobManagerFailureNotes:
         ],
     )
     def test_a_failed_jobs_message_is_its_error_as_error_text_with_notes_reads_it(
-        self, storage: RunStorage, error_type: type[BaseException]
+        self, storage: RunStorage, error_type: type[BaseException], new_job_manager: NewJobManager
     ) -> None:
         """__notes__ is assigned a str, which a loop over the notes would read one character per line."""
         error = error_type("the simulation failed")
         setattr(error, "__notes__", "abc")
 
-        _assert_a_job_raising_is_reported_failed_with(storage, lambda: error, error_text_with_notes(error))
+        _assert_a_job_raising_is_reported_failed_with(
+            new_job_manager, storage, lambda: error, error_text_with_notes(error)
+        )
 
 
 class TestJobManagerCancelRun:
@@ -1006,8 +1151,9 @@ class TestJobManagerCancelRun:
         submit_job: Callable[[JobManager], str],
         blocking_simulation: BlockingSimulation,
         storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         job_id = submit_job(manager)
         blocking_simulation.wait_until_started()
         running = manager.job_state(job_id)
@@ -1026,8 +1172,9 @@ class TestJobManagerCancelRun:
         submit_job: Callable[[JobManager], str],
         blocking_simulation: BlockingSimulation,
         storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         job_id = submit_job(manager)
         blocking_simulation.wait_until_started()
         created = _run_of_job(manager, job_id, storage)
@@ -1040,12 +1187,12 @@ class TestJobManagerCancelRun:
         assert not stored_run_dir(storage, created.id).exists()
 
     def test_a_job_whose_simulation_raises_once_its_run_is_cancelled_reports_cancelled_and_writes_nothing_to_the_run_store(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(
+        manager = new_job_manager(
             storage,
+            _released_then_raising(blocking_simulation, lambda: RuntimeError("the simulation failed")),
             max_workers=1,
-            simulate_home=_released_then_raising(blocking_simulation, lambda: RuntimeError("the simulation failed")),
         )
         job_id = _submit_home_job(manager)
         blocking_simulation.wait_until_started()
@@ -1067,8 +1214,9 @@ class TestJobManagerCancelRun:
         submit_job: Callable[[JobManager], str],
         blocking_simulation: BlockingSimulation,
         storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         _submit_home_job(manager)
         blocking_simulation.wait_until_started()
         queued_job_id = submit_job(manager)
@@ -1087,10 +1235,10 @@ class TestJobManagerCancelRun:
         assert storage.run_record(queued.run_id) == created
 
     def test_a_cancel_that_comes_while_the_jobs_final_save_runs_waits_for_the_save_and_leaves_the_job_completed(
-        self, storage: RunStorage, save_gate: SaveGate
+        self, storage: RunStorage, save_gate: SaveGate, new_job_manager: NewJobManager
     ) -> None:
         gated_storage = RunStorageWithGatedHomeSaves(storage.database, storage.data_dir, save_gate)
-        manager = JobManager(gated_storage, max_workers=1, simulate_home=RecordingSimulation())
+        manager = new_job_manager(gated_storage, RecordingSimulation(), max_workers=1)
         job_id, run_id = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
         save_gate.wait_until_a_save_waits()
         answers: list[bool] = []
@@ -1115,9 +1263,9 @@ class TestJobManagerCancelRun:
         ids=["completed", "failed"],
     )
     def test_cancelling_the_run_of_a_finished_job_returns_false_and_leaves_the_job_as_it_ended(
-        self, simulation: HomeSimulator, status: str, storage: RunStorage
+        self, simulation: HomeSimulator, status: str, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=simulation)
+        manager = new_job_manager(storage, simulation, max_workers=1)
         job_id, run_id = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
         assert manager.wait_until_idle(timeout=30)
         ended = manager.job_state(job_id)
@@ -1127,8 +1275,10 @@ class TestJobManagerCancelRun:
         assert manager.cancel_run(run_id) is False
         assert manager.job_state(job_id) == ended
 
-    def test_cancelling_a_run_no_job_of_the_manager_runs_returns_false(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+    def test_cancelling_a_run_no_job_of_the_manager_runs_returns_false(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
 
         assert manager.cancel_run("no-such-run") is False
 
@@ -1136,8 +1286,8 @@ class TestJobManagerCancelRun:
 class TestJobManagerShutdown:
     """Tests for JobManager shutdown."""
 
-    def test_a_shut_down_manager_refuses_new_jobs(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+    def test_a_shut_down_manager_refuses_new_jobs(self, storage: RunStorage, new_job_manager: NewJobManager) -> None:
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
 
         manager.shutdown()
 
@@ -1146,10 +1296,10 @@ class TestJobManagerShutdown:
 
     @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
     def test_a_refused_job_leaves_no_record(
-        self, submit_job: Callable[[JobManager], str], storage: RunStorage
+        self, submit_job: Callable[[JobManager], str], storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
         ids = CountingIds()
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation(), new_id=ids)
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1, new_id=ids)
         manager.shutdown()
 
         with pytest.raises(RuntimeError, match="after shutdown"):
@@ -1160,9 +1310,13 @@ class TestJobManagerShutdown:
         assert storage.page_runs(RunQuery()).total == 0
 
     def test_a_job_dropped_by_shutdown_reports_failed_naming_the_shutdown_and_logs_no_error(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage, caplog: pytest.LogCaptureFixture
+        self,
+        blocking_simulation: BlockingSimulation,
+        storage: RunStorage,
+        caplog: pytest.LogCaptureFixture,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         _submit_home_job(manager)
         blocking_simulation.wait_until_started()
         dropped_job_id = _submit_home_job(manager)
@@ -1179,41 +1333,17 @@ class TestJobManagerShutdown:
 
         assert [(record.name, record.getMessage()) for record in caplog.records if record.levelno >= logging.ERROR] == []
 
-    def test_shutdown_all_managers_shuts_down_every_live_manager(self, storage: RunStorage) -> None:
-        managers = [JobManager(storage, max_workers=1, simulate_home=RecordingSimulation()) for _ in range(2)]
-
-        shutdown_all_managers()
-
-        for manager in managers:
-            with pytest.raises(RuntimeError, match="after shutdown"):
-                _submit_home_job(manager)
-
-    def test_shutdown_all_managers_is_idempotent(self, storage: RunStorage) -> None:
-        """Test that calling shutdown_all_managers() twice does not raise."""
-        # Bind to a local variable so the manager has a strong reference and
-        # is not garbage-collected from the WeakSet before the first shutdown
-        # call — without this the WeakSet could be empty and the test would
-        # pass trivially without exercising the double-shutdown path.
-        jm = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
-
-        shutdown_all_managers()
-        shutdown_all_managers()  # must not raise
-
-        # Suppress "local variable 'jm' assigned but never used" lint; the
-        # strong reference is the point — it keeps jm alive through both calls.
-        del jm
-
 
 class TestJobManagerWaitUntilIdle:
     """Tests for JobManager.wait_until_idle, which blocks until no job is queued or running."""
 
-    def test_a_manager_never_given_a_job_is_idle(self, storage: RunStorage) -> None:
-        assert JobManager(storage, max_workers=1, simulate_home=RecordingSimulation()).wait_until_idle(timeout=0) is True
+    def test_a_manager_never_given_a_job_is_idle(self, storage: RunStorage, new_job_manager: NewJobManager) -> None:
+        assert new_job_manager(storage, RecordingSimulation(), max_workers=1).wait_until_idle(timeout=0) is True
 
     def test_waiting_returns_false_when_the_timeout_passes_while_a_job_runs(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         _submit_home_job(manager)
         blocking_simulation.wait_until_started()
 
@@ -1225,8 +1355,9 @@ class TestJobManagerWaitUntilIdle:
         submit_job: Callable[[JobManager], str],
         blocking_simulation: BlockingSimulation,
         storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         job_ids = [submit_job(manager), submit_job(manager)]
         blocking_simulation.wait_until_started()
 
@@ -1235,20 +1366,18 @@ class TestJobManagerWaitUntilIdle:
         assert manager.wait_until_idle(timeout=30) is True
         assert [_status_of(manager, job_id) for job_id in job_ids] == ["completed", "completed"]
 
-    def test_a_failed_job_counts_as_finished(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=a_failing_simulation)
+    def test_a_failed_job_counts_as_finished(self, storage: RunStorage, new_job_manager: NewJobManager) -> None:
+        manager = new_job_manager(storage, a_failing_simulation, max_workers=1)
         job_id = _submit_home_job(manager)
 
         assert manager.wait_until_idle(timeout=30) is True
         assert _status_of(manager, job_id) == "failed"
 
     def test_a_job_whose_failure_report_is_stopped_by_an_error_that_is_not_an_exception_counts_as_finished(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(
-            storage,
-            max_workers=1,
-            simulate_home=_released_then_raising(blocking_simulation, _AnErrorWhoseMessageIsInterrupted),
+        manager = new_job_manager(
+            storage, _released_then_raising(blocking_simulation, _AnErrorWhoseMessageIsInterrupted), max_workers=1
         )
         _submit_home_job(manager)
 
@@ -1257,9 +1386,9 @@ class TestJobManagerWaitUntilIdle:
             assert manager.wait_until_idle(timeout=30)
 
     def test_a_job_dropped_by_shutdown_does_not_keep_the_manager_busy(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         _submit_home_job(manager)
         _submit_home_job(manager)
         blocking_simulation.wait_until_started()
@@ -1269,8 +1398,10 @@ class TestJobManagerWaitUntilIdle:
 
         assert manager.wait_until_idle(timeout=30) is True
 
-    def test_a_job_the_manager_refused_does_not_keep_it_busy(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+    def test_a_job_the_manager_refused_does_not_keep_it_busy(
+        self, storage: RunStorage, new_job_manager: NewJobManager
+    ) -> None:
+        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
         manager.shutdown()
         with pytest.raises(RuntimeError, match="after shutdown"):
             _submit_home_job(manager)
@@ -1278,34 +1409,13 @@ class TestJobManagerWaitUntilIdle:
         assert manager.wait_until_idle(timeout=0) is True
 
 
-class TestLiveManagers:
-    """Tests for live_managers(), the snapshot of every JobManager not yet garbage-collected."""
-
-    def test_live_managers_reports_a_newly_constructed_manager(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
-
-        assert manager in live_managers()
-
-    def test_an_earlier_snapshot_does_not_gain_managers_constructed_after_it(self, storage: RunStorage) -> None:
-        snapshot = live_managers()
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
-
-        assert manager not in snapshot
-
-    def test_live_managers_includes_shut_down_managers(self, storage: RunStorage) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
-        manager.shutdown()
-
-        assert manager in live_managers()
-
-
 class TestRecoveryOfInterruptedRuns:
     """Tests for RunStorage.fail_interrupted_runs, which a server start calls, on the runs a JobManager's jobs left."""
 
     def test_the_run_of_a_job_dropped_when_its_manager_shut_down_is_failed_naming_the_drop_and_recovery_leaves_it_as_it_was(
-        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage, new_job_manager: NewJobManager
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        manager = new_job_manager(storage, blocking_simulation, max_workers=1)
         _submit_home_job(manager)
         blocking_simulation.wait_until_started()
         dropped_job_id = _submit_home_job(manager)

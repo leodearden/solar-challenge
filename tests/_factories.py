@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Shared fixture factories for the finance and optimize result dataclasses.
+"""Shared fixture factories for the finance, projection and optimize result dataclasses.
 
 Nine test modules used to spell out their own ``BillBreakdown`` literal, so
 every field added to the dataclass cost nine mechanical edits and a tenth
@@ -12,8 +12,9 @@ assertions actually care about.
 payment rather than accepting it, so a fixture that violates
 ``BillBreakdown``'s ``cbs_amount_due_gbp == own_use_payment_gbp +
 own_use_vat_gbp`` invariant is unconstructible here.
-``make_cost_recovery_solution`` and ``make_config_result`` likewise read each
-field their dataclass mirrors from the value it mirrors.
+``make_cost_recovery_solution`` likewise reads each field its dataclass
+mirrors from the value it mirrors, and ``ConfigResult`` reads its five solved
+fields from its solution, so ``make_config_result`` passes only the solution.
 
 Usage::
 
@@ -31,6 +32,11 @@ from typing import Optional
 
 from solar_challenge.finance import BillBreakdown, BillDistribution, CostRecoverySolution
 from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep
+from solar_challenge.projection import FleetProjection, MultiYearCurve, ProjectEconomics, YearPoint
+from solar_challenge.timebase import SimulationWindow
+
+from tests._finance_builders import make_window
+
 
 DEFAULT_VAT_RATE = 0.05
 """VAT rate the default line items are internally consistent with."""
@@ -80,30 +86,34 @@ def make_bill_breakdown(
 def make_bill_distribution(
     *,
     representative: Optional[BillBreakdown] = None,
-    per_home_net_bill_gbp: Optional[tuple[float, ...]] = None,
+    per_home_total_outlay_gbp: Optional[tuple[float, ...]] = None,
     min_gbp: float = 367.5,
     mean_gbp: float = 367.5,
     median_gbp: float = 367.5,
     max_gbp: float = 367.5,
+    annualised_from: SimulationWindow = make_window(),
 ) -> BillDistribution:
-    """Build a synthetic BillDistribution around *representative*.
+    """Build a synthetic BillDistribution around *representative*, annualised from *annualised_from*.
 
     Defaults to the single-home degenerate distribution: one home, every
-    statistic equal to the representative's ``total_outlay_gbp``.
+    statistic equal to the representative's ``total_outlay_gbp``, annualised
+    from make_window()'s whole calendar year, so a report of it gives no
+    extrapolation notice.
     """
     rep = representative if representative is not None else make_bill_breakdown()
     per_home = (
-        per_home_net_bill_gbp
-        if per_home_net_bill_gbp is not None
+        per_home_total_outlay_gbp
+        if per_home_total_outlay_gbp is not None
         else (rep.total_outlay_gbp,)
     )
     return BillDistribution(
         representative=rep,
-        per_home_net_bill_gbp=per_home,
+        per_home_total_outlay_gbp=per_home,
         min_gbp=min_gbp,
         mean_gbp=mean_gbp,
         median_gbp=median_gbp,
         max_gbp=max_gbp,
+        annualised_from=annualised_from,
     )
 
 
@@ -193,15 +203,16 @@ def make_config_result(
     min_dscr: float = 1.5,
     equity_irr: float = 0.08,
     payback_years: Optional[float] = 12.0,
+    baseline_own_use_rate_pence_per_kwh: float = 15.0,
     baseline_outlay_gbp: float = 450.0,
     baseline_surplus_per_home_gbp: float = 80.0,
 ) -> ConfigResult:
-    """Build a synthetic ConfigResult, reading its five solved fields from its solution.
+    """Build a synthetic ConfigResult over make_cost_recovery_solution's solution for the solve arguments.
 
-    The solution is make_cost_recovery_solution's for the solve arguments, so
-    it takes *outlay* or *representative_outlay_gbp* as that builder does.
-    ``representative_outlay_gbp``, ``solved_own_use_rate_pence_per_kwh``,
-    ``surplus_at_solved_gbp``, ``feasible`` and ``binding`` are the solution's.
+    The solution takes *outlay* or *representative_outlay_gbp* as that builder
+    does.  ConfigResult reads ``representative_outlay_gbp``,
+    ``solved_own_use_rate_pence_per_kwh``, ``surplus_at_solved_gbp``,
+    ``feasible`` and ``binding`` from it.
     """
     solution = make_cost_recovery_solution(
         own_use_rate_pence_per_kwh=solved_own_use_rate_pence_per_kwh,
@@ -214,15 +225,11 @@ def make_config_result(
     return ConfigResult(
         config=ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw),
         solution=solution,
-        representative_outlay_gbp=solution.representative_outlay_gbp,
-        solved_own_use_rate_pence_per_kwh=solution.own_use_rate_pence_per_kwh,
-        surplus_at_solved_gbp=solution.net_surplus_per_home_per_year_gbp,
-        feasible=solution.feasible,
-        binding=solution.binding,
         total_capex_gbp=total_capex_gbp,
         min_dscr=min_dscr,
         equity_irr=equity_irr,
         payback_years=payback_years,
+        baseline_own_use_rate_pence_per_kwh=baseline_own_use_rate_pence_per_kwh,
         baseline_outlay_gbp=baseline_outlay_gbp,
         baseline_surplus_per_home_gbp=baseline_surplus_per_home_gbp,
     )
@@ -234,11 +241,13 @@ def make_ranked_sweep(
     infeasible: Sequence[ConfigPoint] = (),
     pareto: Sequence[ConfigPoint] = (),
     floor: float = 27.0,
+    self_consumption_override: Optional[float] = None,
 ) -> RankedSweep:
     """Build a RankedSweep whose cheapest_feasible is results[0].config, None when *results* is empty.
 
     That is the rule ``RankedSweep.__post_init__`` enforces, so the factory
-    cannot build a sweep that breaks it; ``floor`` is the retained-cash floor.
+    cannot build a sweep that breaks it; ``floor`` is the retained-cash floor
+    and ``self_consumption_override`` the configs' own-use assumption.
     """
     return RankedSweep(
         results=tuple(results),
@@ -246,4 +255,66 @@ def make_ranked_sweep(
         retained_cash_floor_gbp=floor,
         cheapest_feasible=results[0].config if results else None,
         pareto_baseline=tuple(pareto),
+        self_consumption_override=self_consumption_override,
     )
+
+
+def make_project_economics(
+    *,
+    total_capex_gbp: float = 250_000.0,
+    grant_gbp: float = 50_000.0,
+    equity_gbp: float = 150_000.0,
+    debt_gbp: float = 50_000.0,
+    annual_debt_service_gbp: float = 5_500.0,
+    per_year_surplus_gbp: tuple[float, ...] = (8_000.0,) * 25,
+    min_dscr: float = 1.45,
+    equity_irr: float = 0.08,
+    payback_years: Optional[float] = 10.0,
+    net_surplus_per_home_per_year_gbp: float = 80.0,
+    fleet_opex_gbp: float = 12_000.0,
+    mean_fleet_surplus_per_year_gbp: float = 8_000.0,
+) -> ProjectEconomics:
+    """Build a synthetic ProjectEconomics: by default a 25-year project surplusing £8,000 a year, capex £250,000, DSCR 1.45, IRR 8%, paying back in 10 years."""
+    return ProjectEconomics(
+        total_capex_gbp=total_capex_gbp,
+        grant_gbp=grant_gbp,
+        equity_gbp=equity_gbp,
+        debt_gbp=debt_gbp,
+        annual_debt_service_gbp=annual_debt_service_gbp,
+        per_year_surplus_gbp=per_year_surplus_gbp,
+        min_dscr=min_dscr,
+        equity_irr=equity_irr,
+        payback_years=payback_years,
+        net_surplus_per_home_per_year_gbp=net_surplus_per_home_per_year_gbp,
+        fleet_opex_gbp=fleet_opex_gbp,
+        mean_fleet_surplus_per_year_gbp=mean_fleet_surplus_per_year_gbp,
+    )
+
+
+def make_fleet_projection(income_by_age: Sequence[tuple[int, float]], *, asset_life_years: int) -> FleetProjection:
+    """A FleetProjection over *asset_life_years* constant years, sampled at the ages of *income_by_age*, booking each age's grid-services income.
+
+    Every year is the same: no state-of-health loss, 1,000 kWh billed own-use,
+    500 exported and 2,000 imported, £100 of revenue.  It carries no age-0
+    summaries.
+    """
+    points = tuple(
+        YearPoint(
+            year=year,
+            pv_soh=1.0,
+            battery_soh=1.0,
+            fleet_billed_own_use_kwh=1_000.0,
+            fleet_export_kwh=500.0,
+            fleet_import_kwh=2_000.0,
+            fleet_revenue_gbp=100.0,
+        )
+        for year in range(asset_life_years)
+    )
+    curve = MultiYearCurve(
+        points=points,
+        sampled_ages=tuple(age for age, _ in income_by_age),
+        interp_error_estimate=0.0,
+        annualised_from=make_window(),
+        fleet_pv_dc_kw=4.0,
+    )
+    return FleetProjection(curve=curve, age0_summaries=(), grid_services_income_gbp=tuple(income_by_age))

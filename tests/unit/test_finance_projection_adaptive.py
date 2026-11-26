@@ -16,14 +16,16 @@ from typing import TYPE_CHECKING, Callable
 import pytest
 
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import RunPricing
+from solar_challenge.projection import MAX_NODES, fewest_simulated_ages, project_multi_year
 from tests._finance_builders import (
     make_fleet_results,
     make_home_config,
     make_period,
     make_scenario_and_finance,
 )
+from tests._fleet_simulate_stand_in import answering_with
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -213,7 +215,7 @@ def _finance_over_25_years(self_consumption_override: float | None) -> tuple[Sce
 
 
 class TestTheDeviationScaleSeesAZeroAtAgeZero:
-    """An export or import that is 0 at age 0 and grows with age is measured against the age-0 fleet generation or demand.
+    """An export or import that is 0 at age 0 and grows with age is measured against the largest fleet generation or demand at the seed ages.
 
     So its interpolation error stays a finite percentage.
     """
@@ -238,12 +240,16 @@ class TestTheDeviationScaleSeesAZeroAtAgeZero:
         assert len(curve.sampled_ages) < MAX_NODES, curve.sampled_ages
         assert curve.interp_error_estimate <= 1.0
 
-    def test_an_override_fleet_whose_curves_interpolate_within_target_from_the_seeds_simulates_only_the_seeds(
+    def test_an_override_fleet_that_starts_importing_near_age_19_is_bisected_once_for_its_income_kink_not_its_import(
         self,
     ) -> None:
-        """Each reported curve's PCHIP midpoint error from the seeds alone is under 1 % of its scale.
+        """At 0.3 %/yr the override's 0.9 × generation drops below the 3,400 kWh demand near age 19.
 
-        So no bisection age is simulated, as at base.
+        So import is 0 until then and grows after.  The SEG income's kink there
+        costs one bisection round, ages 6 and 18.  The import's miss at age 18
+        is measured against the demand it is part of, so it adds no age;
+        measured against its own largest seed value, about 50 kWh, it would
+        bisect on through ages 19-22.
         """
         scenario, finance = _finance_over_25_years(0.9)
         curve = project_multi_year(
@@ -251,5 +257,78 @@ class TestTheDeviationScaleSeesAZeroAtAgeZero:
             finance,
             simulate=_declining_simulate(_override_capped_at_demand, kept_each_year=0.997),
         )
+        assert curve.sampled_ages == (0, 6, 12, 18, 24)
+        assert curve.interp_error_estimate <= 1.0
+
+
+class TestASmoothFleetSimulatesOnlyTheSeeds:
+    def test_an_override_fleet_whose_cap_binds_at_every_age_simulates_only_the_seeds(self) -> None:
+        """At 0.1 %/yr the override's cap binds to age 24, so every driven curve is smooth and no bisection age is simulated."""
+        scenario, finance = _finance_over_25_years(0.9)
+        curve = project_multi_year(
+            scenario,
+            finance,
+            simulate=_declining_simulate(_override_capped_at_demand, kept_each_year=0.999),
+        )
         assert curve.sampled_ages == (0, 12, 24)
         assert curve.interp_error_estimate <= 1.0
+
+
+def _simulate_income_rising_from_zero(
+    fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp
+) -> FleetResults:
+    """A home that self-consumes 2,000 kWh and imports 1,200 kWh at every age, and exports 2,000 × (1 − e^(−age/8)) kWh at 5 p.
+
+    So its SEG income is £100 × (1 − e^(−age/8)): £0 at age 0.
+    """
+    age = fleet_config.homes[0].pv_config.system_age_years
+    return make_fleet_results(
+        homes=fleet_config.homes,
+        self_kwh=2_000.0,
+        export_kwh=2_000.0 * (1.0 - math.exp(-age / 8.0)),
+        import_kwh=1_200.0,
+        pricing=RunPricing(0.30, 5.0),
+    )
+
+
+class TestTheIncomeDeviationScaleSeesAZeroAtAgeZero:
+    """An income that is 0 at age 0 and grows with age is measured against its largest value at the seed ages.
+
+    So at a 0 p own-use rate, whose revenue is that income, its interpolation
+    error stays a finite percentage and the default 1 % target is met (B9).
+    """
+
+    def test_a_fleet_that_earns_nothing_at_age_zero_converges_below_max_nodes(self) -> None:
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
+        finance = dataclasses.replace(finance, own_use_rate_pence_per_kwh=0.0)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            curve = project_multi_year(scenario, finance, simulate=_simulate_income_rising_from_zero)
+
+        assert len(curve.sampled_ages) < MAX_NODES, curve.sampled_ages
+        assert math.isfinite(curve.interp_error_estimate)
+        assert curve.interp_error_estimate <= 1.0
+
+
+class TestTheFewestAgesAProjectionSimulates:
+    @pytest.mark.parametrize("asset_life_years", [3, 10, 25])
+    def test_a_smooth_fleets_projection_simulates_the_fewest_ages(self, asset_life_years: int) -> None:
+        """A constant fleet is flat at every age, so the bisection stops after its first pass."""
+        scenario, finance = make_scenario_and_finance(n_homes=1, asset_life_years=asset_life_years)
+        answer = answering_with(make_fleet_results(n_homes=1))
+        asked: list[str] = []
+
+        def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            asked.append(fleet_config.name)
+            return answer(fleet_config, start, end)
+
+        project_multi_year(scenario, finance, simulate=simulate)
+
+        assert len(asked) == fewest_simulated_ages(asset_life_years), asked
+
+    def test_the_fewest_ages_are_the_seeds_and_the_first_passes_midpoints(self) -> None:
+        """Seeds 0, 12 and 24 with midpoints 6 and 18; seeds 0, 1 and 2 with none; seeds 0, 5 and 9 with midpoints 2 and 7."""
+        assert fewest_simulated_ages(25) == 5
+        assert fewest_simulated_ages(3) == 3
+        assert fewest_simulated_ages(10) == 5

@@ -2,7 +2,7 @@
 
 **Task:** #1016
 **Code:** [`src/solar_challenge/dispatch.py`](../src/solar_challenge/dispatch.py) (`ChargeWindow`, `ScheduledChargeStrategy`); [`src/solar_challenge/home.py`](../src/solar_challenge/home.py) (`simulate_home(..., strategy=...)`)
-**Tests:** [`tests/unit/dispatch/test_scheduled_charge_strategy.py`](../tests/unit/dispatch/test_scheduled_charge_strategy.py); [`tests/unit/test_home_scheduled_charge.py`](../tests/unit/test_home_scheduled_charge.py)
+**Tests:** [`tests/unit/dispatch/test_scheduled_charge_strategy.py`](../tests/unit/dispatch/test_scheduled_charge_strategy.py); [`tests/unit/test_home_scheduled_charge.py`](../tests/unit/test_home_scheduled_charge.py); [`tests/unit/dispatch/test_charges_from_the_grid.py`](../tests/unit/dispatch/test_charges_from_the_grid.py); [`tests/unit/test_grid_charge_refusals.py`](../tests/unit/test_grid_charge_refusals.py)
 **Measurement:** [`scripts/measure_charge_window_bills.py`](../scripts/measure_charge_window_bills.py) (§3, §4), smoke-tested offline by [`tests/unit/test_measurement_scripts.py`](../tests/unit/test_measurement_scripts.py)
 
 ---
@@ -78,11 +78,11 @@ strategy's name, `scheduled_charge(<base name>)`.
 The windows grid-charge only on a home with a tariff and `BatteryConfig.grid_charging`
 (rule 1). `HomeConfig` refuses that `grid_charging` when the home is built unless the
 dispatch the home selects itself grid-charges (task 787). The home must therefore select
-one, which `strategy` then replaces: either `dispatch_strategy='tou_optimized'` with a
-tariff and a battery that names no strategy, as `scenarios/bristol-arbitrage.yaml`'s home
-does, or a battery `tou_optimized` or `peak_shaving` strategy. A home on the default
-`'greedy'` dispatch whose battery names no strategy is refused with a `ConfigurationError`
-naming `grid_charging` and `self_consumption`. That refusal's first remedy, "remove
+one, which `strategy` then replaces: its battery's `tou_optimized` or `peak_shaving`
+strategy, as `scenarios/bristol-arbitrage.yaml`'s battery names `tou_optimized` on its
+tariff's clock. A home whose battery names no strategy, and so dispatches
+`self_consumption`, is refused with a `ConfigurationError` naming `grid_charging` and
+`self_consumption`. That refusal's first remedy, "remove
 grid_charging", is the wrong one on this path: the windows are then offered no
 `GridChargeContext`, so they hold and never grid-charge.
 
@@ -102,6 +102,18 @@ strategy = ScheduledChargeStrategy(SelfConsumptionStrategy(), windows, ZoneInfo(
 results = simulate_home(home, start, end, weather=weather, strategy=strategy)
 ```
 
+`simulate_home` also refuses a `strategy` that would ignore the battery's
+`grid_charging`, before it asks for weather, with a `ConfigurationError` naming
+`grid_charging` and the strategy. Such a strategy is one whose
+`DispatchStrategy.charges_from_the_grid` is `False`: `SelfConsumptionStrategy`, or a
+`ScheduledChargeStrategy` with no window over one, whose refusal adds giving it a
+`ChargeWindow` to its remedies. A `ScheduledChargeStrategy` with any window charges from the
+grid (rule 1), as do `TOUOptimizedStrategy` and `PeakShavingStrategy`. A strategy of the
+caller's own reads `True` unless it overrides the property. The refusal when the home is
+built stays until D3's mid-term direction lets self-consumption grid-charge
+([`docs/prds/dispatch-configuration-below-config.md`](prds/dispatch-configuration-below-config.md)
+§11).
+
 ## 3. The Year Harness
 
 `scripts/measure_charge_window_bills.py` bills the home of
@@ -109,9 +121,9 @@ results = simulate_home(home, start, end, weather=weather, strategy=strategy)
 
 | Arm | Dispatch |
 |---|---|
-| A | The home as configured: `tou_optimized` on the tariff's clock (`simulate_timestep_tou`), grid-charging to `GridChargeConfig(0.9)` in the cheap period |
+| A | The home as configured: `tou_optimized` on the tariff's clock (`TOUOptimizedStrategy(tariff=...)` through `simulate_timestep`), grid-charging to `GridChargeConfig(0.9)` in the cheap period |
 | B | `ScheduledChargeStrategy` over `TOUOptimizedStrategy([(0, 1), (7, 24)])` |
-| C | `dispatch_strategy="greedy"` with `grid_charging=None`: self-consumption only |
+| C | The battery's `SelfConsumptionStrategyConfig()` with `grid_charging=None`: self-consumption only |
 | D | `ScheduledChargeStrategy` over `SelfConsumptionStrategy()` |
 
 B and D share one window, daily from 00:30 for 7 hours to 0.9, holding, on
@@ -178,7 +190,7 @@ Period: 2025-01-01 to 2025-12-31
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
 | A | as configured | tou_optimized | 1816.8 | 203.87 | 219.00 | 1508.2 | 226.23 | 32.45 | 681.55 |
 | B | windows over tou_optimized | scheduled_charge(tou_optimized) | 1816.8 | 203.87 | 219.00 | 1508.2 | 226.23 | 32.45 | 681.55 |
-| C | greedy, no grid charging | self_consumption | 974.9 | 195.76 | 219.00 | 2350.1 | 352.52 | 38.36 | 805.65 |
+| C | self-consumption, no grid charging | self_consumption | 974.9 | 195.76 | 219.00 | 2350.1 | 352.52 | 38.36 | 805.65 |
 | D | windows over self-consumption | scheduled_charge(self_consumption) | 1816.8 | 203.87 | 219.00 | 1508.2 | 226.23 | 32.45 | 681.55 |
 
 A, B and D bill alike, as §3 explains. D costs the householder £124.10 a year less than C.

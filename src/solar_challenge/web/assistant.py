@@ -31,6 +31,7 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
 from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
     UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
@@ -38,21 +39,17 @@ from solar_challenge.validation import (
     UK_YIELD_BENCHMARK_KWH_PER_KWP,
 )
 from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
+from solar_challenge.web.dashboard import get_database, get_job_manager, get_storage
 from solar_challenge.web.database import Database
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
-from solar_challenge.web.shared import get_database, get_job_manager, get_storage
-from solar_challenge.web.simulation_params import (
-    DAYS_WINDOW_START,
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
     FULL_YEAR_DAYS_SENTINEL,
-    FULL_YEAR_END,
-    FULL_YEAR_START,
     MAX_DAYS,
     MAX_WINDOW_DAYS,
-    parse_home_config,
-    with_default_days,
 )
+from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
+from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import (
     CHAT_DELTA,
     CHAT_DONE,
@@ -375,10 +372,10 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
     "days": {
         "type": "integer",
         "description": (
-            f"Simulation duration in days (1–{MAX_DAYS}), counted from {DAYS_WINDOW_START} "
-            f"and running on past {FULL_YEAR_END} when longer than the rest of that year, "
-            f"except that {FULL_YEAR_DAYS_SENTINEL} runs the whole year {FULL_YEAR_START} to "
-            f"{FULL_YEAR_END}. Must not be sent with start or end; with none of the three "
+            f"Simulation duration in days (1–{MAX_DAYS}), counted from {SHORT_WINDOW_START} "
+            f"and running on past {DEFAULT_LAST_DAY} when longer than the rest of that year, "
+            f"except that {FULL_YEAR_DAYS_SENTINEL} runs the whole year {DEFAULT_FIRST_DAY} to "
+            f"{DEFAULT_LAST_DAY}. Must not be sent with start or end; with none of the three "
             f"sent, the run spans {_TRIGGER_TOOL_DEFAULT_DAYS} days."
         ),
     },
@@ -386,7 +383,7 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
         "type": "string",
         "format": "date",
         "description": (
-            f"First simulated day, an ISO 8601 date (YYYY-MM-DD); {FULL_YEAR_START} when only "
+            f"First simulated day, an ISO 8601 date (YYYY-MM-DD); {DEFAULT_FIRST_DAY} when only "
             "end is sent. Must not be sent with days."
         ),
     },
@@ -394,7 +391,7 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
         "type": "string",
         "format": "date",
         "description": (
-            f"Last simulated day, inclusive, an ISO 8601 date (YYYY-MM-DD); {FULL_YEAR_END} "
+            f"Last simulated day, inclusive, an ISO 8601 date (YYYY-MM-DD); {DEFAULT_LAST_DAY} "
             "when only start is sent. Must not be sent with days. The window from start to "
             f"end spans at most {MAX_WINDOW_DAYS} days."
         ),
@@ -654,7 +651,7 @@ def _call_suggest_config(tool_input: Mapping[str, Any], context: ToolContext) ->
     annual_kwh = as_finite_float(
         tool_input["annual_consumption_kwh"],
         "annual_consumption_kwh",
-        within=Interval(*FLEET_COMPONENTS["load"].fixed_range),
+        within=FLEET_COMPONENTS["load"].value_range,
     )
     return suggest_config(annual_kwh, _as_text(tool_input["goal"], "goal"))
 
@@ -686,6 +683,11 @@ def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolConte
         context.job_manager,
         context.results_url,
     )
+
+
+def _range_text(value_range: Interval) -> str:
+    """*value_range*'s bounds as a tool's description gives them, e.g. '0.5–20'."""
+    return f"{value_range.low:g}–{value_range.high:g}"
 
 
 # ---------------------------------------------------------------------------
@@ -736,8 +738,8 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                         "type": "number",
                         "description": (
                             "Household annual electricity consumption in kWh "
-                            "({:g}–{:g}; ".format(*FLEET_COMPONENTS["load"].fixed_range)
-                            + f"e.g. {_DEFAULT_HOUSEHOLD_CONSUMPTION})."
+                            f"({_range_text(FLEET_COMPONENTS['load'].value_range)}; "
+                            f"e.g. {_DEFAULT_HOUSEHOLD_CONSUMPTION})."
                         ),
                     },
                     "goal": {
@@ -822,16 +824,22 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                 "properties": {
                     "pv_kw": {
                         "type": "number",
-                        "description": "PV array capacity in kW (0.5–20).",
+                        "description": (
+                            f"PV array capacity in kW ({_range_text(FLEET_COMPONENTS['pv'].value_range)})."
+                        ),
                     },
                     "battery_kwh": {
                         "type": "number",
-                        "description": "Battery capacity in kWh (0 = no battery).",
+                        "description": (
+                            "Battery capacity in kWh "
+                            f"({_range_text(FLEET_COMPONENTS['battery'].value_range)}; 0 = no battery)."
+                        ),
                     },
                     "consumption_kwh": {
                         "type": "number",
-                        "description": "Annual household electricity consumption in kWh ({:g}–{:g}).".format(
-                            *FLEET_COMPONENTS["load"].fixed_range
+                        "description": (
+                            "Annual household electricity consumption in kWh "
+                            f"({_range_text(FLEET_COMPONENTS['load'].value_range)})."
                         ),
                     },
                     "occupants": {
@@ -863,11 +871,16 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                     },
                     "pv_kw": {
                         "type": "number",
-                        "description": "PV capacity per home in kW (0.5–20).",
+                        "description": (
+                            f"PV capacity per home in kW ({_range_text(FLEET_COMPONENTS['pv'].value_range)})."
+                        ),
                     },
                     "battery_kwh": {
                         "type": "number",
-                        "description": "Battery capacity per home in kWh (0 = no battery).",
+                        "description": (
+                            "Battery capacity per home in kWh "
+                            f"({_range_text(FLEET_COMPONENTS['battery'].value_range)}; 0 = no battery)."
+                        ),
                     },
                     "location": _TRIGGER_TOOL_LOCATION_PROPERTY,
                     **_TRIGGER_TOOL_WINDOW_PROPERTIES,

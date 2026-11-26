@@ -1,15 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Stand-ins for the simulation, the id source and the run store a JobManager is given."""
+"""Stand-ins for the simulation, the runner, the id source and the run store a JobManager is given."""
 
 import sqlite3
 import threading
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import pytest
 
+from solar_challenge.fleet import FleetConfig, FleetResults, HomesDone
 from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.weather import WeatherProvider
 from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunStorage
 
@@ -36,19 +40,71 @@ def _an_hour_at(generation_kw: float) -> SimulationResults:
 
 
 class RecordingSimulation:
-    """Stands in for simulate_home: records each home it is asked to simulate and returns an hour at the home's PV size."""
+    """Stands in for simulate_home: records each home it is asked to simulate and returns an hour at the home's PV size, ignoring the weather."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
 
-    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+    def __call__(
+        self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
         self.calls.append((config, start_date, end_date))
         return _an_hour_at(config.pv_config.capacity_kw)
 
 
-def a_failing_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+def a_failing_simulation(
+    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+) -> SimulationResults:
     """Stands in for simulate_home: every job it runs fails."""
     raise RuntimeError("the simulation failed")
+
+
+@dataclass(frozen=True)
+class FleetCall:
+    """A simulate call RecordingFleetSimulator recorded: the fleet, its window and the progress sink it was given."""
+
+    fleet: FleetConfig
+    start_date: pd.Timestamp
+    end_date: pd.Timestamp
+    progress: HomesDone | None
+
+
+class RecordingFleetSimulator:
+    """Stands in for a JobManager's runner: records each simulate call in fleet_calls and each simulate_home call in home_calls, and answers each home with an hour at its PV size.
+
+    simulate answers a fleet with FleetResults pairing those hours with the fleet's homes, kept in answers.
+    """
+
+    def __init__(self) -> None:
+        self.fleet_calls: list[FleetCall] = []
+        self.home_calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
+        self.answers: list[FleetResults] = []
+
+    def simulate(
+        self, fleet: FleetConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, progress: HomesDone | None = None
+    ) -> FleetResults:
+        self.fleet_calls.append(FleetCall(fleet, start_date, end_date, progress))
+        self.answers.append(
+            FleetResults(
+                per_home_results=tuple(_an_hour_at(home.pv_config.capacity_kw) for home in fleet.homes),
+                home_configs=fleet.homes,
+            )
+        )
+        return self.answers[-1]
+
+    def simulate_each(
+        self,
+        fleets: Sequence[FleetConfig],
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        *,
+        progress: HomesDone | None = None,
+    ) -> Iterator[tuple[int, FleetResults]]:
+        raise NotImplementedError("a JobManager's jobs simulate one fleet or one home at a time")
+
+    def simulate_home(self, home: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        self.home_calls.append((home, start_date, end_date))
+        return _an_hour_at(home.pv_config.capacity_kw)
 
 
 class BlockingSimulation:
@@ -62,7 +118,9 @@ class BlockingSimulation:
         self._started = threading.Event()
         self._released = threading.Event()
 
-    def __call__(self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+    def __call__(
+        self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
         self.calls.append((config, start_date, end_date))
         self._started.set()
         self._released.wait()
@@ -74,6 +132,38 @@ class BlockingSimulation:
 
     def release(self) -> None:
         self._released.set()
+
+
+class SteppedSimulation:
+    """Stands in for simulate_home: records each home it is asked to simulate, as RecordingSimulation does, then holds it until allow_one() lets one held home finish with an hour at its PV size.
+
+    wait_until_entered(count) returns once *count* homes have entered the simulation. A home held for 30 s raises TimeoutError, which fails its job, so a test that stops early never leaves a job waiting for good.
+    """
+
+    _HOLD_LIMIT_SECONDS = 30.0
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[HomeConfig, pd.Timestamp, pd.Timestamp]] = []
+        self._entered = threading.Condition()
+        self._finishes = threading.Semaphore(0)
+
+    def __call__(
+        self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
+        with self._entered:
+            self.calls.append((config, start_date, end_date))
+            self._entered.notify_all()
+        if not self._finishes.acquire(timeout=self._HOLD_LIMIT_SECONDS):
+            raise TimeoutError(f"{config.name} was held for {self._HOLD_LIMIT_SECONDS} s with no allow_one()")
+        return _an_hour_at(config.pv_config.capacity_kw)
+
+    def allow_one(self) -> None:
+        self._finishes.release()
+
+    def wait_until_entered(self, count: int) -> None:
+        with self._entered:
+            if not self._entered.wait_for(lambda: len(self.calls) >= count, timeout=30):
+                pytest.fail(f"{count} homes had not entered the simulation within 30 s; {len(self.calls)} had")
 
 
 class SaveGate:

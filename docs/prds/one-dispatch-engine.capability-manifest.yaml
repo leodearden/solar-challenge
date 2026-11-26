@@ -205,13 +205,13 @@ tasks:
           paths: ["src/solar_challenge/home.py"]
           expect: absent
       - name: "inline-path-delegates"
-        binding: "built by ε; requires 839 (S11 β): TOUOptimizedStrategy(tariff=)"
+        binding: "built by ε; requires 839 (S11 β): TOUOptimizedStrategy(tariff=). Retired on purpose by successor task 905 (f91143c0), which deleted simulate_timestep_tou; per Leo's 2026-11-24 ruling (sitting item 14) the check now asserts no inline TOU timestep anywhere in src"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "TOUOptimizedStrategy\\(tariff=tariff\\)"
-          paths: ["src/solar_challenge/flow.py"]
-          expect: present
+          pattern: "simulate_timestep_tou"
+          paths: ["src/solar_challenge"]
+          expect: absent
       - name: "briefing-one-engine"
         binding: "built by ε; review/briefing.yaml reads 'Two dispatch paths coexist' at 1fa8f79"
         verdict: PASS

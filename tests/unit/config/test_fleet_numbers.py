@@ -340,19 +340,19 @@ class TestACodeBuiltBareNumberIsReadByTheHomesType:
         [
             pytest.param(
                 {"pv": ComponentDistribution({"capacity_kw": True})},
-                "fleet_distribution.pv, home 1",
+                "fleet_distribution.pv: home 1",
                 lambda: PVConfig(capacity_kw=True),
                 id="pv.capacity_kw",
             ),
             pytest.param(
                 {"pv": ComponentDistribution({"capacity_kw": 4.0, "tilt": True})},
-                "fleet_distribution.pv, home 1",
+                "fleet_distribution.pv: home 1",
                 lambda: PVConfig(capacity_kw=4.0, tilt=True),
                 id="pv.tilt",
             ),
             pytest.param(
                 {"pv": ComponentDistribution(_PV), "load": ComponentDistribution({"annual_consumption_kwh": True})},
-                "fleet_distribution.load, home 1",
+                "fleet_distribution.load: home 1",
                 lambda: LoadConfig(annual_consumption_kwh=True),
                 id="load.annual_consumption_kwh",
             ),

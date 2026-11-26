@@ -16,22 +16,30 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.main import app
+from solar_challenge.config import load_scenarios
 from solar_challenge.finance import (
     BillDistribution,
     FinanceConfig,
-    MultiYearCurve,
-    ProjectEconomics,
-    YearPoint,
     annuity_payment,
     irr,
     npv,
-    project_economics,
 )
-from solar_challenge.output import generate_finance_report
+from solar_challenge.projection import (
+    MultiYearCurve,
+    ProjectEconomics,
+    YearPoint,
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+)
+from tests._assumption_sections import make_assumption_section, sections_of
 from tests._cli_fleet_simulator import invoke_finance_run
-from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._factories import make_bill_breakdown, make_bill_distribution, make_project_economics
 from tests._finance_builders import make_fleet_results, make_scenario_of, make_sized_home
+from tests._install_capex import fleet_wired_dc_kw, roof_battery_inverter_capex_gbp
+from tests._repository_paths import SCENARIOS_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -51,14 +59,15 @@ def _make_point(year: int, revenue: float) -> YearPoint:
     )
 
 
-def _make_curve(revenues: list[float]) -> MultiYearCurve:
-    """Build a synthetic MultiYearCurve with given per-year revenues."""
+def _make_curve(revenues: list[float], *, fleet_pv_dc_kw: float) -> MultiYearCurve:
+    """Build a synthetic MultiYearCurve with given per-year revenues, its generation from *fleet_pv_dc_kw* kWp."""
     points = tuple(_make_point(y, rev) for y, rev in enumerate(revenues))
     return MultiYearCurve(
         points=points,
         sampled_ages=(0,),
         interp_error_estimate=0.0,
         annualised_from=None,
+        fleet_pv_dc_kw=fleet_pv_dc_kw,
     )
 
 
@@ -214,14 +223,14 @@ class TestProjectEconomicsCapex:
     """Fast tests for project_economics capex build-up and financing split."""
 
     def test_two_home_capex_exact(self) -> None:
-        """total_capex_gbp must equal the exact 3-term sum for a 2-home fleet.
+        """total_capex_gbp must equal the curve's PV DC priced plus each home's roof and battery for a 2-home fleet.
 
-        Home A: pv=4.0kWp, battery=5.0kWh
-        Home B: pv=3.0kWp, battery=None (PV-only, battery_kwh=0)
+        Curve: generation from pv_dc_kw = 7.0 kWp
+        Home A: battery=5.0kWh
+        Home B: battery=None (PV-only, battery_kwh=0)
         pv_cost=1000, roof_fit=1000, battery_cost=250
-        expected_capex = (4*1000 + 1000 + 5*250) + (3*1000 + 1000 + 0*250)
-                       = (4000 + 1000 + 1250) + (3000 + 1000 + 0)
-                       = 6250 + 4000 = 10250
+        expected_capex = 7*1000 + (1000 + 5*250) + (1000 + 0*250)
+                       = 7000 + 2250 + 1000 = 10250
         """
         home_a = make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
         home_b = make_sized_home(pv_kwp=3.0, battery_kwh=None)
@@ -234,21 +243,68 @@ class TestProjectEconomicsCapex:
         )
         # 25 revenue entries (asset_life_years=25)
         revenues = [10000.0] * 25
-        curve = _make_curve(revenues)
+        pv_dc_kw = 7.0
+        curve = _make_curve(revenues, fleet_pv_dc_kw=pv_dc_kw)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
-        expected_capex = (4.0 * 1000.0 + 1000.0 + 5.0 * 250.0) + (3.0 * 1000.0 + 1000.0 + 0.0 * 250.0)
+        expected_capex = pv_dc_kw * 1000.0 + (1000.0 + 5.0 * 250.0) + (1000.0 + 0.0 * 250.0)
         assert econ.total_capex_gbp == pytest.approx(expected_capex)
+
+
+class TestCapexPricesTheCurvesPvDc:
+    """project_economics prices the PV term on the curve's fleet_pv_dc_kw, the PV DC its generation came from."""
+
+    def test_the_pv_term_reads_the_curves_pv_dc_not_the_homes_nameplate(self) -> None:
+        """A curve whose generation came from 6.5 kWp prices 6.5 kWp of PV, not the homes' 7 kWp nameplate."""
+        home_a = make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
+        home_b = make_sized_home(pv_kwp=3.0, battery_kwh=None)
+        scenario = make_scenario_of([home_a, home_b])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            inverter_cost_per_kw_gbp=0.0,
+        )
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=6.5)
+
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
+
+        assert econ.total_capex_gbp == pytest.approx(6.5 * 1000.0 + (1000.0 + 5.0 * 250.0) + (1000.0 + 0.0))
+
+    def test_the_board_fleets_physics_curve_prices_the_pv_dc_the_simulator_wires(self) -> None:
+        """The board fleet's projected curve carries Σ wired DC of its homes, and its capex prices that DC."""
+        scenario = load_scenarios(SCENARIOS_DIR / "bristol-phase1.yaml")[0]
+        finance = scenario.finance
+        assert finance is not None
+        fleet = scenario_fleet(scenario)
+        wired = fleet_wired_dc_kw(fleet.homes)
+        nameplate = sum(home.pv_config.capacity_kw for home in fleet.homes)
+        assert wired != pytest.approx(nameplate), (
+            f"the board fleet must wire a DC other than its {nameplate} kWp nameplate, "
+            "or this test cannot tell the two bases apart"
+        )
+
+        curve = project_multi_year(
+            scenario,
+            finance,
+            error_target_pct=math.inf,
+            simulate=lambda fleet_config, start, end: make_fleet_results(homes=fleet_config.homes),
+        )
+
+        assert curve.fleet_pv_dc_kw == pytest.approx(wired)
+        assert project_economics(curve, fleet, finance).total_capex_gbp == pytest.approx(
+            wired * finance.pv_cost_per_kwp_gbp + roof_battery_inverter_capex_gbp(fleet.homes, finance)
+        )
 
     def test_grant_passthrough(self) -> None:
         """grant_gbp in ProjectEconomics must equal FinanceConfig.grant_gbp."""
         home = make_sized_home(pv_kwp=4.0)
         scenario = make_scenario_of([home])
         finance = _make_finance(grant_gbp=5000.0)
-        curve = _make_curve([8000.0] * 25)
+        curve = _make_curve([8000.0] * 25, fleet_pv_dc_kw=4.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert econ.grant_gbp == pytest.approx(5000.0)
 
@@ -263,9 +319,9 @@ class TestProjectEconomicsCapex:
             grant_gbp=1000.0,
             equity_fraction=0.60,
         )
-        curve = _make_curve([8000.0] * 25)
+        curve = _make_curve([8000.0] * 25, fleet_pv_dc_kw=4.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         financed = max(econ.total_capex_gbp - 1000.0, 0.0)
         expected_equity = financed * 0.60
@@ -279,11 +335,11 @@ class TestProjectEconomicsCapex:
         """When grant >= capex, financed=0, equity=0, debt=0."""
         home = make_sized_home(pv_kwp=2.0)
         scenario = make_scenario_of([home])
-        # capex = 2*1000 + 1000 + 0 = 3000; grant=50000 >> capex
+        # capex = the curve's 2 kWp × 1000 + 1000 = 3000; grant=50000 >> capex
         finance = _make_finance(grant_gbp=50000.0)
-        curve = _make_curve([8000.0] * 25)
+        curve = _make_curve([8000.0] * 25, fleet_pv_dc_kw=2.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert econ.equity_gbp == pytest.approx(0.0, abs=1e-9)
         assert econ.debt_gbp == pytest.approx(0.0, abs=1e-9)
@@ -300,7 +356,7 @@ class TestProjectEconomicsDebtService:
     def test_annuity_formula_positive_rate(self) -> None:
         """annual_debt_service_gbp == debt*r/(1-(1+r)^-n) for known parameters."""
         # Known debt, rate, term
-        # capex = 1*1000 + 1000 + 0 = 2000; grant=0; equity_frac=0.5
+        # capex = the curve's 1 kWp × 1000 + 1000 = 2000; grant=0; equity_frac=0.5
         # financed=2000; equity=1000; debt=1000
         home = make_sized_home(pv_kwp=1.0, battery_kwh=None)
         scenario = make_scenario_of([home])
@@ -313,12 +369,13 @@ class TestProjectEconomicsDebtService:
             loan_rate=0.07,
             loan_term_years=15,
         )
-        curve = _make_curve([5000.0] * 25)
+        pv_dc_kw = 1.0
+        curve = _make_curve([5000.0] * 25, fleet_pv_dc_kw=pv_dc_kw)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
-        # capex = 1*1000 + 1000 = 2000; debt = 2000 * 0.5 = 1000
-        expected_debt = 2000.0 * 0.5
+        capex = pv_dc_kw * 1000.0 + 1000.0
+        expected_debt = capex * 0.5
         expected_annuity = annuity_payment(expected_debt, 0.07, 15)
         # verify helper itself
         hand_annuity = expected_debt * 0.07 / (1.0 - (1.07) ** -15)
@@ -329,7 +386,7 @@ class TestProjectEconomicsDebtService:
         """loan_rate==0 → annual_debt_service == debt / loan_term_years."""
         home = make_sized_home(pv_kwp=2.0, battery_kwh=None)
         scenario = make_scenario_of([home])
-        # capex = 2*800+1000=2600; grant=0; debt=2600*0.5=1300
+        # capex = the curve's 2 kWp × 800 + 1000 = 2600; grant=0; debt=2600*0.5=1300
         finance = _make_finance(
             pv_cost_per_kwp_gbp=800.0,
             roof_fit_cost_gbp=1000.0,
@@ -339,12 +396,13 @@ class TestProjectEconomicsDebtService:
             loan_rate=0.0,
             loan_term_years=10,
         )
-        curve = _make_curve([5000.0] * 25)
+        pv_dc_kw = 2.0
+        curve = _make_curve([5000.0] * 25, fleet_pv_dc_kw=pv_dc_kw)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         # debt = 2600 * 0.5 = 1300; annuity = 1300/10 = 130
-        capex = 2.0 * 800.0 + 1000.0
+        capex = pv_dc_kw * 800.0 + 1000.0
         expected_debt = capex * 0.5
         expected_annuity = expected_debt / 10
         assert econ.annual_debt_service_gbp == pytest.approx(expected_annuity, rel=1e-9)
@@ -354,9 +412,9 @@ class TestProjectEconomicsDebtService:
         home = make_sized_home(pv_kwp=2.0)
         scenario = make_scenario_of([home])
         finance = _make_finance(grant_gbp=999999.0)  # grant >> capex
-        curve = _make_curve([5000.0] * 25)
+        curve = _make_curve([5000.0] * 25, fleet_pv_dc_kw=2.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert econ.annual_debt_service_gbp == pytest.approx(0.0, abs=1e-9)
 
@@ -409,11 +467,12 @@ class TestProjectEconomicsSurplusDSCR:
     def _setup(self) -> tuple:
         """Build a canonical 2-home scenario for surplus/DSCR tests.
 
-        Home A: pv=4kWp, battery=5kWh; Home B: pv=3kWp, no battery.
+        Curve: generation from pv_dc_kw = 7 kWp.
+        Home A: battery=5kWh; Home B: no battery.
         finance: pv_cost=1000, roof_fit=1000, battery_cost=250, grant=0,
                  equity_fraction=0.75, loan_rate=0.07, loan_term=15,
                  opex_per_home=200, asset_life=25.
-        capex = (4*1000+1000+5*250)+(3*1000+1000+0) = 6250+4000=10250
+        capex = 7*1000 + (1000+5*250) + (1000+0) = 7000+2250+1000 = 10250
         financed = 10250; equity = 7687.5; debt = 2562.5
         annual_debt_service = annuity_payment(2562.5, 0.07, 15)
         fleet_opex = 200 * 2 = 400
@@ -437,10 +496,11 @@ class TestProjectEconomicsSurplusDSCR:
             asset_life_years=25,
         )
         revenues = [5000.0] * 25
-        curve = _make_curve(revenues)
+        pv_dc_kw = 7.0
+        curve = _make_curve(revenues, fleet_pv_dc_kw=pv_dc_kw)
         scenario = make_scenario_of(homes)
 
-        capex = 10250.0
+        capex = pv_dc_kw * 1000.0 + (1000.0 + 5.0 * 250.0) + 1000.0
         debt = capex * 0.25
         fleet_opex = 200.0 * 2
         annual_ds = annuity_payment(debt, 0.07, 15)
@@ -449,14 +509,14 @@ class TestProjectEconomicsSurplusDSCR:
     def test_surplus_length_equals_asset_life(self) -> None:
         """len(per_year_surplus_gbp) must equal finance.asset_life_years."""
         scenario, finance, curve, _, _ = self._setup()
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert len(econ.per_year_surplus_gbp) == 25
 
     def test_surplus_loan_years_include_debt_service(self) -> None:
         """Surplus for loan years must deduct both opex and debt service."""
         scenario, finance, curve, fleet_opex, annual_ds = self._setup()
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         # For y<15: surplus = 5000 - fleet_opex - annual_ds
         for y in range(15):
@@ -468,7 +528,7 @@ class TestProjectEconomicsSurplusDSCR:
     def test_surplus_post_loan_years_no_debt_service(self) -> None:
         """Surplus for post-loan years must deduct only opex (no debt service)."""
         scenario, finance, curve, fleet_opex, _ = self._setup()
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         # For y>=15: surplus = 5000 - fleet_opex (4600)
         for y in range(15, 25):
@@ -504,16 +564,17 @@ class TestProjectEconomicsSurplusDSCR:
         )
         # Loan years: 5000 revenue; post-loan: 1000 revenue (very low)
         revenues = [5000.0] * 15 + [1000.0] * 10
-        curve = _make_curve(revenues)
+        pv_dc_kw = 7.0
+        curve = _make_curve(revenues, fleet_pv_dc_kw=pv_dc_kw)
         scenario = make_scenario_of(homes)
 
-        capex = 10250.0
+        capex = pv_dc_kw * 1000.0 + (1000.0 + 5.0 * 250.0) + 1000.0
         debt = capex * 0.25
         annual_ds = annuity_payment(debt, 0.07, 15)
         fleet_opex = 200.0 * 2
         expected_dscr = (5000.0 - fleet_opex) / annual_ds
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         # DSCR over loan years (all 5000 revenue) should be much > post-loan DSCR
         assert econ.min_dscr == pytest.approx(expected_dscr, rel=1e-6)
@@ -528,16 +589,16 @@ class TestProjectEconomicsSurplusDSCR:
         home = make_sized_home(pv_kwp=2.0)
         scenario = make_scenario_of([home])
         finance = _make_finance(grant_gbp=999999.0)  # no debt
-        curve = _make_curve([5000.0] * 25)
+        curve = _make_curve([5000.0] * 25, fleet_pv_dc_kw=2.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert math.isinf(econ.min_dscr)
 
     def test_net_surplus_per_home_per_year(self) -> None:
         """net_surplus_per_home_per_year_gbp == mean(per_year_surplus)/n_homes."""
         scenario, finance, curve, _, _ = self._setup()
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         expected_mean = sum(econ.per_year_surplus_gbp) / len(econ.per_year_surplus_gbp)
         expected_per_home = expected_mean / 2  # 2 homes
@@ -550,7 +611,7 @@ class TestProjectEconomicsSurplusDSCR:
         so this raises AttributeError until step-16 adds it.
         """
         scenario, finance, curve, fleet_opex, _ = self._setup()
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         # 2 homes, opex_per_home=200 → fleet_opex_gbp = 400
         assert econ.fleet_opex_gbp == finance.opex_per_home_per_year_gbp * 2
@@ -603,9 +664,9 @@ class TestProjectEconomicsIRRPayback:
             opex_per_home_per_year_gbp=100.0,
             asset_life_years=25,
         )
-        curve = _make_curve([8000.0] * 25)
+        curve = _make_curve([8000.0] * 25, fleet_pv_dc_kw=4.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         if not math.isnan(econ.equity_irr):
             cashflows = [-econ.equity_gbp] + list(econ.per_year_surplus_gbp)
@@ -617,7 +678,7 @@ class TestProjectEconomicsIRRPayback:
         """payback_years equals the hand-computed first 1-based cumulative crossing."""
         # Set up so payback is at a known year.
         # Use equity_fraction=1.0 (no debt) for simplicity.
-        # capex = 1*1000+1000+0=2000; grant=0; equity=2000; debt=0; debt_service=0
+        # capex = the curve's 1 kWp × 1000 + 1000 = 2000; grant=0; equity=2000; debt=0; debt_service=0
         # flat revenue=600/yr; opex=100; surplus=500/yr
         # cumulative: -2000+500=-1500, +500=-1000, +500=-500, +500=0 → payback=year 4
         home = make_sized_home(pv_kwp=1.0, battery_kwh=None)
@@ -634,9 +695,9 @@ class TestProjectEconomicsIRRPayback:
             asset_life_years=25,
         )
         # Revenue 600/yr; opex=100; surplus=500/yr; equity=2000
-        curve = _make_curve([600.0] * 25)
+        curve = _make_curve([600.0] * 25, fleet_pv_dc_kw=1.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         # capex=2000, equity=2000, debt=0
         # surplus each year = 600 - 100 - 0 = 500
@@ -656,9 +717,9 @@ class TestProjectEconomicsIRRPayback:
             asset_life_years=25,
         )
         # Low revenue, massive opex → surplus always negative
-        curve = _make_curve([1.0] * 25)
+        curve = _make_curve([1.0] * 25, fleet_pv_dc_kw=4.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert econ.payback_years is None
 
@@ -674,9 +735,9 @@ class TestProjectEconomicsIRRPayback:
             opex_per_home_per_year_gbp=9999.0,
             asset_life_years=25,
         )
-        curve = _make_curve([1.0] * 25)
+        curve = _make_curve([1.0] * 25, fleet_pv_dc_kw=4.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert math.isnan(econ.equity_irr)
 
@@ -685,10 +746,10 @@ class TestProjectEconomicsIRRPayback:
         home = make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
         scenario = make_scenario_of([home])
         finance = _make_finance()
-        curve = _make_curve([7000.0] * 25)
+        curve = _make_curve([7000.0] * 25, fleet_pv_dc_kw=4.0)
 
-        econ1 = project_economics(curve, scenario, finance)
-        econ2 = project_economics(curve, scenario, finance)
+        econ1 = project_economics(curve, scenario_fleet(scenario), finance)
+        econ2 = project_economics(curve, scenario_fleet(scenario), finance)
 
         # Bit-identical for all float fields
         assert econ1.total_capex_gbp == econ2.total_capex_gbp
@@ -728,45 +789,22 @@ def _make_bill_distribution(multiplier: float = 1.0) -> BillDistribution:
     )
 
 
-def _make_project_economics(
-    *,
-    payback_years: Optional[float] = 10.0,
-    equity_irr: float = 0.08,
-    fleet_opex_gbp: float = 12000.0,
-) -> ProjectEconomics:
-    """Build a synthetic ProjectEconomics for report tests."""
-    return ProjectEconomics(
-        total_capex_gbp=250000.0,
-        grant_gbp=50000.0,
-        equity_gbp=150000.0,
-        debt_gbp=50000.0,
-        annual_debt_service_gbp=5500.0,
-        per_year_surplus_gbp=tuple([8000.0] * 25),
-        min_dscr=1.45,
-        equity_irr=equity_irr,
-        payback_years=payback_years,
-        net_surplus_per_home_per_year_gbp=80.0,
-        fleet_opex_gbp=fleet_opex_gbp,
-        mean_fleet_surplus_per_year_gbp=8000.0,
-    )
-
-
 class TestGenerateFinanceReportEconomics:
-    """Fast tests for output.generate_finance_report economics block (η)."""
+    """Fast tests for board_report.generate_finance_report economics block (η)."""
 
     def test_economics_section_present(self) -> None:
         """Report with economics= must contain a Project Economics section."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         assert "Project Economics" in report
 
     def test_economics_capex_in_report(self) -> None:
         """Economics block must include total capex value."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         # capex = 250000.00 or similar formatting
         assert "250000" in report.replace(",", "").replace(" ", "")
@@ -774,33 +812,33 @@ class TestGenerateFinanceReportEconomics:
     def test_economics_dscr_in_report(self) -> None:
         """Economics block must include min DSCR label."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         assert "DSCR" in report
 
     def test_economics_irr_in_report(self) -> None:
         """Economics block must include IRR label."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         assert "IRR" in report
 
     def test_economics_payback_in_report(self) -> None:
         """Economics block must include payback label."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics()
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics()
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         assert "Payback" in report
 
     def test_economics_none_payback_no_crash(self) -> None:
         """economics with payback_years=None must not crash and must render gracefully."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics(payback_years=None)
+        econ = make_project_economics(payback_years=None)
         # Should not raise
-        report = generate_finance_report(dist, economics=econ)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
         assert isinstance(report, str)
         # Should render a "never" or "—" or similar string, not "None"
         assert "None" not in report
@@ -808,24 +846,24 @@ class TestGenerateFinanceReportEconomics:
     def test_economics_nan_irr_no_crash(self) -> None:
         """economics with equity_irr=nan must not crash."""
         dist = _make_bill_distribution()
-        econ = _make_project_economics(equity_irr=float("nan"))
-        report = generate_finance_report(dist, economics=econ)
+        econ = make_project_economics(equity_irr=float("nan"))
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
         assert isinstance(report, str)
 
     def test_backward_compat_economics_none(self) -> None:
         """generate_finance_report() with no economics kwarg must return same as before."""
         dist = _make_bill_distribution()
         # Call without economics kwarg
-        report_no_econ = generate_finance_report(dist)
+        report_no_econ = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
         # Call with economics=None (explicit)
-        report_econ_none = generate_finance_report(dist, economics=None)
+        report_econ_none = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=None)))
 
         assert report_no_econ == report_econ_none
 
     def test_backward_compat_no_economics_section(self) -> None:
         """Report without economics kwarg must not contain Project Economics section."""
         dist = _make_bill_distribution()
-        report = generate_finance_report(dist)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist)))
 
         # No economics block should appear
         assert "Project Economics" not in report
@@ -838,9 +876,9 @@ class TestGenerateFinanceReportEconomics:
         """
         dist = _make_bill_distribution()
         # fleet_opex_gbp=12000 is clearly distinct from net_surplus_per_home=80
-        econ = _make_project_economics(fleet_opex_gbp=12000.0)
+        econ = make_project_economics(fleet_opex_gbp=12000.0)
         assert econ.net_surplus_per_home_per_year_gbp == 80.0  # sanity
-        report = generate_finance_report(dist, economics=econ)
+        report = generate_finance_report(sections_of(make_assumption_section(bill=dist, economics=econ)))
 
         # The Fleet OpEx row must contain "12,000" or "12000" (the actual fleet opex)
         lines = report.splitlines()
@@ -949,10 +987,10 @@ class TestProjectEconomicsInverterCapex:
     """Tests for the inverter-capex term in project_economics (task #49)."""
 
     def test_default_inverter_cost_capex_bit_identical(self) -> None:
-        """With default inverter cost (0.0), total_capex_gbp equals the 3-term sum exactly.
+        """With default inverter cost (0.0), total_capex_gbp equals the PV term plus the per-home 2-term sum exactly.
 
         The 4th term is eff_inv*0.0 == 0.0 and S+0.0 == S in IEEE-754, so
-        the result is bit-identical to the pre-#49 accumulation.
+        the result is bit-identical to the accumulation without it.
         """
         home_a = make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
         home_b = make_sized_home(pv_kwp=3.0, battery_kwh=None)
@@ -963,22 +1001,20 @@ class TestProjectEconomicsInverterCapex:
             battery_cost_per_kwh_gbp=250.0,
             inverter_cost_per_kw_gbp=0.0,
         )
-        curve = _make_curve([10000.0] * 25)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=7.0)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
-        # Accumulate in the same per-home order as project_economics does
-        expected_3term = 0.0
+        # Accumulate in the same order as project_economics does: the PV term plus the per-home sum
+        per_home_gbp = 0.0
         for home in [home_a, home_b]:
-            pv_kwp = home.pv_config.capacity_kw
             batt_kwh = (
                 home.battery_config.capacity_kwh
                 if home.battery_config is not None
                 else 0.0
             )
-            expected_3term += (
-                pv_kwp * 1000.0 + 1000.0 + batt_kwh * 250.0
-            )
+            per_home_gbp += 1000.0 + batt_kwh * 250.0
+        expected_3term = curve.fleet_pv_dc_kw * 1000.0 + per_home_gbp
         # Exact equality: eff_inv*0.0 == 0.0, and S+0.0 == S in IEEE-754
         assert econ.total_capex_gbp == expected_3term
 
@@ -988,13 +1024,13 @@ class TestProjectEconomicsInverterCapex:
         home_b = make_sized_home(pv_kwp=3.0, battery_kwh=None)
         homes = [home_a, home_b]
         scenario = make_scenario_of(homes)
-        curve = _make_curve([10000.0] * 25)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=7.0)
 
         baseline = project_economics(
-            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=0.0)
+            curve, scenario_fleet(scenario), _make_finance(inverter_cost_per_kw_gbp=0.0)
         )
         nonzero = project_economics(
-            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=200.0)
+            curve, scenario_fleet(scenario), _make_finance(inverter_cost_per_kw_gbp=200.0)
         )
 
         expected_delta = sum(
@@ -1017,14 +1053,14 @@ class TestProjectEconomicsInverterCapex:
         home_default = make_sized_home(pv_kwp=3.0)
         homes = [home_clipped, home_default]
         scenario = make_scenario_of(homes)
-        curve = _make_curve([10000.0] * 25)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=7.0)
 
         cost_per_kw = 200.0
         baseline = project_economics(
-            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=0.0)
+            curve, scenario_fleet(scenario), _make_finance(inverter_cost_per_kw_gbp=0.0)
         )
         nonzero = project_economics(
-            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=cost_per_kw)
+            curve, scenario_fleet(scenario), _make_finance(inverter_cost_per_kw_gbp=cost_per_kw)
         )
 
         # effective_inverter_capacity_kw: 2.5 for home_clipped, 3.0 for home_default
@@ -1047,14 +1083,14 @@ class TestProjectEconomicsInverterCapex:
         """
         home_clipped = make_sized_home(pv_kwp=4.0, inverter_kw=2.5)
         scenario = make_scenario_of([home_clipped])
-        curve = _make_curve([10000.0] * 25)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=4.0)
 
         cost_per_kw = 200.0
         baseline = project_economics(
-            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=0.0)
+            curve, scenario_fleet(scenario), _make_finance(inverter_cost_per_kw_gbp=0.0)
         )
         nonzero = project_economics(
-            curve, scenario, _make_finance(inverter_cost_per_kw_gbp=cost_per_kw)
+            curve, scenario_fleet(scenario), _make_finance(inverter_cost_per_kw_gbp=cost_per_kw)
         )
 
         # Must be 2.5 * 200 = 500, NOT 4.0 * 200 = 800

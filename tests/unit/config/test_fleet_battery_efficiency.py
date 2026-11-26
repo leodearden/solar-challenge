@@ -1,57 +1,110 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How a fleet_distribution: battery's drawn efficiency builds its homes' batteries: through BatteryConfig's transitional efficiency field, until task 1350 builds it through with_round_trip as a home: battery block's is."""
+"""How a fleet_distribution: battery's drawn efficiency builds its homes' batteries: as a home: battery block's does, the round trip BatteryConfig.with_round_trip splits, refused beside a per-direction efficiency."""
 
-import math
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.config import load_fleet_config
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
+    ComponentDistribution,
     FleetDistributionConfig,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
+from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
+from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 
 
-def _fleet(battery: dict[str, float]) -> FleetDistributionConfig:
-    """A seeded two-home fleet with PV whose fleet_distribution: battery block is *battery*."""
-    return parse_fleet_distribution_config(
-        {"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0}, "battery": battery}
+def _fleet_block(battery: dict[str, Any]) -> dict[str, Any]:
+    """A seeded two-home fleet_distribution: block with PV whose battery block is *battery*."""
+    return {"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0}, "battery": battery}
+
+
+def _homes(battery: dict[str, Any]) -> list[HomeConfig]:
+    """The homes of the fleet _fleet_block describes, at Bristol."""
+    return generate_homes_from_distribution(
+        parse_fleet_distribution_config(_fleet_block(battery)), Location.bristol()
     )
 
 
-def _efficiencies(fleet: FleetDistributionConfig) -> list[tuple[float | None, float, float]]:
-    """Each generated home's battery's efficiency, charge_efficiency and discharge_efficiency."""
-    batteries = [home.battery_config for home in generate_homes_from_distribution(fleet, Location.bristol())]
-    return [
-        (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency)
-        for battery in batteries
-        if battery is not None
-    ]
+def _both_forms_refusal(*per_direction: str) -> str:
+    """The refusal of the fleet's battery block setting efficiency beside each of *per_direction*, a home: battery block's wording."""
+    return (
+        "fleet_distribution.battery: sets both forms of a battery's efficiency: efficiency and "
+        f"{' and '.join(per_direction)}; set efficiency, the round trip, or charge_efficiency "
+        "and discharge_efficiency, not both"
+    )
 
 
-def test_a_drawn_round_trip_is_held_beside_the_pair_it_splits_into() -> None:
-    efficiencies = _efficiencies(_fleet({"capacity_kwh": 5.0, "efficiency": 0.81}))
+def test_a_drawn_round_trip_builds_each_battery_through_with_round_trip() -> None:
+    batteries = [home.battery_config for home in _homes({"capacity_kwh": 5.0, "efficiency": 0.81})]
 
-    assert efficiencies == [(0.81, math.sqrt(0.81), math.sqrt(0.81))] * 2
+    assert batteries == [BatteryConfig(capacity_kwh=5.0).with_round_trip(0.81)] * 2
+    assert [(battery.charge_efficiency, battery.discharge_efficiency) for battery in batteries if battery] == [
+        (0.9, 0.9)
+    ] * 2
 
 
-def test_a_per_direction_draw_contradicting_a_drawn_round_trip_is_refused_at_generation_naming_the_home() -> None:
-    """The fleet's refusal is BatteryConfig's own, naming the fleet's battery block and the home."""
-    fleet = _fleet({"capacity_kwh": 5.0, "efficiency": 0.92, "charge_efficiency": 0.96})
-    with pytest.raises(ConfigurationError) as battery_refusal:
-        BatteryConfig(capacity_kwh=5.0, efficiency=0.92, charge_efficiency=0.96)
+@pytest.mark.parametrize(
+    "charge_efficiency",
+    [
+        pytest.param(0.96, id="away-from-its-default"),
+        pytest.param(0.975, id="at-its-default"),
+    ],
+)
+def test_a_block_drawing_both_forms_is_refused_when_read_by_key(charge_efficiency: float) -> None:
+    """As a home: battery block is, whatever the per-direction value."""
+    block = _fleet_block({"capacity_kwh": 5.0, "efficiency": 0.92, "charge_efficiency": charge_efficiency})
 
-    with pytest.raises(ConfigurationError) as fleet_refusal:
+    with pytest.raises(ConfigurationError) as refusal:
+        parse_fleet_distribution_config(block)
+
+    assert str(refusal.value) == _both_forms_refusal("charge_efficiency")
+
+
+def test_a_fleet_built_drawing_both_forms_is_refused_at_construction() -> None:
+    battery = ComponentDistribution({"capacity_kwh": 5.0, "efficiency": 0.92, "discharge_efficiency": 0.96})
+
+    with pytest.raises(ConfigurationError) as refusal:
+        FleetDistributionConfig(n_homes=2, pv=ComponentDistribution({"capacity_kw": 4.0}), battery=battery)
+
+    assert str(refusal.value) == _both_forms_refusal("discharge_efficiency")
+
+
+def test_a_block_drawing_both_forms_and_no_capacity_is_refused_for_both_forms_when_read_and_when_built() -> None:
+    """Both seams refuse a reader-only key beside a field it sets before a required key left out."""
+    battery = {"efficiency": 0.92, "charge_efficiency": 0.96}
+
+    with pytest.raises(ConfigurationError) as read:
+        parse_fleet_distribution_config(_fleet_block(battery))
+    with pytest.raises(ConfigurationError) as built:
+        FleetDistributionConfig(
+            n_homes=2, pv=ComponentDistribution({"capacity_kw": 4.0}), battery=ComponentDistribution(battery)
+        )
+
+    assert str(read.value) == str(built.value) == _both_forms_refusal("charge_efficiency")
+
+
+def test_homes_drawing_a_round_trip_load_back_from_their_written_fleet(tmp_path: Path) -> None:
+    homes = _homes({"capacity_kwh": 5.0, "efficiency": 0.81})
+    path = tmp_path / "fleet.yaml"
+    path.write_text(scenario_yaml(fleet_scenario(homes, name="Round trip fleet")), encoding="utf-8")
+
+    assert load_fleet_config(path).homes == tuple(homes)
+
+
+def test_a_drawn_round_trip_out_of_range_is_refused_at_generation_naming_the_block_once_and_the_home() -> None:
+    fleet = parse_fleet_distribution_config(_fleet_block({"capacity_kwh": 5.0, "efficiency": 1.5}))
+
+    with pytest.raises(ConfigurationError) as refusal:
         generate_homes_from_distribution(fleet, Location.bristol())
 
-    assert str(fleet_refusal.value) == f"fleet_distribution.battery, home 1: {battery_refusal.value}"
-
-
-def test_a_per_direction_draw_at_its_default_gives_way_to_a_drawn_round_trip() -> None:
-    """Unlike a home: battery block, which refuses both forms by key, whatever their values."""
-    efficiencies = _efficiencies(_fleet({"capacity_kwh": 5.0, "efficiency": 0.92, "charge_efficiency": 0.975}))
-
-    assert efficiencies == [(0.92, math.sqrt(0.92), math.sqrt(0.92))] * 2
+    assert str(refusal.value) == (
+        "fleet_distribution.battery: home 1: efficiency: round-trip efficiency must be greater "
+        "than 0 and at most 1, got 1.5"
+    )

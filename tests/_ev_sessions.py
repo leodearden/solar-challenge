@@ -5,7 +5,7 @@ Usage::
 
     from tests._ev_sessions import charging_sessions
 
-    profile = generate_ev_charging_profile(config, start_date, end_date)
+    profile = generate_ev_charging_profile(config, window, tariff=tariff, generation_kw=generation_kw)
     first_minute, minute_after_the_last = charging_sessions(profile)[0]
 """
 

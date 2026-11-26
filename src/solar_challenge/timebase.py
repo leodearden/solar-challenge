@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; and the default window's first and last days."""
+"""How long simulated time lasts: the minutes in an hour, the hours and minutes in a day; a duration in minutes, which is positive and finite; the row counts of one calendar year; the text naming the first row where two indexes differ; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; the default window's first and last days; and the first day of an n-day window."""
 
 import calendar
 import itertools
@@ -17,7 +17,10 @@ MINUTES_PER_HOUR: int = 60
 HOURS_PER_MINUTE: float = 1 / MINUTES_PER_HOUR
 """Hours in one minute: minutes times this is hours. It says nothing about a series' cadence; SimulationWindow.step_hours is how long one row lasts."""
 
-MINUTES_PER_DAY: int = 24 * MINUTES_PER_HOUR
+HOURS_PER_DAY: int = 24
+"""Hours on a 24-hour wall clock: the rows of one day of hourly weather. A local day across a clock change lasts 23 or 25 hours, so it is not how many hourly rows every day of a zoned series has."""
+
+MINUTES_PER_DAY: int = HOURS_PER_DAY * MINUTES_PER_HOUR
 """Minutes on a 24-hour wall clock, 00:00 to 23:59: the length of a minute-of-day table or profile. A local day across a clock change lasts 23 or 25 hours, so it is not how many one-minute rows every day of a zoned series has."""
 
 ONE_MINUTE: timedelta = timedelta(minutes=1)
@@ -28,6 +31,9 @@ DEFAULT_FIRST_DAY: date = date(2024, 1, 1)
 
 DEFAULT_LAST_DAY: date = date(2024, 12, 31)
 """The last day a scenario simulates when neither its file nor a flag gives one: D11's default tier (ruling L42, docs/prds/one-scenario-reader.md)."""
+
+SHORT_WINDOW_START: date = date(2024, 6, 1)
+"""The first day of an n-day window: home quick's --days, and a dashboard request's days short of the full year, run that many days from it (docs/prds/dashboard-limits-and-distribution-table.md §4.2)."""
 
 
 def require_valid_duration(minutes: float, quantity: str) -> None:
@@ -47,6 +53,32 @@ def covered_days(first_day: date, last_day: date) -> int:
             "a window's days run from its first day to its last"
         )
     return last_day.toordinal() - first_day.toordinal() + 1
+
+
+def year_row_counts(rows_per_day: int) -> range:
+    """The row counts of one calendar year, 365 to 366 days of rows_per_day rows."""
+    return range(365 * rows_per_day, 366 * rows_per_day + 1)
+
+
+def describe_first_differing_row(index: pd.Index, expected: pd.Index, expected_name: str) -> str | None:
+    """None when index equals expected; else the text naming the first row where they differ, the shorter one's length when it is the other's start, and each one's row there, 'no row' past its end, *expected* named *expected_name*."""
+    shorter = min(len(index), len(expected))
+    differs = np.flatnonzero(np.asarray(index[:shorter] != expected[:shorter]))
+    if differs.size:
+        position = int(differs[0])
+    elif len(index) == len(expected):
+        return None
+    else:
+        position = shorter
+    return (
+        f"they first differ at row {position:,}, where it has {_row_text(index, position)} "
+        f"and {expected_name} has {_row_text(expected, position)}"
+    )
+
+
+def _row_text(index: pd.Index, position: int) -> str:
+    """index's row at position, as text, or 'no row' when index ends before it."""
+    return str(index[position]) if position < len(index) else "no row"
 
 
 def minutes_of_day(index: pd.DatetimeIndex) -> np.ndarray:

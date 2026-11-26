@@ -9,10 +9,11 @@ import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.finance import FinanceConfig, project_multi_year
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import RunPricing, calculate_summary
-from solar_challenge.timebase import ONE_MINUTE
+from solar_challenge.projection import project_multi_year
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -144,15 +145,10 @@ def test_sim_results_default_to_one_whole_calendar_year() -> None:
     assert window.annualisation_scale == 1.0
 
 
-def test_period_covers_the_local_dates_of_make_window() -> None:
-    period = make_period()
+def test_period_is_make_windows_days_at_one_minute_on_its_clock() -> None:
     window = make_window()
-    assert window.timezone is not None
 
-    assert (
-        period.get_start_timestamp(window.timezone).date(),
-        period.get_end_timestamp(window.timezone).date(),
-    ) == (window.first_day, window.last_day)
+    assert make_period() == SimulationWindow(window.first_day, window.last_day, ONE_MINUTE, window.timezone)
 
 
 def test_a_projection_of_the_builders_scenario_and_default_results_is_annualised_from_the_period_it_simulated() -> None:
@@ -177,7 +173,7 @@ def test_fleet_results_pair_each_default_home_with_the_given_annual_totals() -> 
         import_kwh=1200.0,
     )
 
-    assert fleet.home_configs == [make_home_config()] * 3
+    assert fleet.home_configs == (make_home_config(),) * 3
     per_home_totals = [
         (
             summary.total_self_consumption_kwh,
@@ -202,7 +198,7 @@ def test_fleet_results_pair_the_given_homes_with_the_totals_over_the_window() ->
         days=3,
     )
 
-    assert fleet.home_configs == homes
+    assert fleet.home_configs == tuple(homes)
     per_home_totals = [
         (
             summary.total_self_consumption_kwh,
@@ -234,7 +230,7 @@ def test_fleet_results_of_pair_each_given_result_in_order_with_a_default_home() 
 
     fleet = make_fleet_results_of(per_home_results)
 
-    assert fleet.home_configs == [make_home_config()] * 2
+    assert fleet.home_configs == (make_home_config(),) * 2
     assert [
         calculate_summary(results).total_self_consumption_kwh for results in fleet.per_home_results
     ] == pytest.approx([18.0, 6.0])
@@ -246,7 +242,7 @@ def test_fleet_results_of_pair_the_given_results_in_order_with_the_given_homes()
 
     fleet = make_fleet_results_of(per_home_results, homes=homes)
 
-    assert fleet.home_configs == homes
+    assert fleet.home_configs == tuple(homes)
     assert [
         calculate_summary(results).total_self_consumption_kwh for results in fleet.per_home_results
     ] == pytest.approx([18.0, 6.0])

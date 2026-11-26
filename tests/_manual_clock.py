@@ -10,7 +10,7 @@ Usage::
     from tests._manual_clock import ManualClock
 
     clock = ManualClock()
-    manager = JobManager(storage, simulate_home=simulation, clock=clock)
+    manager = JobManager(storage, runner=runner, clock=clock)
     clock.advance(24 * 60 * 60.0)  # a day passes for the manager, at once
 """
 

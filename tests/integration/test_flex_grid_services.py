@@ -8,30 +8,48 @@ project_multi_year → project_economics.mean_fleet_surplus_per_year_gbp.
 The board scenario's own grid-services choice (the events model in its flex band, and
 no flat rate), then seam verification that the consuming math (W2-CR2,
 project_multi_year._simulate_age) propagates a band's flat rate into project surplus,
-on the board fleet pinned to the flat model at the central band's flat rate.
+on the board fleet pinned to the flat model at the central band's flat rate; and
+finance run on the board fleet priced flat, whose report books that rate's income and
+whose flexibility-value block reads it (review-all S25 δ, B11).
 """
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
 )
-from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesEventsConfig
+from solar_challenge.gridservices import (
+    GRID_SERVICES_RATE_BANDS,
+    FlatGridServices,
+    GridServicesBand,
+    GridServicesEventsConfig,
+    NoGridServices,
+)
 from solar_challenge.home import HomeConfig, RunPricing, SimulationResults
 from solar_challenge.load import LoadConfig
+from solar_challenge.projection import (
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+)
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_finance_config
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from tests._cli_fleet_simulator import invoke_finance_run
 from tests._finance_builders import make_fleet_results_of
+from tests._markdown_tables import row_cells
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
 
@@ -46,11 +64,9 @@ def test_the_board_scenario_prices_grid_services_at_events_in_its_flex_band() ->
     finance = parse_finance_config(cfg.get("finance"))
     assert finance is not None
 
-    assert finance.grid_services_model == "capacity_at_events"
-    assert isinstance(finance.grid_services_events, GridServicesEventsConfig)
-    assert finance.grid_services_events.band == cfg["flex_band"].lower() == "central"
-    assert "grid_services_income_per_kw_per_year_gbp" not in cfg["finance"]
-    assert finance.grid_services_income_per_kw_per_year_gbp == 0.0
+    assert isinstance(finance.grid_services_model, GridServicesEventsConfig)
+    assert finance.grid_services_model.band == cfg["flex_band"].lower() == "central"
+    assert [key for key in ("grid_services_income_per_kw_per_year_gbp", "grid_services_events") if key in cfg["finance"]] == []
 
 
 # ---------------------------------------------------------------------------
@@ -113,11 +129,9 @@ def _board_scenario_on_the_flat_model() -> tuple[ScenarioConfig, FinanceConfig]:
     scenario, finance = board_econ_scenario()
     return scenario, dataclasses.replace(
         finance,
-        grid_services_model="flat",
-        grid_services_events=None,
-        grid_services_income_per_kw_per_year_gbp=GRID_SERVICES_RATE_BANDS.resolve(
-            "central"
-        ).flat_gbp_per_kw_per_year,
+        grid_services_model=FlatGridServices(
+            GRID_SERVICES_RATE_BANDS.resolve(GridServicesBand.CENTRAL).flat_gbp_per_kw_per_year
+        ),
     )
 
 
@@ -128,7 +142,7 @@ def _surplus_at(
 ) -> float:
     """Return mean_fleet_surplus_per_year_gbp from project_economics."""
     curve = project_multi_year(scenario, finance, simulate=simulate)
-    return project_economics(curve, scenario, finance).mean_fleet_surplus_per_year_gbp
+    return project_economics(curve, scenario_fleet(scenario), finance).mean_fleet_surplus_per_year_gbp
 
 
 # ---------------------------------------------------------------------------
@@ -158,10 +172,7 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
     assert sigma == pytest.approx(250.0), f"Expected Σ=250 kW, got {sigma}"
 
     # Surplus difference: the central band's flat rate vs zeroed (0.0)
-    finance_zeroed = dataclasses.replace(
-        finance_loaded,
-        grid_services_income_per_kw_per_year_gbp=0.0,
-    )
+    finance_zeroed = dataclasses.replace(finance_loaded, grid_services_model=NoGridServices())
     surplus_loaded = _surplus_at(scenario, finance_loaded, simulate)
     surplus_zeroed = _surplus_at(scenario, finance_zeroed, simulate)
 
@@ -197,17 +208,13 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
         if h.battery_config is not None
     )
 
-    finance_zero = dataclasses.replace(
-        finance_base, grid_services_income_per_kw_per_year_gbp=0.0
-    )
+    finance_zero = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
     surplus_zero = _surplus_at(scenario, finance_zero, simulate)
 
     band_surpluses: dict[str, float] = {}
     for band in ("low", "central", "high"):
         rate = GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year
-        finance_band = dataclasses.replace(
-            finance_base, grid_services_income_per_kw_per_year_gbp=rate
-        )
+        finance_band = dataclasses.replace(finance_base, grid_services_model=FlatGridServices(rate))
         s = _surplus_at(scenario, finance_band, simulate)
         band_surpluses[band] = s
 
@@ -232,21 +239,20 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
 
 def test_unset_grid_services_is_theta_safe_noop() -> None:
-    """Omitting grid_services_income_per_kw_per_year_gbp, whether from the finance
-    block the production parser reads or from a direct FinanceConfig construction,
-    must be bit-identical to explicit 0.0 on project surplus.
+    """Omitting grid_services_model, whether from the finance block the production
+    parser reads or from a direct FinanceConfig construction, must be bit-identical
+    to an explicit NoGridServices() on project surplus.
 
     Encodes the seam's θ-safe contract: the additive default is a true no-op,
     so existing non-flex economics and the θ calibration are unperturbed.
 
     Non-tautological: finance_base (the board's finance) is pinned to the central
     band's flat rate, so the two omitted-path configs (finance_omitted,
-    finance_dataclass_default) must resolve to 0.0, not that rate, to pass.
-    parse_finance_config leaves an omitted key to FinanceConfig's declared
-    default, so a future change that shifts FinanceConfig's
-    grid_services_income_per_kw_per_year_gbp field default away from 0.0, or
-    that has the parser supply its own value for an omitted key, would be
-    caught here.
+    finance_dataclass_default) must resolve to NoGridServices(), not that rate,
+    to pass. parse_finance_config reads an omitted block as NoGridServices(), so
+    a future change that shifts FinanceConfig's grid_services_model field default
+    away from NoGridServices(), or that has the parser supply another pricing for
+    an omitted block, would be caught here.
     """
     scenario, finance_base = _board_scenario_on_the_flat_model()
     homes = scenario.homes
@@ -257,29 +263,22 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     # omitted paths below are genuinely different from finance_base.
     central_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
     assert central_rate > 0.0
-    assert finance_base.grid_services_income_per_kw_per_year_gbp == pytest.approx(central_rate)
+    assert finance_base.grid_services_model == FlatGridServices(central_rate)
 
-    # Baseline: explicit 0.0 via dataclasses.replace.
-    finance_explicit_zero = dataclasses.replace(
-        finance_base, grid_services_income_per_kw_per_year_gbp=0.0
-    )
+    # Baseline: explicit NoGridServices() via dataclasses.replace.
+    finance_explicit_zero = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
     surplus_explicit = _surplus_at(scenario, finance_explicit_zero, simulate)
 
-    # Path 1 — production-parser omitted path: the board's finance block omits the
-    # rate, so parse_finance_config leaves it to FinanceConfig's declared default.
-    # Removing the board's events-model keys too leaves every grid-services key
-    # unset, so FinanceConfig's declared default, the flat model, applies.
+    # Path 1 — production-parser omitted path: removing the board's
+    # grid_services_model block leaves the pricing unset, so parse_finance_config
+    # reads it as no grid services.
     cfg = load_config(SCENARIO)
     finance_dict = dict(cfg["finance"])
     finance_dict.pop("grid_services_model", None)
-    finance_dict.pop("grid_services_events", None)
-    assert "grid_services_income_per_kw_per_year_gbp" not in finance_dict, (
-        "Key must be absent so FinanceConfig's declared default applies"
-    )
     finance_omitted = parse_finance_config(finance_dict)
     assert finance_omitted is not None
-    assert finance_omitted.grid_services_income_per_kw_per_year_gbp == 0.0, (
-        "parse_finance_config must leave an absent key to FinanceConfig's default of 0.0"
+    assert finance_omitted.grid_services_model == NoGridServices(), (
+        "parse_finance_config must read an absent grid_services_model as NoGridServices()"
     )
 
     # Path 2 — FinanceConfig dataclass default path: reconstruct from finance_base's
@@ -287,11 +286,11 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     kwargs = {
         f.name: getattr(finance_base, f.name)
         for f in dataclasses.fields(finance_base)
-        if f.name != "grid_services_income_per_kw_per_year_gbp"
+        if f.name != "grid_services_model"
     }
     finance_dataclass_default = FinanceConfig(**kwargs)
-    assert finance_dataclass_default.grid_services_income_per_kw_per_year_gbp == 0.0, (
-        "FinanceConfig field default must be 0.0"
+    assert finance_dataclass_default.grid_services_model == NoGridServices(), (
+        "FinanceConfig field default must be NoGridServices()"
     )
 
     # Both omitted paths must yield project surplus bit-identical to explicit 0.0.
@@ -328,7 +327,7 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     home_b = HomeConfig(pv_config=pv, load_config=load, battery_config=None)
     homes = [home_a, home_b]
 
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+    period = SimulationWindow(date(2024, 1, 1), date(2024, 12, 31), ONE_MINUTE, "Europe/London")
     scenario = ScenarioConfig(
         name="Hermetic-BattVsNoBatt",
         period=period,
@@ -342,13 +341,9 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     # Finance config: the board's on the flat model, with controllable grid_services
     _, finance_base = _board_scenario_on_the_flat_model()
 
-    finance_zero = dataclasses.replace(
-        finance_base, grid_services_income_per_kw_per_year_gbp=0.0
-    )
+    finance_zero = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
     central_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
-    finance_central = dataclasses.replace(
-        finance_base, grid_services_income_per_kw_per_year_gbp=central_rate
-    )
+    finance_central = dataclasses.replace(finance_base, grid_services_model=FlatGridServices(central_rate))
 
     surplus_zero = _surplus_at(scenario, finance_zero, simulate)
     surplus_central = _surplus_at(scenario, finance_central, simulate)
@@ -360,3 +355,35 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
         f"(central={central_rate} × 2.5 kW battery); "
         f"got £{surplus_central - surplus_zero:.6f}"
     )
+
+
+# ---------------------------------------------------------------------------
+# B11 — finance run on the board fleet priced flat books the rate's income
+# ---------------------------------------------------------------------------
+
+
+def test_b11_finance_run_on_the_board_fleet_priced_flat_books_the_rate_and_the_flex_row_reads_it(tmp_path: Path) -> None:
+    """The board YAML priced flat at £4.0/kW-yr: the report's model line, its £4 × Σ kW income, and the flex row per battery home and per kW."""
+    document = yaml.safe_load(SCENARIO.read_text(encoding="utf-8"))
+    finance_block = document["finance"]
+    finance_block["grid_services_model"] = {"type": "flat", "income_per_kw_per_year_gbp": 4.0}
+    path = tmp_path / SCENARIO.name
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    scenario, _finance = board_econ_scenario()
+    batteries = [home.battery_config for home in scenario.homes if home.battery_config is not None]
+    homes, kw = len(batteries), sum(battery.max_discharge_kw for battery in batteries)
+    assert (homes, kw) == (100, 250.0)
+
+    result = invoke_finance_run(
+        [str(path), "--flex-band", "central"], _synthetic_fleet_results(list(scenario.homes))
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "Model: **flat, £4.0/kW-yr**" in lines, result.output
+    assert row_cells(
+        result.output, "### This window's fleet, the same under every assumption", "Annual fleet income"
+    ) == ["£1,000"]
+    assert "| Grid services (booked) | £10 | £4.0/kW |" in lines, result.output
+    assert "| **Headline total** | **£260** | — |" in lines, result.output
+    assert "90% of event days" not in result.output

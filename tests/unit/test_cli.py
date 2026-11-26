@@ -21,6 +21,7 @@ from rich.progress import Progress
 from rich.style import Style
 from typer.testing import CliRunner, Result
 
+from solar_challenge.board_report import AssumptionSection, generate_finance_report
 from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
@@ -41,17 +42,14 @@ from solar_challenge.cli.utils import (
 from solar_challenge.config import load_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import FinanceConfig, bill_distribution
+from solar_challenge.finance import FinanceConfig, OwnUseBasis, bill_distribution
 from solar_challenge.home import SummaryStatistics, calculate_summary
-from solar_challenge.location import parse_location
-from solar_challenge.output import generate_finance_report
 from solar_challenge.scenario_blocks import parse_finance_config
-from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.timebase import ONE_MINUTE
 from solar_challenge.weather import WeatherCache, WeatherDataError
+from tests._assumption_sections import sections_of
 from tests._cli_fleet_simulator import (
     ReachedTheSweep,
-    RecordingSimulate,
     answering,
     invoke_cli,
     invoke_finance_run,
@@ -59,6 +57,7 @@ from tests._cli_fleet_simulator import (
 )
 from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
+from tests._misplaced_sweeps import SHIPPED_SWEEP, misplaced_sweep_refusal, sweep_moved_to
 from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 
@@ -217,6 +216,23 @@ class TestConfigCLI:
             content = output_path.read_text()
             assert "location" in content or "pv" in content
 
+    @pytest.mark.parametrize("template_type", ["home", "scenario"])
+    def test_a_written_home_or_scenario_template_sets_no_output_block_and_validates(
+        self, tmp_path: Path, template_type: str
+    ) -> None:
+        """The file `config template home` or `config template scenario` writes holds no output: block, which no command reads, and `validate config` finds it valid."""
+        template_file = tmp_path / f"{template_type}.yaml"
+
+        written = runner.invoke(
+            app, ["config", "template", template_type, "-o", str(template_file)], catch_exceptions=False
+        )
+        assert written.exit_code == 0
+        assert "output" not in yaml.safe_load(template_file.read_text())
+
+        validated = runner.invoke(app, ["validate", "config", str(template_file)], catch_exceptions=False)
+        assert validated.exit_code == 0
+        assert "OK Configuration is valid" in table_text(validated.stdout)
+
     def test_config_template_reports_its_output_path_verbatim(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -305,6 +321,37 @@ home:
         assert "home.[ghi, dni] [/b]" in rows
         assert "home.panels [3 items]" in rows
 
+    def test_config_show_lists_each_placeholder_as_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """show reads the file's keys without substituting ${VAR}, so a placeholder with a default and one with none are both listed verbatim."""
+        monkeypatch.chdir(tmp_path)
+        Path("placeholders.yaml").write_text(
+            "home:\n  pv:\n    capacity_kw: \"${PV_KW:4.0}\"\n    tilt: \"${TILT}\"\n"
+        )
+
+        result = runner.invoke(app, ["config", "show", "placeholders.yaml"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        rows = table_text(result.stdout)
+        assert "home.pv.capacity_kw ${PV_KW:4.0}" in rows
+        assert "home.pv.tilt ${TILT}" in rows
+
+    def test_config_show_displays_a_file_holding_a_retired_key_that_validate_config_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """show only reads the file, so a retired home-level key is displayed with exit 0; validate config refuses the same file."""
+        monkeypatch.chdir(tmp_path)
+        Path("retired.yaml").write_text("home:\n  dispatch_strategy: tou_optimized\n  pv:\n    capacity_kw: 4.0\n")
+
+        shown = runner.invoke(app, ["config", "show", "retired.yaml"], catch_exceptions=False)
+        validated = runner.invoke(app, ["validate", "config", "retired.yaml"], catch_exceptions=False)
+
+        assert shown.exit_code == 0
+        assert "home.dispatch_strategy tou_optimized" in table_text(shown.stdout)
+        assert validated.exit_code == 1
+        assert "ERROR home.dispatch_strategy:" in table_text(validated.stdout)
+
 
 def _simulate_raising_a_plain_value_error(fleet_config: object, start: object, end: object) -> NoReturn:
     """A fleet simulator that raises a ValueError that is not a ConfigurationError, as a defect would."""
@@ -381,9 +428,9 @@ class TestErrorHandling:
 
     @pytest.mark.usefixtures("bristol_june_tmy")
     def test_home_run_refuses_grid_charging_its_dispatch_would_ignore_before_it_simulates(self, tmp_path: Path) -> None:
-        """scenarios/bristol-arbitrage.yaml dispatched greedy: stderr starts with the refusal, ahead of the status line a run prints."""
+        """scenarios/bristol-arbitrage.yaml whose battery dispatches self_consumption: stderr starts with the refusal, ahead of the status line a run prints."""
         document = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
-        document["home"]["dispatch_strategy"] = "greedy"
+        document["home"]["battery"]["dispatch_strategy"] = {"strategy_type": "self_consumption"}
         config_file = tmp_path / "bristol-arbitrage.yaml"
         config_file.write_text(yaml.safe_dump(document))
 
@@ -424,20 +471,20 @@ class TestErrorHandling:
             ),
             pytest.param(
                 {
-                    "grid_services_model": "capacity_at_events",
-                    "grid_services_events": {
+                    "grid_services_model": {
+                        "type": "capacity_at_events",
                         "event_windows": [
                             {"months": [13], "weekdays": [0], "hours": [17], "events_per_year": 1, "event_hours": 1.0}
-                        ]
+                        ],
                     }
                 },
-                "finance.grid_services_events.event_windows[0]: months[0] must be between 1 and 12, got 13",
+                "finance.grid_services_model.event_windows[0]: months[0] must be between 1 and 12, got 13",
                 id="event-window-month-13",
             ),
             pytest.param(
                 {
-                    "grid_services_model": "capacity_at_events",
-                    "grid_services_events": {
+                    "grid_services_model": {
+                        "type": "capacity_at_events",
                         "event_windows": [
                             {
                                 "months": [11],
@@ -449,7 +496,7 @@ class TestErrorHandling:
                         ]
                     }
                 },
-                "finance.grid_services_events.event_windows[0]: event_hours must be a finite number, got inf",
+                "finance.grid_services_model.event_windows[0]: event_hours must be a finite number, got inf",
                 id="event-window-infinite-event-hours",
             ),
         ],
@@ -806,103 +853,6 @@ class TestCreateSummaryTableTitle:
         assert any("Results" in s.text and s.style is not None and s.style.italic for s in segments)
 
 
-class TestHomeRunFullConfigParity:
-    """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
-
-    def _write_home_config(self, tmp_dir: Path, seg_yaml: str) -> Path:
-        """Write a temp YAML config with tariff, followed by *seg_yaml*.
-
-        Uses economy_7 (not flat_rate) because flat_rate has a known gap at 23:59
-        that causes a simulation error on a full-day run; economy_7 fully covers
-        all 24 hours via a midnight-crossing peak period.
-        """
-        cfg_path = tmp_dir / "home_seg.yaml"
-        cfg_path.write_text(
-            """
-home:
-  pv:
-    capacity_kw: 4.0
-  load:
-    annual_consumption_kwh: 3400
-    use_stochastic: false
-  tariff:
-    type: economy_7
-
-"""
-            + seg_yaml
-        )
-        return cfg_path
-
-    def _run_home(self, tmp_path: Path, seg_yaml: str, *extra_args: str) -> tuple[Result, RecordingSimulate]:
-        """Run `home run --report` for _DAY on a config ending in *seg_yaml*, its simulation answered by a RecordingSimulate.
-
-        *extra_args* are appended to the command line after ``--report``.
-        Returns the CLI result and the recorder, whose homes are the HomeConfigs
-        `home run` asked the invocation's runner to simulate.
-        """
-        recorder = RecordingSimulate()
-        cfg_path = self._write_home_config(tmp_path, seg_yaml)
-        result = invoke_cli(
-            ["home", "run", str(cfg_path), "--start", _DAY, "--end", _DAY, "--report", *extra_args],
-            answering(recorder),
-        )
-        return result, recorder
-
-    def test_home_run_threads_tariff_and_seg(self, tmp_path: Path) -> None:
-        """home run passes tariff + seg to the home it simulates and reports SEG Revenue."""
-        result, recorder = self._run_home(tmp_path, "seg:\n  rate_pence_per_kwh: 15.0\n")
-
-        assert result.exit_code == 0, f"CLI failed: {result.stdout}"
-
-        (home_cfg,) = recorder.homes
-        # Tariff must be honoured by the canonical parser
-        assert home_cfg.tariff_config is not None, (
-            "tariff_config should not be None — canonical parser must pick it up"
-        )
-
-        # SEG must be threaded onto the HomeConfig
-        assert home_cfg.seg_tariff is not None, (
-            "seg_tariff should not be None — SEG must be threaded from top-level seg block"
-        )
-        assert home_cfg.seg_tariff.rate_pence_per_kwh == 15.0
-
-        # SEG Revenue section must appear in the --report output
-        assert "SEG Revenue" in result.stdout, (
-            "generate_summary_report must include a SEG Revenue section"
-        )
-
-    def test_home_run_resolves_seg_preset(self, tmp_path: Path) -> None:
-        """A top-level ``seg: {preset: Octopus}`` block prices exports at Octopus's rate."""
-        result, recorder = self._run_home(tmp_path, "seg:\n  preset: Octopus\n")
-
-        assert result.exit_code == 0, f"CLI failed: {result.output}"
-        (home_cfg,) = recorder.homes
-        assert home_cfg.seg_tariff is not None
-        assert home_cfg.seg_tariff.rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
-        assert "SEG Revenue" in result.stdout
-
-    def test_home_run_rejects_unknown_seg_preset(self, tmp_path: Path) -> None:
-        """An unknown SEG preset is refused with exit 1 before anything is simulated."""
-        result, recorder = self._run_home(tmp_path, "seg:\n  preset: Nonexistent\n")
-
-        assert result.exit_code == 1
-        assert "Nonexistent" in result.output
-        assert recorder.homes == []
-
-    def test_home_run_location_option_reaches_home_config(self, tmp_path: Path) -> None:
-        """``--location`` places the simulated home where location.parse_location puts it."""
-        result, recorder = self._run_home(
-            tmp_path,
-            "seg:\n  rate_pence_per_kwh: 15.0\n",
-            "--location",
-            "55.95,-3.19",
-        )
-
-        assert result.exit_code == 0, f"CLI failed: {result.output}"
-        (home_cfg,) = recorder.homes
-        assert home_cfg.location == parse_location("55.95,-3.19")
-
-
 @pytest.fixture
 def clear_june_in_tmp_path(
     bristol_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -975,6 +925,76 @@ def _run_optimize_configs() -> Result:
         ],
         catch_exceptions=False,
     )
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestHomeRunReportPricesExportOnce:
+    """`home run --report` on a home with a seg: block prints one export revenue, and the SEG rate that priced it."""
+
+    def test_home_run_report_shows_the_seg_rate_beside_the_one_export_revenue(self) -> None:
+        """The report's Grid Export Revenue is the run's export at the SEG rate it names, and no SEG Revenue section repeats it."""
+        rate_pence_per_kwh = 15.0
+        Path("home.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "home": {
+                        "name": "Bristol",
+                        "pv": {"capacity_kw": 4.0},
+                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    },
+                    "seg": {"rate_pence_per_kwh": rate_pence_per_kwh},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app, ["home", "run", "home.yaml", "--start", _DAY, "--end", _DAY, "--report"], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0, result.output
+        lines = result.stdout.splitlines()
+        cells = {
+            row[1].strip(): row[2].strip()
+            for row in (line.split("|") for line in lines if line.startswith("| "))
+        }
+        assert "| SEG Rate | 15.0 p/kWh |" in lines
+        export_kwh = float(cells["Grid Export"])
+        assert export_kwh > 0
+        # The report rounds the export to 0.1 kWh and the revenue to the penny: £0.0125 at most at 15 p.
+        assert float(cells["Grid Export Revenue"]) == pytest.approx(export_kwh * rate_pence_per_kwh / 100, abs=0.02)
+        assert "## SEG Revenue" not in result.stdout
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestFleetRunPricesExportAtTheFilesSegRate:
+    """R4: `fleet run` books a fleet file's export at its seg: rate, which reaches every home it reads."""
+
+    def test_the_grid_export_revenue_is_the_export_at_the_seg_rate(self) -> None:
+        rate_pence_per_kwh = 15.0
+        Path("scenario.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "homes": [
+                        {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3400, "use_stochastic": False}}
+                    ],
+                    "seg": {"rate_pence_per_kwh": rate_pence_per_kwh},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app, ["fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0, result.output
+        text = table_text(result.stdout)
+        export = re.search(r"Grid Export ([0-9.]+) kWh", text)
+        revenue = re.search(r"Grid Export Revenue £([0-9.]+)", text)
+        assert export is not None and revenue is not None, text
+        export_kwh = float(export[1])
+        assert export_kwh > 0
+        # The table rounds the export to 0.1 kWh and the revenue to the penny: £0.0125 at most at 15 p.
+        assert float(revenue[1]) == pytest.approx(export_kwh * rate_pence_per_kwh / 100, abs=0.02)
 
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
@@ -1082,7 +1102,7 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
         result = _run_optimize_configs()
 
         assert result.exit_code == 0
-        assert result.stdout.startswith("## Cost-Recovery Rank\n")
+        assert result.stdout.startswith("Self-consumption assumption: **Physics**\n\n## Cost-Recovery Rank\n")
         assert "Sweep complete: 1 feasible config(s), 0 infeasible config(s)." in " ".join(result.stderr.split())
 
 
@@ -1112,6 +1132,11 @@ def _finance_run_over(first_day: date, days: int) -> tuple[Result, list[SummaryS
     finance = parse_finance_config(load_config(Path("scenario.yaml"))["finance"])
     assert finance is not None
     return result, [calculate_summary(r) for r in fleet.per_home_results], finance
+
+
+def _physics_sections(summaries: list[SummaryStatistics], finance: FinanceConfig) -> dict[OwnUseBasis, AssumptionSection]:
+    """The finance report's input of `finance run`'s default physics mode: the bills of *summaries* under *finance*."""
+    return sections_of(AssumptionSection(finance, bill_distribution(summaries, finance)))
 
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
@@ -1150,7 +1175,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         assert result.exit_code == 0
         window = summaries[0].window
         assert window is not None and len(window.rows()) == (23 + 24) * 60
-        assert generate_finance_report(bill_distribution(summaries, finance, 2), scenario_name="Bristol") in result.stdout
+        assert generate_finance_report(_physics_sections(summaries, finance), scenario_name="Bristol") in result.stdout
         assert f"×183.000 from a 2-day window ({_SPRING_FORWARD_FIRST} to {_SPRING_FORWARD_LAST})" in result.stdout
         assert summaries[0].simulation_days == 2
         assert f"Simulating fleet of 1 homes for {summaries[0].simulation_days} days…" in " ".join(
@@ -1162,7 +1187,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         result, summaries, finance = _finance_run_over(date(2023, 1, 1), 365)
 
         assert result.exit_code == 0
-        assert generate_finance_report(bill_distribution(summaries, finance, 365), scenario_name="Bristol") in result.stdout
+        assert generate_finance_report(_physics_sections(summaries, finance), scenario_name="Bristol") in result.stdout
         assert "extrapolated" not in result.stdout
         assert "Simulating fleet of 1 homes for 365 days…" in " ".join(result.stderr.split())
 
@@ -1189,7 +1214,13 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         assert "×12.200 from a 30-day window (2024-03-15 to 2024-04-13)" in result.stdout
 
     def test_optimize_configs_warns_of_a_large_sweep_by_its_calendar_days(self) -> None:
-        """1 January to 30 June 2024 are 182 calendar days, though the whole 24-hour days between their midnights, plus one, are 181 once the clocks have gone forward: 550 configs over one home for 182 days are 100,100 home-days, over the 100,000 that warrant the warning, where 181 days would be 99,550."""
+        """1 January to 30 June 2024 are 182 calendar days, though the whole 24-hour days between their midnights, plus one, are 181 once the clocks have gone forward.
+
+        110 configs, each one projection simulating at least 5 ages over the
+        scenario's default 25-year asset life, over one home for 182 calendar
+        days are 100,100 home-days, over the 100,000 that warrant the warning;
+        181 days would be 99,550.
+        """
         _write_scenario("Bristol")
 
         result = invoke_cli(
@@ -1197,7 +1228,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "optimize", "configs", "scenario.yaml",
                 "--pv", "1,2,3,4,5,6,7,8,9,10",
                 "--battery", "0,1,2,3,4,5,6,7,8,9,10",
-                "--inverter", "3,4,5,6,7",
+                "--inverter", "3",
                 "--sensitivity", "",
                 "--start", "2024-01-01", "--end", "2024-06-30",
             ],
@@ -1205,7 +1236,10 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         )
 
         assert isinstance(result.exception, ReachedTheSweep)
-        assert "550 config(s) × 1 home(s) × 182 day(s) ≈ 100,100 home-days" in " ".join(result.stderr.split())
+        assert (
+            "110 config(s) × at least 5 simulated age(s) per projection × 1 home(s) × 182 day(s) ≈ 100,100 home-days"
+            in " ".join(result.stderr.split())
+        )
 
 
 _ECONOMY_7_TARIFF = {
@@ -1216,8 +1250,9 @@ _ECONOMY_7_TARIFF = {
     "off_peak_end": "07:30",
 }
 
-# Each way `fleet sweep` sweeps a fleet file's battery capacity: the file's capacity_kwh,
-# the options that sweep it, and the file its 5 kWh point is exported to.
+# Each way `fleet sweep` sweeps a fleet file's battery capacity, by its YAML sweep, by a
+# ${CAP} variable or by the battery_capacity_kwh knob: the file's capacity_kwh, the options
+# that sweep it, and the file its 5 kWh point is exported to.
 _SWEEP_PATHS = (
     pytest.param(
         {
@@ -1226,7 +1261,7 @@ _SWEEP_PATHS = (
             "multiplier": {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"},
         },
         (),
-        "multiplier_1.2500.csv",
+        "battery.capacity_kwh.multiplier_1.2500.csv",
         id="yaml-sweep",
     ),
     pytest.param(
@@ -1235,11 +1270,17 @@ _SWEEP_PATHS = (
         "CAP_5.0000.csv",
         id="param-sweep",
     ),
+    pytest.param(
+        2.0,
+        ("--param", "battery_capacity_kwh", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+        "battery_capacity_kwh_5.0000.csv",
+        id="knob-sweep",
+    ),
 )
 
 
 def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, object]) -> None:
-    """Write file_name in the working directory: a fleet file under the top-level tariff, of two tou_optimized homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that charges and discharges at 2.5 kW and grid-charges to 90%."""
+    """Write file_name in the working directory: a fleet file under the top-level tariff, of two homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that dispatches tou_optimized on the tariff's clock, charges and discharges at 2.5 kW and grid-charges to 90%."""
     Path(file_name).write_text(
         yaml.safe_dump(
             {
@@ -1249,8 +1290,8 @@ def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, ob
                     "seed": 42,
                     "pv": {"capacity_kw": 4.0},
                     "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                    "dispatch_strategy": "tou_optimized",
                     "battery": {
+                        "dispatch_strategy": {"strategy_type": "tou_optimized"},
                         "max_charge_kw": 2.5,
                         "max_discharge_kw": 2.5,
                         "grid_charging": {"target_soc_fraction": 0.9},
@@ -1293,7 +1334,7 @@ class TestFleetRunNamesTheHomeWhoseSimulationFailed:
         result = _run_fleet("run", "fleet.yaml")
 
         assert result.exit_code == 1, result.output
-        assert "Invalid value: the weather for" in " ".join(result.stderr.split())
+        assert "Invalid value: the weather's air temperature has" in " ".join(result.stderr.split())
         assert "not one year of hourly rows" in " ".join(result.stderr.split())
         lines = [line.strip() for line in result.stderr.splitlines()]
         refusal = next(index for index, line in enumerate(lines) if "Invalid value:" in line)
@@ -1302,7 +1343,7 @@ class TestFleetRunNamesTheHomeWhoseSimulationFailed:
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestFleetSweepGivesEachPointTheFleetFilesBlocks:
-    """Tests that `fleet sweep`, on either sweep path, gives every point's homes the fleet file's top-level blocks as `fleet run` gives them."""
+    """Tests that `fleet sweep`, on every sweep path, gives every point's homes the fleet file's top-level blocks as `fleet run` gives them."""
 
     @pytest.mark.parametrize(("capacity_kwh", "options", "point_file"), _SWEEP_PATHS)
     def test_a_sweep_point_simulates_the_fleet_fleet_run_simulates(
@@ -1334,7 +1375,7 @@ class TestFleetSweepGivesEachPointTheFleetFilesBlocks:
         result = _run_fleet("sweep", "sweep.yaml", "--output-dir", "sweep", *options)
 
         assert result.exit_code == 1
-        assert "Unknown tariff type 'economy_8'" in " ".join(result.stderr.split())
+        assert "tariff.type: unknown tariff type 'economy_8'; supported types:" in " ".join(result.stderr.split())
         assert not Path("sweep", point_file).exists()
         assert not Path("sweep", "sweep_summary.csv").exists()
 
@@ -1367,9 +1408,38 @@ class TestFleetSweepRefusesAFileItCannotSweep:
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n  battery:\n"
                 "    capacity_kwh: {type: proportional_to, source: pv.capacity_kw, multiplier: '${BATTERY_RATIO:1.0}'}\n",
                 ("--param", "BATTERY_RATI0", "--min", "0.5", "--max", "2", "--steps", "2"),
-                "Variables with no placeholder in the document: 'BATTERY_RATI0'; "
-                "its placeholders: 'BATTERY_RATIO' at fleet_distribution.battery.capacity_kwh.multiplier",
+                "--param 'BATTERY_RATI0' names no knob and no variable of the document; "
+                "its variables: 'BATTERY_RATIO'; "
+                "the knobs fleet sweep sweeps, each with its aliases: pv_capacity_kw, inverter_capacity_kw",
                 id="param-sweep-of-a-variable-no-placeholder-names",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                ("--param", "battery_kwh", "--min", "5", "--max", "10", "--steps", "2"),
+                "--param 'battery_kwh' names no knob and no variable of the document; "
+                "it holds no variables; the knobs fleet sweep sweeps, each with its aliases: pv_capacity_kw",
+                id="name-that-is-neither-in-a-document-without-variables",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n  battery:\n"
+                "    capacity_kwh: '${battery_capacity_kwh}'\n",
+                ("--param", "battery_capacity_kwh", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+                "--param 'battery_capacity_kwh' names both the knob 'battery_capacity_kwh' "
+                "and the document's variable ${battery_capacity_kwh}",
+                id="name-that-is-both-a-knob-and-a-variable",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: '${seg}'}\n",
+                ("--param", "seg", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+                "--param 'seg' names both the knob 'seg_tariff_pence_per_kwh' and the document's variable ${seg}",
+                id="alias-that-is-also-a-variable",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                ("--param", "battery_cost", "--min", "100", "--max", "200", "--steps", "2"),
+                "--param 'battery_cost' names the knob 'battery_cost_per_kwh_gbp', "
+                "which sets the scenario's finance block and no home's simulation",
+                id="knob-that-edits-no-home",
             ),
         ],
     )
@@ -1383,6 +1453,35 @@ class TestFleetSweepRefusesAFileItCannotSweep:
 
         assert result.exit_code == 1
         assert refusal in " ".join(result.stderr.split())
+
+
+class TestFleetRefusesASweepMultiplierOffTheBatteryCapacity:
+    """C5: `fleet run` and `fleet sweep` refuse a file whose sweep multiplier sits off battery.capacity_kwh, naming its path and the placement."""
+
+    @pytest.mark.parametrize("command", ["run", "sweep"])
+    def test_a_sweep_moved_to_the_battery_charge_rate_is_refused_naming_its_path_and_the_placement(
+        self, tmp_path: Path, command: str
+    ) -> None:
+        fleet_file = tmp_path / "fleet.yaml"
+        fleet_file.write_text(yaml.safe_dump(sweep_moved_to("battery", "max_charge_kw")))
+
+        result = _run_fleet(command, str(fleet_file))
+
+        assert result.exit_code == 1
+        assert misplaced_sweep_refusal("fleet_distribution.battery.max_charge_kw") in " ".join(result.stderr.split())
+
+
+class TestFleetRunRefusesASweepFile:
+    """C6: `fleet run` refuses a file whose fleet sweeps, naming the sweep's placement and `fleet sweep`, which runs it."""
+
+    def test_fleet_run_refuses_the_shipped_sweep_file_naming_its_placement_and_fleet_sweep(self) -> None:
+        result = _run_fleet("run", str(SHIPPED_SWEEP))
+
+        assert result.exit_code == 1
+        assert (
+            "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 16 points, "
+            "so the file defines one fleet per point; run it with 'fleet sweep'"
+        ) in " ".join(result.stderr.split())
 
 
 class TestQuietOption:

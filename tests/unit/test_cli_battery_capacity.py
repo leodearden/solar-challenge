@@ -2,18 +2,26 @@
 """The home commands read a battery capacity as solar_challenge.battery.has_battery does.
 
 0 is no battery, and a negative or non-finite capacity is refused, naming the
-argument, before anything is simulated.
+argument, before anything is simulated. `home run --battery-kwh` replaces only the
+capacity of the file's battery, keeping its other settings, and gives a home with
+no battery one of that capacity.
 """
 
+import dataclasses
 from pathlib import Path
 
 import pandas as pd
 import pytest
 import yaml
-from typer.testing import CliRunner, Result
+from typer.testing import CliRunner
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.cli.main import app
+from solar_challenge.config import load_home_config
+from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
+from tests._cli_stderr_text import stderr_text
+from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
@@ -52,11 +60,6 @@ def _write_home_with_battery() -> Path:
     return path
 
 
-def _stderr_text(result: Result) -> str:
-    """The result's stderr with its whitespace collapsed, undoing Rich's wrap at 80 columns."""
-    return " ".join(result.stderr.split())
-
-
 @pytest.mark.parametrize("value", ["nan", "inf"])
 def test_home_quick_refuses_a_battery_kwh_that_is_not_a_capacity(value: str) -> None:
     """`home quick`'s BATTERY_KWH is refused, naming it, when it is not a finite capacity."""
@@ -65,7 +68,7 @@ def test_home_quick_refuses_a_battery_kwh_that_is_not_a_capacity(value: str) -> 
     assert result.exit_code == 1
     assert (
         f"Configuration error: battery_kwh must be a finite number, got {float(value)!r}"
-        in _stderr_text(result)
+        in stderr_text(result)
     )
 
 
@@ -84,10 +87,47 @@ def test_home_run_refuses_a_battery_kwh_override_that_is_not_a_capacity(value: s
     assert result.exit_code == 1
     assert (
         f"Configuration error: --battery-kwh must be {requirement}, got {float(value)!r}"
-        in _stderr_text(result)
+        in stderr_text(result)
     )
 
 
 def test_a_zero_battery_kwh_override_removes_the_files_battery() -> None:
     """`--battery-kwh 0` is no battery, as the option's help says."""
     assert home_config_for_run(_write_home_with_battery(), battery_kwh=0.0).battery_config is None
+
+
+def _home_run_recorded(path: Path, *options: str) -> RecordingSimulate:
+    """The RecordingSimulate that answered `home run` of the file at *path* over _DAY with *options*, once the run exits 0."""
+    recorder = RecordingSimulate()
+    result = invoke_cli(
+        ["home", "run", str(path), "--start", _DAY, "--end", _DAY, *options], answering(recorder)
+    )
+    assert result.exit_code == 0, result.output
+    return recorder
+
+
+def test_a_battery_kwh_override_replaces_only_the_files_battery_capacity() -> None:
+    """The file's battery keeps its other settings, its grid_charging block's 0.9 target included."""
+    path = SCENARIOS_DIR / "bristol-arbitrage.yaml"
+    files_battery = load_home_config(path).battery_config
+    assert files_battery is not None
+
+    (home,) = _home_run_recorded(path, "--battery-kwh", "10").homes
+
+    battery = home.battery_config
+    assert battery == dataclasses.replace(files_battery, capacity_kwh=10.0)
+    assert battery is not None and battery.grid_charging is not None
+    assert battery.grid_charging.target_soc_fraction == 0.9
+
+
+def test_a_battery_kwh_override_gives_a_home_without_a_battery_one_of_that_capacity() -> None:
+    path = Path("home.yaml")
+    path.write_text(
+        yaml.safe_dump(
+            {"home": {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3400, "use_stochastic": False}}}
+        )
+    )
+
+    (home,) = _home_run_recorded(path, "--battery-kwh", "3").homes
+
+    assert home.battery_config == BatteryConfig(capacity_kwh=3.0)

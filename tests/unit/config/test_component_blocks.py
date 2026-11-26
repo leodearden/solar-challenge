@@ -2,7 +2,6 @@
 """Each of scenario_blocks.py's component block tables held to its dataclass."""
 
 import dataclasses
-import re
 from typing import Any, Callable, Optional
 
 import pytest
@@ -50,27 +49,31 @@ def _placement_faults(block: ComponentBlock[Any]) -> list[str]:
     """Each way *block* fails to place its dataclass's fields, naming the field; empty when it places every one.
 
     Every field is either one of the block's keys or outside its grammar, never both; the keys
-    follow field order; and every sub-block and when-omitted entry is one of the keys. Every key
-    is either drawn by the fleet or outside it, never both; the fleet keys follow key order; the
-    presence field is the first of them, since a home draws nothing of a component before
-    learning whether it has one; and a sub-block the fleet carries is a SETTING.
+    but the reader-only ones follow field order; and every sub-block, when-omitted entry and
+    reader-only key is one of the keys, no reader-only key a field. Every key is either drawn by
+    the fleet or outside it, never both; the fleet keys follow key order; the presence field is
+    the first of them, since a home draws nothing of a component before learning whether it has
+    one; and a sub-block the fleet carries is a SETTING.
     """
     field_names = [field.name for field in dataclasses.fields(block.config_type)]
     keys = set(block.keys)
+    field_keys = keys - set(block.reader_only)
     outside = set(block.outside_grammar)
     fleet = set(block.fleet)
     not_in_fleet = set(block.not_in_fleet)
     return [
         *(f"{name} is both a key and outside the grammar" for name in field_names if name in keys & outside),
         *(f"{name} is neither a key nor outside the grammar" for name in field_names if name not in keys | outside),
-        *(f"{name} is placed but is not a field" for name in sorted((keys | outside) - set(field_names))),
+        *(f"{name} is placed but is not a field" for name in sorted((field_keys | outside) - set(field_names))),
         *(
             [f"keys {list(block.keys)} do not follow field order {field_names}"]
-            if list(block.keys) != [name for name in field_names if name in keys]
+            if [key for key in block.keys if key in field_keys] != [name for name in field_names if name in field_keys]
             else []
         ),
         *(f"sub-block {key} is not a key" for key in block.sub_blocks if key not in keys),
         *(f"when_omitted {key} is not a key" for key in block.when_omitted if key not in keys),
+        *(f"reader-only {key} is not a key" for key in block.reader_only if key not in keys),
+        *(f"{key} is reader-only but is a field" for key in block.reader_only if key in field_names),
         *(f"{key} is both drawn by the fleet and outside it" for key in block.keys if key in fleet & not_in_fleet),
         *(
             f"{key} is a key but neither drawn by the fleet nor outside it"
@@ -100,7 +103,7 @@ def _placement_faults(block: ComponentBlock[Any]) -> list[str]:
 def test_each_table_places_every_field_of_its_dataclass_once_in_field_order(
     block: ComponentBlock[Any],
 ) -> None:
-    """T1: a table's keys and the fields outside its grammar are its dataclass's fields, disjoint, the keys in field order."""
+    """T1: a table's keys but its reader-only ones, and the fields outside its grammar, are its dataclass's fields, disjoint, the keys in field order."""
     assert _placement_faults(block) == []
 
 
@@ -165,27 +168,29 @@ def test_a_field_declaring_a_default_factory_is_built_with_the_factorys_value() 
 
 
 @pytest.mark.parametrize(
-    ("block", "outside_grammar", "sub_blocks", "when_omitted"),
+    ("block", "outside_grammar", "sub_blocks", "when_omitted", "reader_only"),
     [
         pytest.param(
             PV_BLOCK,
             {"custom_module_params", "custom_inverter_params"},
             (),
             {"capacity_kw": 4.0},
+            set(),
             id="PVConfig",
         ),
         pytest.param(
-            BATTERY_BLOCK, set(), ("dispatch_strategy", "grid_charging"), {"capacity_kwh": 5.0},
+            BATTERY_BLOCK, set(), ("dispatch_strategy", "grid_charging"), {"capacity_kwh": 5.0}, {"efficiency"},
             id="BatteryConfig",
         ),
-        pytest.param(LOAD_BLOCK, set(), (), {}, id="LoadConfig"),
-        pytest.param(HEAT_PUMP_BLOCK, set(), (), {}, id="HeatPumpConfig"),
-        pytest.param(EV_BLOCK, set(), (), {}, id="EVConfig"),
+        pytest.param(LOAD_BLOCK, set(), (), {}, set(), id="LoadConfig"),
+        pytest.param(HEAT_PUMP_BLOCK, set(), (), {}, set(), id="HeatPumpConfig"),
+        pytest.param(EV_BLOCK, set(), (), {}, set(), id="EVConfig"),
         pytest.param(
             LOCATION_BLOCK,
             set(),
             (),
             {"timezone": _BRISTOL.timezone, "altitude": _BRISTOL.altitude},
+            set(),
             id="Location",
         ),
     ],
@@ -195,15 +200,33 @@ def test_each_table_holds_its_rows(
     outside_grammar: set[str],
     sub_blocks: tuple[str, ...],
     when_omitted: dict[str, object],
+    reader_only: set[str],
 ) -> None:
-    """T2: every field but those outside the grammar, each with its reason, is a key; then the sub-blocks in order and the when-omitted values."""
+    """T2: every field but those outside the grammar, each with its reason, is a key, and so is each reader-only key; then the sub-blocks in order, the when-omitted values and the reader-only keys."""
     field_names = {field.name for field in dataclasses.fields(block.config_type)}
 
     assert set(block.outside_grammar) == outside_grammar
     assert all(reason.strip() for reason in block.outside_grammar.values())
-    assert set(block.keys) == field_names - outside_grammar
+    assert set(block.keys) == (field_names - outside_grammar) | set(block.reader_only)
     assert tuple(block.sub_blocks) == sub_blocks
     assert dict(block.when_omitted) == when_omitted
+    assert set(block.reader_only) == reader_only
+
+
+def test_a_reader_only_key_outside_the_keys_is_reported() -> None:
+    """T1 holds the reader-only keys to the table's keys: PV_BLOCK's table given BATTERY_BLOCK's reader-only keys reports each."""
+    faults = _placement_faults(dataclasses.replace(PV_BLOCK, reader_only=BATTERY_BLOCK.reader_only))
+
+    assert faults == ["reader-only efficiency is not a key"]
+
+
+def test_a_reader_only_key_that_is_a_field_is_reported() -> None:
+    """T1 holds a reader-only key to be no field: PV_BLOCK's table reading its capacity_kw as a reader-only key reports it."""
+    faults = _placement_faults(
+        dataclasses.replace(PV_BLOCK, reader_only={"capacity_kw": BATTERY_BLOCK.reader_only["efficiency"]})
+    )
+
+    assert faults == ["capacity_kw is reader-only but is a field"]
 
 
 _NUMBER = FleetField(FieldKind.NUMBER)
@@ -318,7 +341,9 @@ def test_choices_belong_to_a_choice_field_alone(kind: FieldKind, choices: tuple[
             id="dispatch_strategy-peak_shaving",
         ),
         pytest.param(
-            "grid_charging", GridChargeConfig(target_soc_fraction=0.8), id="grid_charging"
+            "grid_charging",
+            GridChargeConfig(target_soc_fraction=0.8, forecast="trailing_14_days"),
+            id="grid_charging",
         ),
     ],
 )
@@ -327,6 +352,24 @@ def test_each_battery_sub_block_reads_back_what_it_writes(key: str, value: objec
     sub_block = BATTERY_BLOCK.sub_blocks[key]
 
     assert sub_block.read(sub_block.write(value), block_path=f"home.battery.{key}") == value
+
+
+@pytest.mark.parametrize(
+    ("block", "target", "forecast"),
+    [
+        pytest.param(
+            {"target_soc_fraction": 0.9, "forecast": "trailing_14_days"}, 0.9, "trailing_14_days", id="forecast-set"
+        ),
+        pytest.param({"target_soc_fraction": 0.9}, 0.9, "pv_blind", id="forecast-omitted"),
+    ],
+)
+def test_a_grid_charging_block_reads_its_forecast_and_an_omitted_one_is_pv_blind(
+    block: dict[str, Any], target: float, forecast: str
+) -> None:
+    """The grid_charging: block sets the forecast that sizes the battery's grid charge; without one it is PV-blind."""
+    config = BATTERY_BLOCK.sub_blocks["grid_charging"].read(block, block_path="home.battery.grid_charging")
+
+    assert (config.target_soc_fraction, config.forecast) == (target, forecast)
 
 
 @pytest.mark.parametrize(
@@ -373,13 +416,13 @@ _PUBLIC_READINGS: tuple[
 )
 """Each table, the public reader of its blocks, and a block of it that reader accepts, setting each key the block may not leave out."""
 
-_REQUIRED_KEY_PATHS: dict[tuple[type, str], str] = {
-    (HeatPumpConfig, "heat_pump_type"): "home.heat_pump.heat_pump_type",
-    (EVConfig, "charger_type"): "home.ev.charger_type",
-    (Location, "latitude"): "location.latitude",
-    (Location, "longitude"): "location.longitude",
+_REQUIRED_KEY_REFUSALS: dict[tuple[type, str], str] = {
+    (HeatPumpConfig, "heat_pump_type"): "home.heat_pump: requires 'heat_pump_type'",
+    (EVConfig, "charger_type"): "home.ev: requires 'charger_type'",
+    (Location, "latitude"): "location: requires 'latitude'",
+    (Location, "longitude"): "location: requires 'longitude'",
 }
-"""The keys a block may not leave out, each by the path its public reader gives it in its file."""
+"""The keys a block may not leave out, each with the refusal its public reader gives the block without it, naming the block by its path in its file."""
 
 _EVERY_TABLE_KEY = [
     (block, read, base, key) for block, read, base in _PUBLIC_READINGS for key in block.keys
@@ -391,7 +434,7 @@ _EVERY_TABLE_KEY = [
     [
         pytest.param(read, base, key, id=f"{block.config_type.__name__}-{key}")
         for block, read, base, key in _EVERY_TABLE_KEY
-        if (block.config_type, key) not in _REQUIRED_KEY_PATHS
+        if (block.config_type, key) not in _REQUIRED_KEY_REFUSALS
     ],
 )
 def test_a_null_key_reads_as_absent(
@@ -404,24 +447,25 @@ def test_a_null_key_reads_as_absent(
 
 
 @pytest.mark.parametrize(
-    ("read", "data", "path"),
+    ("read", "data", "expected"),
     [
         pytest.param(
             read,
             {**base, key: None},
-            _REQUIRED_KEY_PATHS[block.config_type, key],
+            _REQUIRED_KEY_REFUSALS[block.config_type, key],
             id=f"{block.config_type.__name__}-{key}",
         )
         for block, read, base, key in _EVERY_TABLE_KEY
-        if (block.config_type, key) in _REQUIRED_KEY_PATHS
+        if (block.config_type, key) in _REQUIRED_KEY_REFUSALS
     ],
 )
-def test_a_null_required_key_is_refused_naming_its_path(
-    read: Callable[[dict[str, Any]], object], data: dict[str, Any], path: str
+def test_a_null_required_key_is_refused_naming_its_block_and_the_key(
+    read: Callable[[dict[str, Any]], object], data: dict[str, Any], expected: str
 ) -> None:
-    """R1: a null required key reads as absent, so its block is refused, naming the key by its path."""
-    with pytest.raises(ConfigurationError, match=re.escape(path)):
+    """R1: a null required key reads as absent, so its block is refused, naming the block by its path and the key it requires."""
+    with pytest.raises(ConfigurationError) as refusal:
         read(data)
+    assert str(refusal.value) == expected
 
 
 _WORDS_FOR_NUMBERS: dict[type, dict[str, str]] = {

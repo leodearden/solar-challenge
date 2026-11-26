@@ -41,13 +41,14 @@ import pytest
 pytest.importorskip("jinja2")
 pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE, ChartPanel, ChartTab
 from solar_challenge.web.run_headline import run_headline
 from tests._dashboard_sources import THEME_TOKENS_KEY, theme_tokens
-from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results, make_window
 from tests._plotly_figure import Rgb, colour_literals, drawn_colours, traces
 
 
@@ -85,9 +86,21 @@ def _year() -> SimulationResults:
     return make_sim_results(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0, discharge_kwh=100.0)
 
 
-def _year_with_heat_pump() -> SimulationResults:
+def _year_with_additional_loads() -> SimulationResults:
+    """_year()'s run whose demand also holds a steady 0.1 kW of every additional LoadKind.
+
+    load_panels colours each load by its kind's chart role, so a kind added without a role in
+    the token file's chart section fails every case that draws this run.
+    """
     year = _year()
-    return dataclasses.replace(year, heat_pump_load=pd.Series(0.3, index=year.demand.index))
+    additional_loads = {
+        kind: pd.Series(0.1, index=year.demand.index) for kind in LoadKind if kind is not LoadKind.HOUSEHOLD
+    }
+    return dataclasses.replace(
+        year,
+        demand=year.demand + sum(additional_loads.values()),
+        additional_loads=additional_loads,
+    )
 
 
 def _fleet_year() -> FleetResults:
@@ -107,11 +120,12 @@ _SUMMARY = SummaryStatistics(
     self_consumption_ratio=0.5,
     grid_dependency_ratio=0.375,
     export_ratio=0.4,
-    simulation_days=1,
+    window=make_window(days=1),
     total_import_cost_gbp=0.0,
     total_export_revenue_gbp=0.0,
     net_cost_gbp=0.0,
     total_grid_charge_kwh=4.0,
+    load_energy_kwh={LoadKind.HOUSEHOLD: 80.0},
 )
 _SWEEP_POINTS = tuple(charts.SweepPoint(value, _SUMMARY) for value in (2.0, 4.0, 6.0))
 _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
@@ -162,7 +176,7 @@ _FIGURES: dict[str, _FigureCase] = {
     "monthly_summary": _FigureCase(charts.monthly_summary, lambda build: (build(_year()),)),
     "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: (build(_year(), make_home_config()),)),
     "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: (build(_year()),)),
-    "heat_pump_analysis": _FigureCase(charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())),
+    "load_panels": _FigureCase(charts.load_panels, lambda build: build(_year_with_additional_loads())),
     "comparison_bar_chart": _FigureCase(charts.comparison_bar_chart, lambda build: (build(_five_home_runs()),)),
     "comparison_radar": _FigureCase(
         charts.comparison_radar, lambda build: (build(_four_home_runs_and_a_fleet_run()),)
@@ -182,7 +196,7 @@ _FIGURES: dict[str, _FigureCase] = {
     "home_results_tabs": _FigureCase(
         charts.home_results_tabs,
         lambda build: _panels_of(
-            build(make_home_config(battery_config=_TEN_KWH_BATTERY), _year_with_heat_pump(), _SUMMARY)
+            build(make_home_config(battery_config=_TEN_KWH_BATTERY), _year_with_additional_loads(), _SUMMARY)
         ),
     ),
     "fleet_results_tabs": _FigureCase(

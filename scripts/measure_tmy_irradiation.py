@@ -6,9 +6,9 @@ docs/tmy-irradiation-scaling.md records what this prints. From the repository ro
     uv run --locked --extra dev python scripts/measure_tmy_irradiation.py
 
 For each of seven UK sites it fetches PVGIS's TMY and the hourly series of its climate
-years from the release get_tmy_data uses, so it needs network access to PVGIS; it takes
+years from the release PvgisTmy uses, so it needs network access to PVGIS; it takes
 about two to three minutes. It simulates PVConfig.default_4kw() over every real year and
-over three versions of the TMY: raw, scaled as get_tmy_data scales it, and scaled month
+over three versions of the TMY: raw, scaled as PvgisTmy scales it, and scaled month
 by month, the rejected alternative. tests/unit/test_measurement_scripts.py runs measure
 offline on synthetic weather; the PVGIS fetches and the full run are not part of the test
 suite.
@@ -81,7 +81,7 @@ class SiteMeasurement:
 
 
 def fetch_tmy(location: Location) -> tuple[pd.DataFrame, dict[int, int]]:
-    """PVGIS's TMY requested with get_tmy_data's PVGIS_TMY_REQUEST, and the real year each month comes from."""
+    """PVGIS's TMY requested with PvgisTmy's PVGIS_TMY_REQUEST, and the real year each month comes from."""
     tmy, meta = get_pvgis_tmy(latitude=location.latitude, longitude=location.longitude, **PVGIS_TMY_REQUEST)
     return tmy, {selected["month"]: selected["year"] for selected in meta["months_selected"]}
 
