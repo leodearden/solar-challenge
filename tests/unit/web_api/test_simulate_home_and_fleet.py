@@ -12,11 +12,12 @@ from flask.testing import FlaskClient
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
-from solar_challenge.location import parse_location
+from solar_challenge.location import Location, parse_location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_heat_pump_block, parse_location_block
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
+from solar_challenge.web.simulation_params import HOME_CONFIG_KEYS
 from tests._heat_pump_block_refusals import UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
@@ -55,6 +56,10 @@ def home_page_consumption_bounds(client: FlaskClient) -> tuple[float, float]:
         if attributes.get("id") == "consumption_kwh"
     ]
     return float(consumption_input["min"]), float(consumption_input["max"])
+
+
+#: The two ways a form body's top-level field reads as not sent: null, and "" (a cleared input).
+UNSENT_VALUES = (pytest.param(None, id="null"), pytest.param("", id="empty-string"))
 
 
 class TestSimulateHomeAPI:
@@ -329,6 +334,42 @@ class TestSimulateHomeAPI:
         resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "name": chr(0xD800)})
 
         assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_home_job.assert_not_called()
+
+    @pytest.mark.parametrize("unsent", UNSENT_VALUES)
+    @pytest.mark.parametrize("field", sorted(HOME_CONFIG_KEYS))
+    def test_a_field_sent_as_null_or_empty_text_queues_the_run_a_body_without_it_queues(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, field: str, unsent: object
+    ) -> None:
+        """Every recognised home field sent as null or "" reads as not sent: the run queued is the one the same body without the field queues."""
+        base = {"pv_kw": 4, "days": 1}
+        without = {key: value for key, value in base.items() if key != field}
+
+        sent = client.post("/api/simulate/home", json={**base, field: unsent})
+        left_out = client.post("/api/simulate/home", json=without)
+
+        assert (sent.status_code, left_out.status_code) == (201, 201), (sent.get_json(), left_out.get_json())
+        with_unsent, without_field = mock_job_manager.submit_home_job.call_args_list
+        assert with_unsent.kwargs == without_field.kwargs
+
+    def test_a_null_location_queues_a_home_at_bristol(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A location sent as null is not sent, so the home queued is at Bristol."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "location": None})
+
+        assert resp.status_code == 201, resp.get_json()
+        assert mock_job_manager.submit_home_job.call_args.kwargs["config"].location == Location.bristol()
+
+    @pytest.mark.parametrize("unsent", UNSENT_VALUES)
+    def test_an_unrecognised_key_sent_as_null_or_empty_text_returns_400_naming_it_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, unsent: object
+    ) -> None:
+        """The presence rule applies to recognised keys only: an unrecognised key is refused by name whatever it holds."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "period_days": unsent})
+
+        assert resp.status_code == 400
+        assert "Unrecognised home config keys: 'period_days';" in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
 
 
