@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """PV system configuration and modelling."""
 
-import contextlib
 import functools
 import math
 import warnings
@@ -746,19 +745,6 @@ def _adjust_bracket(template: Mapping[str, float], coefficient: float) -> tuple[
     return 100 - half_width, 100 + half_width
 
 
-@contextlib.contextmanager
-def _quiet_single_diode_solver() -> Iterator[None]:
-    """Ignore the RuntimeWarning "invalid value encountered" from scipy's _chandrupatla, which pvlib's single-diode solution runs to find the maximum-power point: on a curve with no power, such as a dark hour's or that of a module with none at STC, it divides 0 by 0, yet still finds that curve's maximum power."""
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="invalid value encountered",
-            category=RuntimeWarning,
-            module=r"scipy\.optimize\._chandrupatla",
-        )
-        yield
-
-
 def _modelled_gamma(module_params: Mapping[str, float]) -> float:
     """The module's temperature coefficient of maximum power, per K, as the model chain models it.
 
@@ -768,12 +754,23 @@ def _modelled_gamma(module_params: Mapping[str, float]) -> float:
     is not above 0 W has no temperature coefficient of maximum power, so the result is
     NaN, never a division by 0; _require_adjust_reaches refuses that NaN as it refuses
     any NaN end.
+
+    Such a module makes scipy's _chandrupatla, which pvlib's single-diode solution runs to
+    find the maximum-power point, divide 0 by 0, so this solve ignores the "invalid value
+    encountered" RuntimeWarning that raises; the module's refusal is PVConfig's, through
+    that NaN.
     """
     cell_temperatures_c = 25.0 + _GAMMA_HALF_STEP_K * np.array([-1.0, 0.0, 1.0])
     diode = PVSystem(module_parameters=dict(module_params)).calcparams_cec(
         np.full(3, 1000.0), cell_temperatures_c
     )
-    with _quiet_single_diode_solver():
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="invalid value encountered",
+            category=RuntimeWarning,
+            module=r"scipy\.optimize\._chandrupatla",
+        )
         p_cold, p_stc, p_hot = pvlib.pvsystem.singlediode(*diode)["p_mp"]
     if not p_stc > 0:
         return math.nan
