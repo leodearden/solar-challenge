@@ -1241,37 +1241,6 @@ def calculate_degradation_factor(
     return max(0.0, factor)
 
 
-def apply_degradation(
-    generation: pd.Series,
-    system_age_years: float,
-    degradation_rate_per_year: float = 0.005,
-) -> pd.Series:
-    """Apply degradation factor to PV generation time series.
-
-    simulate_pv_output and create_model_chain already apply a PVConfig's ageing
-    to each array's DC power, so applying this to their output for an aged
-    PVConfig ages the array twice.
-
-    Args:
-        generation: PV generation time series in kW
-        system_age_years: Age of the PV system in years
-        degradation_rate_per_year: Annual degradation rate as decimal
-            (default 0.005 = 0.5%/year)
-
-    Returns:
-        Degraded generation series (same index, reduced values)
-
-    Example:
-        >>> import pandas as pd
-        >>> gen = pd.Series([1.0, 2.0, 3.0])
-        >>> degraded = apply_degradation(gen, system_age_years=10)
-        >>> degraded.equals(gen * 0.95)
-        True
-    """
-    factor = calculate_degradation_factor(system_age_years, degradation_rate_per_year)
-    return generation * factor
-
-
 def interpolate_to_minute_resolution(
     hourly_power: pd.Series,
 ) -> pd.Series:

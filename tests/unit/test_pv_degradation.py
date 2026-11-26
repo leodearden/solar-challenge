@@ -1,13 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for PV ageing: calculate_degradation_factor's 1 - age x rate, floored at zero, and apply_degradation's scaling of a generation series by it."""
+"""Tests for PV ageing: calculate_degradation_factor's 1 - age x rate, floored at zero."""
 
 import math
 
-import numpy as np
-import pandas as pd
 import pytest
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.pv import PVConfig, apply_degradation, calculate_degradation_factor
+from solar_challenge.pv import PVConfig, calculate_degradation_factor
 
 
 class TestDegradationFactor:
@@ -97,38 +95,13 @@ class TestDegradationFactor:
         assert factor == 0.0
 
 
-class TestApplyDegradation:
-    """Test applying degradation to generation series."""
+class TestApplyDegradationIsRetired:
+    """Ageing has one home: neither the package nor solar_challenge.pv serves apply_degradation, the AC-side derate that aged simulate_pv_output's output twice."""
 
-    @pytest.fixture
-    def sample_generation(self) -> pd.Series:
-        """Sample generation data."""
-        index = pd.date_range("2024-06-21 10:00", periods=5, freq="1h")
-        return pd.Series([1.0, 2.0, 3.0, 2.0, 1.0], index=index, name="generation_kw")
-
-    def test_year_zero_no_change(self, sample_generation):
-        """Year 0 degradation doesn't change values."""
-        degraded = apply_degradation(sample_generation, system_age_years=0)
-        assert (degraded == sample_generation).all()
-
-    def test_year_ten_reduces_by_five_percent(self, sample_generation):
-        """Year 10 reduces generation by 5% (default rate)."""
-        degraded = apply_degradation(sample_generation, system_age_years=10)
-        expected = sample_generation * 0.95
-        assert np.allclose(degraded.values, expected.values)
-
-    def test_preserves_index(self, sample_generation):
-        """Degradation preserves the series index."""
-        degraded = apply_degradation(sample_generation, system_age_years=5)
-        assert (degraded.index == sample_generation.index).all()
-
-    def test_custom_rate(self, sample_generation):
-        """Custom degradation rate applied correctly."""
-        # 2% per year, year 5 = 10% loss = 90% remaining
-        degraded = apply_degradation(
-            sample_generation,
-            system_age_years=5,
-            degradation_rate_per_year=0.02
-        )
-        expected = sample_generation * 0.90
-        assert np.allclose(degraded.values, expected.values)
+    @pytest.mark.parametrize(
+        "module",
+        [pytest.param("solar_challenge", id="the-package"), pytest.param("solar_challenge.pv", id="pv")],
+    )
+    def test_importing_apply_degradation_raises_import_error(self, module: str) -> None:
+        with pytest.raises(ImportError, match="cannot import name 'apply_degradation'"):
+            exec(f"from {module} import apply_degradation", {})

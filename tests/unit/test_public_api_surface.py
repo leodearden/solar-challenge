@@ -147,7 +147,6 @@ FROZEN_SURFACE: dict[str, str] = {
     "simulate_pv_output": "(config: PVConfig, location: Location, weather_data: DataFrame) -> Series",
     "create_model_chain": "(config: PVConfig, location: Location) -> ModelChain",
     "create_pv_system": "(config: PVConfig) -> PVSystem",
-    "apply_degradation": "(generation: Series, system_age_years: float, degradation_rate_per_year: float = 0.005) -> Series",
     "calculate_degradation_factor": "(system_age_years: float, degradation_rate_per_year: float = 0.005) -> float",
     "interpolate_to_minute_resolution": "(hourly_power: Series) -> Series",
     # --- weather (weather.py) ---
