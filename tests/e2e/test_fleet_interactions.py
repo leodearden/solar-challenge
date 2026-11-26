@@ -605,10 +605,10 @@ def test_fleet_load_preset_fills_the_form_and_names_what_it_did_not_load(
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 
-def test_fleet_load_preset_that_shows_the_battery_again_while_the_browser_renders_no_frame_throws_no_error(
+def test_fleet_load_preset_that_re_enables_the_battery_while_the_browser_renders_no_frame_throws_no_error(
     page: Page, live_server: str, page_errors: list[str]
 ) -> None:
-    """Load Preset right after Enable Battery is unchecked shows the battery again without an error, even when the browser renders no animation frame."""
+    """Load Preset right after Enable Battery is unchecked re-enables the battery without an error, even when the browser renders no animation frame."""
     withhold_animation_frames(page)
     record_fetches_started_and_handled(page)
     page.goto(live_server + "/simulate/fleet")
