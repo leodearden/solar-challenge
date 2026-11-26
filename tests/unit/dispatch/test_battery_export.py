@@ -28,17 +28,16 @@ from solar_challenge.dispatch import (
     DispatchDecision,
     DispatchStrategy,
     GridChargeConfig,
-    GridChargeContext,
     PeakShavingStrategy,
     ScheduledChargeStrategy,
     SelfConsumptionStrategy,
-    StepLimits,
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
-from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._exporting_strategy import ExportingStrategy
 from tests._fixed_decision_strategy import FixedDecisionStrategy
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
@@ -281,55 +280,6 @@ class TestAStepThatAsksForNoExportBooksNone:
         assert result.grid_export == 0.0
 
 
-class _ExportingStrategy(DispatchStrategy):
-    """Test double: inside its hours it covers each step's shortfall and exports all the headroom its battery's discharge limit leaves; outside them its base decides."""
-
-    def __init__(self, base: DispatchStrategy, hours: range, battery: BatteryConfig) -> None:
-        self._base = base
-        self._hours = hours
-        self._battery = battery
-
-    @property
-    def name(self) -> str:
-        """Return its base's name, exporting."""
-        return f"exporting({self._base.name})"
-
-    @property
-    def charges_from_the_grid(self) -> bool:
-        """Whether its base charges from the grid: it only adds export."""
-        return self._base.charges_from_the_grid
-
-    def decide_action(
-        self,
-        timestamp: datetime,
-        generation_kw: float,
-        demand_kw: float,
-        battery_soc_kwh: float,
-        battery_capacity_kwh: float,
-        timestep_minutes: float,
-        *,
-        grid_charge_ctx: Optional[GridChargeContext] = None,
-    ) -> DispatchDecision:
-        """Inside its hours, the step's shortfall and its whole export limit; else its base's decision."""
-        if timestamp.hour in self._hours:
-            limits = StepLimits.for_step(
-                generation_kw,
-                demand_kw,
-                max_charge_kw=self._battery.max_charge_kw,
-                max_discharge_kw=self._battery.max_discharge_kw,
-            )
-            return DispatchDecision(0.0, limits.shortfall_kw, 0.0, limits.max_export_kw)
-        return self._base.decide_action(
-            timestamp=timestamp,
-            generation_kw=generation_kw,
-            demand_kw=demand_kw,
-            battery_soc_kwh=battery_soc_kwh,
-            battery_capacity_kwh=battery_capacity_kwh,
-            timestep_minutes=timestep_minutes,
-            grid_charge_ctx=grid_charge_ctx,
-        )
-
-
 _EXPORT_HOURS = range(17, 19)
 
 
@@ -373,7 +323,7 @@ def _exporting_run(day_id: str) -> SimulationResults:
     """_HOME on _HOME_DAYS[day_id] under _BASE_HOLDING_FOR_THE_PEAK, exporting all it may from 17:00 to 19:00, simulated once for every test that reads it."""
     assert _HOME.battery_config is not None
     return _simulated(
-        _HOME, day_id, _ExportingStrategy(_BASE_HOLDING_FOR_THE_PEAK, _EXPORT_HOURS, _HOME.battery_config)
+        _HOME, day_id, ExportingStrategy(_BASE_HOLDING_FOR_THE_PEAK, _EXPORT_HOURS, _HOME.battery_config)
     )
 
 
@@ -427,6 +377,23 @@ class TestAnExportingRun:
     def test_the_totals_carry_the_export(self, day_id: str) -> None:
         assert "battery_export_kwh" in _exporting_run(day_id).total_amounts()
 
+    @pytest.mark.parametrize("day_id", list(_HOME_DAYS))
+    def test_the_summary_totals_the_export(self, day_id: str) -> None:
+        results = _exporting_run(day_id)
+        summary = calculate_summary(results)
+        assert summary.total_battery_export_kwh == results.window.energy_kwh(_battery_export_kw(results))
+        assert summary.total_battery_export_kwh <= summary.total_battery_discharge_kwh
+        assert summary.total_battery_export_kwh <= summary.total_grid_export_kwh
+
+    @pytest.mark.parametrize("day_id", list(_HOME_DAYS))
+    def test_the_direct_use_of_pv_is_that_of_the_run_that_does_not_export(self, day_id: str) -> None:
+        """The home uses its PV directly whatever its battery does, so only the battery's discharge to the home is taken from its self-consumption."""
+        exporting = calculate_summary(_exporting_run(day_id))
+        not_exporting = calculate_summary(_no_export_run("self_consumption", day_id))
+        assert exporting.total_direct_self_consumption_kwh == pytest.approx(
+            not_exporting.total_direct_self_consumption_kwh, abs=1e-9
+        )
+
 
 @functools.cache
 def _no_export_run(dispatch_id: str, day_id: str) -> SimulationResults:
@@ -456,3 +423,7 @@ class TestARunThatAsksForNoExportHasNoExportSeries:
     @pytest.mark.parametrize(("dispatch_id", "day_id"), NO_EXPORT_RUNS)
     def test_the_totals_have_no_export(self, dispatch_id: str, day_id: str) -> None:
         assert "battery_export_kwh" not in _no_export_run(dispatch_id, day_id).total_amounts()
+
+    @pytest.mark.parametrize(("dispatch_id", "day_id"), NO_EXPORT_RUNS)
+    def test_the_summary_has_no_export(self, dispatch_id: str, day_id: str) -> None:
+        assert calculate_summary(_no_export_run(dispatch_id, day_id)).total_battery_export_kwh == 0.0

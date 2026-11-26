@@ -1469,9 +1469,54 @@ class TestSummaryStatistics:
         assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
         assert f"total_battery_discharge_kwh={discharge_kwh!r}" in message
         assert f"total_self_consumption_kwh={self_consumption_kwh!r}" in message
+        assert "total_battery_export_kwh=0.0" in message
 
     def test_a_discharge_that_is_all_of_its_self_consumption_is_accepted_with_no_direct_use(self) -> None:
         summary = home_summary(total_battery_discharge_kwh=60.0, total_self_consumption_kwh=60.0)
+
+        assert summary.total_direct_self_consumption_kwh == 0.0
+
+    @pytest.mark.parametrize(
+        ("export_kwh", "discharge_kwh", "grid_export_kwh"),
+        [
+            pytest.param(9.0, 8.0, 40.0, id="above-the-discharge"),
+            pytest.param(5.0, 8.0, 4.0, id="above-the-grid-export"),
+            pytest.param(-1.0, 8.0, 40.0, id="negative"),
+            pytest.param(float("nan"), 8.0, 40.0, id="not-a-number"),
+        ],
+    )
+    def test_a_battery_export_that_is_not_a_part_of_both_the_discharge_and_the_grid_export_is_refused_naming_the_three_totals(
+        self, export_kwh: float, discharge_kwh: float, grid_export_kwh: float
+    ) -> None:
+        with pytest.raises(ValueError) as refused:
+            home_summary(
+                total_battery_export_kwh=export_kwh,
+                total_battery_discharge_kwh=discharge_kwh,
+                total_grid_export_kwh=grid_export_kwh,
+            )
+
+        message = str(refused.value)
+        assert "total_battery_export_kwh is a part of both total_battery_discharge_kwh and total_grid_export_kwh" in message
+        assert f"total_battery_export_kwh={export_kwh!r}" in message
+        assert f"total_battery_discharge_kwh={discharge_kwh!r}" in message
+        assert f"total_grid_export_kwh={grid_export_kwh!r}" in message
+
+    def test_a_discharge_above_its_self_consumption_and_export_is_refused_naming_the_three_totals(self) -> None:
+        with pytest.raises(ValueError) as refused:
+            home_summary(
+                total_battery_discharge_kwh=8.0, total_battery_export_kwh=1.0, total_self_consumption_kwh=6.0
+            )
+
+        message = str(refused.value)
+        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert "total_battery_discharge_kwh=8.0" in message
+        assert "total_self_consumption_kwh=6.0" in message
+        assert "total_battery_export_kwh=1.0" in message
+
+    def test_a_discharge_that_is_all_of_its_self_consumption_and_export_is_accepted_with_no_direct_use(self) -> None:
+        summary = home_summary(
+            total_battery_discharge_kwh=70.0, total_battery_export_kwh=10.0, total_self_consumption_kwh=60.0
+        )
 
         assert summary.total_direct_self_consumption_kwh == 0.0
 

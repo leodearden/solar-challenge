@@ -9,7 +9,8 @@ import pytest
 from pvlib.pvsystem import PVSystem
 
 from solar_challenge import pv
-from solar_challenge.home import SimulationResults
+from solar_challenge.dispatch import TOUOptimizedStrategy
+from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
 from solar_challenge.pv import (
     PVConfig,
     create_pv_system,
@@ -30,7 +31,10 @@ from solar_challenge.validation import (
     validate_self_consumption_with_battery,
     validate_simulation,
 )
+from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._exporting_strategy import ExportingStrategy
 from tests._pv_modules import default_module_beyond_every_mppt_window, pvwatts_300_w_module
+from tests._synthetic_weather import sunless_weather, weather_for
 
 
 def _create_minute_index(days: int = 7) -> pd.DatetimeIndex:
@@ -973,6 +977,29 @@ class TestValidateSimulation:
         assert str(exc_info.value) == (
             f"battery_capacity_kwh must be {requirement}, got {battery_capacity_kwh!r}"
         )
+
+    def test_a_run_whose_battery_exports_is_validated_against_its_summary(self) -> None:
+        """docs/prds/event-dispatch-and-battery-sizing.md §5.1: the bristol-arbitrage home, without grid charging, holds its battery for a 16:00 to 20:00 peak and exports from it from 17:00 to 19:00 on a sunless 2024-01-15."""
+        arbitrage_home = bristol_arbitrage_home()
+        assert arbitrage_home.battery_config is not None
+        battery = dataclasses.replace(arbitrage_home.battery_config, grid_charging=None)
+        home = dataclasses.replace(arbitrage_home, battery_config=battery)
+        results = simulate_home(
+            home,
+            pd.Timestamp("2024-01-15"),
+            pd.Timestamp("2024-01-15"),
+            weather=weather_for(home, sunless_weather("2024-01-15", temp_air=5.0)),
+            strategy=ExportingStrategy(TOUOptimizedStrategy([(16, 20)]), range(17, 19), battery),
+        )
+        assert results.battery_export is not None and results.battery_export.gt(0).any()
+
+        report = validate_simulation(
+            results, home.pv_config, battery_capacity_kwh=battery.capacity_kwh, target_annual_consumption_kwh=3400
+        )
+
+        assert isinstance(report, ValidationReport)
+        (benchmark,) = [r for r in report.results if r.check_name == "battery_self_consumption_benchmark"]
+        assert benchmark.value == calculate_summary(results).self_consumption_ratio * 100
 
     def test_the_pv_checks_use_the_wired_dc_of_the_pv_config_given(self) -> None:
         """Per the 1.0 kWp of four 250 W modules: 800 kWh/kWp, and a 1.1 kW peak limit."""
