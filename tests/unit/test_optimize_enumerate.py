@@ -16,6 +16,7 @@ from solar_challenge.dispatch import (
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import FlatGridServices
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.optimize import ConfigPoint, enumerate_configs
@@ -40,7 +41,7 @@ def _make_fleet_base(n_homes: int = 3) -> ScenarioConfig:
         standing_charge_pence_per_day=60.0,
         own_use_rate_pence_per_kwh=18.5,
         retained_cash_floor_per_home_per_year_gbp=50.0,
-        grid_services_income_per_kw_per_year_gbp=12.0,
+        grid_services_model=FlatGridServices(12.0),
     )
     homes = [
         HomeConfig(
@@ -187,7 +188,7 @@ class TestEnumerateContract:
         assert sc.finance is not None
         assert sc.finance.own_use_rate_pence_per_kwh == pytest.approx(18.5)
         assert sc.finance.retained_cash_floor_per_home_per_year_gbp == pytest.approx(50.0)
-        assert sc.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(12.0)
+        assert sc.finance.grid_services_model == FlatGridServices(12.0)
 
     def test_scenario_level_fields_preserved(self) -> None:
         """name, period, seg_tariff_pence_per_kwh are preserved in every scenario."""

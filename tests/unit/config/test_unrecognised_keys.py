@@ -1055,24 +1055,23 @@ class TestScenarioFileBlockKeys:
                 "parse_finance_config",
                 {
                     "standing_charge_pence_per_day": 60.0,
-                    "grid_services_model": "capacity_at_events",
-                    "grid_services_events": {"band": "central", "events": []},
+                    "grid_services_model": {"type": "capacity_at_events", "band": "central", "events": []},
                 },
-                "finance.grid_services_events",
+                "finance.grid_services_model",
                 "events",
-                id="grid_services_events",
+                id="grid_services_model",
             ),
             pytest.param(
                 "parse_finance_config",
                 {
                     "standing_charge_pence_per_day": 60.0,
-                    "grid_services_model": "capacity_at_events",
-                    "grid_services_events": {
+                    "grid_services_model": {
+                        "type": "capacity_at_events",
                         "band": "central",
                         "event_windows": [_EVENT_WINDOW, {**_EVENT_WINDOW, "duration": 2}],
                     },
                 },
-                "finance.grid_services_events.event_windows[1]",
+                "finance.grid_services_model.event_windows[1]",
                 "duration",
                 id="event_window",
             ),
@@ -1255,21 +1254,19 @@ class TestScenarioFileBlockKeys:
                 "parse_finance_config",
                 {
                     "standing_charge_pence_per_day": 60.0,
-                    "grid_services_model": "capacity_at_events",
-                    "grid_services_events": "central",
+                    "grid_services_model": ["capacity_at_events"],
                 },
-                "finance.grid_services_events",
-                "str",
-                id="grid_services_events",
+                "finance.grid_services_model",
+                "list",
+                id="grid_services_model",
             ),
             pytest.param(
                 "parse_finance_config",
                 {
                     "standing_charge_pence_per_day": 60.0,
-                    "grid_services_model": "capacity_at_events",
-                    "grid_services_events": {"band": "central", "event_windows": ["winter"]},
+                    "grid_services_model": {"type": "capacity_at_events", "band": "central", "event_windows": ["winter"]},
                 },
-                "finance.grid_services_events.event_windows[0]",
+                "finance.grid_services_model.event_windows[0]",
                 "str",
                 id="event_window",
             ),
@@ -1280,14 +1277,13 @@ class TestScenarioFileBlockKeys:
                         **_SCENARIO,
                         "finance": {
                             "standing_charge_pence_per_day": 60.0,
-                            "grid_services_model": "capacity_at_events",
-                            "grid_services_events": "central",
+                            "grid_services_model": 5,
                         },
                     }
                 },
-                "scenario.finance.grid_services_events",
-                "str",
-                id="scenario-grid_services_events",
+                "scenario.finance.grid_services_model",
+                "int",
+                id="scenario-grid_services_model",
             ),
             pytest.param(
                 "load_community_config", {"community": "p2p"}, "community", "str", id="community"
@@ -1313,7 +1309,7 @@ class TestScenarioFileBlockKeys:
             "altitude": 80.0,
             "name": "Midlands",
         }
-        grid_services_events: dict[str, Any] = {
+        events_block: dict[str, Any] = {
             "band": "high",
             "event_windows": [self._EVENT_WINDOW],
             "aggregator_share": 0.1,
@@ -1339,9 +1335,7 @@ class TestScenarioFileBlockKeys:
             "asset_life_years": 25,
             "own_use_rate_pence_per_kwh": 12.0,
             "retained_cash_floor_per_home_per_year_gbp": 30.0,
-            "grid_services_income_per_kw_per_year_gbp": 0.0,
-            "grid_services_model": "capacity_at_events",
-            "grid_services_events": grid_services_events,
+            "grid_services_model": {"type": "capacity_at_events", **events_block},
         }
         document = {
             **_SCENARIO,
@@ -1354,7 +1348,7 @@ class TestScenarioFileBlockKeys:
 
         expected_events = GridServicesEventsConfig(
             **{
-                **grid_services_events,
+                **events_block,
                 "event_windows": (
                     EventWindow(
                         months=(12, 1, 2),
@@ -1372,7 +1366,7 @@ class TestScenarioFileBlockKeys:
         )
         assert scenario.seg_tariff_pence_per_kwh == 5.5
         assert scenario.finance == FinanceConfig(
-            **{**finance, "grid_services_events": expected_events}
+            **{**finance, "grid_services_model": expected_events}
         )
 
         def read_scenario_with(key: str) -> Callable[[Any], object]:

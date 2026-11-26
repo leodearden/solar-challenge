@@ -23,6 +23,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig, householder_bill
 from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.gridservices import FlatGridServices, NoGridServices
 from solar_challenge.home import HomeConfig, RunPricing, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.projection import (
     YearPoint,
@@ -119,7 +120,7 @@ class TestProjectMultiYearRevenue:
         scenario, finance = make_scenario_and_finance(
             n_homes=n_homes, asset_life_years=5, battery_config=bat_config
         )
-        finance = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=grid_services_rate)
+        finance = dataclasses.replace(finance, grid_services_model=FlatGridServices(grid_services_rate))
 
         # Synthetic fleet results with no grid_charge_cost
         fr_bat = make_fleet_results(homes=scenario.homes, self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
@@ -333,7 +334,7 @@ class TestSimulateMustReturnTheFleetsBatteries:
         """The homes fitted with *batteries*, two with _BATTERY by default, and a finance paying £12 per kW of battery discharge power per year."""
         _, finance = make_scenario_and_finance(asset_life_years=5)
         scenario = make_scenario_of(self._homes_with(*batteries))
-        return scenario, dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=12.0)
+        return scenario, dataclasses.replace(finance, grid_services_model=FlatGridServices(12.0))
 
     @staticmethod
     def _battery_less(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
@@ -421,8 +422,8 @@ class TestSimulateMustReturnTheFleetsBatteries:
         no state of health while each age asks for its own.
         """
         scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=5, battery_config=self._BATTERY)
-        assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, "premise: no grid services by default"
-        flat = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=12.0)
+        assert finance.grid_services_model == NoGridServices(), "premise: no grid services by default"
+        flat = dataclasses.replace(finance, grid_services_model=FlatGridServices(12.0))
         answer = make_fleet_results(homes=scenario.homes, self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
 
         def year_0_revenue_gbp(priced: FinanceConfig) -> float:
@@ -551,7 +552,7 @@ class TestGridChargeEnergyPaidOnce:
         fleet = self._fleet()
         summaries = [calculate_summary(r) for r in fleet.per_home_results]
         assert all(s.total_export_revenue_gbp == 0.0 for s in summaries), "premise: no SEG"
-        assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, "premise: no grid services"
+        assert finance.grid_services_model == NoGridServices(), "premise: no grid services"
 
         own_use_kwh = sum(s.total_demand_kwh - s.total_grid_import_kwh for s in summaries)
         own_use_gbp = finance.own_use_rate_pence_per_kwh * own_use_kwh / 100.0
