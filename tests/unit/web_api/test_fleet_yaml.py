@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the fleet page's scenario-file endpoints, POST /api/fleet/export-yaml, POST /api/fleet/import-yaml and GET /api/fleet/presets/<name>, and for its Load Preset menu, which offers the presets GET /api/fleet/presets/<name> loads."""
 
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import NonCallableMagicMock
 
@@ -9,6 +10,7 @@ import yaml
 
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
 from solar_challenge.config import load_scenario, parse_scenario
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
@@ -16,6 +18,12 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import parse_fleet_distribution_config
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, TariffConfig
+from tests._default_pv_pool_fleet import (
+    DEFAULT_PV_POOL_FLEET_FORM,
+    DEFAULT_PV_POOL_FLEET_HOMES,
+    DEFAULT_PV_POOL_FLEET_YAML,
+)
+from tests._error_records import error_records
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
@@ -585,3 +593,27 @@ class TestFleetPagePresetMenu:
 
         assert loadable, "no built-in scenario file loads, so the menu's choice goes untested"
         assert offered == loadable
+
+
+@pytest.mark.parametrize(
+    "send",
+    [
+        pytest.param(lambda client: client.post("/api/fleet/export-yaml", json=DEFAULT_PV_POOL_FLEET_FORM), id="export"),
+        pytest.param(
+            lambda client: client.post(
+                "/api/fleet/import-yaml", data=DEFAULT_PV_POOL_FLEET_YAML, content_type="text/yaml"
+            ),
+            id="import",
+        ),
+    ],
+)
+def test_the_fleet_pages_default_pv_pool_with_200_homes_is_answered_400_naming_the_pool(
+    client: FlaskClient, caplog: pytest.LogCaptureFixture, send: Callable[[FlaskClient], TestResponse]
+) -> None:
+    """Row R4: the pool holds 100 values for 200 homes, a refusal, not a defect."""
+    response = send(client)
+
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert "pv.capacity_kw" in error and str(DEFAULT_PV_POOL_FLEET_HOMES) in error, error
+    assert error_records(caplog) == []

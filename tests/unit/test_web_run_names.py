@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.run_names: is_run_name and require_run_name, what can name a run."""
+"""Tests for solar_challenge.web.run_names: is_run_name, require_run_name and read_run_name, what can name a run."""
 
 import re
 
 import pytest
 
-from solar_challenge.web.run_names import is_run_name, require_run_name
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.web.run_names import is_run_name, read_run_name, require_run_name
 
 _RUN_NAMES = ("North Roof", " North Roof ")
 _RUN_NAME_IDS = ("a-name", "a-name-between-spaces")
@@ -22,8 +23,25 @@ def test_a_name_holding_a_character_other_than_whitespace_is_required_unchanged(
 def test_a_name_that_is_no_string_or_holds_only_whitespace_is_refused_naming_the_field_and_the_value(
     name: object,
 ) -> None:
-    with pytest.raises(ValueError, match="^" + re.escape(f"name is {name!r}")):
+    with pytest.raises(ValueError, match="^" + re.escape(f"name is {name!r}")) as refusal:
         require_run_name(name)
+
+    assert type(refusal.value) is ValueError, "a stored row that breaks contract C7 is a defect, not a request refusal"
+
+
+@pytest.mark.parametrize("name", _RUN_NAMES, ids=_RUN_NAME_IDS)
+def test_a_requests_name_holding_a_character_other_than_whitespace_is_read_unchanged(name: str) -> None:
+    assert read_run_name(name) == name
+
+
+@pytest.mark.parametrize("name", _NOT_RUN_NAMES, ids=_NOT_RUN_NAME_IDS)
+def test_a_requests_name_that_names_no_run_is_refused_as_require_run_name_refuses_it(name: object) -> None:
+    with pytest.raises(ValueError) as expected:
+        require_run_name(name)
+    with pytest.raises(ConfigurationError) as refusal:
+        read_run_name(name)
+
+    assert str(refusal.value) == str(expected.value)
 
 
 @pytest.mark.parametrize(

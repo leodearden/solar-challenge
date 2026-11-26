@@ -10,6 +10,7 @@ import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
     FleetDistributionConfig,
     parse_fleet_distribution_config,
@@ -97,7 +98,7 @@ class TestFleetConfigHelpers:
         self,
     ) -> None:
         """A preview of a type the distribution editor does not offer is refused naming type, the field that carries it, and the type sent."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             sample_distribution("bogus", {})
         assert str(exc_info.value) == (
             "type must be one of normal, uniform, weighted_discrete, shuffled_pool, got 'bogus'"
@@ -147,7 +148,7 @@ class TestFleetConfigHelpers:
         self, dist_type: str, params: dict, message: str
     ) -> None:
         """A preview never runs fleet_distribution.py's grammar, so params without a parameter or the rows its type is drawn from, left out or null, are refused naming the field under params, not drawn with an invented default."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             sample_distribution(dist_type, params, 3)
         assert str(exc_info.value) == message
 
@@ -196,7 +197,7 @@ class TestFleetConfigHelpers:
         self, dist_type: str, params: object, message: str
     ) -> None:
         """Params that are not a mapping, a row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
-        with pytest.raises(ValueError, match=re.escape(message)):
+        with pytest.raises(ConfigurationError, match=re.escape(message)):
             sample_distribution(dist_type, params)
 
     @pytest.mark.parametrize(
@@ -212,7 +213,7 @@ class TestFleetConfigHelpers:
         self, n_samples: object
     ) -> None:
         """An n_samples that is not a finite number, a boolean included, is refused, naming n_samples and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
         assert str(exc_info.value) == f"n_samples must be a finite number, got {n_samples!r}"
 
@@ -228,7 +229,7 @@ class TestFleetConfigHelpers:
         self, n_samples: object
     ) -> None:
         """An n_samples with a fractional part is refused, not truncated, naming n_samples and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             sample_distribution("normal", {"mean": 4.0, "std": 1.0}, n_samples)
         assert str(exc_info.value) == f"n_samples must be a whole number, got {n_samples!r}"
 
@@ -246,7 +247,7 @@ class TestFleetConfigHelpers:
     ) -> None:
         """An n_samples below 1 or above the dashboard's fleet limit is refused, naming n_samples, the range and the value sent."""
         with pytest.raises(
-            ValueError,
+            ConfigurationError,
             match=re.escape(
                 f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {n_samples!r}"
             ),
@@ -300,7 +301,7 @@ class TestFleetConfigHelpers:
         self, count: float, message: str
     ) -> None:
         """A preview refuses a shuffled_pool count that is not a whole number, a fraction included, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent; it refuses a count that takes the pool's total above that limit, naming the total."""
-        with pytest.raises(ValueError, match=re.escape(message)):
+        with pytest.raises(ConfigurationError, match=re.escape(message)):
             sample_distribution(
                 "shuffled_pool",
                 {"entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}]},
@@ -351,7 +352,7 @@ class TestFleetConfigHelpers:
         self, dist_type: str, params: dict, message: str
     ) -> None:
         """A preview's malformed row list, row or count is refused naming its field under params, the distribution the preview reads."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             sample_distribution(dist_type, params, 3)
         assert str(exc_info.value) == message
 
@@ -407,7 +408,7 @@ class TestFleetConfigHelpers:
         self, dist_type: str, params: Callable[[object], dict], field: str, value: object
     ) -> None:
         """A preview's params number that is not a finite number, a boolean included, is refused naming its field under params and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             sample_distribution(dist_type, params(value), 3)
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
@@ -438,7 +439,7 @@ class TestFleetConfigHelpers:
         self, dist_type: str, params: dict, sample: float
     ) -> None:
         """A preview whose finite params draw a sample a float cannot hold is refused naming params and that sample."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             sample_distribution(dist_type, params, 100)
         assert str(exc_info.value) == (
             f"params must draw samples that are finite numbers, got a sample of {sample!r}"
@@ -526,7 +527,7 @@ class TestFleetConfigHelpers:
         self, key: str, value: object, type_name: str
     ) -> None:
         """A pv/battery/load block that is neither null nor a mapping, a falsy one included, is refused, naming the block and the type sent."""
-        with pytest.raises(ValueError, match=re.escape(f"{key} must be a mapping, got {type_name}")):
+        with pytest.raises(ConfigurationError, match=re.escape(f"{key} must be a mapping, got {type_name}")):
             form_to_fleet_distribution_config({**valid_distribution_form(), key: value})
 
     @pytest.mark.parametrize(
@@ -599,7 +600,7 @@ class TestFleetConfigHelpers:
         self, block: str, primary_field: str, value: dict
     ) -> None:
         """A pv/battery/load block with a type, itself a distribution, is refused whatever else it holds, naming its type and the field its distribution goes in."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             form_to_fleet_distribution_config({**valid_distribution_form(), block: value})
         assert str(exc_info.value) == (
             f"{block}.type must be absent: the {block} block's distribution goes in "
@@ -675,7 +676,7 @@ class TestFleetConfigHelpers:
         self, spec: dict, message: str
     ) -> None:
         """A weighted_discrete/shuffled_pool row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
-        with pytest.raises(ValueError, match=re.escape(message)):
+        with pytest.raises(ConfigurationError, match=re.escape(message)):
             form_to_fleet_distribution_config(
                 {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
             )
@@ -765,7 +766,7 @@ class TestFleetConfigHelpers:
         self, patch: dict, message: str
     ) -> None:
         """A row's value, weight or count is one of the grammar's parallel lists, so a row cannot leave one out: a row without one is refused naming the row and the row sent, not given a default."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
         assert str(exc_info.value) == message
 
@@ -871,7 +872,7 @@ class TestFleetConfigHelpers:
         self, patch: dict, message: str
     ) -> None:
         """A malformed row list or row is refused naming its distribution's field."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
         assert str(exc_info.value) == message
 
@@ -997,7 +998,7 @@ class TestFleetConfigHelpers:
     ) -> None:
         """A battery block's own dispatch_strategy, any value but null, is refused naming it and the fleet's dispatch_strategy, which every battery takes."""
         form = valid_distribution_form()
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             form_to_fleet_distribution_config(
                 {**form, "battery": {**form["battery"], "dispatch_strategy": strategy}}
             )
@@ -1179,7 +1180,7 @@ class TestFleetConfigHelpers:
         self, spec: object
     ) -> None:
         """A boolean, which fleet_distribution.py's grammar reads as 1 or 0 but the editor never sends as a number, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
-        with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
+        with pytest.raises(ConfigurationError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 
     @pytest.mark.parametrize(
@@ -1196,7 +1197,7 @@ class TestFleetConfigHelpers:
     ) -> None:
         """A type that is not a string, one that cannot be hashed included, is refused as a type the editor has no form for, naming its path and the spec sent; distribution_grammar_spec passes such a type as sent, for the grammar to refuse."""
         spec = {"type": dist_type, "mean": 5.0, "std": 2.0, "min": 0.0, "max": 8.0}
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
         assert str(exc_info.value) == (
             "fleet_distribution.pv.capacity_kw must be a fixed value or one of the fleet page's "
@@ -1216,7 +1217,7 @@ class TestFleetConfigHelpers:
         self, spec: dict
     ) -> None:
         """A fixed distribution without a value, or whose value is a boolean or not a finite number, is refused naming its value's path and the value sent, not read as some default."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
         assert str(exc_info.value) == (
             "fleet_distribution.battery.capacity_kwh.value must be a finite number, "
@@ -1249,7 +1250,7 @@ class TestFleetConfigHelpers:
 
     def test_distribution_form_spec_refuses_a_number_too_large_for_a_float_naming_it(self) -> None:
         """A scenario's number too large for a float is refused naming its path and the value, not raised as an OverflowError."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             distribution_form_spec(
                 {"type": "uniform", "min": 10**400, "max": 8.0}, "fleet_distribution.pv.capacity_kw"
             )
@@ -1263,7 +1264,7 @@ class TestFleetConfigHelpers:
     ) -> None:
         """A shuffled_pool count above MAX_FLEET_HOMES or below 0 is refused naming its counts[i] path and the value sent."""
         spec = {"type": "shuffled_pool", "values": [4.0, 5.0], "counts": [1, count]}
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
         assert str(exc_info.value) == (
             "fleet_distribution.pv.capacity_kw.counts[1] "
@@ -1275,7 +1276,7 @@ class TestFleetConfigHelpers:
     ) -> None:
         """Counts that each fit but total MAX_FLEET_HOMES + 1 are refused naming the pool's path and the total."""
         spec = {"type": "shuffled_pool", "values": [4.0, 5.0], "counts": [MAX_FLEET_HOMES, 1]}
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
         assert str(exc_info.value) == (
             "fleet_distribution.pv.capacity_kw "
@@ -1447,7 +1448,7 @@ class TestDistributionGrammarSpec:
         self, distribution: dict, message: str
     ) -> None:
         """A row's value and its weight or count each go in one of the grammar's parallel lists, so a row without one is refused naming the row and the row sent."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             distribution_grammar_spec(distribution, _FIELDS)
         assert str(exc_info.value) == message
 
@@ -1483,7 +1484,7 @@ class TestDistributionGrammarSpec:
         self, distribution: dict, message: str
     ) -> None:
         """The rows become the grammar's values list and their column's list, so a distribution that also sends either list is refused naming the rows' field and the list, rather than the rows overwriting it."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             distribution_grammar_spec(distribution, _FIELDS)
         assert str(exc_info.value) == message
 
@@ -1506,7 +1507,7 @@ class TestDistributionGrammarSpec:
         self, distribution: dict, message: str
     ) -> None:
         """Each refusal names the field the form sends the refused key in, here the scenario builder's flat fields for a PV distribution, with a row's index under its row list's field."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             distribution_grammar_spec(distribution, _BUILDER_PV_FIELDS)
         assert str(exc_info.value) == message
 
@@ -1542,7 +1543,7 @@ class TestRefuseAFleetTheDashboardCannotRun:
     ) -> None:
         """A fleet of MAX_FLEET_HOMES + 1 homes is refused naming n_homes under *path*, the range and the size."""
         fleet = self._fleet(n_homes=MAX_FLEET_HOMES + 1)
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             fleet_config.refuse_a_fleet_the_dashboard_cannot_run(fleet, path)
         assert str(exc_info.value) == (
             f"{field} must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
@@ -1557,7 +1558,7 @@ class TestRefuseAFleetTheDashboardCannotRun:
         self, path: str, field: str, seed: int
     ) -> None:
         """A seed beyond MAX_FLEET_SEED, positive or negative, which the page's JavaScript number cannot hold exactly, is refused naming seed under *path*, the range and the seed."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             fleet_config.refuse_a_fleet_the_dashboard_cannot_run(self._fleet(seed=seed), path)
         assert str(exc_info.value) == (
             f"{field} must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, got {seed}"

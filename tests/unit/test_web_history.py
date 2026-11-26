@@ -39,6 +39,7 @@ from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_TYPES
 
 from tests._dashboard_databases import write_database_at_schema_version
+from tests._error_records import error_records
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import chart_figures, element_attributes, element_count, texts, texts_after
 from tests._plotly_figure import annotation_texts, traces_by_name
@@ -298,13 +299,17 @@ class TestRunsAPI:
             (row["id"], row["total_generation_kwh"], row["self_consumption_ratio"], row["results_url"]) for row in rows
         ] == [("fleet-run", summary.total_generation_kwh, summary.fleet_self_consumption_ratio, "/results/fleet-run")]
 
-    def test_a_type_that_is_no_run_type_is_refused_naming_it_and_each_run_type(self, client: FlaskClient) -> None:
-        """?type=sweep answers 400 rather than a list of no runs."""
-        response = client.get("/api/history/runs?type=sweep")
+    @pytest.mark.parametrize("run_type", ["sweep", "bogus"])
+    def test_a_type_that_is_no_run_type_is_refused_naming_it_and_each_run_type(
+        self, client: FlaskClient, caplog: pytest.LogCaptureFixture, run_type: str
+    ) -> None:
+        """?type=sweep answers 400 rather than a list of no runs; the refusal is no defect, so nothing is logged at ERROR."""
+        response = client.get("/api/history/runs", query_string={"type": run_type})
 
         assert response.status_code == 400
         error = response.get_json()["error"]
-        assert [name for name in ("sweep", *RUN_TYPES) if repr(name) not in error] == [], error
+        assert [name for name in (run_type, *RUN_TYPES) if repr(name) not in error] == [], error
+        assert error_records(caplog) == []
 
     @pytest.mark.parametrize(
         ("parameter", "value"),
@@ -316,18 +321,20 @@ class TestRunsAPI:
             pytest.param("sort", "evil", id="sort-evil"),
             pytest.param("order", "sideways", id="order-sideways"),
             pytest.param("date_from", "not-a-date", id="date-from-not-a-date"),
+            pytest.param("date_from", "x", id="date-from-x"),
             pytest.param("date_to", "not-a-date", id="date-to-not-a-date"),
         ],
     )
     def test_a_query_value_no_page_answers_is_refused_naming_its_parameter_and_the_value_sent(
-        self, client: FlaskClient, parameter: str, value: str
+        self, client: FlaskClient, caplog: pytest.LogCaptureFixture, parameter: str, value: str
     ) -> None:
-        """The value is refused with 400, not clamped into range or replaced by the parameter's default."""
+        """The value is refused with 400, not clamped into range or replaced by the parameter's default; the refusal is no defect, so nothing is logged at ERROR."""
         response = client.get("/api/history/runs", query_string={parameter: value})
 
         assert response.status_code == 400
         error = response.get_json()["error"]
         assert parameter in error and value in error, error
+        assert error_records(caplog) == []
 
     def test_a_run_whose_summary_does_not_decode_lists_no_figures_beside_the_others_and_a_warning_names_it(
         self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
@@ -655,15 +662,16 @@ class TestPatchAPI:
         ids=["empty", "null", "spaces", "empty-beside-notes"],
     )
     def test_api_patch_of_a_null_or_blank_name_is_400_naming_name_and_writes_no_label(
-        self, app: Flask, client: FlaskClient, body: dict[str, str | None]
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture, body: dict[str, str | None]
     ) -> None:
-        """A run's name is never NULL or blank, so the run keeps its name, and the notes given beside it are not written."""
+        """A run's name is never NULL or blank, so the run keeps its name, and the notes given beside it are not written; the refusal is no defect, so nothing is logged at ERROR."""
         _insert_test_run(app, run_id="keep-my-name", name="Old Name")
 
         response = client.patch("/api/history/runs/keep-my-name", json=body)
 
         assert response.status_code == 400
         assert response.get_json()["error"].startswith("name is ")
+        assert error_records(caplog) == []
         run = client.get("/api/history/runs/keep-my-name").get_json()
         assert (run["name"], run["notes"]) == ("Old Name", None)
 

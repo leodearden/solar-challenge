@@ -77,20 +77,26 @@ def read_iso_date(value: Any, field: str) -> date:
     """Read *value*, the setting named *field*, as an ISO 8601 calendar date (``YYYY-MM-DD``).
 
     Raises:
-        ValueError: If *value* is not a string date.fromisoformat reads; the
+        ConfigurationError: If *value* is not a string date.fromisoformat reads; the
             error names *field* and the value.
     """
+    if not isinstance(value, str):
+        raise _not_an_iso_date(value, field)
     try:
         return date.fromisoformat(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}") from exc
+    except ValueError as exc:
+        raise _not_an_iso_date(value, field) from exc
+
+
+def _not_an_iso_date(value: object, field: str) -> ConfigurationError:
+    return ConfigurationError.must_be(field, "an ISO 8601 date (YYYY-MM-DD)", got=value)
 
 
 def _read_date(value: Any, field: str, default: date) -> date:
     """Read a request body's ``field`` as an ISO 8601 calendar date; *value* is None for a date not sent, which reads as ``default``.
 
     Raises:
-        ValueError: From :func:`read_iso_date`, for a value that is not an ISO
+        ConfigurationError: From :func:`read_iso_date`, for a value that is not an ISO
             8601 date, naming the field and the value sent.
     """
     if value is None:
@@ -103,13 +109,13 @@ def refuse_reversed_or_overlong_window(
 ) -> None:
     """Refuse a window that ends before it starts or spans more than MAX_WINDOW_DAYS days, naming *start_field* and *end_field*."""
     if end < start:
-        raise ValueError(
+        raise ConfigurationError(
             f"{end_field} must not be before {start_field}, "
             f"got {start_field} '{start}' and {end_field} '{end}'"
         )
     span = (end - start).days + 1
     if span > MAX_WINDOW_DAYS:
-        raise ValueError(
+        raise ConfigurationError(
             f"{start_field} to {end_field} must span at most {MAX_WINDOW_DAYS} days, "
             f"got {start_field} '{start}' and {end_field} '{end}', {span:,} days"
         )
@@ -131,7 +137,7 @@ def _refuse_days_with_dates(days: Any, dates: Mapping[str, Any]) -> None:
     """Refuse a *days* sent with any of *dates*: days and start/end are two ways to set one window, so a body may send only one."""
     if days is not None and dates:
         named = " and ".join(f"{field} {value!r}" for field, value in dates.items())
-        raise ValueError(f"days must not be sent with start or end, got days {days!r} with {named}")
+        raise ConfigurationError(f"days must not be sent with start or end, got days {days!r} with {named}")
 
 
 def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
@@ -163,7 +169,7 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
         Tuple of ``(start, end)`` as ``"YYYY-MM-DD"`` strings, ``end`` inclusive.
 
     Raises:
-        ValueError: If ``days`` is sent with a start or end, naming days and
+        ConfigurationError: If ``days`` is sent with a start or end, naming days and
             each of them as sent; if ``days`` is not a whole number from 1 to
             MAX_DAYS, or if ``start`` or ``end`` is not an ISO 8601
             date, naming the field and the value sent; or if the window ends
@@ -197,13 +203,10 @@ def with_default_days(data: Mapping[str, Any], days: int) -> dict[str, Any]:
 def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     """Read a request body's ``seg`` value with :func:`~solar_challenge.scenario_blocks.parse_seg_rate`'s grammar.
 
-    ``None`` means no SEG.  A value that grammar refuses raises ``ValueError``
-    carrying its message, the error every web caller answers with HTTP 400.
+    ``None`` means no SEG.  A value that grammar refuses raises its ``ConfigurationError``,
+    the refusal every web caller answers with HTTP 400.
     """
-    try:
-        rate = parse_seg_rate(seg_data)
-    except ConfigurationError as exc:
-        raise ValueError(str(exc)) from exc
+    rate = parse_seg_rate(seg_data)
     if rate is None:
         return None
     return SEGTariff(name="", rate_pence_per_kwh=rate)
@@ -241,7 +244,7 @@ def _read_efficiency(value: Any) -> float | None:
         return None
     efficiency_pct = as_finite_float(value, "efficiency_pct")
     if not (0 < efficiency_pct <= 100):
-        raise ValueError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
+        raise ConfigurationError(f"Efficiency must be between 0 and 100, got {efficiency_pct}")
     return efficiency_pct / 100
 
 
@@ -257,10 +260,7 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
     if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "discharge")) is not None:
         settings["max_discharge_kw"] = max_discharge_kw
     round_trip = _read_efficiency(params["efficiency_pct"])
-    try:
-        dispatch_strategy = parse_dispatch_strategy_config(params["dispatch_strategy"])
-    except ConfigurationError as exc:
-        raise ValueError(str(exc)) from exc
+    dispatch_strategy = parse_dispatch_strategy_config(params["dispatch_strategy"])
     if dispatch_strategy is not None:
         settings["dispatch_strategy"] = dispatch_strategy
     if has_battery(capacity_kwh, "battery_kwh"):
@@ -274,13 +274,13 @@ def _parse_heat_pump_block(data: object) -> HeatPumpConfig | None:
 
     The form sends ``type`` where config's YAML heat_pump block requires ``heat_pump_type``.
     ``None`` means no heat pump; any other value that is not a mapping raises
-    ``ValueError`` naming ``heat_pump`` and the type received. Each number must be
+    ``ConfigurationError`` naming ``heat_pump`` and the type received. Each number must be
     finite, refused naming it as ``heat_pump.<key>``.
     """
     if data is None:
         return None
     if not isinstance(data, Mapping):
-        raise ValueError(f"heat_pump must be a mapping, got {type(data).__name__}")
+        raise ConfigurationError(f"heat_pump must be a mapping, got {type(data).__name__}")
     return HeatPumpConfig(
         heat_pump_type=data.get("type", "ASHP"),
         thermal_capacity_kw=as_finite_float(
@@ -303,7 +303,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         when it sends none; the HomeConfig takes it, and is unnamed ("") when there is none.
 
     Raises:
-        ValueError: If *data* is not a JSON object (the error names the type
+        ConfigurationError: If *data* is not a JSON object (the error names the type
             received), if it has a top-level key outside the recognised set
             (the error names each such key), if a nested block (heat_pump,
             seg, tariff or dispatch_strategy) is neither null, which reads as
@@ -317,14 +317,16 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             pv_kw, battery_kwh or a sent consumption_kwh lies outside its
             fleet component's value_range, PV's, the battery's or the load's
             (the error names the field, the range and the value sent), or if
-            required fields are missing or invalid. The battery
+            required fields are missing or invalid; a seg, tariff or
+            dispatch_strategy block its grammar refuses raises that
+            grammar's own refusal. The battery
             settings (max_charge_kw, max_discharge_kw, efficiency_pct and
             dispatch_strategy) are read, and refused, whatever battery_kwh
             is; a null setting reads as unset. A null system_losses also
             reads as unset, leaving PVConfig's default. An azimuth, tilt,
             system_age_years, degradation_rate_per_year or system_losses
             that is not a finite number in PVConfig's range raises
-            PVConfig's own refusal, a ConfigurationError, naming it. A name
+            PVConfig's own refusal, naming it. A name
             sent as text holding a lone surrogate is refused with
             require_encodable_text's refusal, naming name; a name that is
             not text is not checked here.
@@ -375,10 +377,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     heat_pump_config = _parse_heat_pump_block(params["heat_pump"])
 
     # Build optional tariff config
-    try:
-        tariff_config = parse_tariff_config(params["tariff"])
-    except ConfigurationError as exc:
-        raise ValueError(str(exc)) from exc
+    tariff_config = parse_tariff_config(params["tariff"])
 
     seg_tariff = parse_seg_tariff(params["seg"])
 

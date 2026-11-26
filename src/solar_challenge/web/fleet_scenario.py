@@ -50,9 +50,6 @@ _FLEET_FORM_KEYS: frozenset[str] = (
     | {"name", "location", "tariff", "dispatch_strategy", "seg"}
 )
 
-#: The exceptions this module's readers raise for a fleet form or scenario they refuse, each naming why.
-FLEET_FORM_REFUSALS: tuple[type[Exception], ...] = (ValueError, TypeError, ConfigurationError)
-
 
 @dataclass(frozen=True)
 class ParsedFleetForm:
@@ -102,13 +99,13 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     message.
 
     Raises:
-        ValueError: For a top-level key the fleet form does not have, naming each one and
+        ConfigurationError: For a top-level key the fleet form does not have, naming each one and
             listing the fleet form's keys.
-        ValueError: For a name sent as text holding a lone surrogate, require_encodable_text's
+        ConfigurationError: For a name sent as text holding a lone surrogate, require_encodable_text's
             refusal naming name.
-        ValueError, TypeError, ConfigurationError: From the readers of the form's
-            distributions, location, dispatch strategy and window, read in that order, a
-            date that does not parse included.
+        ConfigurationError: From the readers of the form's distributions, location,
+            dispatch strategy and window, read in that order, a date that does not parse
+            included.
         ConfigurationError: From read_fleet_scenario, for a tariff, SEG or fleet the
             scenario grammar refuses.
         ConfigurationError: From refuse_a_fleet_the_dashboard_cannot_run, for a fleet the
@@ -149,8 +146,8 @@ def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
     """The fleet scenario document the fleet *form* describes, which load_scenario reads back as its homes and dates: :func:`parse_fleet_form`'s.
 
     Raises:
-        ValueError, TypeError, ConfigurationError: As :func:`parse_fleet_form`, for a form
-            whose simulation is refused.
+        ConfigurationError: As :func:`parse_fleet_form`, for a form whose simulation is
+            refused.
     """
     return parse_fleet_form(form).scenario
 
@@ -215,14 +212,14 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     refused too.
 
     Raises:
-        ValueError: For a document that is not a fleet_distribution scenario, a period the
+        ConfigurationError: For a document that is not a fleet_distribution scenario, a period the
             page cannot run, or a setting the form needs but cannot hold exactly, naming it.
         ConfigurationError: From read_fleet_scenario, for a scenario it refuses, a
             fleet_distribution block fleet_distribution.py's grammar refuses included; from
             refuse_a_fleet_the_dashboard_cannot_run, for a fleet size or seed the page cannot
             run, naming it.
-        ValueError, TypeError, ConfigurationError: From parse_fleet_form, for a form the page
-            could not run, a refusal found only while generating its homes included.
+        ConfigurationError: From parse_fleet_form, for a form the page could not run, a
+            refusal found only while generating its homes included.
     """
     scenario = _fleet_scenario(document)
     period = _read_period(scenario.get("period"))
@@ -248,13 +245,13 @@ def fleet_form_from_yaml(yaml_text: str) -> ImportedFleetForm:
     """The fleet form the fleet scenario YAML *yaml_text* describes, as :func:`fleet_form_from_scenario` reads its document.
 
     Raises:
-        ValueError: For text that does not parse as YAML, "Invalid YAML: " and the parser's error.
-        ValueError, TypeError, ConfigurationError: As fleet_form_from_scenario.
+        ConfigurationError: For text that does not parse as YAML, "Invalid YAML: " and the parser's error.
+        ConfigurationError: As fleet_form_from_scenario.
     """
     try:
         document = yaml.safe_load(yaml_text)
     except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid YAML: {exc}") from exc
+        raise ConfigurationError(f"Invalid YAML: {exc}") from exc
     return fleet_form_from_scenario(document)
 
 
@@ -270,18 +267,18 @@ def _fleet_scenario(document: object) -> dict[str, Any]:
     """*document*, which must be a scenario with a fleet_distribution block, the fleet the fleet page holds.
 
     Raises:
-        ValueError: For a document that is not a mapping or has no fleet_distribution block,
+        ConfigurationError: For a document that is not a mapping or has no fleet_distribution block,
             or a fleet_distribution block that is not a mapping.
     """
     if not isinstance(document, dict):
-        raise ValueError(f"A fleet scenario must be a mapping, got {type(document).__name__}")
+        raise ConfigurationError(f"A fleet scenario must be a mapping, got {type(document).__name__}")
     if "fleet_distribution" not in document:
-        raise ValueError(
+        raise ConfigurationError(
             "The scenario has no fleet_distribution block, the fleet the fleet page loads"
         )
     fleet = document["fleet_distribution"]
     if not isinstance(fleet, dict):
-        raise ValueError(f"fleet_distribution must be a mapping, got {type(fleet).__name__}")
+        raise ConfigurationError(f"fleet_distribution must be a mapping, got {type(fleet).__name__}")
     return document
 
 
@@ -318,14 +315,14 @@ def _read_period(period: Any) -> _BlockRead:
     """The fleet form's start and end dates: the scenario's period, none when it is absent or null.
 
     Raises:
-        ValueError: For a period that is not a mapping, or a date that is not a day,
+        ConfigurationError: For a period that is not a mapping, or a date that is not a day,
             naming it as period.start_date or period.end_date; or for a window the page
             cannot run, naming period.start_date and period.end_date.
     """
     if period is None:
         return {}, ()
     if not isinstance(period, Mapping):
-        raise ValueError(f"period must be a mapping, got {type(period).__name__}")
+        raise ConfigurationError(f"period must be a mapping, got {type(period).__name__}")
     start_path, end_path = "period.start_date", "period.end_date"
     start = _read_day(period.get("start_date"), start_path)
     end = _read_day(period.get("end_date"), end_path)
@@ -340,13 +337,13 @@ def _read_day(value: Any, path: str) -> date:
     A YAML timestamp is its day when it is that day's midnight with no time zone.
 
     Raises:
-        ValueError: For a timestamp with a time of day or a time zone, which the form's
+        ConfigurationError: For a timestamp with a time of day or a time zone, which the form's
             date fields cannot hold, or, from read_iso_date, any other value that is not
             an ISO 8601 date string, a missing one read as None included, naming *path*.
     """
     if isinstance(value, datetime):
         if value.tzinfo is not None or value.time() != time.min:
-            raise ValueError(
+            raise ConfigurationError(
                 f"{path} must be a day, got {value!r}: the fleet page's date fields hold "
                 "no time of day or time zone"
             )
@@ -367,7 +364,7 @@ def _read_fleet_distribution(fleet: Mapping[str, Any], parsed: FleetDistribution
     """The fleet form's fleet size, seed, distributions and dispatch strategy: the scenario's fleet_distribution block *fleet*, whose n_homes and seed are those the loaders read, *parsed*'s, a seed it leaves out none.
 
     Raises:
-        ValueError: From the readers of its distributions and dispatch strategy.
+        ConfigurationError: From the readers of its distributions and dispatch strategy.
     """
     path = "fleet_distribution"
     return _read_blocks(
@@ -389,7 +386,7 @@ def _read_component(
     """The fleet form's *component* block, its *distribution_key* distribution, read from the *path* fleet's.
 
     Raises:
-        ValueError: From distribution_form_spec, for a distribution the editor cannot hold,
+        ConfigurationError: From distribution_form_spec, for a distribution the editor cannot hold,
             an absent one included.
     """
     block_path = child_path(path, component)
@@ -407,7 +404,7 @@ def _read_battery(battery: Any, path: str) -> _BlockRead:
     tariff's clock loads none, and its path is named not loaded.
 
     Raises:
-        ValueError: From distribution_form_spec, for a capacity the editor cannot hold, or
+        ConfigurationError: From distribution_form_spec, for a capacity the editor cannot hold, or
             for a dispatch strategy the form cannot hold.
     """
     if battery is None:
@@ -432,10 +429,10 @@ def _required(value: Any, path: str) -> Any:
     """*value*, a setting the fleet page always sets.
 
     Raises:
-        ValueError: When the scenario leaves it out, naming *path*.
+        ConfigurationError: When the scenario leaves it out, naming *path*.
     """
     if value is None:
-        raise ValueError(f"{path} must be set: the fleet page always sets it")
+        raise ConfigurationError(f"{path} must be set: the fleet page always sets it")
     return value
 
 
@@ -457,10 +454,10 @@ def _one_peak_window(peak_hours: Any, path: str) -> list[list[Any]]:
     """*peak_hours* as the fleet form's one [start, end] peak window.
 
     Raises:
-        ValueError: For any other number of windows, naming *path*.
+        ConfigurationError: For any other number of windows, naming *path*.
     """
     if not isinstance(peak_hours, list) or len(peak_hours) != 1:
-        raise ValueError(
+        raise ConfigurationError(
             f"{path} must hold exactly one [start, end] window, the fleet page's one "
             f"peak window, got {peak_hours!r}"
         )
@@ -486,7 +483,7 @@ def _read_tariff(tariff: Any) -> _BlockRead:
     """The fleet form's tariff: the scenario's tariff block, none when it is absent or null.
 
     Raises:
-        ValueError: For a tariff the form cannot hold, naming its setting.
+        ConfigurationError: For a tariff the form cannot hold, naming its setting.
     """
     if tariff is None:
         return {}, ()
@@ -501,7 +498,7 @@ def _read_dispatch(dispatch: Any, path: str) -> _BlockRead:
     names *path* not loaded.
 
     Raises:
-        ValueError: For a dispatch strategy the form cannot hold, naming its setting.
+        ConfigurationError: For a dispatch strategy the form cannot hold, naming its setting.
     """
     if dispatch is None:
         return {}, ()
@@ -528,13 +525,13 @@ def _read_typed_block(
     """The *path* block, whose *type_key* names its type, as the fleet form holds it: its type and the settings *settings* reads for that type.
 
     Raises:
-        ValueError: For a type *settings* has no readers for, naming the block's *type_key*,
+        ConfigurationError: For a type *settings* has no readers for, naming the block's *type_key*,
             or from a setting's reader.
     """
     block_type = block[type_key]
     readers = settings.get(block_type)
     if readers is None:
-        raise ValueError(
+        raise ConfigurationError(
             f"{child_path(path, type_key)} must be one the fleet page holds "
             f"({', '.join(settings)}), got {block_type!r}"
         )

@@ -24,6 +24,8 @@ from solar_challenge.web.fleet_config import (
     sample_distribution,
 )
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
+from tests._default_pv_pool_fleet import DEFAULT_PV_POOL_FLEET_FORM, DEFAULT_PV_POOL_FLEET_HOMES
+from tests._error_records import error_records
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
@@ -1271,3 +1273,16 @@ class TestFleetFromDistribution:
         assert resp.status_code == 400
         assert "seg" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
+
+
+def test_the_fleet_pages_default_pv_pool_with_200_homes_is_answered_400_naming_the_pool(
+    client: FlaskClient, mock_job_manager: NonCallableMagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Row R4: the pool holds 100 values for 200 homes, a refusal, not a defect."""
+    response = client.post("/api/simulate/fleet-from-distribution", json=DEFAULT_PV_POOL_FLEET_FORM)
+
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert "pv.capacity_kw" in error and str(DEFAULT_PV_POOL_FLEET_HOMES) in error, error
+    assert error_records(caplog) == []
+    assert mock_job_manager.method_calls == []

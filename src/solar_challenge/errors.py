@@ -5,13 +5,21 @@ from typing import Self
 
 
 class ConfigurationError(ValueError):
-    """Raised for a value that an input type or the scenario grammar refuses; the message names the value and why.
+    """Raised for a value that an input type, the scenario grammar or a web request reader refuses; the message names the value and why.
 
     An input value object, such as a component config or the finance, grid-services or
     flexibility settings, raises it from its constructor for a value it is given; the
-    scenario grammar raises it for a scenario it refuses. A computed result whose own
-    invariant breaks, such as an EnergyFlowResult or a BillBreakdown, is a defect, not a
-    refusal, and raises plain ValueError.
+    scenario grammar raises it for a scenario it refuses; and the web's request readers,
+    solar_challenge.web.request_boundary and the form readers built on it, raise it for a
+    request they refuse. A computed result whose own invariant breaks, such as an
+    EnergyFlowResult or a BillBreakdown, is a defect, not a refusal, and raises plain
+    ValueError.
+
+    The web boundary answers a ConfigurationError as a refusal: HTTP 400, or the site's own
+    refusal answer. It gives any other ValueError the same answer, but
+    request_boundary.refusal_text first logs it at ERROR as a probable defect. Anything
+    else is not a refusal, and an /api view answers it HTTP 500 with a JSON body
+    (docs/prds/web-request-boundary.md §3, its reading of D2).
 
     It is a ValueError, so code that catches ValueError catches every refusal. A handler
     that treats a refusal apart from other ValueErrors names ConfigurationError before

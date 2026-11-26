@@ -29,7 +29,7 @@ from solar_challenge.web.fleet_config import (
     keys_the_editor_holds,
 )
 from solar_challenge.web.request_boundary import (
-    NotAJsonObject,
+    refusal_text,
     refuse_unrecognised_keys,
     require_json_object,
 )
@@ -86,7 +86,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
     as sent, for config.parse_scenario to refuse, as builder_form_errors reports.
 
     Raises:
-        ValueError: naming the form field at fault, for a form that is not an object, a
+        ConfigurationError: naming the form field at fault, for a form that is not an object, a
             key the builder does not send, a flat field that is not the number it should
             be, an unknown location preset, or a malformed distribution row.
     """
@@ -125,13 +125,13 @@ def builder_form_errors(form: object) -> list[str]:
     """
     try:
         form = require_json_object(form, _BUILDER_FORM)
-    except NotAJsonObject as refusal:
-        return [str(refusal)]
+    except ValueError as refusal:
+        return [refusal_text(refusal)]
     errors = _dashboard_limit_errors(_present_fields(form))
     try:
         document = scenario_from_builder_form(form)
-    except ValueError as exc:
-        return [*errors, str(exc)]
+    except ValueError as refusal:
+        return [*errors, refusal_text(refusal)]
     if _home_count_allowed(document["fleet_distribution"].get("n_homes")):
         errors.extend(_scenario_reader_errors(document))
     return errors
@@ -171,22 +171,25 @@ def _readable(
         return None
     try:
         return as_number(fields[key], key)
-    except ValueError:
+    except ConfigurationError:
         return None
 
 
 def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     """Why config.parse_scenario refuses *document*, judged in memory, as builder_form_errors lists the reader's reasons.
 
-    An accepted document has its homes' value_range reasons alone.  A refused one has the
-    reasons _fleet_reasons_beside gives beside its refusal.  The reader refuses a scenario
-    with ConfigurationError, or with ValueError from a config it builds; anything else it
-    raises is a defect in it, not a refusal, so it propagates.
+    An accepted document has its homes' value_range reasons alone.  One the reader refuses,
+    with a ConfigurationError, has the reasons _fleet_reasons_beside gives beside the
+    refusal.  Any other ValueError is a probable defect, not a refusal of one block, so it is
+    the one reason, which refusal_text logs once, and the reader is not asked again.
+    Anything else the reader raises is a defect, not a refusal, so it propagates.
     """
     try:
         scenario = parse_scenario(document)
-    except (ConfigurationError, ValueError) as refusal:
+    except ConfigurationError as refusal:
         return _fleet_reasons_beside(document, str(refusal))
+    except ValueError as defect:
+        return [refusal_text(defect)]
     return _range_errors(scenario)
 
 
@@ -201,8 +204,8 @@ def _fleet_reasons_beside(document: Mapping[str, Any], refusal: str) -> list[str
     """
     try:
         fleet = parse_scenario({**document, "period": None, "seg": None})
-    except (ConfigurationError, ValueError) as exc:
-        return [str(exc)]
+    except ValueError as refusal:
+        return [refusal_text(refusal)]
     return [*_range_errors(fleet), refusal]
 
 
@@ -222,7 +225,7 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
     one the form leaves out; scenario_blocks.parse_location_block reads it as any location: block.
 
     Raises:
-        ValueError: for any other preset, naming it, or for a custom coordinate that is
+        ConfigurationError: for any other preset, naming it, or for a custom coordinate that is
             not a finite number.
     """
     preset = fields["location_preset"]
@@ -230,7 +233,7 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
         return _present_numbers(fields, _CUSTOM_LOCATION_FORM_KEYS)
     if isinstance(preset, str) and preset in LOCATION_PRESETS:
         return location_block(LOCATION_PRESETS[preset])
-    raise ValueError(
+    raise ConfigurationError(
         f"location_preset must be 'custom' or one of "
         f"{', '.join(map(repr, LOCATION_PRESETS))}, got {preset!r}"
     )
@@ -254,7 +257,7 @@ def _component_block(fields: Mapping[str, Any], component: ComponentLimits) -> d
     distribution editor holds its type in (keys_the_editor_holds).
 
     Raises:
-        ValueError: From distribution_grammar_spec, for malformed rows, naming the
+        ConfigurationError: From distribution_grammar_spec, for malformed rows, naming the
             builder's field, or for a fixed value that is not a finite number.
     """
     distribution_fields = _distribution_fields(component)

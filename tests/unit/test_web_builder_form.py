@@ -16,10 +16,11 @@ from solar_challenge.config import load_fleet_config, parse_scenario, period_win
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.scenario_writer import scenario_yaml
+from solar_challenge.web import builder_form
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, ComponentLimits
 from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
-from solar_challenge.web.request_boundary import NotAJsonObject
+from tests._error_records import error_records
 from tests._fleet_form import valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS, whole_number_forms
@@ -61,12 +62,12 @@ class TestScenarioFromBuilderForm:
     def test_a_form_that_is_not_a_json_object_is_refused_naming_its_type(
         self, form: object, type_name: str
     ) -> None:
-        """The web's shared NotAJsonObject refuses it as the "Builder form".
+        """require_json_object refuses it as the "Builder form", with a ConfigurationError.
 
         Over HTTP this refusal is unreachable, because request_json_object refuses the
         body first, so this direct call is its only guard.
         """
-        with pytest.raises(NotAJsonObject) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             scenario_from_builder_form(form)
         assert str(exc_info.value) == f"Builder form must be a JSON object, got {type_name}"
 
@@ -87,7 +88,7 @@ class TestScenarioFromBuilderForm:
 
         *arm* is the rest of the form that makes the builder read *field*.
         """
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             scenario_from_builder_form({**_ACCEPTED_FORM, **arm, field: value})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
@@ -188,15 +189,21 @@ class TestScenarioFromBuilderForm:
         self, changes: dict[str, object], message: str
     ) -> None:
         """Each refusal of a distribution's shape is the fleet form's refusal of the same distribution, under the builder's field names: both forms' distributions are translated by one translator."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             scenario_from_builder_form({**_ACCEPTED_FORM, **changes})
         assert str(exc_info.value) == message
 
     def test_a_number_of_homes_with_a_fractional_part_is_refused_naming_it(self) -> None:
         """The number of homes with a fractional part is refused, not truncated."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             scenario_from_builder_form({**_ACCEPTED_FORM, "n_homes": 2.5})
         assert str(exc_info.value) == "n_homes must be a whole number, got 2.5"
+
+    def test_a_location_preset_that_is_neither_custom_nor_a_preset_is_refused_naming_it(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            scenario_from_builder_form({**_ACCEPTED_FORM, "location_preset": "atlantis"})
+        assert str(exc_info.value).startswith("location_preset must be 'custom' or one of ")
+        assert str(exc_info.value).endswith("got 'atlantis'")
 
     @pytest.mark.parametrize("value", WHOLE_NUMBER_FORMS)
     def test_a_number_of_homes_that_is_a_whole_number_in_another_form_is_the_int_it_equals(
@@ -264,9 +271,9 @@ class TestBuilderFormErrors:
 
     @pytest.mark.parametrize(("form", "type_name"), _FORMS_THAT_ARE_NOT_JSON_OBJECTS)
     def test_a_form_that_is_not_a_json_object_has_that_refusal_as_its_one_reason(
-        self, form: object, type_name: str
+        self, form: object, type_name: str, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The shared rule refuses it before the dashboard's limits read any field of it.
+        """The shared rule refuses it before the dashboard's limits read any field of it, and logs nothing: it is a refusal, not a defect.
 
         Over HTTP this is unreachable, because request_json_object refuses the body
         first, so this direct call is its only guard.
@@ -274,6 +281,51 @@ class TestBuilderFormErrors:
         assert builder_form_errors(form) == [
             f"Builder form must be a JSON object, got {type_name}"
         ]
+        assert error_records(caplog) == []
+
+    def test_a_value_error_from_the_reader_that_is_not_a_configuration_error_is_the_one_reason_logged_once_as_a_probable_defect(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The reader is not asked again for the fleet beside it, which would meet the defect, and log it, a second time."""
+        reads: list[object] = []
+
+        def parse_scenario_failing(document: Any) -> Any:
+            reads.append(document)
+            raise ValueError("probe")
+
+        monkeypatch.setattr(builder_form, "parse_scenario", parse_scenario_failing)
+
+        assert builder_form_errors(_ACCEPTED_FORM) == ["probe"]
+        assert len(reads) == 1
+        [record] = error_records(caplog)
+        assert "ValueError" in record.getMessage()
+
+    def test_a_value_error_that_is_not_a_configuration_error_from_the_fleet_read_beside_a_refusal_is_the_one_reason_logged_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The reader refuses the document, then fails reading its fleet with the period: and seg: blocks left null."""
+        reads: list[object] = []
+
+        def parse_scenario_refusing_then_failing(document: Any) -> Any:
+            reads.append(document)
+            if len(reads) == 1:
+                raise ConfigurationError("refusal")
+            raise ValueError("probe")
+
+        monkeypatch.setattr(builder_form, "parse_scenario", parse_scenario_refusing_then_failing)
+
+        assert builder_form_errors(_ACCEPTED_FORM) == ["probe"]
+        [record] = error_records(caplog)
+        assert "ValueError" in record.getMessage()
+
+    def test_a_type_error_from_the_reader_is_not_a_reason_and_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def parse_scenario_failing(document: Any) -> Any:
+            raise TypeError("probe")
+
+        monkeypatch.setattr(builder_form, "parse_scenario", parse_scenario_failing)
+
+        with pytest.raises(TypeError, match="probe"):
+            builder_form_errors(_ACCEPTED_FORM)
 
     @pytest.mark.parametrize(
         ("changes", "reason"),

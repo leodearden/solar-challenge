@@ -25,10 +25,10 @@ from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
 from solar_challenge.web.fleet_scenario import (
-    FLEET_FORM_REFUSALS,
     ImportedFleetForm,
     ParsedFleetForm,
     fleet_form_from_scenario,
+    fleet_form_from_yaml,
     parse_fleet_form,
     scenario_from_fleet_form,
 )
@@ -165,7 +165,7 @@ class TestParseFleetForm:
         The error lists the fleet form's keys: exactly the keys of
         _ANOTHER_VALUE_OF_EACH_FLEET_FORM_KEY, each of which the run and its scenario read.
         """
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_fleet_form(
                 {
                     **_FLEET_FORM,
@@ -246,7 +246,7 @@ class TestParseFleetForm:
         """The refusal names the form's own dispatch_strategy key, never fleet_distribution.battery.dispatch_strategy, whether or not a battery carries it."""
         with pytest.raises(ConfigurationError) as expected:
             parse_dispatch_strategy_config(value)
-        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form({**form, "dispatch_strategy": value})
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
@@ -255,17 +255,17 @@ class TestParseFleetFormName:
     """The name parse_fleet_form reads: refused when it is text that does not encode as UTF-8, before the fleet is read."""
 
     def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
-        with pytest.raises(ValueError) as expected:
+        with pytest.raises(ConfigurationError) as expected:
             require_encodable_text(chr(0xD800), "name")
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form({**_FLEET_FORM, "name": chr(0xD800)})
         assert str(refusal.value) == str(expected.value)
 
     def test_a_name_holding_a_lone_surrogate_is_refused_before_the_fleet_is_read(self) -> None:
         """A form whose pv distribution is refused too gets the name's refusal, so a refused name costs no home generation."""
-        with pytest.raises(ValueError) as expected:
+        with pytest.raises(ConfigurationError) as expected:
             require_encodable_text(chr(0xD800), "name")
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form({**_without(_FLEET_FORM, "pv"), "name": chr(0xD800)})
         assert str(refusal.value) == str(expected.value)
 
@@ -287,9 +287,9 @@ class TestParseFleetFormRefusalOrder:
         ungeneratable = {**form, "pv": {"capacity_kw": 0}}
         with pytest.raises(ConfigurationError, match="capacity_kw must be greater than 0"):
             parse_fleet_form(ungeneratable)
-        with pytest.raises(FLEET_FORM_REFUSALS) as expected:
+        with pytest.raises(ConfigurationError) as expected:
             parse_fleet_form({**form, key: value})
-        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form({**ungeneratable, key: value})
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
@@ -351,7 +351,7 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
         form = {**_FLEET_FORM, key: value, "battery": {"capacity_kwh": {"type": "uniform"}}}
         with pytest.raises(ConfigurationError) as expected:
             read_block()
-        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form(form)
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
@@ -363,7 +363,7 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
         form = {**_FLEET_FORM_WITHOUT_A_POOL, "n_homes": MAX_FLEET_HOMES + 1, key: value}
         with pytest.raises(ConfigurationError) as expected:
             read_block()
-        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form(form)
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
@@ -377,7 +377,7 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
             "premise: parse_scenario refuses the sweep naming its field"
         )
 
-        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form({**_FLEET_FORM, "battery": {"capacity_kwh": _A_SWEPT_BATTERY_CAPACITY}})
 
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
@@ -503,14 +503,14 @@ class TestScenarioFromFleetForm:
         A dispatch is checked even without a battery to carry it, as the simulate endpoint checks it.
         A fleet whose homes cannot be generated is refused too: load_fleet_config generates them.
         """
-        with pytest.raises((ValueError, ConfigurationError), match=reason):
+        with pytest.raises(ConfigurationError, match=reason):
             scenario_from_fleet_form(form)
 
     def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
         """No YAML is written for a name the simulate endpoint refuses."""
-        with pytest.raises(ValueError) as expected:
+        with pytest.raises(ConfigurationError) as expected:
             require_encodable_text(chr(0xD800), "name")
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             scenario_from_fleet_form({**_FLEET_FORM, "name": chr(0xD800)})
         assert str(refusal.value) == str(expected.value)
 
@@ -551,6 +551,15 @@ fleet_distribution:
 finance:
   standing_charge_pence_per_day: 60.0
 """
+
+
+class TestFleetFormFromYaml:
+    """fleet_form_from_yaml reads YAML text as fleet_form_from_scenario reads its document, and refuses text that is not YAML."""
+
+    def test_text_that_does_not_parse_as_yaml_is_refused_naming_the_parsers_error(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_yaml("name: [unclosed")
+        assert str(refusal.value).startswith("Invalid YAML: ")
 
 
 class TestFleetFormFromScenario:
@@ -692,9 +701,9 @@ class TestFleetFormFromScenario:
     def test_a_period_date_that_is_not_an_iso_date_is_refused_naming_it(
         self, key: str, value: object
     ) -> None:
-        """A period date that is neither a YAML date nor an ISO 8601 date string (YYYY-MM-DD) is refused with a ValueError naming it as period.<key> and the value as written; the other date is the round trip's."""
+        """A period date that is neither a YAML date nor an ISO 8601 date string (YYYY-MM-DD) is refused with a ConfigurationError naming it as period.<key> and the value as written; the other date is the round trip's."""
         period = {**_FLEET_SCENARIO["period"], key: value}
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
         assert str(exc_info.value) == f"period.{key} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
 
@@ -724,8 +733,8 @@ class TestFleetFormFromScenario:
     def test_a_period_the_page_cannot_run_is_refused_naming_start_date_and_end_date(
         self, period: dict[str, Any], message: str
     ) -> None:
-        """A period that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is refused with a ValueError naming the scenario's period.start_date and period.end_date as read."""
-        with pytest.raises(ValueError) as exc_info:
+        """A period that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is refused with a ConfigurationError naming the scenario's period.start_date and period.end_date as read."""
+        with pytest.raises(ConfigurationError) as exc_info:
             fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
         assert str(exc_info.value) == message
 
@@ -762,13 +771,13 @@ class TestFleetFormFromScenario:
         assert str(exc_info.value).startswith(f"fleet_distribution: {key} ")
 
     def test_a_seed_the_fleet_page_cannot_hold_exactly_is_refused_naming_it(self) -> None:
-        """A seed beyond MAX_FLEET_SEED is refused with a ValueError naming fleet_distribution.seed, the range and the value as written.
+        """A seed beyond MAX_FLEET_SEED is refused with a ConfigurationError naming fleet_distribution.seed, the range and the value as written.
 
         The fleet page holds the seed as a JavaScript number, which reads 2**53 + 1 as 2**53, so
         loading it would run another fleet than the scenario's.
         """
         seed = MAX_FLEET_SEED + 2
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             fleet_form_from_scenario(_with_fleet_distribution(seed=seed))
         assert str(exc_info.value) == (
             f"fleet_distribution.seed must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, "
@@ -776,14 +785,14 @@ class TestFleetFormFromScenario:
         )
 
     def test_a_fleet_size_above_max_fleet_homes_is_refused_by_the_dashboards_bound_naming_it(self) -> None:
-        """An n_homes the loaders accept but above the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written.
+        """An n_homes the loaders accept but above the dashboard's fleet limit is refused with a ConfigurationError naming fleet_distribution.n_homes, the range and the value as written.
 
         The battery's pool, sized to the scenario's 3 homes, becomes a fixed capacity, since the
         loaders' F6 would refuse it first.
         """
         n_homes = MAX_FLEET_HOMES + 1
         battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "capacity_kwh": 5.0}
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             fleet_form_from_scenario(_with_fleet_distribution(n_homes=n_homes, battery=battery))
         assert str(exc_info.value) == (
             f"fleet_distribution.n_homes must be between 1 and {MAX_FLEET_HOMES}, got {n_homes!r}"
@@ -988,7 +997,7 @@ class TestFleetFormFromScenario:
     )
     def test_a_scenario_the_form_cannot_hold_is_refused(self, document: object, reason: str) -> None:
         """A scenario whose fleet, period, tariff or dispatch the form cannot hold exactly is refused, naming the setting: loading it anyway would run a different fleet."""
-        with pytest.raises(ValueError, match=re.escape(reason)):
+        with pytest.raises(ConfigurationError, match=re.escape(reason)):
             fleet_form_from_scenario(document)
 
     def test_a_scenario_key_no_scenario_reads_is_refused_naming_it(self) -> None:
@@ -1033,9 +1042,9 @@ class TestFleetFormFromScenario:
         """YAML's \\u escape can write a lone surrogate into a scenario's name, and the page could not run that scenario's form, so the scenario is not loaded."""
         name = yaml.safe_load(r'"\ud800"')
         assert name == chr(0xD800), "premise: YAML reads the escape as a lone surrogate"
-        with pytest.raises(ValueError) as expected:
+        with pytest.raises(ConfigurationError) as expected:
             require_encodable_text(name, "name")
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             fleet_form_from_scenario({**_FLEET_SCENARIO, "name": name})
         assert str(refusal.value) == str(expected.value)
 
@@ -1097,7 +1106,7 @@ class TestFleetFormFromScenario:
             "periods": [{"start_time": "00:00", "end_time": "00:00", "rate_per_kwh": 0.25}],
         }
 
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             fleet_form_from_scenario({**ungeneratable, "tariff": custom_tariff})
 
         assert str(refusal.value) == (

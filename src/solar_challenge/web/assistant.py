@@ -28,6 +28,7 @@ from uuid import uuid4
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, session
 from flask.typing import ResponseReturnValue
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
 from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
@@ -48,7 +49,7 @@ from solar_challenge.web.fleet_components import (
     MAX_WINDOW_DAYS,
 )
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
+from solar_challenge.web.request_boundary import refusal_text, request_json_object
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import (
     CHAT_DELTA,
@@ -499,7 +500,9 @@ def run_home_simulation(
     Parses *params* with ``parse_home_config`` from
     ``solar_challenge.web.simulation_params``.
     Returns a graceful ``{"error": ...}`` dict when the params fail validation
-    or the job submission fails.  Never raises.
+    or the job submission fails.  It raises only what parse_home_config raises
+    that is not a ValueError: a defect, which the chat stream answers as a
+    failed frame.
 
     Args:
         params:      Flat parameters (pv_kw, battery_kwh, occupants,
@@ -513,14 +516,14 @@ def run_home_simulation(
 
     Returns:
         ``{"run_id": str, "results_url": str}`` on success, or
-        ``{"error": str}`` on failure.  Never raises.
+        ``{"error": str}`` on failure.
     """
     try:
         home_config, start_date, end_date, name = parse_home_config(
             with_default_days(params, _TRIGGER_TOOL_DEFAULT_DAYS)
         )
-    except (ValueError, TypeError) as exc:
-        return {"error": f"Invalid simulation parameters: {exc}"}
+    except ValueError as refusal:
+        return {"error": f"Invalid simulation parameters: {refusal_text(refusal)}"}
 
     try:
         _job_id, run_id = job_manager.submit_home_job(
@@ -544,7 +547,9 @@ def run_fleet_simulation(
     ``parse_home_config`` and repeating the resulting frozen ``HomeConfig``
     for each home.  An *n_homes* outside _FLEET_TOOL_SIZES, 1 to
     _FLEET_TOOL_MAX_HOMES, is refused, naming n_homes, its value and the bound,
-    to protect the single-worker JobManager.
+    to protect the single-worker JobManager.  It raises only what its readers
+    raise that is not a ValueError: a defect, which the chat stream answers as
+    a failed frame.
 
     Args:
         n_homes:     The number of homes in the fleet.
@@ -558,20 +563,20 @@ def run_fleet_simulation(
 
     Returns:
         ``{"run_id": str, "results_url": str}`` on success, or
-        ``{"error": str}`` on failure.  Never raises.
+        ``{"error": str}`` on failure.
     """
     try:
         fleet_size = as_whole_number(n_homes, "n_homes", _FLEET_TOOL_SIZES)
     except ValueError as refusal:
-        return {"error": str(refusal)}
+        return {"error": refusal_text(refusal)}
 
     # Validate once; if it fails, return early without submitting
     try:
         home_config_0, start_date, end_date, name = parse_home_config(
             with_default_days(params, _TRIGGER_TOOL_DEFAULT_DAYS)
         )
-    except (ValueError, TypeError) as exc:
-        return {"error": f"Invalid simulation parameters: {exc}"}
+    except ValueError as refusal:
+        return {"error": f"Invalid simulation parameters: {refusal_text(refusal)}"}
 
     # The fleet is homogeneous by design (docs/prds/web-ai-assistant.md §4,
     # "Fleet trigger scope"): every home gets the same parameters; fleets that
@@ -614,10 +619,10 @@ def _as_text(value: Any, field: str) -> str:
     """Return *value*, a text field as the model sent it, refusing one that is not a string.
 
     Raises:
-        ValueError: If *value* is not a str; the error names *field* and the value sent.
+        ConfigurationError: If *value* is not a str; the error names *field* and the value sent.
     """
     if not isinstance(value, str):
-        raise ValueError(f"{field} must be a string, got {value!r}")
+        raise ConfigurationError(f"{field} must be a string, got {value!r}")
     return value
 
 
@@ -637,14 +642,14 @@ class _Tool:
         """Return the result of the call that sent *tool_input*, run in *context*.
 
         Raises:
-            ValueError: When *tool_input* does not send a field the schema requires,
+            ConfigurationError: When *tool_input* does not send a field the schema requires,
                 naming each one it does not send, or when the run refuses a value
                 *tool_input* sends.
         """
         required = self.schema["input_schema"].get("required", ())
         unsent = [field_name for field_name in required if field_name not in tool_input]
         if unsent:
-            raise ValueError("; ".join(f"{field_name} is required" for field_name in unsent))
+            raise ConfigurationError("; ".join(f"{field_name} is required" for field_name in unsent))
         return self.run(tool_input, context)
 
 
@@ -930,7 +935,8 @@ def dispatch_tool(name: str, tool_input: Mapping[str, Any], context: ToolContext
     unknown *name*, and an input the tool refuses (a required field it does
     not send, or a value a field's reader refuses), come back as
     ``{"error": ...}`` naming the problem, so the model can correct its call.
-    Never raises.
+    It raises only what the tool raises that is not a ValueError: a defect,
+    which the chat stream answers as a failed frame.
     """
     tool = _TOOL_BY_NAME.get(name)
     if tool is None:
@@ -938,7 +944,7 @@ def dispatch_tool(name: str, tool_input: Mapping[str, Any], context: ToolContext
     try:
         return tool.answer(tool_input, context)
     except ValueError as refusal:
-        return {"error": str(refusal)}
+        return {"error": refusal_text(refusal)}
 
 
 def _session_id() -> str:
@@ -1360,8 +1366,8 @@ def chat() -> Response:
     """
     try:
         data = request_json_object()
-    except NotAJsonObject as refusal:
-        return _refused_turn(str(refusal))
+    except ValueError as refusal:
+        return _refused_turn(refusal_text(refusal))
     user_message: str = str(data.get("message", "")).strip()
     refusal_reason = _refusal(user_message)
     if refusal_reason is not None:

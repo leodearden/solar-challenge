@@ -39,6 +39,7 @@ from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_names
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
+from tests._error_records import error_records
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
 from tests._html_select_options import option_texts
@@ -1248,7 +1249,7 @@ class TestSweepChartRoute:
 
     @pytest.mark.parametrize(("body", "named"), _MALFORMED_SWEEP_CHART_BODIES)
     def test_a_malformed_body_is_refused_naming_the_field(
-        self, client: FlaskClient, body: object, named: list[str]
+        self, client: FlaskClient, caplog: pytest.LogCaptureFixture, body: object, named: list[str]
     ) -> None:
         response = client.post(_SWEEP_CHART_URL, json=body)
 
@@ -1256,3 +1257,4 @@ class TestSweepChartRoute:
         refusal = response.get_json()
         assert refusal == {"error": refusal["error"]}
         assert [text for text in named if text not in refusal["error"]] == [], refusal["error"]
+        assert error_records(caplog) == []

@@ -19,6 +19,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.number_fields import Interval, as_whole_number
 from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
+from solar_challenge.web import assistant
 from solar_challenge.web.assistant import (
     METRIC_TABLE,
     explain_metric,
@@ -32,9 +33,12 @@ from solar_challenge.web.database import Database
 from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
+from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
+from tests._error_records import error_records
+from tests._raising import raising
 from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_stores import empty_run_storage, run_storage_over
@@ -1085,6 +1089,62 @@ class TestRunFleetSimulation:
         with pytest.raises(ValueError) as refusal:
             require_encodable_text(chr(0xD800), "name")
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+
+
+_CARDIFF_PARAMS: dict[str, Any] = {"pv_kw": 4, "location": "cardiff"}
+"""Trigger-tool params whose location read_location refuses, and which send no window."""
+
+
+class TestTriggerToolsJudgeARefusalWithRefusalText:
+    """The trigger tools answer a ValueError their reader raises as an error, logging one that is not a ConfigurationError as a probable defect; anything else is not a refusal and propagates."""
+
+    def test_a_home_its_reader_refuses_is_answered_with_the_refusal_and_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        jm = autospecced_job_manager()
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_home_config(with_default_days(_CARDIFF_PARAMS, 7))
+        assert "cardiff" in str(refusal.value), "premise: the reader refuses the location"
+
+        result = run_home_simulation(_CARDIFF_PARAMS, jm, _results_url_for_test)
+
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+        assert jm.method_calls == []
+        assert error_records(caplog) == []
+
+    def test_a_fleet_its_reader_refuses_is_answered_with_the_refusal_and_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        jm = autospecced_job_manager()
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_home_config(with_default_days(_CARDIFF_PARAMS, 7))
+
+        result = run_fleet_simulation(2, _CARDIFF_PARAMS, jm, _results_url_for_test)
+
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+        assert jm.method_calls == []
+        assert error_records(caplog) == []
+
+    def test_a_value_error_that_is_not_a_configuration_error_is_answered_and_logged_as_a_probable_defect(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(assistant, "parse_home_config", raising(ValueError("probe")))
+        jm = autospecced_job_manager()
+
+        result = run_home_simulation({"pv_kw": 4}, jm, _results_url_for_test)
+
+        assert result == {"error": "Invalid simulation parameters: probe"}
+        assert jm.method_calls == []
+        [record] = error_records(caplog)
+        assert "ValueError" in record.getMessage()
+
+    def test_a_type_error_is_not_a_refusal_and_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(assistant, "parse_home_config", raising(TypeError("probe")))
+        jm = autospecced_job_manager()
+
+        with pytest.raises(TypeError, match="probe"):
+            run_home_simulation({"pv_kw": 4}, jm, _results_url_for_test)
+        assert jm.method_calls == []
 
 
 _REAL_JOB_DAYS = web_job_days(count=1)

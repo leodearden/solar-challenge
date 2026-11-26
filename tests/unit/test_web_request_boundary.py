@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys and text that encodes as UTF-8, and its location reader."""
+"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys and text that encodes as UTF-8, its location reader, and its translator of a refusal into an answer."""
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -9,19 +10,23 @@ import pytest
 pytest.importorskip("flask")
 
 from flask import Flask
+from werkzeug.exceptions import InternalServerError
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location, parse_location
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.request_boundary import (
-    NotAJsonObject,
+    answer_refusal,
+    answer_server_error,
     read_location,
+    refusal_text,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
     request_json_object,
     require_encodable_text,
     require_json_object,
 )
+from tests._error_records import error_records
 
 
 class TestRequireJsonObject:
@@ -55,7 +60,7 @@ class TestRequireJsonObject:
         self, what: str, value: object, type_name: str
     ) -> None:
         """Any other value, falsy ones included, is refused naming *what* verbatim and the type received."""
-        with pytest.raises(NotAJsonObject) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             require_json_object(value, what)
         assert str(exc_info.value) == f"{what} must be a JSON object, got {type_name}"
 
@@ -65,13 +70,14 @@ class TestRequireJsonObject:
             require_json_object("x", "Home config")
 
 
+
 class TestRequestJsonObject:
     def test_a_body_nested_past_the_recursion_limit_reads_as_unparseable(self) -> None:
         """get_json(silent=True) swallows only ValueError, so the RecursionError of parsing is read as NoneType."""
         with Flask(__name__).test_request_context(
             data="[" * 100000, content_type="application/json", method="POST"
         ):
-            with pytest.raises(NotAJsonObject, match="got NoneType"):
+            with pytest.raises(ConfigurationError, match="got NoneType"):
                 request_json_object()
 
 
@@ -84,7 +90,7 @@ class TestRefuseUnrecognisedKeys:
 
     def test_any_other_key_is_refused_naming_each_and_listing_the_recognised(self) -> None:
         """*what*, the label require_json_object takes, lower-cased; each unrecognised key as its repr, sorted; then the recognised keys, sorted."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             refuse_unrecognised_keys(
                 {"pv_kw": 4.0, "tarif": {}, "heat_pump": "ASHP"},
                 frozenset({"pv_kw", "days"}),
@@ -117,7 +123,7 @@ class TestRequireEncodableText:
         ],
     )
     def test_text_holding_a_lone_surrogate_is_refused_naming_what_and_the_text(self, text: str) -> None:
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             require_encodable_text(text, "points[1].run_id")
         assert str(refusal.value) == (
             f"points[1].run_id must be text that encodes as UTF-8, holding no lone surrogate; got {text!r}"
@@ -145,9 +151,9 @@ class TestRefuseUnencodableText:
 
     def test_text_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
         text = chr(0xD800)
-        with pytest.raises(ValueError) as expected:
+        with pytest.raises(ConfigurationError) as expected:
             require_encodable_text(text, "name")
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             refuse_unencodable_text(text, "name")
         assert str(refusal.value) == str(expected.value)
 
@@ -221,3 +227,64 @@ class TestReadLocation:
 
         assert str(refusal.value).startswith("location")
         assert str(refusal.value).endswith(f"got {type_name}")
+
+
+class _ProbeRefusal(ValueError):
+    """A ValueError that is not a ConfigurationError, as a reader's bug might raise."""
+
+
+_BOUNDARY_LOGGER = "solar_challenge.web.request_boundary"
+
+
+class TestRefusalText:
+    """refusal_text is the refusal's text, and logs a ValueError that is not a ConfigurationError as a probable defect."""
+
+    def test_a_configuration_error_is_its_text_and_logs_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.ERROR, logger=_BOUNDARY_LOGGER):
+            text = refusal_text(ConfigurationError("x"))
+
+        assert text == "x"
+        assert error_records(caplog, _BOUNDARY_LOGGER) == []
+
+    def test_any_other_value_error_is_its_text_logged_once_as_a_probable_defect(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        refusal = ValueError("probe")
+        with caplog.at_level(logging.ERROR, logger=_BOUNDARY_LOGGER):
+            text = refusal_text(refusal)
+
+        assert text == "probe"
+        [record] = error_records(caplog, _BOUNDARY_LOGGER)
+        message = record.getMessage()
+        assert "ValueError" in message
+        assert "not a ConfigurationError" in message
+        assert "probable defect" in message
+        assert record.exc_info is not None
+        assert record.exc_info[1] is refusal
+
+    def test_a_value_error_subclass_is_named_by_its_own_type(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.ERROR, logger=_BOUNDARY_LOGGER):
+            text = refusal_text(_ProbeRefusal("probe"))
+
+        assert text == "probe"
+        [record] = error_records(caplog, _BOUNDARY_LOGGER)
+        assert "_ProbeRefusal" in record.getMessage()
+
+
+class TestAnswers:
+    """answer_refusal answers a refusal 400 with its text; answer_server_error answers 500 with a JSON body."""
+
+    def test_a_refusal_is_answered_400_with_its_text(self) -> None:
+        with Flask(__name__).test_request_context():
+            response, status = answer_refusal(ConfigurationError("x"))
+
+            assert status == 400
+            assert response.get_json() == {"error": "x"}
+
+    def test_a_server_error_is_answered_500_with_a_json_body(self) -> None:
+        with Flask(__name__).test_request_context():
+            response, status = answer_server_error(InternalServerError())
+
+            assert status == 500
+            assert response.mimetype == "application/json"
+            assert response.get_json() == {"error": "Internal server error"}
