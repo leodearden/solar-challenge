@@ -23,6 +23,7 @@ import pytest
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import (
     ChargeWindow,
+    DispatchDecision,
     DispatchStrategy,
     GridChargeConfig,
     PeakShavingStrategy,
@@ -30,8 +31,9 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
 )
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
 from solar_challenge.tariff import TariffConfig
+from tests._fixed_decision_strategy import FixedDecisionStrategy
 from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 _E7 = TariffConfig.economy_7()
@@ -167,3 +169,106 @@ class TestARunThatAsksForNoExportIsUnchanged:
         self, dispatch_id: str
     ) -> None:
         assert _digest(_flows_of_the_day(dispatch_id)) == _DIGESTS_BEFORE_BATTERY_EXPORT[dispatch_id]
+
+    @pytest.mark.parametrize("dispatch_id", list(BUILT_IN_DISPATCHES))
+    def test_no_step_of_a_built_in_strategy_s_day_exports(self, dispatch_id: str) -> None:
+        assert [flow.battery_export for flow in _flows_of_the_day(dispatch_id)] == [0.0] * _MINUTES_PER_DAY
+
+
+def _ten_kwh_battery(soc_kwh: float) -> Battery:
+    """A 10 kWh battery at *soc_kwh*, with the default 2.5 kW limits and 0.975 efficiencies."""
+    return Battery(BatteryConfig(capacity_kwh=10.0), initial_soc_kwh=soc_kwh)
+
+
+class _Export(NamedTuple):
+    """An hour's step at a battery's SOC, generation and demand, the decision asked of it, and the flows it settles to, in kWh."""
+
+    soc_kwh: float
+    generation_kw: float
+    demand_kw: float
+    decision: DispatchDecision
+    self_consumption: float
+    battery_discharge: float
+    battery_export: float
+    grid_export: float
+    grid_import: float
+
+
+EXPORTS = [
+    pytest.param(
+        _Export(5.0, 0.0, 1.0, DispatchDecision(0.0, 1.0, 0.0, 1.5), 1.0, 2.5, 1.5, 1.5, 0.0),
+        id="the_home_s_shortfall_then_the_export",
+    ),
+    pytest.param(
+        _Export(2.5, 0.0, 1.0, DispatchDecision(0.0, 1.0, 0.0, 1.5), 1.0, 1.4625, 0.4625, 0.4625, 0.0),
+        id="less_delivered_than_asked-the_home_takes_its_shortfall_and_the_rest_is_exported",
+    ),
+    pytest.param(
+        _Export(1.8, 0.0, 1.0, DispatchDecision(0.0, 1.0, 0.0, 1.5), 0.78, 0.78, 0.0, 0.0, 0.22),
+        id="less_delivered_than_the_shortfall-nothing_is_exported",
+    ),
+    pytest.param(
+        _Export(5.0, 0.0, 1.0, DispatchDecision(0.0, 0.5, 0.0, 1.0), 1.0, 1.5, 0.5, 0.5, 0.0),
+        id="a_discharge_below_the_shortfall-the_delivery_serves_the_whole_shortfall_first",
+    ),
+    pytest.param(
+        _Export(5.0, 2.0, 1.0, DispatchDecision(0.0, 0.0, 0.0, 1.0), 1.0, 1.0, 1.0, 2.0, 0.0),
+        id="a_pv_excess-the_excess_and_the_battery_both_export",
+    ),
+]
+
+
+# The flows each of EXPORTS names, in EnergyFlowResult's field order.
+_SETTLED_FLOWS = ("self_consumption", "battery_discharge", "battery_export", "grid_export", "grid_import")
+
+
+class TestAStepThatAsksForExportServesTheHomeFirst:
+    """B1, invariants 2 and 3: an hour's step, so a power in kW is the same energy in kWh, whose decision asks for export.
+
+    What the battery delivers serves the home's shortfall first, and only the rest is exported: battery_export is that
+    rest, a part of both battery_discharge and grid_export, and self_consumption never includes it.
+    """
+
+    @staticmethod
+    def _settled(export: _Export) -> EnergyFlowResult:
+        """*export*'s step on a 10 kWh battery at its SOC, under a strategy that returns its decision."""
+        return simulate_timestep(
+            generation_kw=export.generation_kw,
+            demand_kw=export.demand_kw,
+            battery=_ten_kwh_battery(export.soc_kwh),
+            timestep_minutes=60,
+            strategy=FixedDecisionStrategy(export.decision),
+        )
+
+    @pytest.mark.parametrize("export", EXPORTS)
+    def test_the_step_settles_the_home_s_shortfall_before_the_export(self, export: _Export) -> None:
+        result = self._settled(export)
+        settled = {flow: getattr(result, flow) for flow in _SETTLED_FLOWS}
+        assert settled == pytest.approx({flow: getattr(export, flow) for flow in _SETTLED_FLOWS})
+
+    @pytest.mark.parametrize("export", EXPORTS)
+    def test_the_bus_identity_closes(self, export: _Export) -> None:
+        assert validate_energy_balance(self._settled(export))
+
+    @pytest.mark.parametrize("export", EXPORTS)
+    def test_the_battery_s_export_is_a_part_of_its_discharge_and_of_the_grid_export(self, export: _Export) -> None:
+        result = self._settled(export)
+        assert result.battery_export <= result.battery_discharge
+        assert result.battery_export <= result.grid_export
+
+    @pytest.mark.parametrize("export", EXPORTS)
+    def test_self_consumption_is_at_most_the_demand(self, export: _Export) -> None:
+        result = self._settled(export)
+        assert result.self_consumption <= result.demand
+
+
+class TestAStepThatAsksForNoExportBooksNone:
+    """B3's ulp gate: delivery beyond the shortfall is booked as export only when the decision asked for export, so the ulp a self-consumption minute can deliver beyond its shortfall is not."""
+
+    def test_an_ulp_delivered_beyond_the_shortfall_is_not_exported(self) -> None:
+        result = simulate_timestep(
+            _ULP_PAIR_GENERATION_KW, _ULP_PAIR_DEMAND_KW, _ten_kwh_battery(5.0), 1.0, strategy=SelfConsumptionStrategy()
+        )
+        assert result.battery_discharge > result.demand - result.generation
+        assert result.battery_export == 0.0
+        assert result.grid_export == 0.0

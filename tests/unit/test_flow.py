@@ -1512,6 +1512,7 @@ FLOWS = (
     "grid_export",
     "grid_import",
     "grid_charge",
+    "battery_export",
 )
 
 NOT_A_FINITE_NUMBER_AT_LEAST_0 = [
