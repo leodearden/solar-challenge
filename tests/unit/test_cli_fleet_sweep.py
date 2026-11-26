@@ -193,6 +193,24 @@ def test_a_knob_given_by_an_alias_labels_its_points_by_the_knobs_canonical_name(
     assert list(pd.read_csv(Path("out", "sweep_summary.csv"))["param"]) == ["degradation_rate_per_year"] * 2
 
 
+def test_points_that_share_a_four_decimal_label_are_each_exported_and_listed_under_a_wider_one() -> None:
+    """Three degradation rates 2.5e-5 apart all read 0.0001 at four decimals, so each point is labelled at five."""
+    result = _sweep(
+        2.0, "--param", "degradation", "--min", "0.0001", "--max", "0.00015", "--steps", "3", "--mode", "linear"
+    )
+
+    body_rows = [line for line in result.stdout.splitlines() if line.startswith("│")]
+    assert result.exit_code == 0, result.output
+    assert sorted(path.name for path in Path("out").iterdir()) == [
+        "degradation_rate_per_year_0.00010.csv",
+        "degradation_rate_per_year_0.00013.csv",
+        "degradation_rate_per_year_0.00015.csv",
+        "sweep_summary.csv",
+    ]
+    assert len(pd.read_csv(Path("out", "sweep_summary.csv"))) == 3
+    assert [row.split("│")[1].strip() for row in body_rows] == ["0.00010", "0.00013", "0.00015"]
+
+
 @pytest.mark.parametrize(
     ("name", "canonical"),
     [
