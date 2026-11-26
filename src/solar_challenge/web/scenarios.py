@@ -53,7 +53,6 @@ def _script_components() -> list[dict[str, Any]]:
     return [
         {
             "key": component.key,
-            "fixed_field": component.fixed_field,
             "grammar_key": component.grammar_key,
             "dist": component.start.editor_state(),
         }

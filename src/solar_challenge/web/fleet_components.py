@@ -137,11 +137,10 @@ class ComponentLimits:
     """A fleet component: the names the form and the scenario grammar give it, the range of a home's value, and what its distribution editor offers and starts at.
 
     Attributes:
-        key: Its fleet_distribution block, and the prefix of the builder form's fields for it.
+        key: Its fleet_distribution block, and the block both fleet pages post for it.
         block: Its scenario_blocks component block table, whose fleet row for grammar_key
             gives the kind of field the editor edits.
         grammar_key: Its spec's key in that block.
-        fixed_field: The builder form field carrying a fixed value.
         subject: What its values measure, e.g. 'PV Capacity': the fleet page's card heading,
             and the words that start each accessible name in that card's distribution editor.
         unit: The unit of its values, e.g. 'kW', which heading appends to subject in parentheses.
@@ -163,7 +162,6 @@ class ComponentLimits:
     key: str
     block: ComponentBlock[Any]
     grammar_key: str
-    fixed_field: str
     subject: str
     unit: str
     step: float
@@ -287,7 +285,6 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
             key="pv",
             block=PV_BLOCK,
             grammar_key="capacity_kw",
-            fixed_field="pv_capacity_kw",
             subject="PV Capacity",
             unit="kW",
             step=0.1,
@@ -309,7 +306,6 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
             key="battery",
             block=BATTERY_BLOCK,
             grammar_key="capacity_kwh",
-            fixed_field="battery_capacity_kwh",
             subject="Battery Capacity",
             unit="kWh",
             step=0.1,
@@ -331,7 +327,6 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
             key="load",
             block=LOAD_BLOCK,
             grammar_key="annual_consumption_kwh",
-            fixed_field="annual_consumption_kwh",
             subject="Annual Consumption",
             unit="kWh",
             step=100,

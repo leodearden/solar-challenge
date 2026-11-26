@@ -286,15 +286,6 @@ def _editor_type(dist_type: object) -> _EditorType | None:
 DISTRIBUTION_KEYS = ("type", "mean", "std", "min", "max", "values", "entries")
 
 
-def keys_the_editor_holds(dist_type: object) -> frozenset[str]:
-    """The keys the distribution editor holds a distribution of *dist_type* in: its type, its parameters and its rows; every editor key for a type the editor does not offer, so a form passes each on, for fleet_distribution.py's grammar to refuse."""
-    editor_type = _editor_type(dist_type)
-    if editor_type is None:
-        return frozenset(DISTRIBUTION_KEYS)
-    rows = () if editor_type.rows is None else (editor_type.rows.key,)
-    return frozenset({"type", *editor_type.parameters, *rows})
-
-
 def _fields_under(path: str) -> dict[str, str]:
     """Each key of an editor distribution, mapped to its field in the distribution at *path*: ``path.key``."""
     return {key: f"{path}.{key}" for key in DISTRIBUTION_KEYS}

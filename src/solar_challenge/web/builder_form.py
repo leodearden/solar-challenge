@@ -1,12 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The scenario builder's form contract: the fleet scenario document a form describes, and why it is refused.
 
-The builder posts one flat form, the one scenario-builder.js's getFormData() builds.
-A field the form leaves out, or sends as null or '' (a cleared input), is left out
-of the block that carries it, so config.parse_scenario reports or defaults it as it
-would for a hand-written scenario file.  The tariff: and seg: blocks carry nothing but
-their rate, so a form without the import or SEG rate writes that block as null:
-a scenario with no tariff, or no SEG.
+The builder posts the form scenario-builder.js's getFormData() builds: flat general
+fields, the number of homes, and the fleet page's pv, battery and load blocks, each
+component's field the grammar's own spec.  A field the form leaves out, or sends as null
+or '' (a cleared input), is left out of the block that carries it, so config.parse_scenario
+reports or defaults it as it would for a hand-written scenario file.  The tariff: and
+seg: blocks carry nothing but their rate, so a form without the import or SEG rate writes
+that block as null: a scenario with no tariff, or no SEG.
+
+A form is judged in one order: the dashboard's own limits, then the fleet blocks as
+fleet_config.read_form_fleet reads them, naming a field at the form's own path, then the
+whole document as config.parse_scenario reads it.
 """
 
 from collections.abc import Callable, Mapping
@@ -19,15 +24,10 @@ from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
-    ComponentLimits,
     page_limits,
     refuse_homes_outside_ranges,
 )
-from solar_challenge.web.fleet_config import (
-    DISTRIBUTION_KEYS,
-    distribution_grammar_spec,
-    keys_the_editor_holds,
-)
+from solar_challenge.web.fleet_config import read_form_fleet
 from solar_challenge.web.request_boundary import (
     present_fields,
     refusal_text,
@@ -36,24 +36,6 @@ from solar_challenge.web.request_boundary import (
 )
 
 _BUILDER_FORM = "Builder form"
-
-#: The suffix of the builder form field carrying each key of the editor's distribution
-#: whose field is not named for the key itself: scenario-builder.js componentFormData's
-#: wire contract.
-_FIELD_SUFFIX_OVERRIDES: Mapping[str, str] = {
-    "type": "distribution_type",
-    "values": "wd_values",
-    "entries": "sp_entries",
-}
-
-
-def _distribution_fields(component: ComponentLimits) -> dict[str, str]:
-    """Each key of the editor's distribution, mapped to the builder form field carrying it for *component*: the component's key, then the key or its suffix override."""
-    return {
-        key: f"{component.key}_{_FIELD_SUFFIX_OVERRIDES.get(key, key)}"
-        for key in DISTRIBUTION_KEYS
-    }
-
 
 _CUSTOM_LOCATION_FORM_KEYS: Mapping[str, str] = {
     coordinate: coordinate for coordinate in ("latitude", "longitude", "altitude")
@@ -71,25 +53,20 @@ _RECOGNISED_KEYS = frozenset(
         "import_rate",
         "seg_rate_pence_per_kwh",
     }
-    | {component.fixed_field for component in FLEET_COMPONENTS.values()}
-    | {
-        form_key
-        for component in FLEET_COMPONENTS.values()
-        for form_key in _distribution_fields(component).values()
-    }
+    | set(FLEET_COMPONENTS)
 )
 
 
 def scenario_from_builder_form(form: object) -> dict[str, Any]:
     """The fleet scenario document the builder *form* describes.
 
-    A distribution's numbers, a shuffled pool's counts included, and its type are written
-    as sent, for config.parse_scenario to refuse, as builder_form_errors reports.
+    Each component block is written as sent, for the fleet's readers to refuse, as
+    builder_form_errors reports.
 
     Raises:
         ConfigurationError: naming the form field at fault, for a form that is not an object, a
             key the builder does not send, a flat field that is not the number it should
-            be, an unknown location preset, or a malformed distribution row.
+            be, or an unknown location preset.
     """
     form = require_json_object(form, _BUILDER_FORM)
     refuse_unrecognised_keys(form, _RECOGNISED_KEYS, _BUILDER_FORM)
@@ -118,11 +95,12 @@ def builder_form_errors(form: object) -> list[str]:
 
     A form that is not a JSON object has that one reason.  For any other, the dashboard's
     own limits come first.  Then the form becomes its scenario, and, unless its number of
-    homes is out of bounds, config.parse_scenario judges that document in memory.  A
-    refused location, tariff or fleet_distribution is then the one reason.  Otherwise the
-    homes' value_range reasons come first, then the reader's first refusal of the period
-    or SEG rate, the period's before the SEG's: one of the two, never both, and neither
-    hides a fleet reason.
+    homes is out of bounds, read_form_fleet reads its fleet blocks: a refusal, naming the
+    field at the form's own path, is the one fleet reason.  Otherwise config.parse_scenario
+    judges the document in memory.  A refused location or tariff is then the one reason.
+    Otherwise the homes' value_range reasons come first, then the reader's first refusal of
+    the period or SEG rate, the period's before the SEG's: one of the two, never both, and
+    neither hides a fleet reason.
     """
     try:
         form = require_json_object(form, _BUILDER_FORM)
@@ -133,7 +111,12 @@ def builder_form_errors(form: object) -> list[str]:
         document = scenario_from_builder_form(form)
     except ValueError as refusal:
         return [*errors, refusal_text(refusal)]
-    if _home_count_allowed(document["fleet_distribution"].get("n_homes")):
+    fleet_distribution = document["fleet_distribution"]
+    if _home_count_allowed(fleet_distribution.get("n_homes")):
+        try:
+            read_form_fleet(fleet_distribution)
+        except ConfigurationError as refusal:
+            return [*errors, str(refusal)]
         errors.extend(_scenario_reader_errors(document))
     return errors
 
@@ -236,37 +219,12 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
-    """The fleet_distribution: block: the number of homes, then each component's block."""
+    """The fleet_distribution: block: the number of homes, then each component block the form sends, as sent."""
     block: dict[str, Any] = {}
     if "n_homes" in fields:
         block["n_homes"] = as_whole_number(fields["n_homes"], "n_homes")
-    for component in FLEET_COMPONENTS.values():
-        block[component.key] = _component_block(fields, component)
+    block.update({key: fields[key] for key in FLEET_COMPONENTS if key in fields})
     return block
-
-
-def _component_block(fields: Mapping[str, Any], component: ComponentLimits) -> dict[str, Any]:
-    """*component*'s block: the distribution the form sets a type for, translated by the fleet form's translator, distribution_grammar_spec, else the form's fixed value.
-
-    The builder sends a normal's parameters and a uniform's alike, all four of them
-    (scenario-builder.js componentFormData), so the distribution holds only the keys the
-    distribution editor holds its type in (keys_the_editor_holds).
-
-    Raises:
-        ConfigurationError: From distribution_grammar_spec, for malformed rows, naming the
-            builder's field, or for a fixed value that is not a finite number.
-    """
-    distribution_fields = _distribution_fields(component)
-    if distribution_fields["type"] in fields:
-        held = keys_the_editor_holds(fields[distribution_fields["type"]])
-        distribution = {
-            key: fields[field]
-            for key, field in distribution_fields.items()
-            if key in held and field in fields
-        }
-        spec = distribution_grammar_spec(distribution, distribution_fields)
-        return {component.grammar_key: spec}
-    return _present_numbers(fields, {component.grammar_key: component.fixed_field})
 
 
 def _optional_number(fields: Mapping[str, Any], form_key: str) -> Optional[float]:
