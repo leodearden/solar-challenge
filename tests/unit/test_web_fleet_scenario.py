@@ -11,7 +11,7 @@ import yaml
 
 pytest.importorskip("flask")
 
-from solar_challenge.config import parse_scenario
+from solar_challenge.config import parse_scenario, read_fleet_scenario
 from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import parse_fleet_distribution_config
@@ -368,12 +368,19 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
     def test_a_fleet_that_sweeps_is_refused_as_parse_scenario_refuses_its_document(self) -> None:
-        """A sweep defines one fleet per point, which 'fleet sweep' runs, so the form's one fleet is refused naming the swept field."""
-        with pytest.raises(ConfigurationError) as refusal:
+        """A sweep defines one fleet per point, which 'fleet sweep' runs, so the form's one fleet is refused with parse_scenario's refusal of the document the form describes, naming the swept field."""
+        battery = _FLEET_SCENARIO["fleet_distribution"]["battery"]
+        document = _with_fleet_distribution(battery={**battery, "capacity_kwh": _A_SWEPT_BATTERY_CAPACITY})
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+        assert "fleet_distribution.battery.capacity_kwh" in str(expected.value), (
+            "premise: parse_scenario refuses the sweep naming its field"
+        )
+
+        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
             parse_fleet_form({**_FLEET_FORM, "battery": {"capacity_kwh": _A_SWEPT_BATTERY_CAPACITY}})
 
-        assert "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points" in str(refusal.value)
-        assert "'fleet sweep'" in str(refusal.value)
+        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
 
 #: Each component's fixed value no home may hold (P3), with the refusal parse_fleet_form gives a fleet form fixing it.
@@ -1123,3 +1130,36 @@ class TestFleetFormFromScenario:
             fleet_form_from_scenario(document)
 
         assert str(refusal.value) == "fleet_distribution.pv.capacity_kw.values[0] must be a finite number, got None"
+
+    @pytest.mark.parametrize(
+        ("blocks", "form", "not_loaded"),
+        [
+            pytest.param(
+                {"pv": {**_FLEET_SCENARIO["fleet_distribution"]["pv"], "azimuth": 400}},
+                _FLEET_FORM,
+                ("fleet_distribution.pv.azimuth",),
+                id="pv-azimuth-outside-0-to-360",
+            ),
+            pytest.param(
+                {
+                    "battery": {
+                        "capacity_kwh": _FLEET_SCENARIO["fleet_distribution"]["battery"]["capacity_kwh"],
+                        "grid_charging": {"target_soc_fraction": 0.8},
+                    }
+                },
+                _without(_FLEET_FORM, "dispatch_strategy"),
+                ("fleet_distribution.battery.grid_charging",),
+                id="grid-charging-under-self-consumption",
+            ),
+        ],
+    )
+    def test_a_setting_only_generation_refuses_loads_the_rest_and_is_named_when_the_form_does_not_hold_it(
+        self, blocks: dict[str, Any], form: dict[str, Any], not_loaded: tuple[str, ...]
+    ) -> None:
+        """The import generates only the form it loads, so a setting the form does not hold is never generated: a scenario that parse_scenario, fleet run and validate config refuse only while generating its homes, for such a setting, loads the rest and names the setting, which the page does not run."""
+        document = _with_fleet_distribution(**blocks)
+        with pytest.raises(ConfigurationError):
+            parse_scenario(document)
+        read_fleet_scenario(document)
+
+        assert fleet_form_from_scenario(document) == ImportedFleetForm(form=form, not_loaded=not_loaded)
