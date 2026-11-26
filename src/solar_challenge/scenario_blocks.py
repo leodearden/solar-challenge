@@ -582,6 +582,9 @@ _SETTING_FIELD = FleetField(FieldKind.SETTING)
 
 _UNNAMED_IN_A_FLEET = "the generator names each home, and leaves its components unnamed"
 
+#: The capacity in kW a pv: block that sets none reads as, and a web home body that sends no pv_kw.
+PV_CAPACITY_KW_WHEN_OMITTED = 4.0
+
 PV_BLOCK: ComponentBlock[PVConfig] = ComponentBlock(
     config_type=PVConfig,
     keys=(
@@ -594,7 +597,7 @@ PV_BLOCK: ComponentBlock[PVConfig] = ComponentBlock(
         "custom_inverter_params": "custom pvlib inverter parameters have no YAML form",
     }),
     sub_blocks=MappingProxyType({}),
-    when_omitted=MappingProxyType({"capacity_kw": 4.0}),
+    when_omitted=MappingProxyType({"capacity_kw": PV_CAPACITY_KW_WHEN_OMITTED}),
     fleet=MappingProxyType({
         "capacity_kw": FleetField(FieldKind.NUMBER, required=True),
         **dict.fromkeys(
