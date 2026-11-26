@@ -1061,3 +1061,65 @@ class TestFleetFormFromScenario:
             ),
         ):
             fleet_form_from_scenario(document)
+
+    def test_a_refused_tariff_is_refused_before_the_dashboards_bound_as_parse_scenario_reads_them(self) -> None:
+        """The import reads the scenario's tariff before its fleet, as parse_scenario does, so a fleet above the dashboard's bound gets the tariff's refusal."""
+        battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "capacity_kwh": 5.0}
+        document = {
+            **_with_fleet_distribution(n_homes=MAX_FLEET_HOMES + 1, battery=battery),
+            "tariff": {"type": "flat_rate"},
+        }
+        with pytest.raises(ConfigurationError) as expected:
+            parse_tariff_config({"type": "flat_rate"})
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
+
+    def test_a_setting_the_form_cannot_hold_is_refused_before_any_home_is_generated(self) -> None:
+        """A scenario whose 0 kW PV only the generation of its homes refuses gets the form's refusal of its custom tariff, so the import generates no home before the form reads the scenario."""
+        ungeneratable = _with_fleet_distribution(pv={"capacity_kw": 0})
+        with pytest.raises(ConfigurationError) as generation_refusal:
+            parse_scenario(ungeneratable)
+        assert str(generation_refusal.value) == (
+            "fleet_distribution.pv: home 1: capacity_kw must be greater than 0, got 0.0"
+        ), "premise: only generation refuses the scenario's PV"
+        custom_tariff = {
+            "type": "custom",
+            "periods": [{"start_time": "00:00", "end_time": "00:00", "rate_per_kwh": 0.25}],
+        }
+
+        with pytest.raises(ValueError) as refusal:
+            fleet_form_from_scenario({**ungeneratable, "tariff": custom_tariff})
+
+        assert str(refusal.value) == (
+            "tariff.type must be one the fleet page holds (flat_rate, economy_7, economy_10), got 'custom'"
+        )
+
+    def test_a_battery_whose_dispatch_reaches_its_tariffs_cheap_period_is_refused_as_parse_scenario_refuses_it(
+        self,
+    ) -> None:
+        """A tou_optimized peak window reaching into Economy 7's off-peak is refused only by generating a home, which the import leaves to the form it loads."""
+        battery = {
+            **_FLEET_SCENARIO["fleet_distribution"]["battery"],
+            "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[7, 9]]},
+        }
+        document = _with_fleet_distribution(battery=battery)
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
+
+    def test_a_null_in_a_pv_pool_is_refused_naming_the_value(self) -> None:
+        document = _with_fleet_distribution(
+            pv={"capacity_kw": {"type": "shuffled_pool", "values": [None, 4.0], "counts": [1, 2]}}
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == "fleet_distribution.pv.capacity_kw.values[0] must be a finite number, got None"
