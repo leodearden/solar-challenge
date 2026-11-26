@@ -132,6 +132,9 @@ FROZEN_SURFACE: dict[str, str] = {
     "compute_fleet_spare_capacity_kw": "(fleet_results: FleetResults, windows: tuple[EventWindow, ...], delivery_baseline: str = 'operational') -> tuple[float, ...]",
     "compute_grid_services_at_events": "(fleet_results: FleetResults, cfg: GridServicesEventsConfig) -> GridServicesAtEvents",
     "GRID_SERVICES_RATE_BANDS": "GridServicesRateBands",
+    "GridServicesBand": "LOW='low', CENTRAL='central', HIGH='high'",
+    "NoGridServices": "dataclass[eq, frozen] () -> None",
+    "FlatGridServices": "dataclass[eq, frozen, match_args] (income_per_kw_per_year_gbp: float) -> None",
     "DEFAULT_EVENT_WINDOWS": "tuple [EventWindow]",
     # --- community (community.py) ---
     "CommunityConfig": "dataclass[eq, frozen, match_args] (sharing_mode: Literal['p2p', 'community_battery'], community_battery: BatteryConfig | None = None, billing: CommunityBillingConfig | None = None) -> None",
@@ -238,7 +241,6 @@ FROZEN_CLOSURE: dict[str, str] = {
     "dispatch.SelfConsumptionStrategyConfig": "dataclass[eq, frozen] () -> None",
     "dispatch.TOUOptimizedStrategyConfig": "dataclass[eq, frozen, match_args] (peak_hours: tuple[tuple[int, int], ...] | None = None) -> None",
     "ev.EVConfig": "dataclass[eq, frozen, match_args] (charger_type: str, arrival_hour: int = 18, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: str = 'none', name: str = '') -> None",
-    "gridservices.GridServicesBand": "LOW='low', CENTRAL='central', HIGH='high'",
     "heat_pump.HeatPumpConfig": "dataclass[eq, frozen, match_args] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
     "home.HomeConfig": "dataclass[eq, frozen, match_args] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, seg_tariff: SEGTariff | None = None) -> None",
     "home.RunPricing": "dataclass[eq, frozen, match_args] (import_tariff_mean_rate_gbp_per_kwh: float | None, seg_rate_pence_per_kwh: float | None) -> None",
@@ -416,6 +418,15 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     "GridServicesEventsConfig": {
         "annual_income_gbp": "(self, fleet_results: FleetResults) -> float",
     },
+    "GridServicesBand": {
+        "parse": "classmethod (cls, value: object, *, what: str) -> GridServicesBand",
+    },
+    "NoGridServices": {
+        "annual_income_gbp": "(self, fleet_results: FleetResults) -> float",
+    },
+    "FlatGridServices": {
+        "annual_income_gbp": "(self, fleet_results: FleetResults) -> float",
+    },
     # --- pv (pv.py) ---
     "PVConfig": {
         "effective_inverter_capacity_kw": "property (self) -> float",
@@ -476,9 +487,6 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     "ev.EVConfig": {
         "get_charger_power_kw": "(self) -> float",
         "get_available_charging_hours": "(self) -> float",
-    },
-    "gridservices.GridServicesBand": {
-        "parse": "classmethod (cls, value: object, *, what: str) -> GridServicesBand",
     },
     "heat_pump.HeatPumpConfig": {
         "default_ashp": "classmethod (cls) -> HeatPumpConfig",
@@ -1116,6 +1124,7 @@ EXPECTED_KIND: dict[str, str] = {
     "FlatRateTariff": "function",           # GOTCHA: CamelCase factory, NOT a class
     "GRID_SERVICES_RATE_BANDS": "constant", # GOTCHA: frozen-dataclass instance, NOT a class
     "DispatchTariffPeriod": "class",        # Enum alias — verifies clean class re-export
+    "GridServicesBand": "class",            # StrEnum — verifies clean class re-export
     "FleetSimulate": "constant",            # GOTCHA: Callable type alias, NOT a class
     "HomesDone": "constant",                # GOTCHA: Callable type alias, NOT a class
 }
