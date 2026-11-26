@@ -178,16 +178,18 @@ def _readable(
 def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     """Why config.parse_scenario refuses *document*, judged in memory, as builder_form_errors lists the reader's reasons.
 
-    An accepted document has its homes' value_range reasons alone.  A refused one has the
-    reasons _fleet_reasons_beside gives beside its refusal.  A ConfigurationError is the
-    reader's refusal; any other ValueError is a reason too, but refusal_text logs it as a
-    probable defect; anything else the reader raises is a defect, not a refusal, so it
-    propagates.
+    An accepted document has its homes' value_range reasons alone.  One the reader refuses,
+    with a ConfigurationError, has the reasons _fleet_reasons_beside gives beside the
+    refusal.  Any other ValueError is a probable defect, not a refusal of one block, so it is
+    the one reason, which refusal_text logs once, and the reader is not asked again.
+    Anything else the reader raises is a defect, not a refusal, so it propagates.
     """
     try:
         scenario = parse_scenario(document)
-    except ValueError as refusal:
-        return _fleet_reasons_beside(document, refusal_text(refusal))
+    except ConfigurationError as refusal:
+        return _fleet_reasons_beside(document, str(refusal))
+    except ValueError as defect:
+        return [refusal_text(defect)]
     return _range_errors(scenario)
 
 

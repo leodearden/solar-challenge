@@ -283,23 +283,38 @@ class TestBuilderFormErrors:
         ]
         assert error_records(caplog) == []
 
-    def test_a_value_error_from_the_reader_that_is_not_a_configuration_error_is_a_reason_logged_as_a_probable_defect(
+    def test_a_value_error_from_the_reader_that_is_not_a_configuration_error_is_the_one_reason_logged_once_as_a_probable_defect(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The reader's first read raises it; its read of the fleet beside the refusal is the real reader's."""
+        """The reader is not asked again for the fleet beside it, which would meet the defect, and log it, a second time."""
         reads: list[object] = []
 
-        def parse_scenario_failing_once(document: Any) -> Any:
+        def parse_scenario_failing(document: Any) -> Any:
+            reads.append(document)
+            raise ValueError("probe")
+
+        monkeypatch.setattr(builder_form, "parse_scenario", parse_scenario_failing)
+
+        assert builder_form_errors(_ACCEPTED_FORM) == ["probe"]
+        assert len(reads) == 1
+        [record] = error_records(caplog)
+        assert "ValueError" in record.getMessage()
+
+    def test_a_value_error_that_is_not_a_configuration_error_from_the_fleet_read_beside_a_refusal_is_the_one_reason_logged_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The reader refuses the document, then fails reading its fleet with the period: and seg: blocks left null."""
+        reads: list[object] = []
+
+        def parse_scenario_refusing_then_failing(document: Any) -> Any:
             reads.append(document)
             if len(reads) == 1:
-                raise ValueError("probe")
-            return parse_scenario(document)
+                raise ConfigurationError("refusal")
+            raise ValueError("probe")
 
-        monkeypatch.setattr(builder_form, "parse_scenario", parse_scenario_failing_once)
+        monkeypatch.setattr(builder_form, "parse_scenario", parse_scenario_refusing_then_failing)
 
-        errors = builder_form_errors(_ACCEPTED_FORM)
-
-        assert "probe" in errors
+        assert builder_form_errors(_ACCEPTED_FORM) == ["probe"]
         [record] = error_records(caplog)
         assert "ValueError" in record.getMessage()
 
