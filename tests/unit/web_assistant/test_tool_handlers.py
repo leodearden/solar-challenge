@@ -4,7 +4,6 @@
 import json
 import logging
 import time
-from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -39,6 +38,7 @@ from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 from tests._error_records import error_records
+from tests._raising import raising
 from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_stores import empty_run_storage, run_storage_over
@@ -1095,13 +1095,6 @@ _CARDIFF_PARAMS: dict[str, Any] = {"pv_kw": 4, "location": "cardiff"}
 """Trigger-tool params whose location read_location refuses, and which send no window."""
 
 
-def _raise(error: Exception) -> Callable[..., Any]:
-    def raising(*_args: object, **_kwargs: object) -> Any:
-        raise error
-
-    return raising
-
-
 class TestTriggerToolsJudgeARefusalWithRefusalText:
     """The trigger tools answer a ValueError their reader raises as an error, logging one that is not a ConfigurationError as a probable defect; anything else is not a refusal and propagates."""
 
@@ -1135,7 +1128,7 @@ class TestTriggerToolsJudgeARefusalWithRefusalText:
     def test_a_value_error_that_is_not_a_configuration_error_is_answered_and_logged_as_a_probable_defect(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        monkeypatch.setattr(assistant, "parse_home_config", _raise(ValueError("probe")))
+        monkeypatch.setattr(assistant, "parse_home_config", raising(ValueError("probe")))
         jm = autospecced_job_manager()
 
         result = run_home_simulation({"pv_kw": 4}, jm, _results_url_for_test)
@@ -1146,7 +1139,7 @@ class TestTriggerToolsJudgeARefusalWithRefusalText:
         assert "ValueError" in record.getMessage()
 
     def test_a_type_error_is_not_a_refusal_and_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(assistant, "parse_home_config", _raise(TypeError("probe")))
+        monkeypatch.setattr(assistant, "parse_home_config", raising(TypeError("probe")))
         jm = autospecced_job_manager()
 
         with pytest.raises(TypeError, match="probe"):

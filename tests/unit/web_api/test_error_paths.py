@@ -3,7 +3,6 @@
 
 from collections.abc import Callable
 from functools import partial
-from typing import Any
 from unittest.mock import NonCallableMagicMock
 
 import pytest
@@ -21,6 +20,7 @@ from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_scenario import parse_fleet_form
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config
 from tests._error_records import error_records
+from tests._raising import raising
 from tests._fleet_form import valid_distribution_form
 
 
@@ -204,13 +204,6 @@ def test_a_body_a_reader_refuses_is_answered_400_with_its_refusal_and_logs_nothi
     assert mock_job_manager.method_calls == []
 
 
-def _raise(error: Exception) -> Callable[..., Any]:
-    def raising(*_args: object, **_kwargs: object) -> Any:
-        raise error
-
-    return raising
-
-
 def test_a_value_error_that_is_not_a_configuration_error_is_answered_400_and_logged_as_a_probable_defect(
     client: FlaskClient,
     mock_job_manager: NonCallableMagicMock,
@@ -218,7 +211,7 @@ def test_a_value_error_that_is_not_a_configuration_error_is_answered_400_and_log
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Row R2."""
-    monkeypatch.setattr(api, "parse_home_config", _raise(ValueError("probe")))
+    monkeypatch.setattr(api, "parse_home_config", raising(ValueError("probe")))
 
     resp = client.post("/api/simulate/home", json={"pv_kw": 4.0})
 
@@ -248,7 +241,7 @@ def test_a_type_error_is_no_refusal_and_is_answered_500_with_a_json_body(
 ) -> None:
     """Row R3: anything but a ValueError is a defect, answered 500 with JSON, not the HTML error page."""
     app.config["PROPAGATE_EXCEPTIONS"] = False
-    monkeypatch.setattr(api, reader, _raise(TypeError("probe")))
+    monkeypatch.setattr(api, reader, raising(TypeError("probe")))
 
     resp = client.post(path, json=body)
 

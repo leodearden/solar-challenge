@@ -11,6 +11,10 @@ import logging
 import pytest
 
 
-def error_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    """The records *caplog* captured at ERROR or above, in the order they were logged."""
-    return [record for record in caplog.records if record.levelno >= logging.ERROR]
+def error_records(caplog: pytest.LogCaptureFixture, logger: str | None = None) -> list[logging.LogRecord]:
+    """The records *caplog* captured at ERROR or above, in the order they were logged: only those of the logger named *logger*, when it names one."""
+    return [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and (logger is None or record.name == logger)
+    ]

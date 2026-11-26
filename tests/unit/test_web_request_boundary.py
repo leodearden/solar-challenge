@@ -26,6 +26,7 @@ from solar_challenge.web.request_boundary import (
     require_encodable_text,
     require_json_object,
 )
+from tests._error_records import error_records
 
 
 class TestRequireJsonObject:
@@ -232,33 +233,28 @@ class _ProbeRefusal(ValueError):
     """A ValueError that is not a ConfigurationError, as a reader's bug might raise."""
 
 
-def _boundary_errors(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    return [
-        record
-        for record in caplog.records
-        if record.name == "solar_challenge.web.request_boundary" and record.levelno >= logging.ERROR
-    ]
+_BOUNDARY_LOGGER = "solar_challenge.web.request_boundary"
 
 
 class TestRefusalText:
     """refusal_text is the refusal's text, and logs a ValueError that is not a ConfigurationError as a probable defect."""
 
     def test_a_configuration_error_is_its_text_and_logs_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.ERROR, logger="solar_challenge.web.request_boundary"):
+        with caplog.at_level(logging.ERROR, logger=_BOUNDARY_LOGGER):
             text = refusal_text(ConfigurationError("x"))
 
         assert text == "x"
-        assert _boundary_errors(caplog) == []
+        assert error_records(caplog, _BOUNDARY_LOGGER) == []
 
     def test_any_other_value_error_is_its_text_logged_once_as_a_probable_defect(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         refusal = ValueError("probe")
-        with caplog.at_level(logging.ERROR, logger="solar_challenge.web.request_boundary"):
+        with caplog.at_level(logging.ERROR, logger=_BOUNDARY_LOGGER):
             text = refusal_text(refusal)
 
         assert text == "probe"
-        [record] = _boundary_errors(caplog)
+        [record] = error_records(caplog, _BOUNDARY_LOGGER)
         message = record.getMessage()
         assert "ValueError" in message
         assert "not a ConfigurationError" in message
@@ -267,11 +263,11 @@ class TestRefusalText:
         assert record.exc_info[1] is refusal
 
     def test_a_value_error_subclass_is_named_by_its_own_type(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.ERROR, logger="solar_challenge.web.request_boundary"):
+        with caplog.at_level(logging.ERROR, logger=_BOUNDARY_LOGGER):
             text = refusal_text(_ProbeRefusal("probe"))
 
         assert text == "probe"
-        [record] = _boundary_errors(caplog)
+        [record] = error_records(caplog, _BOUNDARY_LOGGER)
         assert "_ProbeRefusal" in record.getMessage()
 
 
