@@ -226,16 +226,21 @@ class TestScenarioFromBuilderForm:
         [
             pytest.param(-1, id="negative"),
             pytest.param(2.5, id="fraction"),
+            pytest.param(0, id="counts-totalling-one-above-the-forms-homes"),
             pytest.param(MAX_FLEET_HOMES + 1, id="one-above-the-fleet-limit"),
-            pytest.param(10**12, id="the-count-of-finding-fk-9dd1d9389dd2"),
-            pytest.param(1e300, id="huge-float"),
+            pytest.param(float(MAX_FLEET_HOMES + 1), id="a-whole-float-one-above-the-fleet-limit"),
             pytest.param(MAX_FLEET_HOMES - 1, id="counts-totalling-one-above-the-fleet-limit"),
         ],
     )
     def test_a_shuffled_pool_row_count_the_loaders_refuse_is_written_as_sent_and_their_refusal_is_the_forms_one_reason(
         self, count: object, tmp_path: Path
     ) -> None:
-        """A shuffled pool row's count is written into the scenario as sent; ShuffledPoolDistribution refuses one below 0 or with a fractional part, and the fleet's F6 refuses counts that do not total its homes, before any value of the pool is built: n_homes, at most MAX_FLEET_HOMES, bounds every pool."""
+        """A shuffled pool row's count is written into the scenario as sent; ShuffledPoolDistribution refuses one below 0 or with a fractional part, and the fleet's F6 refuses counts that do not total its homes, before any value of the pool is built: n_homes, at most MAX_FLEET_HOMES, bounds every pool.
+
+        Each count reaches the loaders, so none is above MAX_FLEET_HOMES + 1, never a count
+        such as finding fk-9dd1d9389dd2's 10**12: a regressed F6 builds a pool of a few more
+        than MAX_FLEET_HOMES values rather than exhausting the host's memory.
+        """
         form = _form_with_pv_pool([{"value": 3, "count": 2}, {"value": 4, "count": count}])
         counts = scenario_from_builder_form(form)["fleet_distribution"]["pv"]["capacity_kw"]["counts"]
 
