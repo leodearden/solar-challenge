@@ -512,11 +512,11 @@ subprojects:
 
     # (RESOLVED — no live gap) The former CommunityMetrics.sharing_mode HEURISTIC
     # ('community_battery' if the battery was active, else 'p2p') was retired by
-    # Task 86 (commit 2f0350a4, merged 2026-06-30): CommunityResults now carries an
-    # authoritative sharing_mode field (community.py:138, set at construction in
-    # community.py:300/354), and output.py reads it directly (output.py:470;
-    # docstring output.py:438). No output.py TODO remains — /review should NOT
-    # re-flag the retired heuristic.
+    # Task 86 (commit 2f0350a4, merged 2026-06-30): CommunityResults.sharing_mode is
+    # an authoritative field that simulate_community sets from
+    # CommunityConfig.sharing_mode, a property derived from community_battery, and
+    # output.compute_community_metrics copies it into CommunityMetrics.sharing_mode.
+    # No output.py TODO remains — /review should NOT re-flag the retired heuristic.
     known_gaps: []
 
     exclude:
