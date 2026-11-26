@@ -232,7 +232,8 @@ class PVConfig:
         custom_inverter_params: Optional custom pvlib inverter parameters dict
 
         # Degradation parameters (PV-DGR)
-        system_age_years: Age of the PV system in years (default 0.0 = new system)
+        system_age_years: Age of the PV system in years (default 0.0 = new system); its
+            ageing lowers each array's DC power before the inverter, with the system losses
         degradation_rate_per_year: Annual capacity degradation as a fraction
             (default 0.005 = 0.5%/year, typical for crystalline silicon panels)
 
@@ -1066,13 +1067,19 @@ def _dc_after_losses(
     return dc.assign(i_mp=dc["i_mp"] * kept_fraction, p_mp=dc["p_mp"] * kept_fraction)
 
 
-def _deduct_system_losses(model_chain: ModelChain, system_losses: float) -> ModelChain:
-    """pvlib's losses-model step: each array's DC output less system_losses, for the inverter model to read.
+def _dc_kept_fraction(config: PVConfig) -> float:
+    """The fraction of each array's DC power that reaches the inverter: what the system losses and the modules' ageing leave, combined as PVWatts combines its loss categories."""
+    return (1 - config.system_losses) * calculate_degradation_factor(
+        config.system_age_years, config.degradation_rate_per_year
+    )
 
-    Like pvlib's own losses models, it records the fraction of DC power kept in
+
+def _deduct_dc_losses(model_chain: ModelChain, kept_fraction: float) -> ModelChain:
+    """pvlib's losses-model step: each array's DC output scaled to kept_fraction, for the inverter model to read.
+
+    Like pvlib's own losses models, it records the kept fraction in
     results.losses.
     """
-    kept_fraction = 1 - system_losses
     model_chain.results.losses = kept_fraction
     dc = model_chain.results.dc
     if isinstance(dc, tuple):
@@ -1096,8 +1103,10 @@ def create_model_chain_picking_from(
     CecInverter must name a row there. Custom inverter parameters and PVWatts
     modules ignore the candidates, and their system's inverter is None.
 
-    Each array's DC power falls by config.system_losses before the inverter
-    model reads it, at unchanged voltage (docs/pv-system-losses.md).
+    Each array's DC power falls by config.system_losses and by the modules'
+    ageing (calculate_degradation_factor of config.system_age_years and
+    config.degradation_rate_per_year) before the inverter model reads it, at
+    unchanged voltage (docs/pv-system-losses.md).
 
     Args:
         config: PV system configuration
@@ -1141,7 +1150,7 @@ def create_model_chain_picking_from(
         location=pvlib_location,
         aoi_model="physical",
         spectral_model="no_loss",
-        losses_model=functools.partial(_deduct_system_losses, system_losses=config.system_losses),
+        losses_model=functools.partial(_deduct_dc_losses, kept_fraction=_dc_kept_fraction(config)),
     )
     _require_compatible_dc_and_ac_models(model_chain)
 
@@ -1169,7 +1178,8 @@ def simulate_pv_output(
         weather_data: DataFrame with ghi, dni, dhi, temp_air, wind_speed columns
 
     Returns:
-        Series of AC power output in kW with same index as weather_data
+        Series of AC power output at config.system_age_years, in kW, with the
+        same index as weather_data
     """
     model_chain = create_model_chain(config, location)
 
@@ -1182,13 +1192,6 @@ def simulate_pv_output(
 
     # Ensure no negative values (numerical noise)
     ac_power = ac_power.clip(lower=0.0)
-
-    # Apply panel degradation based on system age
-    ac_power = apply_degradation(
-        ac_power,
-        config.system_age_years,
-        config.degradation_rate_per_year,
-    )
 
     return ac_power
 
@@ -1240,6 +1243,10 @@ def apply_degradation(
     degradation_rate_per_year: float = 0.005,
 ) -> pd.Series:
     """Apply degradation factor to PV generation time series.
+
+    simulate_pv_output and create_model_chain already apply a PVConfig's ageing
+    to each array's DC power, so applying this to their output for an aged
+    PVConfig ages the array twice.
 
     Args:
         generation: PV generation time series in kW
