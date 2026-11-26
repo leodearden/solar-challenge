@@ -47,6 +47,7 @@ from solar_challenge.web.presets import (
 from solar_challenge.web.request_boundary import (
     answer_refusal,
     answer_server_error,
+    read_optional_string,
     refuse_unencodable_text,
     request_json_object,
     require_encodable_text,
@@ -126,13 +127,12 @@ def simulate_fleet_api() -> tuple[Response, int]:
         JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
-    name = data.get("name")
+    name = read_optional_string(data.get("name"), "name")
     homes_data = data.get("homes", [])
     if not isinstance(homes_data, list):
         return jsonify({"error": f"homes must be a JSON array, got {type(homes_data).__name__}"}), 400
     if not homes_data:
         return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400
-    refuse_unencodable_text(name, "name")
     configs = []
     # Use first home's date config for the fleet
     first_config, start_date, end_date, _ = parse_home_config(homes_data[0])
