@@ -189,7 +189,7 @@ bool (Python's or numpy's), and holds `3.0` as the int `3`; the tag accepts e.g.
 consumption, ageing inputs and system age; the tag accepts e.g.
 `capacity_kwh=float("inf")`. Consumers fix such inputs when they re-pin.
 
-This note also covers tasks 378 and 332. Consumers fix such inputs when they re-pin.
+This note also covers tasks 378 and 332.
 
 **Task 436.** `SimulationResults`, reached through
 `FleetResults.per_home_results`, is frozen, so that each of its series stays
@@ -198,7 +198,7 @@ fields, such as `results.demand = series`, raises
 `dataclasses.FrozenInstanceError`; the 0.5.0 tag accepts the assignment.
 Consumers that assign to a results field build new results with
 `dataclasses.replace(results, demand=series)` instead when they re-pin.
-`hash(results)` still raises `TypeError`. Consumers that assign to a results field build new results with `dataclasses.replace(results, demand=series)` instead when they re-pin.
+`hash(results)` still raises `TypeError`.
 
 **Task 464.** `WeatherCache.get`, and so `get_tmy_data` on
 a cache hit, returns exactly the frame `WeatherCache.put` stored. Its floats
@@ -840,7 +840,7 @@ Consumers whose fleets come from `simulate_home` or `simulate_fleet` need no
 code change when they re-pin; one that hands `compute_grid_services_at_events`
 an unevenly spaced index resamples it to one cadence first.
 Capacity-at-events figures for a fleet whose homes share one simulated index
-never fall, and rise wherever a home's firm capacity differs between event days. Consumers that hand `compute_grid_services_at_events` an unevenly spaced index resample it to one cadence first.
+never fall, and rise wherever a home's firm capacity differs between event days.
 
 **Task 838.** `TariffConfig` refuses input the 0.5.0 tag
 accepts: periods that leave a minute of the local day uncovered, or cover one
@@ -1817,7 +1817,7 @@ the keyword and the attribute when they re-pin.
 **Task 945.** `solar_challenge.config.run_parameter_sweep`,
 `ParameterSweepConfig` and `SweepResult` are removed. None was in `__all__` or
 had a package caller; sweeps run through `fleet.FleetRunner.simulate_each`,
-`optimize.run_sweep` and the web's sweep endpoint. Consumers run sweeps through `fleet.FleetRunner.simulate_each`, `optimize.run_sweep` or the web's sweep endpoint instead.
+`optimize.run_sweep` and the web's sweep endpoint.
 
 **Task 946.** The scenario grammar's block readers `parse_home_block`, `parse_location_block`,
 `parse_tariff_config`, `parse_dispatch_strategy_config`, `parse_seg_rate` and
@@ -2157,7 +2157,7 @@ platform's seam test builds one window. Where this note and task 956's entry dif
 this note holds for the release: construction, and so `dataclasses.replace`,
 checks the window's type, cadence and zone, not its days, so no construction
 refusal names `period.start_date`; and consumers give a period's days to a
-window, not to `SimulationPeriod` as task 956's entry's re-pin advice says. When they re-pin, consumers give a period's days to a window, `SimulationWindow(first_day, last_day, ONE_MINUTE, timezone)` or `config.period_window(start, end, timezone=...)`, not to `SimulationPeriod`.
+window, not to `SimulationPeriod` as task 956's entry's re-pin advice says.
 
 **Task 964.** `solar_challenge.fleet_distribution.SweepSpec`'s `mode` is now a `SweepMode`,
 a new `StrEnum` of `linear` and `geometric` in the same module, and defaults to
@@ -3473,7 +3473,7 @@ consumers need no change when they re-pin.
    | `config.run_parameter_sweep`, `ParameterSweepConfig`, `SweepResult` | `fleet.FleetRunner.simulate_each`, `optimize.run_sweep` or the web's sweep endpoint | 945 |
    | `generate_load_profile(config, start_date, end_date, timezone=…)` | `generate_load_profile(config, window, …)`, `window` a `timebase.SimulationWindow` | 894 |
    | `generate_ev_charging_profile(config, start_date, end_date, …)`; an EV's charging inside `generate_load_profile` | `generate_ev_charging_profile(config, window, *, tariff=None, generation_kw=None)`, added to the household by the caller | 895 |
-   | the projection names from `solar_challenge.finance` (`YearPoint`, `MultiYearCurve`, `ProjectEconomics`, `MAX_NODES`, `project_multi_year`, `project_economics`, `spreadsheet_revenue_curve`); `project_economics(scenario, …)` | `solar_challenge.projection`; `project_economics(scenario_fleet(scenario), …)` | 928 |
+   | the projection names from `solar_challenge.finance` (`YearPoint`, `MultiYearCurve`, `ProjectEconomics`, `MAX_NODES`, `project_multi_year`, `project_economics`, `spreadsheet_revenue_curve`); `project_economics(curve, scenario, finance)` | `solar_challenge.projection`; `project_economics(curve, scenario_fleet(scenario), finance)` | 928 |
    | `from solar_challenge.finance import solve_cost_recovery_rate` | `from solar_challenge import solve_cost_recovery_rate`, or `solar_challenge.projection` | 939 |
    | `ConfigResult(representative_outlay_gbp=…, solved_own_use_rate_pence_per_kwh=…, surplus_at_solved_gbp=…, feasible=…, binding=…)` | the five keywords dropped: they are read-only properties over its `solution` | 934 |
    | `from solar_challenge.output import generate_finance_report, generate_config_ranking_report` | `solar_challenge.board_report` | 970 |
@@ -3490,7 +3490,7 @@ consumers need no change when they re-pin.
    | `WeatherCache.cache_dir` listed or written before any `put` | `cache_dir.mkdir(parents=True, exist_ok=True)` first | 1559 |
    | a pre-built weather cache's files | `WeatherCache.put(df, "tmy", location)`, read only through `WeatherCache.get` | 815 |
    | code that matches a refusal's message text | the new text: a scenario grammar refusal reads `<block path>: <problem>` | 861, 862, 864, 866, 871, 904, 948, 965 |
-   | input the 0.5.0 tag accepted, now refused (tasks 374, 384, 466, 469, 540, 559, 590, 633, 659, 660, 672, 787, 802, 863, 868, 902, 909, 914, 925, 1029, 1119, 1125, 1218, 1315, 1358, 1372, 1374, 1400, 1440, 1473) | fix the input; `except ValueError` still catches each refusal | see the list |
+   | input the 0.5.0 tag accepted, now refused (tasks 374, 384, 466, 469, 540, 559, 590, 633, 659, 660, 672, 787, 802, 823, 863, 868, 902, 909, 914, 925, 1029, 1119, 1125, 1218, 1315, 1358, 1372, 1374, 1400, 1440, 1473) | fix the input; `except ValueError` still catches each refusal | see the list |
 
    The other Breaking entries change behaviour, not a spelling, and each says
    what a consumer does: 464 (a cache seeded with a fixed-offset frame), 782 (a
@@ -3514,29 +3514,32 @@ consumers need no change when they re-pin.
 4. **Platform (solar-challenge-platform at f8d7a1ef1).** Its main pins
    solar-challenge-v0.5.0 and requires-python ">=3.11,<3.14". The table counts the
    lines that name an old spelling of the table above in the 68 files under
-   `src` and `tests` that import `solar_challenge`, leaving out comments and
-   docstrings. A line that already writes the new form, such as a call that passes
-   `timestep_minutes`, still counts, so each site is a line to check.
+   `src` and `tests` that import `solar_challenge`, leaving out comments,
+   docstrings and names that only contain one, such as a test function named
+   after `householder_bill`. Sites counts each line once, though one line can
+   name two spellings. A line that already writes the new form, such as a call
+   that passes `timestep_minutes`, still counts, so each site is a line to check.
+   The platform's `target_soc_fraction` lines are `GridChargeConfig`'s field,
+   which 0.6.0 keeps, so they need no edit and are not counted.
 
    | File | Sites | Old spellings it names |
    |---|---|---|
    | `solar-challenge-platform/src/solar_challenge_platform/optimiser/forecast/weather_api.py` | 2 | `generate_load_profile` ×2 |
-   | `solar-challenge-platform/src/solar_challenge_platform/optimiser/planner.py` | 7 | `compute_grid_charge_power_kw` ×1; `decide_action(` ×3; `simulate_timestep(` ×1; `solar_challenge.config` ×1; `target_soc_fraction` ×1 |
+   | `solar-challenge-platform/src/solar_challenge_platform/optimiser/planner.py` | 5 | `decide_action(` ×3; `simulate_timestep(` ×1; `solar_challenge.config` ×1 |
    | `solar-challenge-platform/src/solar_challenge_platform/simulator/physics.py` | 4 | `decide_action(` ×3; `simulate_timestep(` ×1 |
    | `solar-challenge-platform/src/solar_challenge_platform/simulator/service.py` | 1 | `create_uniform` or `create_heterogeneous` ×1 |
    | `solar-challenge-platform/tests/billing/test_reducer_reconciliation.py` | 12 | `SummaryStatistics(` ×2; `householder_bill(` ×2; `seg_revenue_gbp` ×2; `simulation_days` ×4; `total_heat_pump_load_kwh` ×2 |
-   | `solar-challenge-platform/tests/integration/test_billing_boundary.py` | 10 | `BillDistribution(` ×1; `CostRecoverySolution(` or `ConfigResult(` ×1; `SummaryStatistics(` ×1; `householder_bill(` ×2; `per_home_net_bill_gbp` ×1; `seg_revenue_gbp` ×1; `simulation_days` ×2; `total_heat_pump_load_kwh` ×1 |
+   | `solar-challenge-platform/tests/integration/test_billing_boundary.py` | 9 | `BillDistribution(` ×1; `CostRecoverySolution(` or `ConfigResult(` ×1; `SummaryStatistics(` ×1; `householder_bill(` ×1; `per_home_net_bill_gbp` ×1; `seg_revenue_gbp` ×1; `simulation_days` ×2; `total_heat_pump_load_kwh` ×1 |
    | `solar-challenge-platform/tests/integration/test_optimiser_end_to_end.py` | 1 | `simulate_timestep(` ×1 |
-   | `solar-challenge-platform/tests/optimiser/test_outlay_parity.py` | 9 | `SummaryStatistics(` ×1; `householder_bill(` ×2; `simulation_days` ×5; `solar_challenge.finance` ×1 |
-   | `solar-challenge-platform/tests/optimiser/test_param_search.py` | 1 | `target_soc_fraction` ×1 |
+   | `solar-challenge-platform/tests/optimiser/test_outlay_parity.py` | 5 | `SummaryStatistics(` ×1; `householder_bill(` ×1; `simulation_days` ×2; `solar_challenge.finance` ×1 |
    | `solar-challenge-platform/tests/optimiser/test_planner.py` | 1 | `decide_action(` ×1 |
-   | `solar-challenge-platform/tests/optimiser/test_planner_derated_battery.py` | 4 | `decide_action(` ×2; `solar_challenge.config` ×1; `target_soc_fraction` ×1 |
+   | `solar-challenge-platform/tests/optimiser/test_planner_derated_battery.py` | 3 | `decide_action(` ×2; `solar_challenge.config` ×1 |
    | `solar-challenge-platform/tests/simulator/fleet_harness.py` | 1 | `create_uniform` or `create_heterogeneous` ×1 |
    | `solar-challenge-platform/tests/simulator/test_fleet.py` | 2 | `FleetConfig(`, `FleetResults(` or `CommunityResults(` ×1; `create_uniform` or `create_heterogeneous` ×1 |
    | `solar-challenge-platform/tests/simulator/test_physics.py` | 4 | `simulate_timestep(` ×4 |
-   | `solar-challenge-platform/tests/test_solar_challenge_seam.py` | 8 | `FleetConfig(`, `FleetResults(` or `CommunityResults(` ×1; `ScenarioConfig(` ×1; `SimulationPeriod` ×2; `get_tmy_data`, `get_weather_cache` or `set_weather_cache` ×1; `seg_tariff_pence_per_kwh` ×1; `solar_challenge.config` ×1; `solve_cost_recovery_rate(` ×1 |
+   | `solar-challenge-platform/tests/test_solar_challenge_seam.py` | 6 | `FleetConfig(`, `FleetResults(` or `CommunityResults(` ×1; `ScenarioConfig(` ×1; `SimulationPeriod` ×2; `seg_tariff_pence_per_kwh` ×1; `solar_challenge.config` ×1; `solve_cost_recovery_rate(` ×1 |
 
-   No line of those files names `bill_distribution(`; the `grid_services_*` keywords; `band=`; `heat_pump_load`; `OutputConfig`; `get_start_timestamp`; `efficiency=`; `dispatch_strategy`; `GridServicesAtEvents`; `sharing_mode`; `simulate_timestep_tou`; `apply_degradation`; `charger_type`; `per_minute_amounts`; `mean_period_rate`; `.config =`; `off_peak_hours`; `DispatchStrategyConfig`; `resolve_grid_services_band`; `simulate_fleet` and task 879's other names; `project_multi_year`, `run_sweep`, `sensitivity_panel`; `generate_ev_charging_profile`; the `*DistributionConfig` types; the names task 928 moved; `run_parameter_sweep`, `ParameterSweepConfig`, `SweepResult`; the block readers; the fleet grammar's names; `apply_knob`, `SENSITIVITY_BANDS`, `Knob(`; `retained_cash_floor_gbp`; `RankedSweep`; the board reports; `calculate_summary(` and its three siblings; `load_config_with_overrides`; or `ConfigurationError`.
+   No code line of those files names `bill_distribution(`; the `grid_services_*` keywords; `band=`; `heat_pump_load`; `OutputConfig`; `get_start_timestamp`; `efficiency=`; `dispatch_strategy`; `GridServicesAtEvents`; `sharing_mode`; `simulate_timestep_tou`; `compute_grid_charge_power_kw`; `GridChargeContext.target_soc_fraction`; `apply_degradation`; `get_tmy_data`, `get_weather_cache`, `set_weather_cache`; `charger_type`; `per_minute_amounts`; `mean_period_rate`; `.config =`; `off_peak_hours`; `DispatchStrategyConfig`; `resolve_grid_services_band`; `simulate_fleet` and task 879's other names; `project_multi_year`, `run_sweep`, `sensitivity_panel`; `generate_ev_charging_profile`; the `*DistributionConfig` types; the names task 928 moved; `run_parameter_sweep`, `ParameterSweepConfig`, `SweepResult`; the block readers; the fleet grammar's names; `apply_knob`, `SENSITIVITY_BANDS`, `Knob(`; `retained_cash_floor_gbp`; `RankedSweep`; the board reports; `calculate_summary(` and its three siblings; `load_config_with_overrides`; or `ConfigurationError`.
 
 ---
 
