@@ -311,7 +311,18 @@ override is set, else SIMULATED.  `finance run --assumptions` picks each mode's
 `spreadsheet` keeps the scenario's override, else sets
 `DEFAULT_SPREADSHEET_SELF_CONSUMPTION` (0.70), and `both` renders the two.  Each
 mode's bill, projection, economics and cost-recovery solve are computed under that
-mode's `FinanceConfig`.  On the override path:
+mode's `FinanceConfig`.  `optimize configs --assumptions physics|spreadsheet`
+(default `physics`) puts the scenario's `FinanceConfig` on that mode through
+`finance.with_own_use_basis` before enumerating, so every config's solve, its
+configured-rate trade-off and the sensitivity panel are computed under it; `both`
+is refused, since a ranking is computed under one assumption.  The ranking report
+opens with `Self-consumption assumption: **Physics**` or
+`Self-consumption assumption: **Spreadsheet (<x>% self-consumption)**`, named as
+`finance run` heads that mode's column and read from
+`RankedSweep.self_consumption_override`, which `run_sweep` records and requires to
+be one across configs (`tests/unit/test_board_report.py::TestARankingReportNamesItsAssumption`,
+`tests/integration/test_optimize_cli.py::TestOptimizeCLIE2EFast`).  On the override
+path:
 
 ```
 own_use_kwh = min(self_consumption_override × generation_kwh, demand_kwh)
