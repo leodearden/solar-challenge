@@ -6,6 +6,9 @@ values render from. A context processor gives every template it as page_limits, 
 base.html writes its as_json() once into each page as the #page-limits element, a
 <script type="application/json">, which the pages' scripts read.
 
+Each fleet component's editor offers the types fleet_distribution.editor_types gives its
+field's kind, and starts at fleet_distribution spec objects, which construction checks.
+
 Each fleet component's value_range bounds every home's value, fixed or drawn.
 simulation_params.parse_home_config reads a home's value within it, and the fleet page
 and the scenario builder refuse a fleet whose generated homes hold a value outside it
@@ -19,8 +22,20 @@ from types import MappingProxyType
 from typing import Any
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import (
+    DISTRIBUTION_TYPES,
+    DistributionSpec,
+    DistributionType,
+    NormalDistribution,
+    ShuffledPoolDistribution,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
+    editor_types,
+    write_distribution_spec,
+)
 from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_whole_number
+from solar_challenge.scenario_blocks import BATTERY_BLOCK, LOAD_BLOCK, PV_BLOCK, ComponentBlock, FieldKind
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START, covered_days
 
 
@@ -94,42 +109,37 @@ def days_window(days: int) -> tuple[date, date]:
 
 
 @dataclass(frozen=True)
-class EditorDistribution:
-    """A distribution as the distribution editor holds it at Fixed Value: the fixed value, and the parameters and rows each other type starts at.
+class EditorStart:
+    """What a component's distribution editor starts at: the type it shows, its Fixed Value, and the spec each of its editor types starts at.
 
     Attributes:
-        values: Weighted Discrete's (value, weight) rows.
-        entries: Shuffled Pool's (value, count) rows.
+        shown: The name of the editor type the card shows, '' for Fixed Value.
+        fixed: The value Fixed Value starts at.
+        specs: One spec of each of the component's editor types, in editor_types order.
     """
 
+    shown: str
     fixed: float
-    mean: float
-    std: float
-    min: float
-    max: float
-    values: tuple[tuple[float, float], ...]
-    entries: tuple[tuple[float, int], ...]
+    specs: tuple[DistributionSpec, ...]
 
     def editor_state(self) -> dict[str, Any]:
-        """The distribution editor's dist object holding this distribution, which type '' shows at Fixed Value."""
-        return {
-            "type": "",
-            "fixed": self.fixed,
-            "mean": self.mean,
-            "std": self.std,
-            "min": self.min,
-            "max": self.max,
-            "values": [{"value": value, "weight": weight} for value, weight in self.values],
-            "entries": [{"value": value, "count": count} for value, count in self.entries],
-        }
+        """The distribution editor's dist object: the type shown, the fixed value, and each spec as written, without its type, under its type's name."""
+        specs: dict[str, Any] = {}
+        for spec in self.specs:
+            written = write_distribution_spec(spec)
+            if isinstance(written, dict):
+                specs[written["type"]] = {key: value for key, value in written.items() if key != "type"}
+        return {"type": self.shown, "fixed": self.fixed, "specs": specs}
 
 
 @dataclass(frozen=True)
 class ComponentLimits:
-    """A fleet component: the names the form and the scenario grammar give it, the range of a home's value, and what its distribution editor shows and starts at.
+    """A fleet component: the names the form and the scenario grammar give it, the range of a home's value, and what its distribution editor offers and starts at.
 
     Attributes:
         key: Its fleet_distribution block, and the prefix of the builder form's fields for it.
+        block: Its scenario_blocks component block table, whose fleet row for grammar_key
+            gives the kind of field the editor edits.
         grammar_key: Its spec's key in that block.
         fixed_field: The builder form field carrying a fixed value.
         subject: What its values measure, e.g. 'PV Capacity': the fleet page's card heading,
@@ -139,15 +149,19 @@ class ComponentLimits:
         value_range: The range of the value every home holds, fixed or drawn, either end
             included.
         new_row_value: The value an added row starts at.
-        start: The distribution its card starts at.
+        start: What its card's editor starts at.
         value_of: The value a home holds for it, None when the home has no such component
             or leaves the value unset.
 
     Raises:
-        ValueError: for a start whose fixed value lies outside value_range.
+        ValueError: For a grammar_key outside its block's fleet rows, a start whose fixed value
+            lies outside value_range, whose specs are not one of each editor type in order,
+            whose shown type is neither '' nor an editor type, or whose shuffled pool's counts
+            do not total FLEET_SIZE_DEFAULT, naming the field and the value.
     """
 
     key: str
+    block: ComponentBlock[Any]
     grammar_key: str
     fixed_field: str
     subject: str
@@ -155,16 +169,64 @@ class ComponentLimits:
     step: float
     value_range: Interval
     new_row_value: float
-    start: EditorDistribution
+    start: EditorStart
     value_of: Callable[[HomeConfig], float | None] = field(compare=False, repr=False)
 
     def __post_init__(self) -> None:
+        component = f"fleet component {self.key!r}"
+        _require(
+            self.grammar_key in self.block.fleet,
+            f"grammar_key of {component}",
+            f"be one of its block's fleet rows ({', '.join(self.block.fleet)})",
+            self.grammar_key,
+        )
         _require(
             self.value_range.admits(self.start.fixed),
-            f"start.fixed of fleet component {self.key!r}",
+            f"start.fixed of {component}",
             f"lie within its value_range, {self.value_range}",
             self.start.fixed,
         )
+        type_names = ", ".join(each.name for each in self.editor_types)
+        _require(
+            len(self.start.specs) == len(self.editor_types)
+            and all(
+                isinstance(spec, each.spec_type)
+                for spec, each in zip(self.start.specs, self.editor_types, strict=True)
+            ),
+            f"start.specs of {component}",
+            f"be one spec of each of its editor types, in order ({type_names})",
+            self.start.specs,
+        )
+        _require(
+            self.start.shown in {"", *(each.name for each in self.editor_types)},
+            f"start.shown of {component}",
+            f"be '' or one of its editor types ({type_names})",
+            self.start.shown,
+        )
+        for spec in self.start.specs:
+            if isinstance(spec, ShuffledPoolDistribution):
+                _require(
+                    sum(spec.counts) == FLEET_SIZE_DEFAULT,
+                    f"start.specs of {component}",
+                    f"hold shuffled pools whose counts total FLEET_SIZE_DEFAULT, {FLEET_SIZE_DEFAULT}",
+                    spec.counts,
+                )
+
+    @property
+    def field_kind(self) -> FieldKind:
+        """The kind of the field its editor edits: its block's fleet row for grammar_key's."""
+        return self.block.fleet[self.grammar_key].kind
+
+    @property
+    def editor_types(self) -> tuple[DistributionType, ...]:
+        """The types its editor offers beside Fixed Value: those a field of its field_kind draws, in table order."""
+        return editor_types(self.field_kind)
+
+    @property
+    def scalar_form(self) -> DistributionType:
+        """The record of the bare value every home is given, which its editor offers as Fixed Value."""
+        (scalar_form,) = [each for each in DISTRIBUTION_TYPES.values() if each.is_scalar_form]
+        return scalar_form
 
     @property
     def heading(self) -> str:
@@ -172,7 +234,8 @@ class ComponentLimits:
         return f"{self.subject} ({self.unit})"
 
     def as_json(self) -> dict[str, Any]:
-        """This component as #page-limits writes it: its names, step, value_range as its bounds, new_row_value and start as the editor holds it."""
+        """This component as #page-limits writes it: its names, step, value_range as its bounds, new_row_value, start as the editor holds it, and the editor types and scalar form its editor offers."""
+        (scalar_key,) = self.scalar_form.spec_keys
         return {
             "key": self.key,
             "grammar_key": self.grammar_key,
@@ -182,7 +245,23 @@ class ComponentLimits:
             "value_range": _interval_json(self.value_range),
             "new_row_value": self.new_row_value,
             "start": self.start.editor_state(),
+            "editor_types": [_editor_type_json(each) for each in self.editor_types],
+            "scalar_form": {"name": self.scalar_form.name, "title": self.scalar_form.title, "key": scalar_key},
         }
+
+
+def _editor_type_json(distribution_type: DistributionType) -> dict[str, Any]:
+    """*distribution_type* as #page-limits writes it: its name, title, parameters, and rows as their keys and paired title, or null."""
+    rows = distribution_type.rows
+    return {
+        "name": distribution_type.name,
+        "title": distribution_type.title,
+        "parameters": [
+            {"key": parameter.key, "title": parameter.title, "required": parameter.required}
+            for parameter in distribution_type.parameters
+        ],
+        "rows": None if rows is None else {"keys": list(rows.keys), "paired_title": rows.paired_title},
+    }
 
 
 FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
@@ -190,6 +269,7 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
     for component in (
         ComponentLimits(
             key="pv",
+            block=PV_BLOCK,
             grammar_key="capacity_kw",
             fixed_field="pv_capacity_kw",
             subject="PV Capacity",
@@ -197,19 +277,21 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
             step=0.1,
             value_range=Interval(0.5, 20),
             new_row_value=4.0,
-            start=EditorDistribution(
+            start=EditorStart(
+                shown="shuffled_pool",
                 fixed=4.0,
-                mean=4.0,
-                std=1.0,
-                min=2.0,
-                max=8.0,
-                values=((3.0, 20), (4.0, 40), (5.0, 30)),
-                entries=((3.0, 20), (4.0, 40), (5.0, 30), (6.0, 10)),
+                specs=(
+                    WeightedDiscreteDistribution((3.0, 4.0, 5.0, 6.0), (20, 40, 30, 10)),
+                    NormalDistribution(4.0, 1.0, 2.0, 8.0),
+                    UniformDistribution(2.0, 8.0),
+                    ShuffledPoolDistribution((3.0, 4.0, 5.0, 6.0), (20, 40, 30, 10)),
+                ),
             ),
             value_of=lambda home: home.pv_config.capacity_kw,
         ),
         ComponentLimits(
             key="battery",
+            block=BATTERY_BLOCK,
             grammar_key="capacity_kwh",
             fixed_field="battery_capacity_kwh",
             subject="Battery Capacity",
@@ -217,19 +299,21 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
             step=0.1,
             value_range=Interval(0, 100),
             new_row_value=5.0,
-            start=EditorDistribution(
+            start=EditorStart(
+                shown="shuffled_pool",
                 fixed=5.0,
-                mean=5.0,
-                std=2.0,
-                min=0,
-                max=13.5,
-                values=((0, 40), (5.0, 40), (10.0, 20)),
-                entries=((0, 40), (5.0, 40), (10.0, 20)),
+                specs=(
+                    WeightedDiscreteDistribution((0.0, 5.0, 10.0), (40, 40, 20)),
+                    NormalDistribution(5.0, 2.0, 0.0, 15.0),
+                    UniformDistribution(0.0, 15.0),
+                    ShuffledPoolDistribution((0.0, 5.0, 10.0), (40, 40, 20)),
+                ),
             ),
             value_of=lambda home: None if home.battery_config is None else home.battery_config.capacity_kwh,
         ),
         ComponentLimits(
             key="load",
+            block=LOAD_BLOCK,
             grammar_key="annual_consumption_kwh",
             fixed_field="annual_consumption_kwh",
             subject="Annual Consumption",
@@ -237,14 +321,15 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
             step=100,
             value_range=Interval(500, 20000),
             new_row_value=3500,
-            start=EditorDistribution(
+            start=EditorStart(
+                shown="normal",
                 fixed=3500,
-                mean=3400,
-                std=800,
-                min=2000,
-                max=5000,
-                values=((2900, 30), (3500, 40), (4500, 30)),
-                entries=((2900, 30), (3500, 40), (4500, 30)),
+                specs=(
+                    WeightedDiscreteDistribution((2900, 3500, 4500), (30, 40, 30)),
+                    NormalDistribution(3400, 800, 2000, 6000),
+                    UniformDistribution(2000, 6000),
+                    ShuffledPoolDistribution((2900, 3500, 4500), (30, 40, 30)),
+                ),
             ),
             value_of=lambda home: home.load_config.annual_consumption_kwh,
         ),
