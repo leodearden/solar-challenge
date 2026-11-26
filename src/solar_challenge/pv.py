@@ -1165,6 +1165,25 @@ def create_model_chain(
     return create_model_chain_picking_from(config, location, candidate_cec_inverters())
 
 
+def run_model_chain(model_chain: ModelChain, weather_data: pd.DataFrame) -> ModelChain:
+    """Run model_chain over weather_data and return it, run.
+
+    It is the one way the project runs a pvlib ModelChain, which
+    simulate_pv_output, the measurement scripts and the tests share. Every
+    chain create_model_chain_picking_from builds already applies the system
+    losses and ageing to each array's DC power. Building and running stay
+    separate because measure_mppt_window's census reads a chain's inverter
+    pick before it runs the chain.
+    """
+    model_chain.run_model(weather_data)
+    return model_chain
+
+
+def ac_power_kw(model_chain: ModelChain) -> pd.Series:
+    """A run chain's AC power in kW, clipped at 0 so the inverter's night tare never reads as negative generation."""
+    return (model_chain.results.ac / 1000.0).clip(lower=0.0)
+
+
 def simulate_pv_output(
     config: PVConfig,
     location: "Location",
@@ -1181,19 +1200,7 @@ def simulate_pv_output(
         Series of AC power output at config.system_age_years, in kW, with the
         same index as weather_data
     """
-    model_chain = create_model_chain(config, location)
-
-    # Run the simulation
-    with _quiet_single_diode_solver():
-        model_chain.run_model(weather_data)
-
-    # Get AC power and convert from W to kW
-    ac_power = model_chain.results.ac / 1000.0
-
-    # Ensure no negative values (numerical noise)
-    ac_power = ac_power.clip(lower=0.0)
-
-    return ac_power
+    return ac_power_kw(run_model_chain(create_model_chain(config, location), weather_data))
 
 
 def calculate_degradation_factor(
