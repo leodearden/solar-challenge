@@ -1219,8 +1219,9 @@ _ECONOMY_7_TARIFF = {
     "off_peak_end": "07:30",
 }
 
-# Each way `fleet sweep` sweeps a fleet file's battery capacity: the file's capacity_kwh,
-# the options that sweep it, and the file its 5 kWh point is exported to.
+# Each way `fleet sweep` sweeps a fleet file's battery capacity, by its YAML sweep, by a
+# ${CAP} variable or by the battery_capacity_kwh knob: the file's capacity_kwh, the options
+# that sweep it, and the file its 5 kWh point is exported to.
 _SWEEP_PATHS = (
     pytest.param(
         {
@@ -1237,6 +1238,12 @@ _SWEEP_PATHS = (
         ("--param", "CAP", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
         "CAP_5.0000.csv",
         id="param-sweep",
+    ),
+    pytest.param(
+        2.0,
+        ("--param", "battery_capacity_kwh", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+        "battery_capacity_kwh_5.0000.csv",
+        id="knob-sweep",
     ),
 )
 
@@ -1373,6 +1380,13 @@ class TestFleetSweepRefusesAFileItCannotSweep:
                 "Variables with no placeholder in the document: 'BATTERY_RATI0'; "
                 "its placeholders: 'BATTERY_RATIO' at fleet_distribution.battery.capacity_kwh.multiplier",
                 id="param-sweep-of-a-variable-no-placeholder-names",
+            ),
+            pytest.param(
+                "name: Street\nfleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                ("--param", "battery_cost", "--min", "100", "--max", "200", "--steps", "2"),
+                "Knob 'battery_cost_per_kwh_gbp' sets finance.battery_cost_per_kwh_gbp, "
+                "but scenario 'Street' has no finance block",
+                id="finance-knob-of-a-file-without-finance",
             ),
         ],
     )

@@ -172,6 +172,18 @@ def test_the_progress_bar_counts_every_home_of_every_point(
     assert "4/4" in status
 
 
+def test_a_knob_given_by_an_alias_labels_its_points_by_the_knobs_canonical_name() -> None:
+    result = _sweep(2.0, "--param", "seg", "--min", "5", "--max", "15", "--steps", "2", "--mode", "linear")
+
+    assert result.exit_code == 0, result.output
+    assert sorted(path.name for path in Path("out").iterdir()) == [
+        "seg_tariff_pence_per_kwh_15.0000.csv",
+        "seg_tariff_pence_per_kwh_5.0000.csv",
+        "sweep_summary.csv",
+    ]
+    assert list(pd.read_csv(Path("out", "sweep_summary.csv"))["param"]) == ["seg_tariff_pence_per_kwh"] * 2
+
+
 def test_a_param_sweep_of_a_placeholder_in_the_location_block_simulates_each_point_at_its_latitude(
     weather_cache: WeatherCache,
 ) -> None:
