@@ -9,8 +9,10 @@ import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.web import fleet_presets
 from solar_challenge.web.builtin_scenarios import scenario_files_in
 from solar_challenge.web.fleet_presets import fleet_preset_names_among
+from tests._error_records import error_records
 
 #: A fleet scenario the fleet form loads.
 _FLEET_SCENARIO = """\
@@ -76,3 +78,35 @@ def test_a_file_that_cannot_be_read_as_utf8_text_is_left_out_and_a_warning_names
     assert [record.levelno for record in caplog.records if str(spoilt) in record.getMessage()] == [
         logging.WARNING
     ]
+
+
+def _scenario_text_unique_to(test_name: str) -> str:
+    """_FLEET_SCENARIO under a comment naming *test_name*: _yaml_loads memoises by text, so a test that patches the reader judges text no other test has."""
+    return f"# {test_name}\n{_FLEET_SCENARIO}"
+
+
+def test_a_value_error_from_the_reader_that_is_not_a_configuration_error_leaves_the_file_out_logged_as_a_probable_defect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def fleet_form_from_yaml_failing(yaml_text: str) -> object:
+        raise ValueError("probe")
+
+    monkeypatch.setattr(fleet_presets, "fleet_form_from_yaml", fleet_form_from_yaml_failing)
+    (tmp_path / "fleet.yaml").write_text(_scenario_text_unique_to("value-error-not-a-configuration-error"))
+
+    assert fleet_preset_names_among(scenario_files_in(tmp_path)) == ()
+    [record] = error_records(caplog)
+    assert "ValueError" in record.getMessage()
+
+
+def test_a_type_error_from_the_reader_is_not_a_refusal_and_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fleet_form_from_yaml_failing(yaml_text: str) -> object:
+        raise TypeError("probe")
+
+    monkeypatch.setattr(fleet_presets, "fleet_form_from_yaml", fleet_form_from_yaml_failing)
+    (tmp_path / "fleet.yaml").write_text(_scenario_text_unique_to("type-error"))
+
+    with pytest.raises(TypeError, match="probe"):
+        fleet_preset_names_among(scenario_files_in(tmp_path))

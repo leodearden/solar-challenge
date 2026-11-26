@@ -31,6 +31,7 @@ from solar_challenge.validation import (
     UK_PV_ONLY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
     UK_YIELD_BENCHMARK_KWH_PER_KWP,
 )
+from solar_challenge.web import assistant
 from solar_challenge.web.assistant import (
     MAX_TOOL_ITERATIONS,
     METRIC_TABLE,
@@ -50,6 +51,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
 
+from tests._error_records import error_records
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_stores import empty_run_storage, run_storage_over
 from tests._run_summaries import home_summary
@@ -1241,6 +1243,39 @@ _YIELDS_KWH_PER_KWP = {
     f"{kwh_per_kwp:g}"
     for kwh_per_kwp in (*UK_YIELD_BENCHMARK_KWH_PER_KWP, BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP)
 }
+
+
+class TestDispatchToolJudgesARefusalWithRefusalText:
+    """dispatch_tool answers a tool's refusal as an error, logging a ValueError that is not a ConfigurationError as a probable defect."""
+
+    @pytest.mark.parametrize(
+        ("tool_input", "error"),
+        [
+            pytest.param({}, "metric is required", id="required-field-omitted"),
+            pytest.param({"metric": 5}, "metric must be a string, got 5", id="text-field-not-a-string"),
+        ],
+    )
+    def test_an_input_the_tool_refuses_is_answered_naming_the_field_and_logs_nothing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, tool_input: dict[str, Any], error: str
+    ) -> None:
+        result = dispatch_tool("explain_metric", tool_input, tool_context(tmp_path))
+
+        assert result == {"error": error}
+        assert error_records(caplog) == []
+
+    def test_a_value_error_that_is_not_a_configuration_error_is_answered_and_logged_as_a_probable_defect(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def explain_metric_failing(metric: str) -> dict[str, str]:
+            raise ValueError("probe")
+
+        monkeypatch.setattr(assistant, "explain_metric", explain_metric_failing)
+
+        result = dispatch_tool("explain_metric", {"metric": "x"}, tool_context(tmp_path))
+
+        assert result == {"error": "probe"}
+        [record] = error_records(caplog)
+        assert "ValueError" in record.getMessage()
 
 
 class TestTheModelIsToldTheEnginesFacts:
