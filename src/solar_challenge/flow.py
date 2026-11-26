@@ -139,6 +139,11 @@ class EnergyFlowResult:
     battery_charge - battery_discharge closes with no loss term, and the battery's
     SOC changes by charge_efficiency × battery_charge - battery_discharge /
     discharge_efficiency (docs/prds/one-dispatch-engine.md §5.2).
+
+    grid_charge and battery_export are informational parts of other flows, so the
+    identity is unchanged by them: grid_charge of battery_charge and grid_import,
+    battery_export of battery_discharge and grid_export
+    (docs/prds/event-dispatch-and-battery-sizing.md §5.1).
     """
 
     generation: float
@@ -150,6 +155,7 @@ class EnergyFlowResult:
     grid_import: float
     battery_soc: float  # SOC after this timestep
     grid_charge: float = 0.0  # informational: kWh the battery drew from the grid, a part of battery_charge and grid_import
+    battery_export: float = 0.0  # informational: kWh the battery sent to the grid, a part of battery_discharge and grid_export
 
     def __post_init__(self) -> None:
         """Refuse a flow NON_NEGATIVE does not admit (below 0, NaN or infinite), naming each such flow and its value."""
@@ -220,26 +226,28 @@ class _StepEnergies:
 @dataclass(frozen=True)
 class _BatteryExchange:
     """The energies a battery drew from PV and from the grid (before charge losses)
-    and delivered to the home's bus (after discharge losses) in one timestep, in kWh."""
+    and delivered to the home's bus (after discharge losses) in one timestep, in kWh,
+    and whether its decision asked for export."""
 
     pv_charge_kwh: float
     grid_charge_kwh: float
     discharge_kwh: float
+    exports: bool
 
 
-_NO_EXCHANGE: Final = _BatteryExchange(pv_charge_kwh=0.0, grid_charge_kwh=0.0, discharge_kwh=0.0)
+_NO_EXCHANGE: Final = _BatteryExchange(pv_charge_kwh=0.0, grid_charge_kwh=0.0, discharge_kwh=0.0, exports=False)
 
 
 def _execute(decision: DispatchDecision, battery: Battery, timestep_minutes: float) -> _BatteryExchange:
-    """Run decision on battery for one timestep: its PV charge, then its grid charge, then its discharge, skipping each power not above 0."""
+    """Run decision on battery for one timestep: its PV charge, then its grid charge, then its discharge and export in one discharge, skipping each power not above 0."""
+    discharge_kw = decision.discharge_kw + decision.export_kw
     return _BatteryExchange(
         pv_charge_kwh=battery.charge(decision.charge_kw, timestep_minutes) if decision.charge_kw > 0 else 0.0,
         grid_charge_kwh=(
             battery.charge(decision.grid_charge_kw, timestep_minutes) if decision.grid_charge_kw > 0 else 0.0
         ),
-        discharge_kwh=(
-            battery.discharge(decision.discharge_kw, timestep_minutes) if decision.discharge_kw > 0 else 0.0
-        ),
+        discharge_kwh=battery.discharge(discharge_kw, timestep_minutes) if discharge_kw > 0 else 0.0,
+        exports=decision.export_kw > 0,
     )
 
 
@@ -247,13 +255,18 @@ def _settle(step: _StepEnergies, exchange: _BatteryExchange, battery_soc_kwh: fl
     """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not draw or supply."""
     battery_charge_kwh = exchange.pv_charge_kwh + exchange.grid_charge_kwh
 
-    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
+    # Self-consumption: direct PV consumption + battery discharge (capped at demand), so the
+    # battery's delivery serves the home first and never counts what it exports.
     direct_consumption_kwh = min(step.generation_kwh, step.demand_kwh)
     self_consumption_kwh = min(direct_consumption_kwh + exchange.discharge_kwh, step.demand_kwh)
 
-    # Export is the excess the battery did not draw; import adds what it drew from the grid
-    # (docs/prds/one-dispatch-engine.md §5.2).
-    grid_export_kwh = max(0.0, step.excess_kwh - exchange.pv_charge_kwh)
+    # The battery exports what it delivered beyond the shortfall, but only when its decision asked
+    # to: a discharge of just the shortfall can deliver an ulp more, which is not an export.
+    battery_export_kwh = max(0.0, exchange.discharge_kwh - step.shortfall_kwh) if exchange.exports else 0.0
+
+    # Export is the excess the battery did not draw, plus the battery's export; import adds what it
+    # drew from the grid (docs/prds/one-dispatch-engine.md §5.2).
+    grid_export_kwh = max(0.0, step.excess_kwh - exchange.pv_charge_kwh) + battery_export_kwh
     grid_import_kwh = max(0.0, step.shortfall_kwh - exchange.discharge_kwh) + exchange.grid_charge_kwh
 
     return EnergyFlowResult(
@@ -266,6 +279,7 @@ def _settle(step: _StepEnergies, exchange: _BatteryExchange, battery_soc_kwh: fl
         grid_import=grid_import_kwh,
         battery_soc=battery_soc_kwh,
         grid_charge=exchange.grid_charge_kwh,
+        battery_export=battery_export_kwh,
     )
 
 
@@ -288,6 +302,8 @@ def simulate_timestep(
     3. Remaining excess exports to grid
     4. Shortfall draws from battery (if strategy allows)
     5. Remaining shortfall imports from grid
+    6. What the battery delivers beyond the shortfall exports to grid (if the strategy
+       asks for export_kw), as battery_export
 
     Args:
         generation_kw: PV generation power in kW
@@ -393,8 +409,9 @@ def validate_energy_balance(
     Raises:
         ValueError: If balance is violated beyond tolerance
     """
-    # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, so
-    # _settle's flows close this balance.
+    # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, and
+    # _settle books what the battery delivers beyond the shortfall as grid export, so its flows close
+    # this balance.
     energy_in = result.generation + result.grid_import
     battery_net_draw_kwh = result.battery_charge - result.battery_discharge
     energy_out = result.demand + result.grid_export + battery_net_draw_kwh
