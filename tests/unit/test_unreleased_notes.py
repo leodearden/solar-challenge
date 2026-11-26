@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-NOTES_DIR = "docs/unreleased"
-NOTE_DOCS = ("domain-library-consumption", "cost-recovery-finance-model")
+from tests._release_notes import CONSUMPTION_DOC, NOTE_DOCS, NOTES_DIR, note_path
+
 NOTES_README = "README.md"
 UNRELEASED_PARAGRAPH = "**Unreleased on main**"
 
@@ -75,7 +75,7 @@ def test_every_note_is_a_task_file_under_the_doc_it_serves(project_root: Path) -
         f"Files under {NOTES_DIR} that are not a release note: {misplaced}. A note is "
         f"{NOTES_DIR}/<doc>/<task id>.md, <doc> one of {list(NOTE_DOCS)} and <task id> the "
         "id of the task whose change it describes, e.g. "
-        f"{NOTES_DIR}/domain-library-consumption/871.md. The only other files are "
+        f"{note_path(CONSUMPTION_DOC, 871)}. The only other files are "
         f"{NOTES_DIR}/{NOTES_README} and each {NOTES_DIR}/<doc>/{NOTES_README}."
     )
 
