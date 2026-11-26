@@ -383,6 +383,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "available_charge_capacity_kwh": "property (self) -> float",
         "available_discharge_capacity_kwh": "property (self) -> float",
         "max_charge_kw": "property (self) -> float",
+        "max_discharge_kw": "property (self) -> float",
         "charge": "(self, power_kw: float, duration_minutes: float) -> float",
         "discharge": "(self, power_kw: float, duration_minutes: float) -> float",
     },

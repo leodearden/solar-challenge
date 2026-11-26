@@ -345,6 +345,12 @@ class TestBatteryAnswersItsGridChargeTarget:
         assert battery.charge(2 * battery.max_charge_kw, 60) == pytest.approx(battery.max_charge_kw * 1.0)
         assert battery.soc_kwh - 1.0 == pytest.approx(battery.max_charge_kw * 1.0 * battery.charge_efficiency)
 
+    def test_the_discharge_limit_is_the_configured_one_and_the_one_discharge_applies(self) -> None:
+        battery = Battery(BatteryConfig(capacity_kwh=10.0, max_discharge_kw=3.3), initial_soc_kwh=9.0)
+        assert battery.max_discharge_kw == 3.3
+        assert battery.discharge(2 * battery.max_discharge_kw, 60) == pytest.approx(battery.max_discharge_kw * 1.0)
+        assert 9.0 - battery.soc_kwh == pytest.approx(battery.max_discharge_kw * 1.0 / battery.discharge_efficiency)
+
 
 class TestBatteryConfigRoundTripEfficiency:
     """A battery's round-trip efficiency is no field of BatteryConfig: with_round_trip sets the pair it splits into."""

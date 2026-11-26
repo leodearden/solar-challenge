@@ -379,7 +379,7 @@ def simulate_timestep(
         generation_kw,
         demand_kw,
         max_charge_kw=battery.max_charge_kw,
-        max_discharge_kw=battery.config.max_discharge_kw,
+        max_discharge_kw=battery.max_discharge_kw,
     ).require_admissible(decision, strategy.name)
 
     exchange = _execute(decision, battery, timestep_minutes)
