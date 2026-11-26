@@ -360,8 +360,11 @@ def suggest_config(
 # The days a trigger tool's simulation spans when the model sends no window.
 _TRIGGER_TOOL_DEFAULT_DAYS = 7
 
-# The most homes run_fleet_simulation submits: a larger n_homes is clamped to it, to protect the single-worker JobManager.
+# The most homes run_fleet_simulation submits: a larger n_homes is refused, to protect the single-worker JobManager.
 _FLEET_TOOL_MAX_HOMES = 100
+
+# The fleet sizes run_fleet_simulation submits.
+_FLEET_TOOL_SIZES = Interval(1, _FLEET_TOOL_MAX_HOMES)
 
 # The runs list_recent_runs returns when the model sends no positive limit, and the most it returns for any limit.
 _LIST_RUNS_DEFAULT_LIMIT = 10
@@ -539,11 +542,12 @@ def run_fleet_simulation(
 
     Builds a homogeneous fleet by parsing the per-home *params* once with
     ``parse_home_config`` and repeating the resulting frozen ``HomeConfig``
-    for each home.  *n_homes* is clamped to [1, _FLEET_TOOL_MAX_HOMES] to
-    protect the single-worker JobManager.
+    for each home.  An *n_homes* outside _FLEET_TOOL_SIZES, 1 to
+    _FLEET_TOOL_MAX_HOMES, is refused, naming n_homes, its value and the bound,
+    to protect the single-worker JobManager.
 
     Args:
-        n_homes:     The number of homes in the fleet, before the clamp.
+        n_homes:     The number of homes in the fleet.
         params:      The per-home fields accepted by ``parse_home_config``
                      (pv_kw, battery_kwh, location, days or start/end, …),
                      without ``n_homes``.  Params that send no window run
@@ -556,7 +560,10 @@ def run_fleet_simulation(
         ``{"run_id": str, "results_url": str}`` on success, or
         ``{"error": str}`` on failure.  Never raises.
     """
-    fleet_size = max(1, min(n_homes, _FLEET_TOOL_MAX_HOMES))
+    try:
+        fleet_size = as_whole_number(n_homes, "n_homes", _FLEET_TOOL_SIZES)
+    except ValueError as refusal:
+        return {"error": str(refusal)}
 
     # Validate once; if it fails, return early without submitting
     try:
@@ -678,7 +685,7 @@ def _call_run_fleet_simulation(tool_input: Mapping[str, Any], context: ToolConte
     """Answer a run_fleet_simulation call: submit the fleet *tool_input* describes to *context*'s JobManager."""
     per_home = {key: value for key, value in tool_input.items() if key != "n_homes"}
     return run_fleet_simulation(
-        as_whole_number(tool_input["n_homes"], "n_homes"),
+        as_whole_number(tool_input["n_homes"], "n_homes", _FLEET_TOOL_SIZES),
         per_home,
         context.job_manager,
         context.results_url,
