@@ -42,6 +42,7 @@ import pytest
 import solar_challenge
 import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
+from tests._release_notes import CONSUMPTION_DOC, note_path
 from tests._released_surface import RELEASED_CALLS, RELEASED_CLOSURE, RELEASED_MEMBERS, RELEASED_SURFACE
 from tests._surface_forms import (
     is_additive_change,
@@ -1167,6 +1168,35 @@ def test_a_pinned_call_changed_since_the_release_is_listed_under_its_class_path_
         f"released: {RELEASED_CALLS['HomeSimulator']}",
     ]
     assert entry[3:] == ["change:   breaking"]
+
+
+def test_an_unreleased_task_with_no_note_file_fails_naming_the_note_to_write(
+    scratch_edit: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    scratch_edit.setitem(UNRELEASED, "calculate_degradation_factor", 999999999)
+
+    message = _lock_failure(lambda: test_every_task_unreleased_names_has_its_release_note(project_root))
+
+    assert note_path(CONSUMPTION_DOC, 999999999) in message
+    assert "calculate_degradation_factor" in message
+
+
+def test_a_changed_form_passes_once_unreleased_names_it_with_a_task_whose_note_exists(
+    scratch_edit: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def calculate_degradation_factor(
+        system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0
+    ) -> float: ...
+
+    scratch_edit.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+    scratch_edit.setitem(UNRELEASED, "calculate_degradation_factor", 4242)
+    for task in set(UNRELEASED.values()):
+        note = tmp_path / note_path(CONSUMPTION_DOC, task)
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text("What changed.\n", encoding="utf-8")
+
+    test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release()
+    test_every_task_unreleased_names_has_its_release_note(tmp_path)
 
 
 # ===========================================================================
