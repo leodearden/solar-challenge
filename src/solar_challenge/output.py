@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TypeVar, Uni
 
 import pandas as pd
 
+from solar_challenge.community import SharingMode
 from solar_challenge.demand import LoadKind
 from solar_challenge.home import (
     RunPricing,
@@ -23,7 +24,7 @@ from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
-    from solar_challenge.community import CommunityResults, SharingMode
+    from solar_challenge.community import CommunityResults
 
 
 _WINTER_MONTHS = (12, 1, 2)
@@ -362,7 +363,7 @@ class CommunityMetrics:
     battery_charge_kwh: float
     battery_discharge_kwh: float
     #: Authoritative sharing mode, read directly from CommunityResults.sharing_mode.
-    sharing_mode: "SharingMode"
+    sharing_mode: SharingMode
 
 
 def compute_community_metrics(community_results: "CommunityResults") -> CommunityMetrics:

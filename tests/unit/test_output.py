@@ -1,6 +1,7 @@
 """Tests for output and reporting functions."""
 
 import tempfile
+import typing
 from dataclasses import asdict, replace
 from datetime import date
 from pathlib import Path
@@ -9,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.community import CommunityConfig, simulate_community
+from solar_challenge.community import CommunityConfig, SharingMode, simulate_community
 from solar_challenge.demand import LoadKind
 from solar_challenge.home import RunPricing, SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
@@ -451,6 +452,13 @@ class TestCommunityMetrics:
         assert minute.dt_h == pytest.approx(1 / 60, rel=1e-9)
         assert half_hour.dt_h == pytest.approx(0.5, rel=1e-9)
         assert half_hour.sharing_mode == minute.sharing_mode
+
+
+class TestCommunityMetricsSharingMode:
+    """CommunityMetrics.sharing_mode is typed by community.SharingMode, a type a runtime reader of the report's hints can resolve."""
+
+    def test_the_type_hints_of_community_metrics_resolve_its_sharing_mode_to_sharing_mode(self) -> None:
+        assert typing.get_type_hints(CommunityMetrics)["sharing_mode"] == SharingMode
 
 
 class TestAggregateDaily:
