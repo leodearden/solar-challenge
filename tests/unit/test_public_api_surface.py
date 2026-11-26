@@ -12,8 +12,8 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
 - The drift report: how a failing lock names each drifted path with its frozen and
   current forms, labels each additive or breaking, and says what each kind needs.
 - Changes since the last release: UNRELEASED lists each path whose form differs from
-  the released snapshot, tests/_released_surface.py, with the task that last changed it,
-  and each task it names has its release note.
+  the released snapshot, tests/_released_surface.py, with the task that last changed it;
+  each task it names has its release note; and the snapshot is of the package's version.
 - Name resolution: every exported name resolves to its typed import, the object the
   package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
   names, and an unknown name raises AttributeError; and each EXPECTED_KIND name resolves
@@ -44,7 +44,13 @@ import solar_challenge
 import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
 from tests._release_notes import CONSUMPTION_DOC, note_path
-from tests._released_surface import RELEASED_CALLS, RELEASED_CLOSURE, RELEASED_MEMBERS, RELEASED_SURFACE
+from tests._released_surface import (
+    RELEASED_CALLS,
+    RELEASED_CLOSURE,
+    RELEASED_MEMBERS,
+    RELEASED_SURFACE,
+    RELEASED_VERSION,
+)
 from tests._surface_forms import (
     is_additive_change,
     is_additive_member_change,
@@ -1138,6 +1144,17 @@ def test_every_task_unreleased_names_has_its_release_note(project_root: Path) ->
     )
 
 
+def test_the_released_snapshot_is_of_the_package_version() -> None:
+    """RELEASED_VERSION is the package's version, so a version bump that keeps the old snapshot fails."""
+    assert RELEASED_VERSION == solar_challenge.__version__, (
+        f"The released snapshot, tests/_released_surface.py, is of {RELEASED_VERSION!r}, but "
+        f"the package's version is {solar_challenge.__version__!r}. The release commit that "
+        "bumps the version replaces tests/_released_surface.py's four tables with the frozen "
+        "tables it releases, sets RELEASED_VERSION, and empties UNRELEASED ('Tag / release "
+        "convention' in docs/domain-library-consumption.md)."
+    )
+
+
 def test_a_form_changed_since_the_release_that_unreleased_does_not_list_fails_naming_its_released_and_current_forms_and_its_change(
     scratch_edit: pytest.MonkeyPatch,
 ) -> None:
@@ -1223,7 +1240,7 @@ def test_a_version_bump_that_keeps_the_released_snapshot_fails_naming_both_versi
     message = _lock_failure(test_the_released_snapshot_is_of_the_package_version)
 
     assert "'0.7.0'" in message
-    assert "'0.6.0'" in message
+    assert repr(RELEASED_VERSION) in message
     assert "tests/_released_surface.py" in message
 
 

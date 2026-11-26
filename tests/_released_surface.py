@@ -2,9 +2,12 @@
 """The frozen tables of tests/unit/test_public_api_surface.py as the last release shipped them.
 
 Each RELEASED_X is FROZEN_X at that release's commit, comments and order included, each
-value on one line. The release convention (docs/domain-library-consumption.md, "Tag /
-release convention") replaces them.
+value on one line, and RELEASED_VERSION is the version of the release they are a snapshot
+of. The release convention (docs/domain-library-consumption.md, "Tag / release
+convention") replaces them.
 """
+
+RELEASED_VERSION = "0.6.0"
 
 RELEASED_SURFACE: dict[str, str] = {
     # --- finance / bill engine (finance.py) ---
