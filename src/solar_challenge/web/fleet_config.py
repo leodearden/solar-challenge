@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Helper module for fleet configuration in the web dashboard.
+"""The fleet a dashboard form's blocks describe, held to the dashboard's bounds, and the distribution preview's sampler.
 
-Provides utilities for sampling distributions, converting form data to
-fleet distribution configs and their distributions back to the form's, and
-translating either fleet form's distributions into fleet_distribution.py's grammar.
-The translation is of shape only: the grammar reads every number and type a form sends,
-and only the preview, which never runs the grammar, reads its own.
+read_form_fleet reads a form's fleet blocks as a fleet_distribution: block's are, at the
+form's own paths, with nothing invented. The preview never runs the grammar, so it reads
+its own numbers.
 """
 
 from __future__ import annotations
@@ -24,9 +22,7 @@ from solar_challenge.number_fields import Interval, as_finite_float, as_whole_nu
 from solar_challenge.scenario_blocks import child_path
 from solar_challenge.web.fleet_components import (
     FLEET_SIZE,
-    FLEET_SIZE_DEFAULT,
     MAX_FLEET_HOMES,
-    SEED_DEFAULT,
     read_fleet_seed,
     read_fleet_size,
 )
@@ -201,79 +197,6 @@ def read_form_fleet(blocks: Mapping[str, Any]) -> FleetDistributionConfig:
     return fleet
 
 
-def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, Any]:
-    """Convert web form data to a fleet distribution config dict.
-
-    The returned dict mirrors the structure of the ``fleet_distribution``
-    section in scenario YAML files and can be used with
-    :func:`solar_challenge.fleet_distribution.generate_homes_from_distribution`.
-
-    Its pv/battery/load blocks follow the fleet form's presence rule (see
-    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).  Its battery block sets
-    no dispatch strategy: every battery takes the form's dispatch_strategy.
-
-    Args:
-        form_data: A fleet form, of which only the FLEET_DISTRIBUTION_FORM_KEYS are read.
-
-    Returns:
-        Fleet distribution config dict.
-
-    Its n_homes and seed, FLEET_SIZE_DEFAULT and SEED_DEFAULT when the form leaves them
-    out, and each block's distributions, fixed values and other settings pass on as sent,
-    the blocks' as :func:`_parse_component_distribution` writes them, for
-    fleet_distribution.py's grammar to read or refuse naming them; the dashboard's bounds
-    apply to the fleet it reads (see :func:`refuse_a_fleet_the_dashboard_cannot_run`).
-
-    Raises:
-        ConfigurationError: If a pv/battery/load block is neither null nor a dict (see
-            :func:`_component_block`),
-            a battery block sets a dispatch strategy (see
-            :func:`_refuse_battery_dispatch_strategy`), or
-            :func:`_parse_component_distribution` refuses a block's shape; each refusal
-            names its field as a dot path from the form's root.
-    """
-    config: dict[str, Any] = {
-        "n_homes": form_data.get("n_homes", FLEET_SIZE_DEFAULT),
-        "seed": form_data.get("seed", SEED_DEFAULT),
-    }
-
-    # Process PV distribution
-    pv_data = _component_block_or_empty(form_data, "pv")
-    config["pv"] = _parse_component_distribution(pv_data, "pv", "capacity_kw")
-
-    # Process Battery distribution
-    battery_data = _component_block(form_data, "battery")
-    if battery_data is not None:
-        _refuse_battery_dispatch_strategy(battery_data)
-        config["battery"] = _parse_component_distribution(battery_data, "battery", "capacity_kwh")
-
-    # Process Load distribution
-    load_data = _component_block_or_empty(form_data, "load")
-    config["load"] = _parse_component_distribution(load_data, "load", "annual_consumption_kwh")
-
-    return config
-
-
-def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any] | None:
-    """Return the *key* component block of *form_data*: None when it is absent or null.
-
-    Raises:
-        ConfigurationError: If the block is neither null nor a dict (see :func:`_require_dict`).
-    """
-    block = form_data.get(key)
-    return None if block is None else _require_dict(block, key)
-
-
-def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, Any]:
-    """Return the *key* component block of *form_data*, reading an absent or null block as empty.
-
-    Raises:
-        ConfigurationError: If the block is neither null nor a dict (see :func:`_component_block`).
-    """
-    block = _component_block(form_data, key)
-    return {} if block is None else block
-
-
 def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
     """Refuse the fleet form's *battery* block when it sets a dispatch strategy: every battery takes the form's dispatch_strategy.
 
@@ -302,76 +225,6 @@ def _require_dict(value: object, field: str) -> dict[str, Any]:
     """
     if not isinstance(value, dict):
         raise ConfigurationError(f"{field} must be a mapping, got {type(value).__name__}")
-    return value
-
-
-def _parse_component_distribution(
-    data: dict[str, Any], block: str, primary_field: str
-) -> dict[str, Any]:
-    """Return the fleet_distribution.py grammar block for *data*, the *block* component block of a fleet form.
-
-    Its distribution, what *data* holds at *primary_field*, and each of its other settings
-    pass on as :func:`_setting_as_passed_on` writes them: a distribution translated in shape,
-    any other value as sent.  An absent or null distribution passes as an empty mapping, for
-    fleet_distribution.py's grammar to refuse.
-
-    Args:
-        data: Component form data dict.
-        block: The block's name in the form, ``pv``, ``battery`` or ``load``.
-        primary_field: Name of the primary distribution field.
-
-    Returns:
-        Component distribution config dict.
-
-    Raises:
-        ConfigurationError: If *data* is itself a distribution (see
-            :func:`_refuse_block_that_is_a_distribution`), or
-            :func:`distribution_grammar_spec` refuses a distribution's rows; the error names
-            its field as a dot path under *block*.
-    """
-    _refuse_block_that_is_a_distribution(data, block, primary_field)
-    spec = data.get(primary_field)
-    result: dict[str, Any] = {
-        primary_field: {} if spec is None else _setting_as_passed_on(spec, f"{block}.{primary_field}")
-    }
-    for key, value in data.items():
-        if key != primary_field:
-            result[key] = _setting_as_passed_on(value, f"{block}.{key}")
-    return result
-
-
-def _refuse_block_that_is_a_distribution(
-    data: dict[str, Any], block: str, primary_field: str
-) -> None:
-    """Refuse *data*, the fleet form's *block* component block, when it is itself a distribution: a block holds its distribution in *primary_field*.
-
-    Raises:
-        ConfigurationError: If *data* is a distribution (see :func:`_is_distribution`), whatever
-            else it holds; the error names ``block.type``, ``block.primary_field`` and the
-            type sent.
-    """
-    if _is_distribution(data):
-        raise ConfigurationError(
-            f"{block}.type must be absent: the {block} block's distribution goes in "
-            f"{block}.{primary_field}, got {data['type']!r}"
-        )
-
-
-def _setting_as_passed_on(value: object, field: str) -> object:
-    """Return *value*, a block's distribution or another of its settings, sent in *field*, as it is passed to fleet_distribution.py's grammar.
-
-    A distribution (see :func:`_is_distribution`) is translated by
-    :func:`distribution_grammar_spec`.  Any other value, a fixed value, null, a boolean (a
-    flag such as load.use_stochastic) or a mapping without a type (a block such as
-    battery.grid_charging) included, passes as sent, for fleet_distribution.py's grammar to
-    read or refuse.
-
-    Raises:
-        ConfigurationError: If :func:`distribution_grammar_spec` refuses the distribution's rows;
-            the error names its field under *field*.
-    """
-    if _is_distribution(value):
-        return distribution_grammar_spec(value, _fields_under(field))
     return value
 
 

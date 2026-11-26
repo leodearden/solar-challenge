@@ -627,10 +627,8 @@ class TestFleetFromDistribution:
                 "battery": {
                     "capacity_kwh": {
                         "type": "weighted_discrete",
-                        "values": [
-                            {"value": 0, "weight": 1},
-                            {"value": 5.0, "weight": 1},
-                        ],
+                        "values": [0, 5.0],
+                        "weights": [1, 1],
                     },
                 },
                 "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
@@ -862,14 +860,14 @@ class TestFleetFromDistribution:
     def test_empty_battery_block_returns_400_carrying_the_grammars_refusal_naming_its_capacity(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches fleet_distribution.py's grammar and is a 400 whose error is the grammar's refusal, naming battery.capacity_kwh; no fleet is queued."""
+        """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches fleet_distribution.py's grammar and is a 400 whose error is the grammar's refusal, naming battery's capacity_kwh; no fleet is queued."""
         body = {**self._VALID_BODY, "battery": {}}
         with pytest.raises(ConfigurationError) as grammar_refusal:
             parse_fleet_distribution_config(fleet_blocks(body), block_path="")
         resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(grammar_refusal.value)}
-        assert "battery.capacity_kwh" in resp.get_json()["error"]
+        assert resp.get_json()["error"].startswith("battery") and "'capacity_kwh'" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(

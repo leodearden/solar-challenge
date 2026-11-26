@@ -26,7 +26,7 @@ from tests._default_pv_pool_fleet import (
 from tests._error_records import error_records
 from tests._falsy_json_values import FALSY_SENT_VALUES
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
-from tests._fleet_form import FLEET_FORM_BLOCKS
+from tests._fleet_form import FLEET_FORM_BLOCKS, FLEET_FORM_COMPONENT_BLOCKS
 from tests._html_page import element_attributes
 from tests._repository_paths import SCENARIOS_DIR
 
@@ -165,12 +165,12 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {**_FLEET_FORM_BODY["battery"], "enabled": False}},
-                "fleet_distribution.battery: unrecognised keys 'enabled'",
+                "battery: unrecognised keys 'enabled'",
                 id="battery-enabled-false",
             ),
             pytest.param(
                 {"n_homes": 5},
-                "fleet_distribution: battery.capacity_kwh: shuffled_pool counts must total n_homes",
+                "the top level: battery.capacity_kwh: shuffled_pool counts must total n_homes",
                 id="battery-pool-short-of-n-homes",
             ),
             pytest.param(
@@ -180,17 +180,17 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {"capacity_kwh": {"type": "uniform"}}},
-                "fleet_distribution.battery.capacity_kwh: requires 'min', 'max'",
+                "battery.capacity_kwh: requires 'min', 'max'",
                 id="battery-uniform-without-its-range",
             ),
             pytest.param(
                 {"pv": {"capacity_kw": {"type": "normal", "mena": 4.0, "std": 1.0}}},
-                "fleet_distribution.pv.capacity_kw: unrecognised keys 'mena'",
+                "pv.capacity_kw: unrecognised keys 'mena'",
                 id="pv-normal-with-a-misspelt-mean",
             ),
             pytest.param(
                 {"pv": {"capacity_kw": {"type": "normal", "mean": True, "std": 1.0}}},
-                "fleet_distribution.pv.capacity_kw",
+                "pv.capacity_kw",
                 id="pv-normal-boolean-mean",
             ),
         ],
@@ -219,13 +219,18 @@ class TestExportFleetYAML:
         value: object,
         type_name: str,
     ) -> None:
-        """A falsy block other than null or "", any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent: only null and "" read as absent. No YAML is written and no job is queued."""
+        """A falsy block other than null or "", any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent, a component block's in the grammar's words: only null and "" read as absent. No YAML is written and no job is queued."""
         body = {**_FLEET_FORM_BODY, key: value}
 
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
-        refusal = (400, {"error": non_mapping_block_refusal(key, type_name)})
+        expected = (
+            f"{key}: must be a mapping, got {type_name}"
+            if key in FLEET_FORM_COMPONENT_BLOCKS
+            else non_mapping_block_refusal(key, type_name)
+        )
+        refusal = (400, {"error": expected})
         assert (export.status_code, export.get_json()) == refusal
         assert (simulate.status_code, simulate.get_json()) == refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
