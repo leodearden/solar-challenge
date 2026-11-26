@@ -877,14 +877,17 @@ class TestFinanceGridServicesModelBlock:
             pytest.param({"type": 5}, id="not-a-name"),
         ],
     )
-    def test_an_unknown_type_is_refused_naming_the_supported_types(self, model: dict[str, object]) -> None:
-        """No grid services is written by omitting the block, so no type names it (PRD §12 tactical Q1)."""
+    def test_an_unknown_type_is_refused_naming_the_supported_types_and_the_omission_that_means_none(
+        self, model: dict[str, object]
+    ) -> None:
+        """No grid services is written by omitting the block, so no type names it (PRD §12 tactical Q1), and the refusal of a guess such as type: none says so."""
         message = self._refusal(model)
 
         assert message.startswith("finance.grid_services_model.type: "), message
         assert repr(model["type"]) in message
         assert "flat" in message
         assert "capacity_at_events" in message
+        assert message.endswith("; omit finance.grid_services_model for no grid services"), message
 
     def test_a_block_without_a_type_is_refused_naming_the_type(self) -> None:
         assert self._refusal({}) == "finance.grid_services_model: requires 'type'"

@@ -141,21 +141,29 @@ class BlockType(Generic[_Built]):
 
 
 def _read_typed_block(
-    types: Mapping[str, BlockType[_Built]], data: object, *, block_path: str, kind: str
+    types: Mapping[str, BlockType[_Built]],
+    data: object,
+    *,
+    block_path: str,
+    kind: str,
+    omitted_means: Optional[str] = None,
 ) -> _Built:
     """Build the block at *block_path* by the type of *types* its ``type:`` key names.
 
     Refuses a block that is not a mapping or sets no type, a type *types* does not hold, naming
     it a *kind* type and listing the supported ones, and a key the type does not recognise.
+    *omitted_means*, when given, is what omitting the block means, which no type names, so the
+    refusal of an unknown type says to omit the block for it.
     """
     block = require_mapping(block_path, data)
     require_keys(block_path, block, ["type"])
     type_name = block["type"]
     block_type = types.get(type_name) if isinstance(type_name, str) else None
     if block_type is None:
+        omission = "" if omitted_means is None else f"; omit {block_path} for {omitted_means}"
         raise refusal(
             child_path(block_path, "type"),
-            f"unknown {kind} type {type_name!r}; supported types: {', '.join(types)}",
+            f"unknown {kind} type {type_name!r}; supported types: {', '.join(types)}{omission}",
         )
     refuse_unrecognised_keys(block_path, block, block_type.recognised_keys)
     return block_type.build(block, block_path)
@@ -747,7 +755,7 @@ def _preset_tariff(
         PresetRates,
         **{**asdict(preset_rates), **{key: data[key] for key in _PRESET_TARIFF_RATE_KEYS if key in data}},
     )
-    times = {key: value for key, value in data.items() if key != "type" and key not in _PRESET_TARIFF_RATE_KEYS}
+    times = {key: value for key, value in _without_type_key(data).items() if key not in _PRESET_TARIFF_RATE_KEYS}
     return constructed(block_path, factory, **asdict(rates), **times)
 
 
@@ -1030,7 +1038,13 @@ def _parse_grid_services_model(data: object, *, block_path: str) -> GridServices
             "{type: flat, income_per_kw_per_year_gbp: <rate>} or as "
             "{type: capacity_at_events, <the events keys>}, or omit it for no grid services",
         )
-    return _read_typed_block(_GRID_SERVICES_MODEL_TYPES, data, block_path=block_path, kind="grid_services_model")
+    return _read_typed_block(
+        _GRID_SERVICES_MODEL_TYPES,
+        data,
+        block_path=block_path,
+        kind="grid_services_model",
+        omitted_means="no grid services",
+    )
 
 
 def _retired_grid_services_keys(block_path: str) -> Mapping[str, str]:
