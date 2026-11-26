@@ -4,8 +4,8 @@
 **Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/projection.py`, `src/solar_challenge/board_report.py`
 **Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_ledger.py` (one ledger per home, its pricing rules and balances, §3, §4); `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4); `tests/integration/test_finance_bill.py::TestOverrideExactValues` (override path, §3); `tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue` (override path, §4)
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
-**Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
-**Changes since 0.5.0**: each change merged since the 0.5.0 tag to what a finance-model name returns has a note in `docs/unreleased/cost-recovery-finance-model/`, one file per task ([domain-library-consumption.md](domain-library-consumption.md), *Changes merged since the last tag*).
+**Version**: 0.6.0 (the review-all program's release; its finance-model changes are listed under Results that move in [domain-library-consumption.md](domain-library-consumption.md#solar-challenge-v060), *solar-challenge-v0.6.0*)
+**Changes since 0.6.0**: each change merged since the 0.6.0 tag to what a finance-model name returns has a note in `docs/unreleased/cost-recovery-finance-model/`, one file per task ([domain-library-consumption.md](domain-library-consumption.md), *Changes merged since the last tag*).
 
 ---
 
