@@ -13,6 +13,7 @@ import yaml
 
 from solar_challenge.config import (
     detect_fleet_sweep_spec,
+    load_config,
     load_fleet_config,
     load_scenario,
     load_scenarios,
@@ -20,13 +21,20 @@ from solar_challenge.config import (
     parse_scenario,
     parse_sweep_fleet_configs,
     parse_sweep_scenarios,
+    read_fleet_scenario,
     sweep_point_fleet,
     sweep_value_labels,
 )
 from solar_challenge.dispatch import GridChargeConfig, SelfConsumptionStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig
-from solar_challenge.fleet_distribution import FleetFieldPath, SweepSpec, swept_parameter_path
+from solar_challenge.fleet_distribution import (
+    FleetFieldPath,
+    SweepSpec,
+    detect_sweep_spec,
+    parse_fleet_distribution_config,
+    swept_parameter_path,
+)
 from solar_challenge.pv import calculate_degradation_factor
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
@@ -1083,11 +1091,17 @@ _FLEET_DISTRIBUTION_TOP_LEVEL_READERS = (
         _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
         id="detect_fleet_sweep_spec-a-sweep",
     ),
+    pytest.param(read_fleet_scenario, 5.0, id="read_fleet_scenario"),
+    pytest.param(
+        read_fleet_scenario,
+        _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
+        id="read_fleet_scenario-a-sweep",
+    ),
 )
 
 
 class TestFleetDistributionFileReaders:
-    """parse_fleet_config, parse_sweep_fleet_configs and detect_fleet_sweep_spec read a fleet_distribution file's top-level blocks alike, in parse_scenario's order: its keys, location:, then tariff:, then fleet_distribution:."""
+    """parse_fleet_config, parse_sweep_fleet_configs, detect_fleet_sweep_spec and read_fleet_scenario read a fleet_distribution file's top-level blocks alike, in parse_scenario's order: its keys, location:, then tariff:, then fleet_distribution:."""
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_TOP_LEVEL_READERS)
     def test_a_file_refused_on_every_block_is_refused_on_a_key_no_scenario_reads(
@@ -1149,6 +1163,7 @@ class TestParseFleetConfigNamesTheBlockItRefuses:
             pytest.param(parse_fleet_config, id="parse_fleet_config"),
             pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
             pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+            pytest.param(read_fleet_scenario, id="read_fleet_scenario"),
         ],
     )
     def test_a_document_that_is_no_mapping_is_refused_naming_the_top_level(
@@ -1166,6 +1181,7 @@ class TestParseFleetConfigNamesTheBlockItRefuses:
             pytest.param(parse_fleet_config, id="parse_fleet_config"),
             pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
             pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+            pytest.param(read_fleet_scenario, id="read_fleet_scenario"),
         ],
     )
     @pytest.mark.parametrize(
@@ -1180,3 +1196,74 @@ class TestParseFleetConfigNamesTheBlockItRefuses:
             read({"fleet_distribution": fleet_distribution})
 
         assert str(refusal.value) == f"fleet_distribution: must be a mapping, got {type_name}"
+
+
+_LONDON_FLEET = {
+    "name": "London street",
+    "location": {"latitude": 51.51, "longitude": -0.13, "altitude": 11.0, "name": "London, UK"},
+    "tariff": _ECONOMY_7,
+    "fleet_distribution": {
+        "n_homes": 3,
+        "seed": 11,
+        "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 5.0}},
+        "load": {"annual_consumption_kwh": 3400},
+        "battery": {"capacity_kwh": 5.0},
+    },
+}
+
+
+class TestReadFleetScenario:
+    """read_fleet_scenario reads a bare fleet scenario document in parse_scenario's order up to its homes, and its scenario() is parse_scenario's reading of the document."""
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param(load_config(SCENARIOS_DIR / "bristol-phase1.yaml"), id="bristol-phase1"),
+            pytest.param(_LONDON_FLEET, id="an-inline-london-fleet-on-economy-7"),
+        ],
+    )
+    def test_its_scenario_is_parse_scenarios_reading_of_the_document(self, document: Mapping[str, Any]) -> None:
+        read = read_fleet_scenario(document)
+
+        assert read.scenario() == parse_scenario(document)
+        assert read.fleet == parse_fleet_distribution_config(
+            document["fleet_distribution"], block_path="fleet_distribution"
+        )
+        assert read.location == parse_scenario(document).get_location()
+
+    def test_reading_a_fleet_generates_no_home(self) -> None:
+        """A 0 kW PV is refused only by generation, so reading the fleet refuses nothing and its scenario() refuses what parse_scenario refuses."""
+        document = {
+            "fleet_distribution": {"n_homes": 2, "pv": {"capacity_kw": 0}, "load": {"annual_consumption_kwh": 3400}}
+        }
+        with pytest.raises(ConfigurationError) as parse_scenarios_refusal:
+            parse_scenario(document)
+
+        read = read_fleet_scenario(document)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            read.scenario()
+        assert str(refusal.value) == str(parse_scenarios_refusal.value)
+        assert str(refusal.value) == "fleet_distribution.pv: home 1: capacity_kw must be greater than 0, got 0.0"
+
+    def test_a_sweep_is_read_and_its_scenario_refused_as_parse_scenario_refuses_it(self) -> None:
+        document = _fleet_file(
+            _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}), tariff={"type": "economy_7"}
+        )
+        with pytest.raises(ConfigurationError) as parse_scenarios_refusal:
+            parse_scenario(document)
+
+        read = read_fleet_scenario(document)
+
+        assert detect_sweep_spec(read.fleet) == detect_fleet_sweep_spec(document)
+        with pytest.raises(ConfigurationError) as refusal:
+            read.scenario()
+        assert str(refusal.value) == str(parse_scenarios_refusal.value)
+        assert "fleet_distribution.battery.capacity_kwh" in str(refusal.value)
+        assert "'fleet sweep'" in str(refusal.value)
+
+    def test_a_scenario_without_a_fleet_distribution_is_refused_naming_the_top_level(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_fleet_scenario({"home": {"pv": {"capacity_kw": 4.0}}})
+
+        assert str(refusal.value) == "the top level: requires 'fleet_distribution'"
