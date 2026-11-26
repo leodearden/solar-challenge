@@ -6,6 +6,7 @@ The command and its report are specified in
 docs/prds/discrete-install-config-sweep.md §3.6.
 """
 
+import dataclasses
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Optional
@@ -14,6 +15,8 @@ import typer
 
 from solar_challenge.board_report import generate_config_ranking_report
 from solar_challenge.cli.utils import (
+    ASSUMPTION_BASES,
+    AssumptionMode,
     EndOption,
     StartOption,
     handle_errors,
@@ -25,6 +28,7 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.config import ScenarioConfig, load_scenario
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import OwnUseBasis, with_own_use_basis
 from solar_challenge.gridservices import GridServicesEventsConfig, GridServicesModel
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
@@ -175,6 +179,28 @@ def _with_grid_services_kw(
     return _FLAT_RATE_KNOB.apply(scenario, grid_services_kw)
 
 
+def _ranking_basis(mode: AssumptionMode) -> OwnUseBasis:
+    """The one own-use basis *mode* names: every config's ranking is computed under it.
+
+    Raises:
+        ConfigurationError: If *mode* names more than one basis, naming it and the modes that name one.
+    """
+    bases = ASSUMPTION_BASES[mode]
+    if len(bases) != 1:
+        single = ", ".join(other.value for other, named in ASSUMPTION_BASES.items() if len(named) == 1)
+        raise ConfigurationError(
+            f"--assumptions {mode.value} names {len(bases)} self-consumption assumptions, but a ranking is "
+            f"computed under one; pass one of {single}, and run once per assumption"
+        )
+    (basis,) = bases
+    return basis
+
+
+def _on_basis(scenario: ScenarioConfig, basis: OwnUseBasis) -> ScenarioConfig:
+    """*scenario* with its finance on *basis*, as finance.with_own_use_basis puts it."""
+    return dataclasses.replace(scenario, finance=with_own_use_basis(required_finance(scenario), basis))
+
+
 def _with_retained_floor(scenario: ScenarioConfig, retained_floor: Optional[float]) -> ScenarioConfig:
     """*scenario* with *retained_floor* as its retained-cash floor, or *scenario* itself when it is None."""
     if retained_floor is None:
@@ -217,6 +243,18 @@ def configs(
             help="Comma-separated AC inverter capacities in kW to sweep (e.g. '3.68,5,6')",
         ),
     ] = "3.68,5,6",
+    assumptions: Annotated[
+        AssumptionMode,
+        typer.Option(
+            "--assumptions",
+            help=(
+                "The self-consumption assumption every config is ranked under: physics (model) "
+                "or spreadsheet (the scenario's override, else 70%).  both is finance run's and "
+                "is refused here: run once per assumption."
+            ),
+            case_sensitive=False,
+        ),
+    ] = AssumptionMode.physics,
     retained_floor: Annotated[
         Optional[float],
         typer.Option(
@@ -264,6 +302,12 @@ def configs(
     for each config, ranks by householder outlay, and renders a two-table
     markdown report (cost-recovery rank + configured-rate trade-off).
 
+    Every config, the configured-rate trade-off and the sensitivity panel are
+    computed under --assumptions' finance, ``finance.with_own_use_basis`` of
+    the scenario's, as finance run computes each mode: physics clears any
+    override, and spreadsheet keeps the scenario's or sets the default.  The
+    report opens naming that assumption.
+
     When the sensitivity axes are non-empty, a one-at-a-time (OAT) sensitivity
     panel is appended showing which cost assumptions most affect the top-ranked
     config.  --sensitivity defaults to retained_floor,grid_services, or to
@@ -287,14 +331,15 @@ def configs(
     battery_list = _parse_float_list(battery, "battery")
     inverter_list = _parse_float_list(inverter, "inverter")
 
-    # ---- Parse sensitivity names -------------------------------------------
+    # ---- Parse sensitivity names and the ranking's own-use basis -------------
     requested_sensitivity = None if sensitivity is None else _parse_sensitivity(sensitivity)
+    basis = _ranking_basis(assumptions)
 
     # ---- Load the scenario and its finance block -----------------------------
     scenario_config = with_window_options(load_scenario(scenario), start=start, end=end)
     pricing = required_finance(scenario_config).grid_services_model
     base = _with_retained_floor(
-        _with_grid_services_kw(scenario_config, grid_services_kw, pricing), retained_floor
+        _with_grid_services_kw(_on_basis(scenario_config, basis), grid_services_kw, pricing), retained_floor
     )
     finance = required_finance(base)
     sensitivity_axes, left_out_of_the_default = _resolve_sensitivity_axes(requested_sensitivity, pricing)
