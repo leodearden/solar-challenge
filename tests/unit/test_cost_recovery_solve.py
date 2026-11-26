@@ -186,7 +186,7 @@ class TestCostRecoverySolution:
                 binding=binding,
             )
         assert f"feasible={feasible!r}" in str(refused.value)
-        assert repr(binding) in str(refused.value)
+        assert f"binding={binding!r}" in str(refused.value)
 
     @pytest.mark.parametrize(
         ("copy", "copied", "sourced"),

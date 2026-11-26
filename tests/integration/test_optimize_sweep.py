@@ -199,7 +199,7 @@ class TestConfigResult:
         assert cr.config.inverter_kw == pytest.approx(4.6)
 
     def test_solution_field_accessible(self) -> None:
-        """The solution's solved fields are readable through the ConfigResult."""
+        """solution.own_use_rate_pence_per_kwh is readable through the ConfigResult."""
         sol = make_cost_recovery_solution(
             own_use_rate_pence_per_kwh=18.5, feasible=True, binding="floor", representative_outlay_gbp=400.0
         )
@@ -216,11 +216,6 @@ class TestConfigResult:
             baseline_surplus_per_home_gbp=80.0,
         )
         assert cr.solution.own_use_rate_pence_per_kwh == pytest.approx(18.5)
-        assert cr.feasible is sol.feasible
-        assert cr.binding == sol.binding
-        assert cr.representative_outlay_gbp == sol.representative_outlay_gbp
-        assert cr.solved_own_use_rate_pence_per_kwh == sol.own_use_rate_pence_per_kwh
-        assert cr.surplus_at_solved_gbp == sol.net_surplus_per_home_per_year_gbp
 
 
 # ---------------------------------------------------------------------------

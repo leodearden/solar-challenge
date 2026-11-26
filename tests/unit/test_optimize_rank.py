@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import random
 
-import pytest
-
 from solar_challenge.optimize import (
     cheapest_feasible,
     feasible_split,
@@ -177,19 +175,6 @@ class TestFeasibleSplit:
         feasible_out, infeasible_out = feasible_split([a, b, c, d])
         assert [r.config.pv_kwp for r in feasible_out] == [1.0, 3.0]
         assert [r.config.pv_kwp for r in infeasible_out] == [2.0, 4.0]
-
-    @pytest.mark.parametrize(
-        ("binding", "feasible"),
-        [("infeasible_above_retail", True), ("floor", False)],
-    )
-    def test_a_record_whose_feasible_flag_contradicts_its_binding_cannot_be_built(
-        self, binding: str, feasible: bool
-    ) -> None:
-        """The split never meets a contradiction: building one is refused, naming both values."""
-        with pytest.raises(ValueError) as refused:
-            make_config_result(binding=binding, feasible=feasible)
-        assert f"feasible={feasible!r}" in str(refused.value)
-        assert repr(binding) in str(refused.value)
 
 
 # ---------------------------------------------------------------------------
