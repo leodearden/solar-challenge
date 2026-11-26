@@ -149,6 +149,15 @@ PRE_975_FLEET_SEG_REVENUE_KEYS: tuple[str, ...] = ("total_seg_revenue_gbp", "per
 """The SEG revenue pair a fleet summary held before task 975, which pre_975_seg_fleet's holds non-null
 and the stored-run format's v6 step drops, in the order that FleetSummary declared them."""
 
+PRE_S12_SUMMARY_HEAT_PUMP_KEYS: tuple[str, ...] = (
+    "total_heat_pump_load_kwh",
+    "peak_heat_pump_load_kw",
+    "heat_pump_load_ratio",
+)
+"""The heat pump's figures a stored summary saved before summaries held each load's energy holds, its total,
+its peak and its share of the demand, in the order SummaryStatistics declared them. The stored-run format's
+v10 step carries the total into the summary's load_energy_kwh and drops the three."""
+
 PRE_S12_HEAT_PUMP_SUMMARY_FIGURES: Mapping[str, float] = MappingProxyType(
     {
         "total_demand_kwh": 5400.0,
@@ -158,9 +167,8 @@ PRE_S12_HEAT_PUMP_SUMMARY_FIGURES: Mapping[str, float] = MappingProxyType(
     }
 )
 """The figures of a stored summary of a heat-pump home saved before summaries held each load's energy: its
-demand, 3000 kWh of it its household's, and its heat pump's total, peak and share of that demand. The
-stored-run format's v10 step carries the heat pump's total into the summary's load_energy_kwh and drops the
-three heat-pump keys."""
+demand, 3000 kWh of it its household's, and its heat pump's total, peak and share of that demand, under
+PRE_S12_SUMMARY_HEAT_PUMP_KEYS."""
 
 
 def stored_run_fixture_dir(name: str) -> Path:

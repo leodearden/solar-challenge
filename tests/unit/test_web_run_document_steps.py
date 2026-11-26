@@ -130,6 +130,7 @@ from tests._finance_builders import make_fleet_results_of, make_home_config, mak
 from tests._stored_run_fixtures import (
     PRE_975_FLEET_SEG_REVENUE_KEYS,
     PRE_S12_HEAT_PUMP_SUMMARY_FIGURES,
+    PRE_S12_SUMMARY_HEAT_PUMP_KEYS,
     STORED_RUN_FIXTURES,
     fixture_run_type,
     fixture_runs_row,
@@ -1684,9 +1685,6 @@ def test_each_home_summary_of_a_run_stored_with_a_seg_revenue_reads_once_brought
     assert [summary.total_export_revenue_gbp for summary in summaries] == pytest.approx(stored, abs=1e-9)
 
 
-_SUMMARY_HEAT_PUMP_KEYS = ("total_heat_pump_load_kwh", "peak_heat_pump_load_kw", "heat_pump_load_ratio")
-"""The heat pump's figures a SummaryStatistics stored before format 10 holds, its total, its peak and its share of the demand, which v10 drops, carrying the total into the summary's load_energy_kwh."""
-
 _LOAD_ENERGY = "load_energy_kwh"
 
 _HEAT_PUMP_HOME_S_LOAD_ENERGY = {"household": 3000.0, "heat_pump": 2400.0}
@@ -1700,25 +1698,30 @@ def _with_heat_pump_figures(documents: StoredRunDocuments, document: str) -> Sto
     return documents
 
 
-def _given_load_energy(documents: StoredRunDocuments, document: str, load_energy: Any) -> StoredRunDocuments:
-    """*documents*, with a copy of the summary named *document* holding *load_energy* as its load_energy_kwh and lacking the heat pump's figures."""
-    documents = _with_value(documents, document, (_LOAD_ENERGY,), load_energy)
-    for key in _SUMMARY_HEAT_PUMP_KEYS:
+def _without_heat_pump_figures(documents: StoredRunDocuments, document: str) -> StoredRunDocuments:
+    """*documents*, with a copy of the summary named *document* lacking the heat pump's figures."""
+    for key in PRE_S12_SUMMARY_HEAT_PUMP_KEYS:
         documents = _without(documents, document, key)
     return documents
 
 
+def _given_load_energy(documents: StoredRunDocuments, document: str, load_energy: Any) -> StoredRunDocuments:
+    """*documents*, with a copy of the summary named *document* holding *load_energy* as its load_energy_kwh and lacking the heat pump's figures."""
+    return _without_heat_pump_figures(_with_value(documents, document, (_LOAD_ENERGY,), load_energy), document)
+
+
 def _summaries_at_format_10(
-    documents: StoredRunDocuments, run_type: RunType, load_energy: dict[str, Any] | None = None
+    documents: StoredRunDocuments, run_type: RunType, load_energy_by_document: Mapping[str, Any] | None = None
 ) -> StoredRunDocuments:
     """*documents*, of a run of *run_type*, with a copy of each SummaryStatistics document lacking the heat pump's figures.
 
-    Each holds *load_energy*'s entry for its name as its load_energy_kwh, or, when *load_energy*
-    names none, its household's energy, its total_demand_kwh.
+    Each holds *load_energy_by_document*'s entry for its name as its load_energy_kwh, or, when
+    *load_energy_by_document* names none, its household's energy, its total_demand_kwh.
     """
     for summary in _summary_documents(documents, run_type):
         household = {"household": summary.content["total_demand_kwh"]}
-        documents = _given_load_energy(documents, summary.name, (load_energy or {}).get(summary.name, household))
+        load_energy = (load_energy_by_document or {}).get(summary.name, household)
+        documents = _given_load_energy(documents, summary.name, load_energy)
     return documents
 
 
@@ -1739,7 +1742,7 @@ def test_v10_gives_each_legacy_fixture_s_summaries_their_household_s_energy_drop
     run_type = fixture_run_type(name)
     documents = _documents_before(v10, name)
     summaries = _summary_documents(documents, run_type)
-    assert summaries and all(summary.content[key] is None for summary in summaries for key in _SUMMARY_HEAT_PUMP_KEYS)
+    assert summaries and all(summary.content[key] is None for summary in summaries for key in PRE_S12_SUMMARY_HEAT_PUMP_KEYS)
 
     result = v10.apply(run_type, documents)
 
@@ -1819,29 +1822,44 @@ def test_v10_reports_a_dropped_heat_pump_total_its_summary_s_load_energy_does_no
     assert result.rewritten == ()
 
 
-@pytest.mark.parametrize("key", ["total_demand_kwh", "total_heat_pump_load_kwh"])
+@pytest.mark.parametrize(
+    ("key", "refused_field"),
+    [("total_demand_kwh", "total_demand_kwh"), ("total_heat_pump_load_kwh", _LOAD_ENERGY)],
+    ids=["demand", "heat-pump-total"],
+)
 @pytest.mark.parametrize("value", ["2400.0", True], ids=["text", "bool"])
-def test_v10_leaves_a_summary_whose_demand_or_heat_pump_total_is_not_a_number_as_it_is(key: str, value: Any) -> None:
-    """The strict reader refuses it, naming the figure, and its run is left unmigrated."""
+def test_v10_gives_a_summary_whose_demand_or_heat_pump_total_is_not_a_number_no_load_energy_dropping_its_heat_pump_figures(
+    key: str, refused_field: str, value: Any
+) -> None:
+    """Its heat-pump total is reported, and the strict reader refuses it, naming its demand or its missing load_energy_kwh, so its run is left unmigrated."""
     v10 = _step(10)
     documents = _with_value(
         _with_heat_pump_figures(_documents_before(v10, _PRE_867), "summary.json"), "summary.json", (key,), value
     )
+    heat_pump_total = documents.summary.content["total_heat_pump_load_kwh"]
 
     result = v10.apply("home", documents)
 
-    assert result.documents == documents
-    assert (result.dropped, result.rewritten) == ((), ())
+    assert result.documents == _without_heat_pump_figures(documents, "summary.json")
+    assert result.dropped == (DroppedValue(_PRE_867, "summary.json", "total_heat_pump_load_kwh", heat_pump_total),)
+    assert result.rewritten == ()
+    with pytest.raises(StoredRunUnreadable) as refused:
+        documents_in_current_format("home", documents).summary.read(SummaryStatistics)
+    assert (refused.value.document, refused.value.field) == ("summary.json", refused_field)
 
 
-def test_v10_leaves_a_summary_holding_no_demand_as_it_is() -> None:
+def test_v10_gives_a_summary_holding_no_demand_no_load_energy_dropping_its_null_heat_pump_figures_reporting_nothing() -> None:
+    """The strict reader refuses it, naming its missing total_demand_kwh, so its run is left unmigrated."""
     v10 = _step(10)
     documents = _without(_documents_before(v10, _PRE_867), "summary.json", "total_demand_kwh")
 
     result = v10.apply("home", documents)
 
-    assert result.documents == documents
+    assert result.documents == _without_heat_pump_figures(documents, "summary.json")
     assert (result.dropped, result.rewritten) == ((), ())
+    with pytest.raises(StoredRunUnreadable) as refused:
+        documents_in_current_format("home", documents).summary.read(SummaryStatistics)
+    assert (refused.value.document, refused.value.field) == ("summary.json", "total_demand_kwh")
 
 
 @pytest.mark.parametrize("content", ["not an object", [1.23], None], ids=["text", "list", "null"])
@@ -1881,13 +1899,13 @@ def test_v2_keeps_each_stored_summary_s_heat_pump_figures_for_v10_reporting_none
         holding_figures = _with_heat_pump_figures(holding_figures, summary.name)
 
     def heat_pump_figures(stored: StoredRunDocuments) -> list[list[Any]]:
-        return [[summary.content[key] for key in _SUMMARY_HEAT_PUMP_KEYS] for summary in _summary_documents(stored, run_type)]
+        return [[summary.content[key] for key in PRE_S12_SUMMARY_HEAT_PUMP_KEYS] for summary in _summary_documents(stored, run_type)]
 
     for documents in (fixture, holding_figures):
         result = _V2.apply(run_type, documents)
 
         assert heat_pump_figures(result.documents) == heat_pump_figures(documents)
-        assert [each for each in result.dropped if each.field in _SUMMARY_HEAT_PUMP_KEYS] == []
+        assert [each for each in result.dropped if each.field in PRE_S12_SUMMARY_HEAT_PUMP_KEYS] == []
 
 
 def test_a_heat_pump_home_s_summary_stored_before_summaries_held_each_load_s_energy_reads_once_brought_forward() -> None:

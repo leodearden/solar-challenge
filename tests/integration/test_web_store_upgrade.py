@@ -47,6 +47,7 @@ from tests._html_page import headings
 from tests._run_storage_layout import stored_run_dir
 from tests._stored_run_fixtures import (
     PRE_975_FLEET_SEG_REVENUE_KEYS,
+    PRE_S12_SUMMARY_HEAT_PUMP_KEYS,
     STORED_RUN_FIXTURES,
     fixture_run_type,
     fixture_summary_statistics_documents,
@@ -335,9 +336,6 @@ def test_each_home_run_stored_with_a_seg_revenue_renders_without_it_once_migrate
     assert {run_id: _files_of_the_run(dashboard, run_id) for run_id in legacy_store.stored_runs} == files
 
 
-_SUMMARY_HEAT_PUMP_KEYS = ("total_heat_pump_load_kwh", "peak_heat_pump_load_kw", "heat_pump_load_ratio")
-"""The heat pump's figures a SummaryStatistics stored before format 10 holds, which `web migrate` drops, carrying the total into the summary's load_energy_kwh."""
-
 
 def test_a_heat_pump_home_stored_before_summaries_held_each_load_s_energy_renders_with_both_once_migrated_and_a_second_migrate_leaves_every_run_alone(
     legacy_store: _LegacyStore, served_dashboards: list[Flask]
@@ -380,7 +378,7 @@ def test_a_heat_pump_home_stored_before_summaries_held_each_load_s_energy_render
     ]
     assert all(summaries.values()), summaries
     assert {
-        run_id: [key for each in stored for key in _SUMMARY_HEAT_PUMP_KEYS if key in each]
+        run_id: [key for each in stored for key in PRE_S12_SUMMARY_HEAT_PUMP_KEYS if key in each]
         for run_id, stored in summaries.items()
     } == {run_id: [] for run_id in summaries}
     pages = {run_id: client.get(rows[run_id]["results_url"]).status_code for run_id in home_runs}

@@ -123,6 +123,7 @@ from tests._run_stores import empty_run_storage, run_storage_over
 from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
 from tests._stored_run_fixtures import (
     PRE_975_FLEET_SEG_REVENUE_KEYS,
+    PRE_S12_SUMMARY_HEAT_PUMP_KEYS,
     STORED_RUN_FIXTURES,
     fixture_run_type,
     fixture_summary_statistics_documents,
@@ -1093,9 +1094,6 @@ def test_after_migrate_store_no_stored_summary_holds_a_seg_revenue_and_each_run_
             )
 
 
-_SUMMARY_HEAT_PUMP_KEYS = ("total_heat_pump_load_kwh", "peak_heat_pump_load_kw", "heat_pump_load_ratio")
-"""The heat pump's figures a SummaryStatistics stored before format 10 holds, which v10 drops, carrying the total into the summary's load_energy_kwh."""
-
 
 def _stored_summaries(store: Path, name: str, run_id: str) -> list[dict[str, Any]]:
     """Each SummaryStatistics document of fixture *name*, installed as run *run_id* in the store whose database file is *store*: its files', then its runs columns'."""
@@ -1121,7 +1119,7 @@ def test_after_migrate_store_each_stored_summary_holds_its_household_s_energy_an
         assert [summary["load_energy_kwh"] for summary in summaries] == [
             {"household": summary["total_demand_kwh"]} for summary in summaries
         ], name
-        assert [key for summary in summaries for key in _SUMMARY_HEAT_PUMP_KEYS if key in summary] == [], name
+        assert [key for summary in summaries for key in PRE_S12_SUMMARY_HEAT_PUMP_KEYS if key in summary] == [], name
         loaded = storage.load_run(run_id)
         if isinstance(loaded, StoredHomeRun):
             assert loaded.summary.load_energy_kwh == {LoadKind.HOUSEHOLD: loaded.summary.total_demand_kwh}, name

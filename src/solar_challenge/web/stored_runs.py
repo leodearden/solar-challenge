@@ -105,6 +105,7 @@ from solar_challenge.web.field_tree import (
     DropsUnknownKey,
     FieldTreeRefused,
     field_tree,
+    is_json_number,
     read_field_tree,
     without_unknown_keys,
 )
@@ -1086,12 +1087,7 @@ def _periods_charge_one_rate(tariff: Any) -> bool:
     if not isinstance(periods, list) or not periods or not all(isinstance(period, dict) for period in periods):
         return False
     rates = [period.get("rate_per_kwh") for period in periods]
-    return all(_is_a_number(rate) for rate in rates) and all(rate == rates[0] for rate in rates)
-
-
-def _is_a_number(value: Any) -> bool:
-    """Whether *value*, decoded from a stored document's JSON, is a number: an int or a float, never a bool."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return all(is_json_number(rate) for rate in rates) and all(rate == rates[0] for rate in rates)
 
 
 def _summaries_at_format_5(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
@@ -1266,29 +1262,37 @@ def _summaries_given_load_energy(run_type: RunType, documents: StoredRunDocument
 def _summary_given_load_energy(summary: Any) -> tuple[Any, Any]:
     """*summary*, a stored SummaryStatistics object, given a load_energy_kwh and rid of _SUMMARY_HEAT_PUMP_KEYS; and its dropped heat-pump total, None unless its load_energy_kwh does not hold it.
 
-    A summary holding a load_energy_kwh keeps it. Otherwise it is given its household's energy,
-    its total_demand_kwh less its heat pump's total, and that total when it holds one: a summary
-    whose demand is not a number, or whose heat-pump total is neither null nor a number, is left
-    as it is, as is one that is not an object, for the strict reader to refuse. A household's
-    energy below 0 is kept, for the strict reader to refuse by its path.
+    A summary holding a load_energy_kwh keeps it. Otherwise it is given the one
+    _load_energy_of its demand and its heat-pump total, or none when they make none, for the
+    strict reader to refuse by its path: its demand, or its missing load_energy_kwh. Either way
+    the three figures are dropped. A summary that is not an object is left as it is, for the
+    strict reader to refuse.
     """
     if not isinstance(summary, dict):
         return summary, None
     heat_pump_kwh = summary.get(_SUMMARY_HEAT_PUMP_TOTAL)
     load_energy = summary.get(_LOAD_ENERGY)
     if load_energy is None:
-        demand_kwh = summary.get("total_demand_kwh")
-        if not _is_a_number(demand_kwh) or not (heat_pump_kwh is None or _is_a_number(heat_pump_kwh)):
-            return summary, None
-        load_energy = (
-            {LoadKind.HOUSEHOLD.value: demand_kwh}
-            if heat_pump_kwh is None
-            else {LoadKind.HOUSEHOLD.value: demand_kwh - heat_pump_kwh, LoadKind.HEAT_PUMP.value: heat_pump_kwh}
-        )
+        load_energy = _load_energy_of(summary.get("total_demand_kwh"), heat_pump_kwh)
     held = load_energy.get(LoadKind.HEAT_PUMP.value) if isinstance(load_energy, dict) else None
     dropped_total = heat_pump_kwh if heat_pump_kwh is not None and held != heat_pump_kwh else None
     without_the_figures = {key: value for key, value in summary.items() if key not in _SUMMARY_HEAT_PUMP_KEYS}
-    return {**without_the_figures, _LOAD_ENERGY: load_energy}, dropped_total
+    given = {} if load_energy is None else {_LOAD_ENERGY: load_energy}
+    return {**without_the_figures, **given}, dropped_total
+
+
+def _load_energy_of(demand_kwh: Any, heat_pump_kwh: Any) -> dict[str, Any] | None:
+    """The load_energy_kwh of a stored summary whose total_demand_kwh is *demand_kwh* and whose heat-pump total is *heat_pump_kwh*, or None when the demand is not a number or the total is neither null nor a number.
+
+    It holds the household's energy, the demand less the heat pump's total, and that total when
+    it is not null. A household's energy below 0 is kept, for the strict reader to refuse by its
+    path.
+    """
+    if not is_json_number(demand_kwh) or not (heat_pump_kwh is None or is_json_number(heat_pump_kwh)):
+        return None
+    if heat_pump_kwh is None:
+        return {LoadKind.HOUSEHOLD.value: demand_kwh}
+    return {LoadKind.HOUSEHOLD.value: demand_kwh - heat_pump_kwh, LoadKind.HEAT_PUMP.value: heat_pump_kwh}
 
 
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (

@@ -14,7 +14,7 @@ refused with a FieldTreeRefused naming the value's dotted path, with [i] for an 
 for the root, and the reason. A missing field that has a default takes it.
 without_unknown_keys drops each key the reader would refuse as one no field has, reporting each
 as an UnknownKey, unless its predicate, asked with the dataclass whose object holds the key,
-spares it.
+spares it. is_json_number is the reader's test of a JSON number: an int or a float, but no bool.
 
 The reader and the drop both walk a value by its _shape: a dataclass's object, an array, a dict's
 object or a leaf, each child with the annotation it is read as and its path. The writer, _shape
@@ -381,10 +381,10 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
         if isinstance(value, bool):
             return value
     elif annotation is int:
-        if _is_number(value):
+        if is_json_number(value):
             return value
     elif annotation is float:
-        if _is_number(value) and _float_can_hold(value):
+        if is_json_number(value) and _float_can_hold(value):
             return value
     elif annotation is str:
         if isinstance(value, str):
@@ -447,7 +447,7 @@ def _member_values(str_enum: type[Enum]) -> list[str]:
     return [member.value for member in str_enum]
 
 
-def _is_number(value: Any) -> bool:
+def is_json_number(value: Any) -> bool:
     """Whether *value*, decoded JSON, is a number: an int or a float, but no bool."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
