@@ -17,10 +17,11 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
-from solar_challenge.web.simulation_params import parse_home_config
+from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from tests._html_page import element_attributes
 
 
@@ -403,6 +404,27 @@ class TestSweepParameters:
 
         assert response.status_code == 400
         assert "pv_capacity_kw=25.0" in response.get_json()["error"]
+        assert recording_job_manager.submitted_homes == []
+
+    def test_a_base_config_the_home_parser_refuses_is_refused_naming_the_first_point_and_carrying_its_refusal(
+        self,
+        client: FlaskClient,
+        recording_job_manager: _RecordingJobManager,
+    ) -> None:
+        """A base_config location no preset names refuses the sweep at its first point, with parse_home_config's own refusal, and submits nothing."""
+        base_config = {"location": "londn"}
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_home_config({**with_default_days(base_config, 7), "pv_kw": 1.0})
+
+        response = client.post(
+            "/api/simulate/sweep",
+            json={"parameter": "pv_capacity_kw", "min": 1.0, "max": 5.0, "steps": 2, "base_config": base_config},
+        )
+
+        assert (response.status_code, response.get_json()) == (
+            400,
+            {"error": f"Invalid config for pv_capacity_kw=1.0: {refusal.value}"},
+        )
         assert recording_job_manager.submitted_homes == []
 
 
