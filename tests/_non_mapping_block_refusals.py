@@ -15,7 +15,7 @@ Usage::
 """
 
 #: The blocks of a web request that the scenario grammar's readers read.
-GRAMMAR_READ_BLOCKS = frozenset({"tariff", "dispatch_strategy", "seg"})
+GRAMMAR_READ_BLOCKS = frozenset({"tariff", "dispatch_strategy", "seg", "heat_pump"})
 
 
 def non_mapping_block_refusal(block: str, type_name: str) -> str:

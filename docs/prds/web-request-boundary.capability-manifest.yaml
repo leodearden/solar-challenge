@@ -299,7 +299,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "type: f\\.heat_pump_type"
+          pattern: "(^|[^_[:alnum:]])type: f\\.heat_pump_type"
           paths: ["src/solar_challenge/web/templates/simulate/home.html"]
           expect: absent
       - name: "config-heat-pump-reader-public"

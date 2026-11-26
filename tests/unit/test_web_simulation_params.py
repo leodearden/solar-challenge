@@ -17,7 +17,12 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES, PVConfig
-from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_seg_rate, parse_tariff_config
+from solar_challenge.scenario_blocks import (
+    parse_dispatch_strategy_config,
+    parse_heat_pump_block,
+    parse_seg_rate,
+    parse_tariff_config,
+)
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_WINDOW_DAYS
@@ -33,6 +38,7 @@ from solar_challenge.web.simulation_params import (
     with_default_days,
 )
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._heat_pump_block_refusals import UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
@@ -56,7 +62,7 @@ FORM_PAYLOAD_BATTERY_ON: dict = {
     "location": "bristol",
     "name": "Every panel",
     "days": 7,
-    "heat_pump": {"type": "ASHP", "thermal_capacity_kw": 8.0, "annual_heat_demand_kwh": 8000.0},
+    "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": 8.0, "annual_heat_demand_kwh": 8000.0},
     "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
     "seg": {"preset": "Octopus"},
     "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]},
@@ -501,21 +507,6 @@ class TestParseSegTariff:
 class TestParseHomeConfigCapabilities:
     """Boundary tests calling parse_home_config directly."""
 
-    def test_heat_pump_fields_populate_home_config(self) -> None:
-        """heat_pump dict in payload populates HomeConfig.heat_pump_config."""
-        payload = {
-            **VALID_HOME_PAYLOAD,
-            "heat_pump": {
-                "type": "ASHP",
-                "thermal_capacity_kw": 8.0,
-                "annual_heat_demand_kwh": 8000,
-            },
-        }
-        home_config, _start, _end, _name = parse_home_config(payload)
-        assert home_config.heat_pump_config is not None
-        assert home_config.heat_pump_config.heat_pump_type == "ASHP"
-        assert home_config.heat_pump_config.thermal_capacity_kw == 8.0
-
     def test_tariff_fields_populate_home_config(self) -> None:
         """tariff dict in payload populates HomeConfig.tariff_config."""
         payload = {
@@ -536,7 +527,7 @@ class TestParseHomeConfigCapabilities:
             **VALID_HOME_PAYLOAD,
             "battery_kwh": 5.0,
             "heat_pump": {
-                "type": "ASHP",
+                "heat_pump_type": "ASHP",
                 "thermal_capacity_kw": 8.0,
                 "annual_heat_demand_kwh": 8000,
             },
@@ -575,7 +566,31 @@ class TestParseHomeConfigCapabilities:
 
 
 class TestParseHomeConfigHeatPumpBlock:
-    """The heat_pump block: the web form's keys, defaulted when omitted; a value that is not a mapping is refused."""
+    """The heat_pump block is config's heat_pump: block, so parse_heat_pump_block's home is the home's heat pump and its refusal is the refusal.
+
+    These tests pin only that delegation; the grammar's own matrix is in tests/unit/config and
+    tests/unit/test_heat_pump.py.
+    """
+
+    def test_a_block_the_grammar_reads_is_the_homes_heat_pump(self) -> None:
+        """A heat_pump block naming a GSHP of 12 kW is the home's heat pump, as parse_heat_pump_block reads it."""
+        block = {"heat_pump_type": "GSHP", "thermal_capacity_kw": 12}
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": block})
+        assert home_config.heat_pump_config == parse_heat_pump_block(block) == HeatPumpConfig(
+            heat_pump_type="GSHP", thermal_capacity_kw=12.0
+        )
+
+    @pytest.mark.parametrize(("block", "key"), UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS)
+    def test_a_block_the_grammar_refuses_is_refused_with_the_grammars_refusal(
+        self, block: dict, key: str
+    ) -> None:
+        """A heat_pump block with a key the grammar does not recognise is refused with parse_heat_pump_block's own ConfigurationError, naming the key."""
+        with pytest.raises(ConfigurationError) as expected:
+            parse_heat_pump_block(block)
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": block})
+        assert str(refusal.value) == str(expected.value)
+        assert repr(key) in str(refusal.value)
 
     @pytest.mark.parametrize(
         ("value", "type_name"),
@@ -591,18 +606,9 @@ class TestParseHomeConfigHeatPumpBlock:
     ) -> None:
         """A heat_pump that is not an object is refused with a ConfigurationError naming heat_pump and the type sent."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"heat_pump must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(non_mapping_block_refusal("heat_pump", type_name))
         ):
             parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": value})
-
-    def test_empty_heat_pump_is_the_default_heat_pump(self) -> None:
-        """An empty heat_pump is a mapping whose every key defaults: an 8 kW ASHP with 8000 kWh annual heat demand."""
-        home_config, _start, _end, _name = parse_home_config(
-            {**VALID_HOME_PAYLOAD, "heat_pump": {}}
-        )
-        assert home_config.heat_pump_config == HeatPumpConfig(
-            heat_pump_type="ASHP", thermal_capacity_kw=8.0, annual_heat_demand_kwh=8000.0
-        )
 
 
 class NestedBlock(NamedTuple):
@@ -653,6 +659,7 @@ class TestParseHomeConfigNestedBlockPresence:
     @pytest.mark.parametrize(
         ("key", "grammar"),
         [
+            pytest.param("heat_pump", parse_heat_pump_block, id="heat_pump"),
             pytest.param("seg", parse_seg_rate, id="seg"),
             pytest.param("tariff", parse_tariff_config, id="tariff"),
             pytest.param("dispatch_strategy", parse_dispatch_strategy_config, id="dispatch_strategy"),
@@ -783,16 +790,6 @@ class TestParseHomeConfigNumberFields:
         with pytest.raises(ConfigurationError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, field: value})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
-
-    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
-    @pytest.mark.parametrize("key", ["thermal_capacity_kw", "annual_heat_demand_kwh"])
-    def test_heat_pump_field_that_is_not_a_finite_number_is_refused_naming_it_in_its_block(
-        self, key: str, value: object
-    ) -> None:
-        """A heat_pump number too large for a float, an infinity, NaN or a boolean is refused naming it as heat_pump.<key>."""
-        with pytest.raises(ConfigurationError) as exc_info:
-            parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": {key: value}})
-        assert str(exc_info.value) == f"heat_pump.{key} must be a finite number, got {value!r}"
 
     def test_occupants_with_a_fractional_part_is_refused_naming_it(self) -> None:
         """An occupants value with a fractional part is refused, not truncated, naming occupants and the value sent."""
