@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
-import dataclasses
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -55,21 +54,6 @@ from solar_challenge.output import compute_community_metrics, generate_community
 from solar_challenge.scenario_knobs import KNOBS, Knob, is_knob_name, knob_named, names_with_aliases
 
 app = typer.Typer(help="Fleet simulation commands")
-
-
-def _sweep_spec_default_mode() -> SweepMode:
-    """The mode SweepSpec spaces its points by when none is given, read from its own field.
-
-    Raises:
-        RuntimeError: If that default is not a SweepMode: a defect of fleet_distribution, not of a command line.
-    """
-    default = next(field.default for field in dataclasses.fields(SweepSpec) if field.name == "mode")
-    if not isinstance(default, SweepMode):
-        raise RuntimeError(f"SweepSpec.mode defaults to {default!r}, which is not a SweepMode")
-    return default
-
-
-_SWEEP_SPEC_DEFAULT_MODE = _sweep_spec_default_mode()
 
 
 def _export_fleet_results(results: FleetResults, output: Path) -> None:
@@ -258,7 +242,7 @@ def sweep(
             "--mode",
             help="How the points are spaced from --min to --max: by a constant step (linear) or a constant ratio (geometric)",
         ),
-    ] = _SWEEP_SPEC_DEFAULT_MODE,
+    ] = SweepSpec.mode,
     output_dir: Annotated[
         Optional[Path],
         typer.Option(
@@ -379,7 +363,7 @@ def sweep(
 
 
 @dataclass(frozen=True)
-class KnobAxis:
+class _KnobAxis:
     """A --param sweep of a knob: each point is the document's one scenario with the knob set to the point's value."""
 
     knob: Knob
@@ -396,7 +380,7 @@ class KnobAxis:
 
 
 @dataclass(frozen=True)
-class VariableAxis:
+class _VariableAxis:
     """A --param sweep of a variable: each point is the scenario the document reads as once the point's value replaces ${name}."""
 
     name: str
@@ -414,7 +398,7 @@ class VariableAxis:
         ]
 
 
-SweepAxis = KnobAxis | VariableAxis
+_SweepAxis = _KnobAxis | _VariableAxis
 
 
 def _param_sweep(
@@ -433,7 +417,7 @@ def _param_sweep(
     return axis.label, sweep_spec, axis.scenarios(raw_config, sweep_spec.get_values())
 
 
-def _sweep_axis(document: Mapping[str, Any], name: str) -> SweepAxis:
+def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
     """The axis --param *name* sweeps: the knob it names, else the variable of *document* it names.
 
     Raises:
@@ -449,9 +433,9 @@ def _sweep_axis(document: Mapping[str, Any], name: str) -> SweepAxis:
             f"${{{name}}}; rename the variable to sweep it, or remove it to sweep the knob"
         )
     if is_knob:
-        return KnobAxis(knob_named(name))
+        return _KnobAxis(knob_named(name))
     if is_variable:
-        return VariableAxis(name)
+        return _VariableAxis(name)
     held = f"its variables: {', '.join(repr(each) for each in variables)}" if variables else "it holds no variables"
     raise ConfigurationError(
         f"--param {name!r} names no knob and no variable of the document; {held}; "
