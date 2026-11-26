@@ -12,6 +12,7 @@ pytest.importorskip("flask")
 from solar_challenge.web import fleet_presets
 from solar_challenge.web.builtin_scenarios import scenario_files_in
 from solar_challenge.web.fleet_presets import fleet_preset_names_among
+from tests._default_pv_pool_fleet import DEFAULT_PV_POOL_FLEET_YAML
 from tests._error_records import error_records
 
 #: A fleet scenario the fleet form loads.
@@ -110,3 +111,13 @@ def test_a_type_error_from_the_reader_is_not_a_refusal_and_propagates(
 
     with pytest.raises(TypeError, match="probe"):
         fleet_preset_names_among(scenario_files_in(tmp_path))
+
+
+def test_a_scenario_file_holding_the_fleet_pages_default_pv_pool_with_200_homes_is_not_offered_and_logs_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Row R4: the pool holds 100 values for 200 homes, a refusal, not a defect."""
+    (tmp_path / "default-pool.yaml").write_text(DEFAULT_PV_POOL_FLEET_YAML)
+
+    assert fleet_preset_names_among(scenario_files_in(tmp_path)) == ()
+    assert error_records(caplog) == []
