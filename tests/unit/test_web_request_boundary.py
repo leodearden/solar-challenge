@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys and text that encodes as UTF-8, its location reader, and its translator of a refusal into an answer."""
+"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys, a top-level field sent as null or "" read as not sent, and text that encodes as UTF-8, its location reader, and its translator of a refusal into an answer."""
 
 import logging
 from collections.abc import Callable
@@ -18,6 +18,7 @@ from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.request_boundary import (
     answer_refusal,
     answer_server_error,
+    present_fields,
     read_location,
     refusal_text,
     refuse_unencodable_text,
@@ -99,6 +100,44 @@ class TestRefuseUnrecognisedKeys:
         assert str(exc_info.value) == (
             "Unrecognised fleet form keys: 'heat_pump', 'tarif'; recognised keys: days, pv_kw"
         )
+
+
+class TestPresentFields:
+    """present_fields reads a form body's top-level field sent as null or "" (a cleared input) as not sent."""
+
+    def test_a_field_sent_as_null_or_empty_text_is_dropped_and_every_other_is_kept(self) -> None:
+        """Each field sent as None or "" is left out; each other field keeps the value it was sent with."""
+        body = {"pv_kw": 4.0, "name": "", "tilt": None, "location": "bristol", "seed": None}
+        assert present_fields(body) == {"pv_kw": 4.0, "location": "bristol"}
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(False, id="false"),
+            pytest.param(0, id="zero"),
+            pytest.param(0.0, id="zero-float"),
+            pytest.param([], id="empty-array"),
+            pytest.param({}, id="empty-object"),
+        ],
+    )
+    def test_any_other_falsy_value_is_kept_as_sent(self, value: object) -> None:
+        """Only null and "" read as not sent: any other falsy JSON value is a value the field's reader judges."""
+        fields = present_fields({"battery_kwh": value})
+        assert fields == {"battery_kwh": value}
+        assert fields["battery_kwh"] is value
+
+    def test_a_nested_blocks_contents_are_returned_untouched(self) -> None:
+        """The rule is top level only: a block's own null or "" keys are its grammar's to read."""
+        block = {"heat_pump_type": None, "name": ""}
+        fields = present_fields({"heat_pump": block})
+        assert fields == {"heat_pump": {"heat_pump_type": None, "name": ""}}
+        assert fields["heat_pump"] is block
+
+    def test_the_body_passed_in_is_not_mutated(self) -> None:
+        """A new dict is returned; the body keeps every field it was sent with."""
+        body = {"pv_kw": 4.0, "name": "", "tilt": None}
+        present_fields(body)
+        assert body == {"pv_kw": 4.0, "name": "", "tilt": None}
 
 
 class TestRequireEncodableText:
