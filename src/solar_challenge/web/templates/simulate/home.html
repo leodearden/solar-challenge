@@ -156,7 +156,7 @@ document.addEventListener('alpine:init', () => {
             // Optional: heat pump
             if (f.heat_pump_enabled) {
                 payload.heat_pump = {
-                    type: f.heat_pump_type,
+                    heat_pump_type: f.heat_pump_type,
                     thermal_capacity_kw: parseFloat(f.heat_pump_capacity_kw),
                     annual_heat_demand_kwh: parseFloat(f.heat_pump_demand_kwh)
                 };
