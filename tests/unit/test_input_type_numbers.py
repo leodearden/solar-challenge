@@ -63,6 +63,8 @@ from tests._package_modules import module_level_dataclasses, top_level_modules
 
 _BAD_NUMBERS: tuple[object, ...] = (math.nan, math.inf, -math.inf, True, "x")
 
+_FRACTION = 2.5
+
 
 
 def _scenario() -> ScenarioConfig:
@@ -313,6 +315,32 @@ def stale(discovered: Collection[str]) -> list[str]:
         for name in names
         if name not in discovered
     )
+
+
+def bad_numbers(number_types: frozenset[type]) -> tuple[object, ...]:
+    """Return the values a field mentioning *number_types* is tried with: the bad numbers, and a fraction if the field is whole."""
+    return (*_BAD_NUMBERS, _FRACTION) if number_types == frozenset({int}) else _BAD_NUMBERS
+
+
+def with_bad_number(value: object, bad: object) -> object:
+    """Return *value* with *bad* in place of its first number: a tuple's first element, recursively, or a frozenset's one member."""
+    if isinstance(value, tuple):
+        return (with_bad_number(value[0], bad), *value[1:])
+    if isinstance(value, frozenset):
+        return frozenset({bad})
+    return bad
+
+
+def refusal_cases() -> list[pytest.ParameterSet]:
+    """Return a (dotted name, field, bad value) case for each bad value of each numeric field of each discovered input type that EXCLUDED_FIELDS does not exclude."""
+    discovered = numeric_dataclasses(top_level_modules())
+    return [
+        pytest.param(name, field, bad, id=f"{name.removeprefix('solar_challenge.')}.{field}-{bad!r}")
+        for name in sorted(INPUT_TYPES.keys() & discovered.keys())
+        for field, number_types in numeric_fields(discovered[name]).items()
+        if (name, field) not in EXCLUDED_FIELDS
+        for bad in bad_numbers(number_types)
+    ]
 
 
 _SEEDED_MODULE_NAME = "seeded_numeric_dataclasses"
