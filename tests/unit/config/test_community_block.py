@@ -12,7 +12,7 @@ import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityConfig
-from solar_challenge.config import load_community_config, load_community_configs, load_scenario
+from solar_challenge.config import load_community_config, load_community_configs, load_scenario, load_scenarios
 from solar_challenge.errors import ConfigurationError
 
 
@@ -358,6 +358,43 @@ class TestTheCommunityBlockOfEachScenario:
             load_community_configs(_scenario_file(tmp_path, document))
 
         assert str(refusal.value) == f"{path}: {_SHARING_MODE_RETIRED}"
+
+
+class TestWhereTheScenariosSit:
+    """A document whose scenarios sit where no scenario reader reads them is refused by each community reader as its scenario reader refuses it."""
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({"scenario": {"homes": [{}]}, "name": "x"}, id="key-beside-scenario"),
+            pytest.param({"scenario": 5}, id="scenario-block-no-mapping"),
+            pytest.param({"scenarios": [{"homes": [{}]}], "name": "x"}, id="key-beside-scenarios"),
+            pytest.param({"scenarios": 5}, id="scenarios-no-list"),
+            pytest.param({"scenarios": [5]}, id="scenarios-entry-no-mapping"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("read_community", "read_scenarios"),
+        [
+            pytest.param(load_community_config, load_scenario, id="load_community_config"),
+            pytest.param(load_community_configs, load_scenarios, id="load_community_configs"),
+        ],
+    )
+    def test_a_community_reader_refuses_the_document_as_its_scenario_reader_does(
+        self,
+        tmp_path: Path,
+        document: dict[str, Any],
+        read_community: Callable[[Path], object],
+        read_scenarios: Callable[[Path], object],
+    ) -> None:
+        path = _scenario_file(tmp_path, document)
+        with pytest.raises(ConfigurationError) as scenario_refusal:
+            read_scenarios(path)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            read_community(path)
+
+        assert str(refusal.value) == str(scenario_refusal.value)
 
 
 class TestCommunityConfigFrozenPicklable:
