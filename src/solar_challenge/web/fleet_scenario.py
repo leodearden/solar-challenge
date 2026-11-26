@@ -14,7 +14,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from solar_challenge.config import parse_scenario
+from solar_challenge.config import parse_scenario, read_fleet_scenario
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import FleetDistributionConfig, parse_fleet_distribution_config
@@ -92,13 +92,14 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     mapping its grammar reads.
 
     The form's own keys are read first: a top-level key the fleet form does not have is
-    refused, naming it, then the name, the distributions, the dashboard's bounds on the
-    fleet they describe, the location, the dispatch strategy, at the form's own key whether
-    or not a battery carries it, and the window.
-    parse_scenario then reads the document's location, period, tariff and SEG before its
-    fleet, and every value before any home is generated, so a value a reader refuses costs
-    no home generation.  The simulate endpoint and the export both read the form here, so
-    they refuse it at the same value with the same message.
+    refused, naming it, then the name, the distributions, the location, the dispatch
+    strategy, at the form's own key whether or not a battery carries it, and the window.
+    config.read_fleet_scenario then reads the document's keys, location, period, tariff and
+    SEG, then its fleet in fleet_distribution.py's grammar, as parse_scenario reads them;
+    then the dashboard's bounds on that fleet; and only then are its homes generated, so a
+    value a reader or bound refuses costs no home generation.  The simulate endpoint and the
+    export both read the form here, so they refuse it at the same value with the same
+    message.
 
     Raises:
         ValueError: For a top-level key the fleet form does not have, naming each one and
@@ -106,12 +107,15 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
         ValueError: For a name sent as text holding a lone surrogate, require_encodable_text's
             refusal naming name.
         ValueError, TypeError, ConfigurationError: From the readers of the form's
-            distributions, the dashboard's bounds on the fleet fleet_distribution.py's
-            grammar reads from them (see refuse_a_fleet_the_dashboard_cannot_run, naming
-            n_homes or seed), and the readers of its location, dispatch strategy and window,
-            read in that order, a date that does not parse included.
-        ConfigurationError: From parse_scenario, for a tariff, SEG or fleet the scenario
-            grammar refuses, or homes it cannot generate.
+            distributions, location, dispatch strategy and window, read in that order, a
+            date that does not parse included.
+        ConfigurationError: From read_fleet_scenario, for a tariff, SEG or fleet the
+            scenario grammar refuses.
+        ConfigurationError: From refuse_a_fleet_the_dashboard_cannot_run, for a fleet the
+            dashboard cannot run, naming n_homes or seed.
+        ConfigurationError: From the scenario's generation, as parse_scenario refuses it: for
+            a fleet that sweeps, naming the sweep's field and 'fleet sweep', or homes it
+            cannot generate.
         ConfigurationError: For a generated home whose PV, battery or load value lies
             outside its fleet component's value_range, from refuse_homes_outside_ranges,
             naming the component's form path, the range, the value and the home's number.
@@ -121,7 +125,6 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     refuse_unencodable_text(sent_name, "name")
     name = sent_name if is_run_name(sent_name) else None
     distribution = form_to_fleet_distribution_config(dict(form))
-    _refuse_a_fleet_the_dashboard_cannot_run_before_its_homes(distribution)
     location = _fleet_form_location(form)
     parse_dispatch_strategy_config(form.get("dispatch_strategy"))
     start, end = parse_date_range(form)
@@ -133,27 +136,13 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
         "tariff": form.get("tariff"),
         "seg": form.get("seg"),
     }
-    scenario = parse_scenario(document)
+    read = read_fleet_scenario(document)
+    refuse_a_fleet_the_dashboard_cannot_run(read.fleet, "")
+    scenario = read.scenario()
     homes = scenario.simulated_homes()
     refuse_homes_outside_ranges(homes)
     start_date, end_date = scenario.simulation_bounds()
     return ParsedFleetForm(name=name, homes=homes, start_date=start_date, end_date=end_date, scenario=document)
-
-
-def _refuse_a_fleet_the_dashboard_cannot_run_before_its_homes(distribution: Mapping[str, Any]) -> None:
-    """Refuse the fleet *distribution* describes, as fleet_distribution.py's grammar reads it, when the dashboard cannot run it (see refuse_a_fleet_the_dashboard_cannot_run), before parse_scenario generates its homes.
-
-    A *distribution* the grammar refuses is left to parse_scenario, which refuses it in its
-    own order, after the document's tariff and SEG.
-
-    Raises:
-        ConfigurationError: From refuse_a_fleet_the_dashboard_cannot_run, naming n_homes or seed.
-    """
-    try:
-        fleet = parse_fleet_distribution_config(distribution)
-    except ConfigurationError:
-        return
-    refuse_a_fleet_the_dashboard_cannot_run(fleet, "")
 
 
 def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
