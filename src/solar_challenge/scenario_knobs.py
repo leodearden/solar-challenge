@@ -163,10 +163,25 @@ def names_with_aliases(knobs: Iterable[Knob]) -> str:
     return ", ".join(_name_with_aliases(knob) for knob in knobs)
 
 
+def knob_listing() -> str:
+    """The clause naming every knob of the registry, each with its aliases, that a refusal or a help text ends with."""
+    return f"the knobs, each with its aliases: {names_with_aliases(KNOBS.values())}"
+
+
 def _name_with_aliases(knob: Knob) -> str:
     """*knob*'s canonical name, its aliases after it in parentheses when it has any."""
     aliases = [alias for alias, name in ALIASES.items() if name == knob.name]
     return f"{knob.name} ({', '.join(aliases)})" if aliases else knob.name
+
+
+def _canonical_name(name: str) -> str:
+    """The canonical name *name* resolves to: an alias's knob name, else *name* itself."""
+    return ALIASES.get(name, name)
+
+
+def is_knob_name(name: str) -> bool:
+    """Whether *name* names a knob, as its canonical name or as an alias."""
+    return _canonical_name(name) in KNOBS
 
 
 def knob_named(name: str) -> Knob:
@@ -175,9 +190,6 @@ def knob_named(name: str) -> Knob:
     Raises:
         ConfigurationError: If *name* names no knob, listing every knob with its aliases.
     """
-    canonical = ALIASES.get(name, name)
-    if canonical not in KNOBS:
-        raise ConfigurationError(
-            f"Unknown knob {name!r}; the knobs, each with its aliases: {names_with_aliases(KNOBS.values())}"
-        )
-    return KNOBS[canonical]
+    if not is_knob_name(name):
+        raise ConfigurationError(f"Unknown knob {name!r}; {knob_listing()}")
+    return KNOBS[_canonical_name(name)]

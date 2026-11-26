@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
@@ -31,6 +32,7 @@ from solar_challenge.cli.utils import (
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
     ScenarioConfig,
+    config_variables,
     detect_fleet_sweep_spec,
     fleet_of,
     load_community_config,
@@ -49,6 +51,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec, swept_parameter_path
 from solar_challenge.output import compute_community_metrics, generate_community_report
+from solar_challenge.scenario_knobs import Knob, is_knob_name, knob_listing, knob_named
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -205,7 +208,10 @@ def sweep(
         Optional[str],
         typer.Option(
             "--param",
-            help="Name of the ${NAME} placeholder the CLI sweep sets (e.g., BATTERY_RATIO)",
+            help=(
+                "What the sweep varies: a knob, by its name or an alias, else NAME, the ${NAME} "
+                "placeholders of the document; a name with both readings is refused; " + knob_listing()
+            ),
         ),
     ] = None,
     min_val: Annotated[
@@ -230,12 +236,12 @@ def sweep(
         ),
     ] = 10,
     mode: Annotated[
-        str,
+        SweepMode,
         typer.Option(
             "--mode",
-            help="Sweep mode: geometric or linear",
+            help="How the points are spaced from --min to --max: by a constant step (linear) or a constant ratio (geometric)",
         ),
-    ] = "geometric",
+    ] = SweepSpec.mode,
     output_dir: Annotated[
         Optional[Path],
         typer.Option(
@@ -251,13 +257,20 @@ def sweep(
     1. YAML-defined sweep: When the config contains a sweep spec in the
        battery.capacity_kwh.multiplier field, runs all sweep points.
 
-    2. CLI-driven sweep: When --param is provided, it is the NAME of the
-       ${NAME} or ${NAME:default} placeholders to sweep, each the whole
-       value of a key in the config. Each sweep point replaces every such
-       placeholder with the point's value, from --min to --max; a
-       placeholder --param does not name takes its default. The sweep
-       refuses a --param that no placeholder names, a placeholder inside a
-       longer string, and a default that is not a finite number.
+    2. CLI-driven sweep: When --param is provided, it resolves through the
+       knob registry first, by a knob's name or an alias, and then as the
+       NAME of the ${NAME} or ${NAME:default} placeholders of the config,
+       each the whole value of a key; the sweep refuses a --param with both
+       readings or neither. A knob sweep reads the config once, each
+       placeholder at its default, and sets the knob to each point's value,
+       from --min to --max. A variable sweep replaces every placeholder of
+       NAME with the point's value; a placeholder --param does not name
+       takes its default. The sweep refuses a placeholder inside a longer
+       string, and a default that is not a finite number.
+
+    Each point is labelled <axis label>=<value> and written to
+    <axis label>_<value>.csv: the axis label is the knob's canonical name,
+    the variable's NAME, or the path of the YAML sweep's field.
 
     Example YAML-defined sweep:
 
@@ -281,6 +294,11 @@ def sweep(
 
         solar-challenge fleet sweep config.yaml \\
             --param BATTERY_RATIO --min 0.1 --max 4.0 --steps 10
+
+    Example knob sweep:
+
+        solar-challenge fleet sweep config.yaml \\
+            --param battery_capacity_kwh --min 5 --max 10 --steps 2
     """
     cli = invocation(ctx)
     raw_config = load_config(config)
@@ -343,22 +361,84 @@ def sweep(
         print_success(cli, f"Sweep summary saved to {summary_file}")
 
 
+@dataclass(frozen=True)
+class _KnobAxis:
+    """A --param sweep of a knob: each point is the document's one scenario with the knob set to the point's value."""
+
+    knob: Knob
+
+    @property
+    def label(self) -> str:
+        """The knob's canonical name, which names each point and its output file."""
+        return self.knob.name
+
+    def scenarios(self, document: dict[str, Any], values: Iterable[float]) -> list[tuple[float, ScenarioConfig]]:
+        """Each of *values* with the scenario *document* reads as, its placeholders at their defaults, and the knob set to that value."""
+        scenario = parse_scenario(substitute_config_variables(document))
+        return [(value, self.knob.apply(scenario, value)) for value in values]
+
+
+@dataclass(frozen=True)
+class _VariableAxis:
+    """A --param sweep of a variable: each point is the scenario the document reads as once the point's value replaces ${name}."""
+
+    name: str
+
+    @property
+    def label(self) -> str:
+        """The variable's name, which names each point and its output file."""
+        return self.name
+
+    def scenarios(self, document: dict[str, Any], values: Iterable[float]) -> list[tuple[float, ScenarioConfig]]:
+        """Each of *values* with the scenario *document* reads as once that value replaces ${name}."""
+        return [
+            (value, parse_scenario(substitute_config_variables(document, {self.name: value})))
+            for value in values
+        ]
+
+
+_SweepAxis = _KnobAxis | _VariableAxis
+
+
 def _param_sweep(
     raw_config: dict[str, Any],
     param: str,
     min_val: Optional[float],
     max_val: Optional[float],
     steps: int,
-    mode: str,
+    mode: SweepMode,
 ) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
-    """The name of the sweep, param, its spec, and each sweep value with the scenario raw_config reads as once that value replaces ${param}."""
+    """The label of the axis param names, its spec, and each sweep value with the scenario the axis builds from raw_config for it."""
     if min_val is None or max_val is None:
         raise ConfigurationError("CLI sweep requires --min and --max values")
-    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=SweepMode.parse(mode))
-    return param, sweep_spec, [
-        (value, parse_scenario(substitute_config_variables(raw_config, {param: value})))
-        for value in sweep_spec.get_values()
-    ]
+    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
+    axis = _sweep_axis(raw_config, param)
+    return axis.label, sweep_spec, axis.scenarios(raw_config, sweep_spec.get_values())
+
+
+def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
+    """The axis --param *name* sweeps: the knob it names, else the variable of *document* it names.
+
+    Raises:
+        ConfigurationError: If *name* names both a knob and a variable of *document*, or
+            neither, listing the document's variables and the knobs.
+    """
+    variables = config_variables(document)
+    is_knob = is_knob_name(name)
+    is_variable = name in variables
+    if is_knob and is_variable:
+        raise ConfigurationError(
+            f"--param {name!r} names both the knob {knob_named(name).name!r} and the document's variable "
+            f"${{{name}}}; rename the variable to sweep it, or remove it to sweep the knob"
+        )
+    if is_knob:
+        return _KnobAxis(knob_named(name))
+    if is_variable:
+        return _VariableAxis(name)
+    held = f"its variables: {', '.join(repr(each) for each in variables)}" if variables else "it holds no variables"
+    raise ConfigurationError(
+        f"--param {name!r} names no knob and no variable of the document; {held}; {knob_listing()}"
+    )
 
 
 def _yaml_sweep(
@@ -383,7 +463,7 @@ def _sweep_bounds(
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
     """The start and end every point of the sweep simulates over, which is its document's period with each flag replacing only its own day.
 
-    Every point holds that one period: a YAML sweep reads the document's blocks once, and a ${VAR} stands only for a number, which is neither a day nor a timezone.
+    Every point holds that one period: a YAML sweep reads the document's blocks once, a ${VAR} stands only for a number, which is neither a day nor a timezone, and a knob edits homes, the SEG rate or finance, never the period or location.
     """
     return with_window_options(points[0][1], start=start, end=end).simulation_bounds()
 

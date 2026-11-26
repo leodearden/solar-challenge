@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for config.substitute_config_variables: the ${NAME} and ${NAME:default} placeholders it replaces and those it refuses."""
+"""Tests for config.substitute_config_variables and config.config_variables: the ${NAME} and ${NAME:default} placeholders substitution replaces and those it refuses, and the variables a document's placeholders name."""
 
 import copy
 from typing import Any
 
 import pytest
 
-from solar_challenge.config import substitute_config_variables
+from solar_challenge.config import config_variables, substitute_config_variables
 from solar_challenge.errors import ConfigurationError
 
 
@@ -190,3 +190,17 @@ class TestAMalformedPlaceholderIsRefused:
             substitute_config_variables(document, variables)
 
         assert str(refusal.value) == message
+
+
+class TestConfigVariables:
+    """config_variables names the variable of each placeholder a document holds, reading placeholders as substitution reads them."""
+
+    def test_it_names_each_placeholders_variable_once_in_document_order_defaulted_or_not(self) -> None:
+        assert config_variables({"a": "${A}", "b": {"c": ["${B:2.5}", "${A}"]}, "d": 3}) == ("A", "B")
+
+    def test_a_document_holding_no_placeholders_names_none(self) -> None:
+        assert config_variables({"n_homes": 2, "pv": {"capacity_kw": 4.0}}) == ()
+
+    def test_a_placeholder_inside_a_longer_string_is_refused_as_substitution_refuses_it(self) -> None:
+        with pytest.raises(ConfigurationError, match="inside the longer string"):
+            config_variables({"name": "fleet-${X}"})

@@ -55,7 +55,15 @@ PARAM_SWEEP = SweepPath(
     values=(5.0, 10.0),
 )
 
+KNOB_SWEEP = SweepPath(
+    capacity_kwh=2.0,
+    options=("--param", "battery_capacity_kwh", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+    param_name="battery_capacity_kwh",
+    values=(5.0, 10.0),
+)
+
 SWEEP_PATHS = (
     pytest.param(YAML_SWEEP, id="yaml-sweep"),
     pytest.param(PARAM_SWEEP, id="param-sweep"),
+    pytest.param(KNOB_SWEEP, id="knob-sweep"),
 )
