@@ -6,11 +6,11 @@ annotations declare, refusing a value with a FieldTreeRefused that names the val
 with [i] for an item and None for the root, and the reason. without_unknown_keys drops each key
 the reader refuses as one no field has, reporting each as an UnknownKey, unless the predicate
 it is given, asked with the dataclass whose object holds the key, spares it. The tests drive those
-names over this module's dataclasses, which hold every shape the codec reads, a date and a
-timedelta among them, and shapes no stored dataclass has today: a list, a dict of dataclasses, a
-pd.Timestamp and Any. The agreement test pins the drop to the reader: a key no field has, added
-to each dataclass's object, is refused by the reader at exactly the path where the drop reports
-it.
+names over this module's dataclasses, which hold every shape the codec reads, a date, a
+timedelta and a str-Enum among them, and shapes no stored dataclass has today: a list, a dict of
+dataclasses, a pd.Timestamp and Any. The agreement test pins the drop to the reader: a key no
+field has, added to each dataclass's object, is refused by the reader at exactly the path where
+the drop reports it.
 """
 
 import copy
@@ -676,6 +676,42 @@ class _Weights:
     def __post_init__(self) -> None:
         """Hold a read-only copy of weights, whatever Mapping it was given."""
         object.__setattr__(self, "weights", MappingProxyType(dict(self.weights)))
+
+
+@dataclass(frozen=True)
+class _Shaded:
+    """A dataclass with a field annotated with a str-Enum, as EVConfig's charger_type is."""
+
+    colour: _Colour
+
+
+class TestAStrEnumField:
+    """A field annotated with a str-Enum is stored as its member's value, and read back as the member that value names."""
+
+    def test_a_member_is_written_as_its_value(self) -> None:
+        assert json.loads(json.dumps(field_tree(_Shaded(_Colour.RED)))) == {"colour": "red"}
+
+    def test_a_value_is_read_back_as_the_member_it_names(self) -> None:
+        shaded = _Shaded(_Colour.BLUE)
+
+        read = read_field_tree({"colour": "blue"}, _Shaded)
+
+        assert read.colour is _Colour.BLUE
+        assert read == shaded
+
+    @pytest.mark.parametrize(
+        ("stored", "reason"),
+        [
+            pytest.param("green", "is the string 'green', not one of ['red', 'blue']", id="a-string-naming-no-member"),
+            pytest.param(1, "is the number 1, not one of ['red', 'blue']", id="a-number"),
+            pytest.param(None, "is null, not one of ['red', 'blue']", id="null"),
+        ],
+    )
+    def test_a_value_naming_no_member_is_refused_naming_the_members_values(self, stored: object, reason: str) -> None:
+        with pytest.raises(FieldTreeRefused) as refusal:
+            read_field_tree({"colour": stored}, _Shaded)
+
+        assert (refusal.value.path, refusal.value.reason) == ("colour", reason)
 
 
 class TestAMappingField:
