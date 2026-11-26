@@ -148,8 +148,7 @@ each bump self-documenting in git history.
 
 ### solar-challenge-v0.6.0
 
-The release window is open: task 986 opened it. The release commit folds the
-note files into the groups below.
+Released by task 224 (review-all-solar_challenge-20261013, S29 β), closing the window task 986 opened; Python floor: 3.11. A consumer re-pinning starts at [Consumer recipe for 0.6.0](#consumer-recipe-for-060).
 
 **Breaking** — each entry: what changed (task N); what a consumer writes instead.
 
@@ -3048,6 +3047,373 @@ the new field name.
 **Task 1270.** `optimize configs` gains `--assumptions`, `physics` (the default) or `spreadsheet`, and ranks every config, computes the configured-rate trade-off and runs the sensitivity panel under that mode's `FinanceConfig`, `finance.with_own_use_basis` of the scenario's, as `finance run` computes each mode (§3, *Override (spreadsheet-assumption) path*): `physics` clears any override, and `spreadsheet` keeps the scenario's or sets 0.70. `--assumptions both`, which names two assumptions, is refused as a configuration error before any simulation; run once per assumption. The 0.5.0 tag ranks under the scenario's `finance:` block as written, so on `scenarios/bristol-fin-calibration.yaml`, whose block sets 0.70, the ranking, the trade-off and the sensitivity panel are now physics' where the tag ranked under the override; `--assumptions spreadsheet` reproduces the tag's ranking. Scenarios that set no override rank as before. The ranking report now names its assumption on its first line, `Self-consumption assumption: **Physics**` or `Self-consumption assumption: **Spreadsheet (70% self-consumption)**`, above `## Cost-Recovery Rank`. Readers of the report read the assumption from that line when they re-pin, and pass `--assumptions spreadsheet` to rank a calibration scenario under its override.
 
 **Additive** — each entry (task N).
+
+**Task 200.** `TariffConfig` gains one read-only member, `peak_rate`, its highest period
+rate in £/kWh, which the 0.5.0 tag lacks. Consumers need no change when they
+re-pin.
+
+**Task 230.** `TariffConfig` gains `rates_for(index)`, the rate in £/kWh at each timestamp
+of a `pandas.DatetimeIndex`, in order, as a float64 `numpy.ndarray`. Each rate
+is the one `get_rate` returns for that timestamp, at its wall-clock minute. The
+0.5.0 tag lacks it. `calculate_bill` reads its rates through it and sums the
+rows' costs with numpy, where the tag adds them one row at a time. Its total can
+therefore differ from the tag's in the last digits, about 4e-14 relative on a
+minute year. A NaN energy still gives a NaN bill, and a `pd.NA` energy now gives
+one too, where the tag returns `pd.NA` itself. Consumers need no change when
+they re-pin, unless they test a bill with `is pd.NA`: `pd.isna` reads both.
+
+**Task 318.** `SimulationResults`, reached through
+`FleetResults.per_home_results`, gains the classmethod
+`from_dataframe(frame, *, strategy_name)`, the inverse of `to_dataframe()`.
+`to_dataframe()` also gains a trailing `grid_charge_cost_gbp` column for
+tariffed runs, so the CSV that `home run` writes and the web CSV export of home
+runs carry one more column. Consumers that read the frame by position rather
+than by name re-check it when they re-pin.
+
+**Task 323.** `BatteryConfig` gains the read-only property
+`nominal_usable_capacity_kwh`, its usable capacity between the SOC limits before
+SOH de-rating, in kWh; the 0.5.0 tag lacks it. Consumers need no change when
+they re-pin.
+
+**Task 392.** `SimulationResults`, reached through
+`FleetResults.per_home_results`, gains two methods: `per_minute_amounts()`, a
+frame of each minute's energy in kWh and money in £, one column per amount, and
+`total_amounts()`, the run's total of each amount, keyed by column; the 0.5.0
+tag has neither. Consumers need no change when they re-pin.
+
+**Task 426.** `Battery` declares `config`,
+`min_soc_fraction`, `max_soc_fraction`, `charge_efficiency` and
+`discharge_efficiency` in its class body, and `WeatherCache` declares
+`cache_dir`, so the frozen contract now covers them. `WeatherCache.cache_dir` is
+still a plain instance attribute that `__init__` sets. `Battery`'s five are
+settable properties since tasks 540 and 1691, still read and assigned as on the
+0.5.0 tag. Consumers need no change when they re-pin.
+
+**Task 505.** the frozen contract now covers the
+constructors and public members of the eight classes outside `__all__` that the
+frozen surface names, directly or through another such class:
+`DispatchStrategyConfig`, `GridChargeConfig`, `OutputConfig` and
+`SimulationPeriod` in `solar_challenge.config`, `EVConfig` in
+`solar_challenge.ev`, `HeatPumpConfig` in `solar_challenge.heat_pump`, and
+`HomeConfig` and `SimulationResults` in `solar_challenge.home`. Consumers still
+import each from its module, as on the 0.5.0 tag, e.g.
+`from solar_challenge.home import HomeConfig`, and need no change when they
+re-pin.
+
+**Task 567.** the frozen contract now covers, for each
+class it pins, whether it is a dataclass and which of the dataclass parameters
+`eq`, `order`, `unsafe_hash` and `frozen` it sets. These decide whether its
+instances compare equal field by field, support `<`, `<=`, `>` and `>=`, are
+hashable, and refuse a field assignment with `dataclasses.FrozenInstanceError`.
+Every pinned dataclass sets `eq` except `PrefetchedWeather` and
+`solar_challenge.timebase.LocalDay`, and none sets `order` or `unsafe_hash`. All
+are frozen except `FleetConfig`, `FleetResults` and `CommunityResults`. A pinned
+dataclass that the 0.5.0 tag also has sets the same parameters there, except
+`SimulationResults` and `ScenarioConfig`, which tasks 436 and 955 froze, and
+`SummaryStatistics`, `EnergyFlowResult`, and `OutputConfig` and
+`SimulationPeriod` in `solar_challenge.config`, which task 669 froze (see their
+notes). Consumers need no change when they re-pin.
+
+**Task 668.** The frozen contract now covers, for every class it pins but an Enum, whether a
+positional class pattern such as `case Location(lat, lon)` matches its
+instances by its constructor's positional parameters, whether they hold no
+`__dict__`, so `vars()` and attributes set ad hoc fail on them, and, if they
+hold none, whether they take a weakref. These are spelled `match_args`,
+`slots` and `weakref_slot` in its kind: `dataclass[eq, frozen, match_args]
+(...)` for a dataclass, and `class[match_args, slots] (...)` for any other
+class that has one. Every pinned dataclass with a positional field reads
+`match_args`; `SelfConsumptionStrategyConfig` in `solar_challenge.dispatch`,
+which has no field, does not, and no other pinned class sets `__match_args__`.
+No pinned class reads `slots`: the instances of each hold a `__dict__` and take
+a weakref. No class changes: the lock now pins what instances already did.
+Consumers need no change when they re-pin.
+
+**Task 777.** `SimulationResults`, reached through
+`FleetResults.per_home_results`, gains a read-only property, `window`: the
+`SimulationWindow`, imported from `solar_challenge.timebase`, that its index
+describes: the first and last calendar dates it covers on the index's own
+clock, the cadence its rows are spaced at, and that clock's zone name.
+`per_minute_amounts()` and `total_amounts()` take each kW row's kWh from
+`window.row_energy_kwh`, which multiplies it by `window.step_hours`, the
+cadence in hours; the 0.5.0 tag multiplies by 1/60 whatever the spacing. A row
+of half-hourly results, such as `from_dataframe` builds from a half-hourly
+frame, now counts as half an hour's kWh, where the tag counts it as one
+minute's. Both now raise `ValueError` for
+results whose index no window describes: an empty index, one row without a
+fixed-duration `freq` (a daily `freq` is never one, on any pandas release: a
+zoned day lasts 23 or 25 hours across a clock change), unevenly spaced rows
+(naming the first position whose gap differs and both gaps), or an index that
+is not a `DatetimeIndex` (naming its type and dtype); the tag returns amounts
+for each. The frozen contract now
+also covers `SimulationWindow`, a frozen dataclass that sets `eq`: its
+constructor and public members. Every `simulate_home` run, and every run the
+web app stores, is spaced one minute apart, so its amounts are unchanged;
+consumers that build results at another spacing re-check their totals when they
+re-pin.
+
+**Task 789.** `solar_challenge.battery` gains `SocEnvelope(effective_capacity_kwh,
+min_soc_kwh, max_soc_kwh)`, a frozen value holding a battery's SOH-derated
+capacity and the SOC limits within it, in kWh, whose `target_kwh(fraction)` is
+that fraction of the effective capacity capped at `max_soc_kwh`. It refuses,
+with a `ConfigurationError`, a field that is not a finite number, an effective
+capacity that is not above 0, a negative limit, and limits out of the order
+`min_soc_kwh <= max_soc_kwh <= effective_capacity_kwh`; `target_kwh` refuses
+the same way a fraction that is not a finite number greater than 0 and at
+most 1, the range in which `GridChargeConfig` reads `target_soc_fraction`.
+`BatteryConfig` gains `resolved_soh`, the SOH a `Battery` holds while this
+config is its own, built from it or assigned to it: its `soh` override as
+given, else `compute_soh` of its `system_age_years` with no throughput; and
+`soc_envelope()`, the SOH-derated envelope at its own SOC fractions, the one a
+`Battery` built from it starts with. `Battery` gains `soc_envelope`, the
+envelope of its config at its current SOC fractions, either possibly
+reassigned, from which its `min_soc_kwh`, `max_soc_kwh`, `usable_capacity_kwh`,
+`effective_capacity_kwh`, `soc_fraction` and `grid_charge_target_kwh` now
+derive. The first five give the values the 0.5.0 tag gives and follow a
+reassigned `config` at once as on the tag, except that the SOH they derive from
+now follows a reassigned `config` too (task 1691's note); the tag has no
+`grid_charge_target_kwh` (task 788's note). The 0.5.0 tag has no `SocEnvelope`,
+`resolved_soh` or `soc_envelope`, so a reader of a battery's SOC limits or
+effective capacity builds a `Battery` to read them. Consumers need no change
+when they re-pin; one that builds a `Battery` only to read its SOC limits or
+effective capacity can ask the config's `soc_envelope()` instead.
+
+**Task 801.** `GridServicesEventsConfig` gains
+`annual_income_gbp(fleet_results)`, the annual capacity-at-events income in £,
+net of the aggregator share, that it prices a simulated fleet at, equal to
+`compute_grid_services_at_events(fleet_results, self).annual_income_gbp`; the
+0.5.0 tag lacks it. `compute_grid_services_at_events` now issues a
+`UserWarning`, once per call, for each event window the fleet's simulated index
+never enters, naming the window's months, weekdays and hours and the index's
+first and last timestamps. That window still contributes £0, and a fleet with
+no battery home does not warn. `project_multi_year`, which prices every
+simulated age, shows each such warning once per call, attributed to its own
+caller; the 0.5.0 tag prices the window at £0 silently.
+`project_multi_year`, and so `solve_cost_recovery_rate`, prices a flat
+grid-services rate from the batteries of the `home_configs` its `simulate`
+returns, where the 0.5.0 tag sums the scenario's own homes.
+`FleetRunner.simulate` pairs them with the homes it is asked to simulate, so its
+flat figure is unchanged. A `simulate=` must return `home_configs` carrying the
+batteries that earn the income; task 1119's note says how one that does not is
+refused, and what such a consumer changes. Consumers that simulate through a
+`FleetRunner` need no change when they re-pin.
+
+**Task 808.** `WeatherProvider`, `PvgisTmy` and
+`PrefetchedWeather` join `__all__`; the 0.5.0 tag has none of them.
+`WeatherProvider` is a `typing.Protocol`: any object whose `get(location)`
+returns a frame of hourly weather is one. `PvgisTmy(cache)` is a frozen
+dataclass whose `get(location)` returns the TMY `get_tmy_data` returns, read
+from `cache` and put there on a miss, or fetched on every call when `cache` is
+`None`; it raises `WeatherDataError` where `get_tmy_data` does.
+`PrefetchedWeather(frames)` is a frozen dataclass compared by identity. Its
+`frames` is a read-only copy of the mapping from `Location` to frame it is
+given, so the locations it holds are fixed at construction; the frames
+themselves are the ones given, not copies. Its `get(location)` returns the held
+frame, and for any other location raises `LookupError` naming that location and
+those held; its `fetch(weather, locations)` calls `weather.get` once per
+distinct location, in first-seen order. Both pickle. `WeatherCache()` given no
+directory uses the one `SOLAR_CHALLENGE_WEATHER_CACHE_DIR` names, when it is set
+and non-empty, else `.cache/weather` under the working directory, as on the
+tag; so `get_tmy_data`, with no cache installed, reads and fills that
+directory. With none installed, `get_weather_cache()` returns a new
+`WeatherCache()` on each call, so a change to the variable takes effect at the
+next call; the tag builds one on the first call and returns it ever after.
+`set_weather_cache` still overrides both. Consumers need no change when they
+re-pin.
+
+**Task 833.** `SummaryStatistics` gains three read-only
+properties, each the difference of two of its totals, in kWh:
+`total_pv_charge_kwh`, the battery charge less `total_grid_charge_kwh`;
+`total_direct_self_consumption_kwh`, the self-consumption less the battery
+discharge, which `simulate_home` counts in self-consumption; and
+`total_grid_to_demand_kwh`, the grid import less `total_grid_charge_kwh`. The
+0.5.0 tag has none of them. Consumers need no change when they re-pin, and a
+subtraction of their own that computes one can go.
+
+**Task 848.** `GridChargeConfig` gains a `forecast` field, after `target_soc_fraction`, naming
+what sizes a cheap period's grid charge: one of `dispatch.GRID_CHARGE_FORECASTS`,
+`'pv_blind'`, `'trailing_14_days'` or `'perfect_foresight'`
+(`docs/grid-charge-forecast.md`). A `grid_charging:` block reads and writes it as
+`forecast`. Omitted, it is `'pv_blind'`, which fills to the target in every cheap
+period as the 0.5.0 tag does; the tag has no such field, and its `grid_charging:`
+block refuses the key. Any other value is refused with a `ConfigurationError`
+naming `forecast`, the value and every forecast. Consumers that build
+`GridChargeConfig` by `target_soc_fraction`, positionally or by keyword, need no
+change when they re-pin.
+
+`GridChargeContext` gains a last field, `useful_charge_ceiling_kwh`, `None` by
+default: the state of charge above which a step's grid charge is forecast to be
+stranded by the PV after it. `compute_grid_charge_power_kw` then fills to the
+lower of it and `target_soc_kwh`, so every strategy that grid-charges through it,
+`TOUOptimizedStrategy` and `PeakShavingStrategy`, honours it;
+`ScheduledChargeStrategy`'s windows still fill to their own targets. A ceiling
+that is negative, NaN or infinite is refused with a `ValueError` naming the field
+and the value. `simulate_timestep` gains a keyword-only `useful_charge_ceiling_kwh`,
+`None` by default, that it carries into the context it builds; without a tariff or
+grid charging it builds none, and the ceiling has no effect. The 0.5.0 tag has
+neither. A context or call that leaves them out fills to the target as on the tag,
+so consumers need no change when they re-pin.
+
+`simulate_home` now sizes each cheap period's grid charge by its battery's
+`GridChargeConfig.forecast`: it computes every row's useful-charge ceiling from the
+run's PV and demand (`grid_charge_forecast.grid_charge_ceilings_kwh`) and passes it to
+`simulate_timestep`, so a strategy given as `strategy=` is offered the same ceilings.
+Under `'pv_blind'`, the default, no period has a ceiling, and every run is as on the
+0.5.0 tag. Under `'trailing_14_days'` the first 14 cheap windows of a run fill as
+`'pv_blind'` does, and from the 15th on a window fills no higher than its ceiling, so
+a sunny spell grid-charges less. `SimulationResults` and `SummaryStatistics` gain a last
+field, `grid_charge_forecast`, `None` by default: the forecast that sized the run's grid
+charge, `None` when the run did not grid-charge. `simulate_home` sets it from the
+battery's `grid_charging`, `calculate_summary` copies it, and
+`SimulationResults.from_dataframe` gains a keyword-only `grid_charge_forecast`, `None` by
+default, that it records. A stored summary saved before the field existed reads it as
+`None`. The 0.5.0 tag has none of these; a consumer that builds either class by keyword,
+or calls `from_dataframe` with `strategy_name` alone, needs no change when it re-pins.
+
+`dispatch.distinct_grid_charge_forecasts(forecasts)` is new: the distinct forecasts
+among the given runs' forecasts, each `None` for a run that did not grid-charge, in
+`GRID_CHARGE_FORECASTS` order, `()` when none is set. `FleetSummary` and
+`BillDistribution` gain a last field, `grid_charge_forecasts`, `()` by default, which
+`aggregate_home_summaries` and `bill_distribution` set from it, so a fleet's net cost
+and every bill distribution, cost-recovery outlays included, say what sized their grid
+charge. A stored fleet summary saved before the field existed reads `()`.
+`generate_summary_report`, `generate_finance_report`, `generate_config_ranking_report`
+and `generate_community_report` open, under their first heading, with a notice naming
+each forecast that sized the grid charge they report, and what it is; a report of runs
+that did not grid-charge is as on the 0.5.0 tag.
+
+`dispatch.ANALYSIS_ONLY_FORECASTS` is new: the forecasts no board figure may use,
+`'perfect_foresight'`. `finance.annualise`, which `householder_bill`,
+`bill_distribution`, `solve_cost_recovery_rate` and `project_multi_year` all
+annualise through, now refuses a summary whose `grid_charge_forecast` is one of them
+with a `ConfigurationError` naming the field, the value and the forecasts to run
+instead: it reads the run's own future, an upper bound no board figure may use.
+`project_multi_year` and `solve_cost_recovery_rate` refuse a scenario whose battery
+grid-charges by one of them before they simulate it, through the new
+`finance.refuse_analysis_only_forecasts(homes)`, which names the first such home's
+`battery_config.grid_charging.forecast` by its position. A
+`CommunityConfig` whose community battery's `grid_charging` names a forecast other
+than `'pv_blind'` is refused with a `ConfigurationError` naming the community
+battery, the forecast and `'pv_blind'`: the community dispatch computes no
+useful-charge ceilings. The 0.5.0 tag has none of these names, fields or refusals;
+a `'pv_blind'` or omitted forecast is accepted everywhere it was.
+
+**Task 893.** `solar_challenge.timebase` gains
+`ONE_MINUTE`, `timedelta(minutes=1)`, the cadence of a simulated run's window.
+Its `SimulationWindow`, the type of the task 777 line's
+`SimulationResults.window`, gains two methods. `rows()` is the window's index,
+from its first day's first instant on its clock up to, not including, the first
+instant after its last day, at its cadence, with `freq` the cadence, at
+microsecond resolution, so `SimulationWindow.of_index(window.rows())` is the
+window. A date's first instant is its local midnight, or, where the clocks skip
+midnight, the instant they jump to, or, where they repeat it, the first 00:00.
+A window with no zone has 24-hour days. A Europe/London one-minute window from
+2024-03-30 to 2024-04-01 has 4,260 rows. `local_days()` yields one
+`LocalDay(date, rows)` per date from `first_day` to `last_day`, in order, each
+holding the rows of `rows()` that start on its date: 1,380 one-minute rows on
+Europe/London's spring-forward day, 1,500 on its fall-back day and 1,440 on any
+other. `rows()` raises `ValueError` naming the cadence when the cadence does not
+divide one hour, and `local_days()` raises the same `ValueError` when it is
+called, before it yields a day. `LocalDay`, in `solar_challenge.timebase`, is a
+frozen dataclass compared by identity, whose two methods read the local wall
+clock. `minute_of_day()` gives each row's minute of the day, 0 to 1439: it
+repeats the minutes of the hour the clocks go back over and lacks those of the
+hour they skip. `instant(minute_of_day)` gives the first row of the date whose
+clock reads that minute or later, e.g. 02:00 BST for 01:30 on 2024-03-31, and
+the first 01:30 on 2024-10-27; it raises `ValueError` for a minute outside 0 to
+1439, or one no row of the date reaches. The frozen contract now also covers
+`LocalDay`'s constructor and methods. The 0.5.0 tag has none of these.
+Consumers need no change when they re-pin.
+
+**Task 915.** the frozen contract now covers what a
+consumer indexes in each exported container constant: the keys of
+`SEG_PRESETS`, `OFGEM_TDCV_BY_OCCUPANTS` and `SEASONAL_FACTORS`, in order, with
+the type of the value under each, and the length of `ELEXON_PROFILE_CLASS_1`
+and `DEFAULT_EVENT_WINDOWS`, with the type of each item. The 0.5.0 tag's
+constants hold the same keys and items, of the same types. Their numbers stay
+data: a changed rate gets its own note as a change to what a public name returns.
+Consumers need no change when they re-pin.
+
+**Task 977.** `timebase` gains `SHORT_WINDOW_START`, 2024-06-01, beside
+`DEFAULT_FIRST_DAY` and `DEFAULT_LAST_DAY`: the first day of the n-day windows
+that the dashboard's `days` requests and `solar-challenge home quick` run. The
+0.5.0 tag has no such name. Consumers need no change when they re-pin; code
+that wants the n-day start reads it there instead of restating 2024-06-01.
+
+**Task 979.** `solar_challenge.fleet_distribution.DISTRIBUTION_TYPES` is the per-type table
+of the distribution grammar: one `DistributionType` for each `type:` a
+`fleet_distribution:` spec names (`weighted_discrete`, `normal`, `uniform`,
+`fixed`, `shuffled_pool` and `proportional_to`, in that order), with its title,
+its `SpecParameter`s and `SpecRows`, the keys an editor has no input for, the
+spec type its builder returns, its builder and its `write`.
+`write_distribution_spec` writes a spec back as the mapping, or the scalar,
+that the grammar reads as it, and `editor_types(kind)` gives the editable types
+a field of a `FieldKind` draws. `DrawnKindRule` and `DRAWN_KIND_RULES`, the rule
+of which specs a field of each drawn `FieldKind` may be given, are now public
+names of the module. None of these is exported from `solar_challenge`, and no
+parsed value or refusal changes. Consumers need no change when they re-pin; one
+that spells a distribution type's keys or titles, or writes a spec back by
+hand, can read them from the table, or write the spec with
+`write_distribution_spec`, instead.
+
+**Task 986.** `ConfigurationError` joins `__all__`, so `solar_challenge` exports it; the
+0.5.0 tag does not. `ConfigurationError(*args)` takes the arguments
+`ValueError` takes, and its classmethod `must_be(field, requirement, *, got)`
+builds a refusal, which the caller raises. It is the class that
+`solar_challenge.errors` defines, so either import gives the same class.
+Accessing `solar_challenge.ConfigurationError` loads `solar_challenge.errors`
+alone: neither pvlib nor any other module of the package. When they re-pin,
+consumers may import it as task 773's note says,
+`from solar_challenge.errors import ConfigurationError`, or write
+`from solar_challenge import ConfigurationError`; either gives the same
+`ValueError` subclass.
+
+**Task 1309.** `SimulationWindow`, the type the task 777 line introduces, now raises
+`ValueError` when it is built with a `first_day` or `last_day` whose type is
+not exactly `datetime.date`, such as a `pd.Timestamp` or a `datetime`, or with
+a `cadence` whose type is not exactly `datetime.timedelta`, such as a
+`pd.Timedelta`, naming the field and the value. Before this change a window
+could be built with two days that were each a `pd.Timestamp` or a `datetime`,
+or with a cadence that is a `pd.Timedelta` or another value that compares with
+a `timedelta`, as a NumPy `timedelta64` or a pandas tick offset such as
+`pd.offsets.Minute(1)` does. A web-app save of a summary carrying such a
+window wrote a `pd.Timestamp` day as datetime text, which loading the run then
+refused, and failed on any other of these values. Any day that is not exactly
+a `date`, or cadence that is not exactly a `timedelta`, and did not build,
+usually with a `TypeError` or `AttributeError`, now raises this `ValueError`.
+The window `SimulationWindow.of_index` gives, and so
+`SimulationResults.window` and the `window` that `calculate_summary` gives a
+`SummaryStatistics`, already holds exactly these types, as does the window
+`simulate_home` runs over, so no result changes. The 0.5.0 tag has no
+`SimulationWindow`. Consumers that build a window from other values pass
+`pd.Timestamp(day).date()` for each day and
+`pd.Timedelta(cadence).to_pytimedelta()` for the cadence when they re-pin.
+
+**Task 1408.** A parallel `FleetRunner` (`simulate`, `simulate_each`) whose worker process ends
+abruptly, e.g. through an out-of-memory kill, fails every unfinished home with one
+`BrokenProcessPool`. That exception now carries the note "the process pool broke before
+home {i} ({name!r}) of fleet {k} ({fleet name!r}) finished; the process that ended may
+have been simulating another home", which names whichever unfinished home's future
+reported first; before this change it carried task 879's note, "simulating home {i}
+({name!r}) of fleet {k} ({fleet name!r})", which claimed that the home it named had
+failed. A `BrokenProcessPool` that a home simulator raises itself, e.g. from a process
+pool of its own, now carries the broken-pool note too, whether the runner runs homes in
+parallel or in turn; every other exception a failed home raises keeps task 879's note.
+The 0.5.0 tag's `simulate_fleet` raises `BrokenProcessPool` with no note. Consumers
+change nothing when they re-pin; code that reads the note to find the failing home
+should take a `BrokenProcessPool`'s note as naming only a home that had not finished.
+
+**Task 1567.** `PvgisTmy.get`, and so `get_tmy_data`, `weather.default_weather().get` and
+`fleet.default_runner()`'s weather prefetch, returns the TMY it has fetched when
+its cache's `put` then raises `OSError`, as where the process may not create the
+cache directory. It issues a `UserWarning`, attributed to its caller, naming the
+cache directory and the error, and caches nothing, so the next `get` requests
+PVGIS again. On the 0.5.0 tag, which has `get_tmy_data` but not `PvgisTmy`, a
+`put` that raises after the fetch makes `get_tmy_data` raise `RuntimeError`
+("Failed to retrieve TMY data from PVGIS"), with the `OSError` as its cause, and
+the fetched TMY is lost. Code that relied on that error to notice a cache it
+cannot write watches for the warning instead, e.g. with
+`warnings.catch_warnings(record=True)` or an `error::UserWarning` filter; other
+consumers need no change when they re-pin.
 
 ---
 
