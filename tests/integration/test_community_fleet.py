@@ -406,8 +406,7 @@ location:
         plain_path.write_text(homes_yaml)
 
         community_yaml = homes_yaml + """
-community:
-  sharing_mode: p2p
+community: {}
 """
         community_path = tmp_path / "fleet_community.yaml"
         community_path.write_text(community_yaml)

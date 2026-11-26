@@ -8,9 +8,9 @@
 # Exporters: high PV capacity, low annual load  → generate surplus at midday
 # Importers: low PV capacity, high annual load  → draw from grid throughout day
 #
-# The community: block enables community_battery sharing mode.  The shared
-# battery absorbs export surplus and discharges to cover import deficits,
-# further reducing grid flows beyond bare P2P netting.
+# The community: block's community_battery makes the community share through
+# a shared battery, which absorbs export surplus and discharges to cover import
+# deficits, further reducing grid flows beyond bare P2P netting.
 
 name: Bristol Community Demo
 
@@ -80,12 +80,9 @@ homes:
 
 # ---- Community sharing block ------------------------------------------------
 # The community: block is OPTIONAL; a plain fleet run ignores it.
-# sharing_mode: community_battery — shared battery absorbs midday surplus from
-#   exporters and discharges to importers later in the day.
 # _parse_battery_config reads capacity_kwh / max_charge_kw / max_discharge_kw.
 
 community:
-  sharing_mode: community_battery
   community_battery:
     capacity_kwh: 20.0
     max_charge_kw: 10.0

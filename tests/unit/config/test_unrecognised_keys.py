@@ -577,7 +577,7 @@ class TestTariffBlockKeys:
             ),
             pytest.param(
                 load_community_config,
-                {"community": {"sharing_mode": "p2p", "billing": {"tariff": _MISKEYED_ECONOMY_7}}},
+                {"community": {"billing": {"tariff": _MISKEYED_ECONOMY_7}}},
                 "community.billing.tariff",
                 id="community-billing",
             ),
@@ -1043,7 +1043,7 @@ class TestScenarioFileBlockKeys:
             pytest.param("parse_seg_rate", _MISKEYED_SEG, "seg", "currency", id="parse_seg_rate"),
             pytest.param(
                 "load_community_config",
-                {"community": {"sharing_mode": "p2p", "billing": {"seg": _MISKEYED_SEG}}},
+                {"community": {"billing": {"seg": _MISKEYED_SEG}}},
                 "community.billing.seg",
                 "currency",
                 id="community-billing-seg",
@@ -1077,7 +1077,7 @@ class TestScenarioFileBlockKeys:
             ),
             pytest.param(
                 "load_community_config",
-                {"community": {"sharing_mode": "p2p", "mode": "p2p"}},
+                {"community": {"mode": "p2p"}},
                 "community",
                 "mode",
                 id="community",
@@ -1086,7 +1086,6 @@ class TestScenarioFileBlockKeys:
                 "load_community_config",
                 {
                     "community": {
-                        "sharing_mode": "p2p",
                         "billing": {"seg_rate_pence_per_kwh": 4.1, "rate": 4.1},
                     }
                 },
@@ -1098,7 +1097,6 @@ class TestScenarioFileBlockKeys:
                 "load_community_config",
                 {
                     "community": {
-                        "sharing_mode": "community_battery",
                         "community_battery": {"capacity_kwh": 50.0, "size_kwh": 50.0},
                     }
                 },
@@ -1378,14 +1376,13 @@ class TestScenarioFileBlockKeys:
         _assert_blocks_recognise_exactly_their_keys(parse_seg_rate, either_seg_form, "seg")
 
     def test_every_recognised_community_key_is_accepted(self, tmp_path: Path) -> None:
-        """A community block setting its mode, battery and billing, billed by a tariff and a scalar SEG rate, parses to the CommunityConfig built from those values; the community and billing blocks recognise no other key."""
+        """A community block setting its battery and billing, billed by a tariff and a scalar SEG rate, parses to the CommunityConfig built from those values; the community and billing blocks recognise no other key."""
         community_battery: dict[str, Any] = {
             "capacity_kwh": 50.0,
             "max_charge_kw": 20.0,
             "max_discharge_kw": 20.0,
         }
         community = {
-            "sharing_mode": "community_battery",
             "community_battery": community_battery,
             "billing": {
                 "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30, "name": "Community"},
@@ -1404,7 +1401,6 @@ class TestScenarioFileBlockKeys:
         assert load_community_config(_write(tmp_path, {"community": community})) == expected
 
         every_community_key = {
-            "sharing_mode": "p2p",
             "community_battery": None,
             "billing": {"tariff": None, "seg_rate_pence_per_kwh": 4.1, "seg": None},
         }

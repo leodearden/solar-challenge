@@ -265,28 +265,43 @@ _SEG_AND_COMMUNITY_ROWS = [
         id="scenario-seg-rate-boolean",
     ),
     pytest.param(
-        _community({"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": None}}),
+        _community({"billing": {"seg_rate_pence_per_kwh": None}}),
         "community.billing.seg_rate_pence_per_kwh",
         lambda: SEGTariff(name="", rate_pence_per_kwh=None),
         id="billing-scalar-rate-null",
     ),
     pytest.param(
-        _community({"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": True}}),
+        _community({"billing": {"seg_rate_pence_per_kwh": True}}),
         "community.billing.seg_rate_pence_per_kwh",
         lambda: SEGTariff(name="", rate_pence_per_kwh=True),
         id="billing-scalar-rate-boolean",
     ),
     pytest.param(
-        _community({"sharing_mode": "p2p", "billing": {"seg": {"rate_pence_per_kwh": True}}}),
+        _community({"billing": {"seg": {"rate_pence_per_kwh": True}}}),
         "community.billing.seg",
         lambda: SEGTariff(name="", rate_pence_per_kwh=True),
         id="billing-seg-rate-boolean",
     ),
     pytest.param(
-        _community({"sharing_mode": "p3"}),
+        _community(
+            {
+                "community_battery": {
+                    "capacity_kwh": 20.0,
+                    "dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 3.0},
+                    "grid_charging": {"target_soc_fraction": 0.9},
+                }
+            }
+        ),
         "community",
-        lambda: CommunityConfig(sharing_mode="p3"),
-        id="community-sharing-mode-unknown",
+        lambda: CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=BatteryConfig(
+                capacity_kwh=20.0,
+                dispatch_strategy=PeakShavingStrategyConfig(3.0),
+                grid_charging=GridChargeConfig(0.9),
+            ),
+        ),
+        id="community-battery-grid-charging-without-a-billing-tariff",
     ),
 ]
 
