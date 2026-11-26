@@ -7,7 +7,7 @@ from datetime import date
 import pytest
 from solar_challenge.board_report import AssumptionSection, generate_config_ranking_report, generate_finance_report
 from solar_challenge.finance import BillDistribution, CostRecoverySolution, OwnUseBasis
-from solar_challenge.optimize import RankedSweep
+from solar_challenge.optimize import ConfigPoint, RankedSweep
 from solar_challenge.timebase import SimulationWindow
 from tests._assumption_sections import make_assumption_section, sections_of
 from tests._factories import (
@@ -18,6 +18,9 @@ from tests._factories import (
 )
 from tests._finance_builders import make_window
 from tests._grid_charge_forecast_notices import PV_BLIND_AND_TRAILING_NOTICE, TRAILING_NOTICE
+
+_PHYSICS_OPENING = "Self-consumption assumption: **Physics**\n\n"
+"""The line a ranking report computed on simulated own-use opens with, above its first heading."""
 
 
 def _annualised_from(window: SimulationWindow) -> BillDistribution:
@@ -74,13 +77,13 @@ class TestGridChargeForecastNotice:
         sweep = make_ranked_sweep((make_config_result(outlay=_sized_by("pv_blind", "trailing_14_days")),))
 
         assert generate_config_ranking_report(sweep).startswith(
-            "## Cost-Recovery Rank\n\n" + PV_BLIND_AND_TRAILING_NOTICE + "| Config"
+            _PHYSICS_OPENING + "## Cost-Recovery Rank\n\n" + PV_BLIND_AND_TRAILING_NOTICE + "| Config"
         )
 
     def test_a_ranking_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
         sweep = make_ranked_sweep((make_config_result(outlay=_sized_by()),))
 
-        assert generate_config_ranking_report(sweep).startswith("## Cost-Recovery Rank\n\n| Config")
+        assert generate_config_ranking_report(sweep).startswith(_PHYSICS_OPENING + "## Cost-Recovery Rank\n\n| Config")
 
 
 class TestExtrapolationNotice:
@@ -118,7 +121,7 @@ class TestExtrapolationNotice:
         sweep = _one_config_sweep(make_window(days=30, first_day=date(2024, 6, 1)))
 
         assert generate_config_ranking_report(sweep).startswith(
-            "## Cost-Recovery Rank\n\n"
+            _PHYSICS_OPENING + "## Cost-Recovery Rank\n\n"
             "*Yearly figures are extrapolated ×12.200 from a 30-day window (2024-06-01 to 2024-06-30), "
             "not whole calendar years.*\n\n"
             "| Config"
@@ -128,7 +131,58 @@ class TestExtrapolationNotice:
         report = generate_config_ranking_report(_one_config_sweep(make_window(days=365, first_day=date(2023, 1, 1))))
 
         assert "extrapolated" not in report
-        assert report.startswith("## Cost-Recovery Rank\n\n| Config")
+        assert report.startswith(_PHYSICS_OPENING + "## Cost-Recovery Rank\n\n| Config")
+
+
+def _column_header(finance_report: str) -> str:
+    """The header of a one-column finance report's column, read from its Householder Bill table's header row."""
+    header_row = next(line for line in finance_report.splitlines() if line.startswith("| Line Item |"))
+    return header_row.split("|")[2].strip()
+
+
+class TestARankingReportNamesItsAssumption:
+    """A ranking report opens, above its first heading, with the self-consumption assumption its sweep was computed under."""
+
+    def test_a_sweep_on_simulated_own_use_opens_naming_physics(self) -> None:
+        report = generate_config_ranking_report(make_ranked_sweep((make_config_result(),)))
+
+        assert report.startswith("Self-consumption assumption: **Physics**\n\n## Cost-Recovery Rank\n\n")
+
+    def test_a_sweep_on_an_override_opens_naming_the_spreadsheet_and_its_fraction(self) -> None:
+        sweep = make_ranked_sweep((make_config_result(),), self_consumption_override=0.6)
+
+        assert generate_config_ranking_report(sweep).startswith(
+            "Self-consumption assumption: **Spreadsheet (60% self-consumption)**\n\n## Cost-Recovery Rank"
+        )
+
+    def test_a_sweep_with_no_feasible_config_still_names_its_assumption(self) -> None:
+        sweep = make_ranked_sweep(
+            (),
+            infeasible=(ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0),),
+            self_consumption_override=0.7,
+        )
+
+        assert generate_config_ranking_report(sweep).startswith(
+            "Self-consumption assumption: **Spreadsheet (70% self-consumption)**\n\n## Cost-Recovery Rank"
+        )
+
+    @pytest.mark.parametrize(
+        ("basis", "override"),
+        [(OwnUseBasis.SIMULATED, None), (OwnUseBasis.OVERRIDE, 0.6), (OwnUseBasis.OVERRIDE, None)],
+        ids=["physics", "spreadsheet-60", "spreadsheet-default"],
+    )
+    def test_the_assumption_is_named_as_finance_run_heads_its_column(
+        self, basis: OwnUseBasis, override: float | None
+    ) -> None:
+        section = make_assumption_section(basis, override=override)
+        finance_report = generate_finance_report(sections_of(section))
+        sweep = make_ranked_sweep(
+            (make_config_result(),), self_consumption_override=section.finance.self_consumption_override
+        )
+
+        assert generate_config_ranking_report(sweep).startswith(
+            f"Self-consumption assumption: **{_column_header(finance_report)}**\n\n"
+        )
 
 
 class _UncheckedSolution(CostRecoverySolution):

@@ -28,12 +28,16 @@ of the scenario's period.
 
 `finance run` and `optimize configs` take their scenario's finance through
 required_finance, so both refuse a file without a finance: block in one message.
+Both read --assumptions as an AssumptionMode, and the own-use bases each mode
+names from ASSUMPTION_BASES, so the two board commands share one vocabulary.
 """
 
 import dataclasses
-from collections.abc import Iterable
+import enum
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from functools import wraps
+from types import MappingProxyType
 from typing import Annotated, Any, Callable, Optional, TypeVar
 
 import typer
@@ -55,7 +59,7 @@ from rich.text import Text
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import FinanceConfig
+from solar_challenge.finance import FinanceConfig, OwnUseBasis
 from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
 from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.home import SummaryStatistics
@@ -200,6 +204,24 @@ def required_finance(scenario: ScenarioConfig) -> FinanceConfig:
             "Add a finance: block with at least standing_charge_pence_per_day."
         )
     return scenario.finance
+
+
+class AssumptionMode(str, enum.Enum):
+    """A board command's --assumptions: the self-consumption assumption, or assumptions, it computes under."""
+
+    physics = "physics"
+    spreadsheet = "spreadsheet"
+    both = "both"
+
+
+ASSUMPTION_BASES: Mapping[AssumptionMode, tuple[OwnUseBasis, ...]] = MappingProxyType(
+    {
+        AssumptionMode.physics: (OwnUseBasis.SIMULATED,),
+        AssumptionMode.spreadsheet: (OwnUseBasis.OVERRIDE,),
+        AssumptionMode.both: (OwnUseBasis.SIMULATED, OwnUseBasis.OVERRIDE),
+    }
+)
+"""The own-use bases each --assumptions mode names: finance run reports each as a column, and optimize configs ranks under a mode naming one."""
 
 
 def verbatim_table_title(title: str) -> Text:

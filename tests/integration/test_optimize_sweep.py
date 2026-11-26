@@ -18,6 +18,7 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
@@ -245,6 +246,7 @@ class TestRankedSweep:
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=cr.config,
             pareto_baseline=(pareto_pt,),
+            self_consumption_override=None,
         )
 
         assert rs.results == (cr,)
@@ -252,6 +254,42 @@ class TestRankedSweep:
         assert rs.retained_cash_floor_gbp == pytest.approx(100.0)
         assert rs.cheapest_feasible is cr.config
         assert rs.pareto_baseline == (pareto_pt,)
+
+    def _built(self, self_consumption_override: float | None) -> RankedSweep:
+        """A one-config sweep solved under *self_consumption_override*."""
+        cr = self._make_one_feasible()
+        return RankedSweep(
+            results=(cr,),
+            infeasible=(),
+            retained_cash_floor_gbp=100.0,
+            cheapest_feasible=cr.config,
+            pareto_baseline=(),
+            self_consumption_override=self_consumption_override,
+        )
+
+    @pytest.mark.parametrize("override", [None, 0.6, 1.0], ids=["simulated", "an-override", "the-whole-generation"])
+    def test_the_own_use_override_reads_back(self, override: float | None) -> None:
+        """self_consumption_override reads back as built: None for simulated own-use, else the fraction."""
+        assert self._built(override).self_consumption_override == override
+
+    @pytest.mark.parametrize("override", [0.0, 1.7, -0.2, float("nan")], ids=["zero", "above-one", "negative", "nan"])
+    def test_an_override_finance_config_refuses_is_refused_naming_it(self, override: float) -> None:
+        """A sweep cannot record an own-use assumption no FinanceConfig could hold, so its report cannot name one."""
+        with pytest.raises(ConfigurationError, match="self_consumption_override") as refusal:
+            self._built(override)
+        assert str(override) in str(refusal.value)
+
+    def test_the_own_use_override_has_no_default(self) -> None:
+        """A sweep built by hand states the own-use assumption it was solved under."""
+        cr = self._make_one_feasible()
+        with pytest.raises(TypeError, match="self_consumption_override"):
+            RankedSweep(
+                results=(cr,),
+                infeasible=(),
+                retained_cash_floor_gbp=100.0,
+                cheapest_feasible=cr.config,
+                pareto_baseline=(),
+            )
 
     def test_cheapest_feasible_equals_results_0_config(self) -> None:
         """When results non-empty, cheapest_feasible must equal results[0].config."""
@@ -262,6 +300,7 @@ class TestRankedSweep:
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=cr.config,
             pareto_baseline=(),
+            self_consumption_override=None,
         )
         assert rs.cheapest_feasible is rs.results[0].config
 
@@ -273,6 +312,7 @@ class TestRankedSweep:
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=None,
             pareto_baseline=(),
+            self_consumption_override=None,
         )
         assert rs.cheapest_feasible is None
 
@@ -287,6 +327,7 @@ class TestRankedSweep:
                 retained_cash_floor_gbp=100.0,
                 cheapest_feasible=wrong,
                 pareto_baseline=(),
+                self_consumption_override=None,
             )
 
     def test_frozen_raises_on_assignment(self) -> None:
@@ -298,6 +339,7 @@ class TestRankedSweep:
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=cr.config,
             pareto_baseline=(),
+            self_consumption_override=None,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             rs.retained_cash_floor_gbp = 999.0  # type: ignore[misc]
@@ -768,6 +810,25 @@ class TestRetainedCashFloor:
             run_sweep(configs, retained_cash_floor_gbp=60.0, simulate=simulate)
 
 
+class TestOwnUseAssumption:
+    """run_sweep records the own-use assumption, the self_consumption_override, its configs' finance shares."""
+
+    def _ranked(self, finance: FinanceConfig) -> RankedSweep:
+        """run_sweep of one config enumerated from the interior scenario carrying *finance*."""
+        n_homes = 5
+        configs = enumerate_configs(
+            _make_scenario(n_homes=n_homes, finance=finance), pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
+        )
+        return run_sweep(configs, simulate=answering_with(_make_fleet_results(n_homes=n_homes)))
+
+    def test_configs_on_simulated_own_use_record_no_override(self) -> None:
+        assert self._ranked(_interior_finance()).self_consumption_override is None
+
+    def test_configs_on_an_override_record_it(self) -> None:
+        finance = dataclasses.replace(_interior_finance(), self_consumption_override=0.6)
+        assert self._ranked(finance).self_consumption_override == pytest.approx(0.6)
+
+
 # ---------------------------------------------------------------------------
 # step-15/16 — guards: TypeError for no simulator, ValueError for empty configs and None finance
 # ---------------------------------------------------------------------------
@@ -817,6 +878,22 @@ class TestRunSweepGuards:
         asked: list[FleetConfig] = []
 
         with pytest.raises(ValueError, match=r"15\.0.*27\.0"):
+            run_sweep(configs, simulate=recording(asked, answering_with(_make_fleet_results(n_homes=n_homes))))
+        assert asked == []
+
+    def test_configs_on_two_own_use_assumptions_are_refused_naming_both_before_any_simulation(self) -> None:
+        """run_sweep solves every config on one own-use assumption: configs on two are refused, naming both, unsimulated."""
+        n_homes = 3
+        configs = enumerate_configs(
+            _make_scenario(n_homes=n_homes, finance=_make_finance()),
+            pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6],
+        ) + enumerate_configs(
+            _make_scenario(n_homes=n_homes, finance=dataclasses.replace(_make_finance(), self_consumption_override=0.6)),
+            pv_kwp=[5.0], battery_kwh=[6.0], inverter_kw=[3.6],
+        )
+        asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError, match=r"None.*0\.6"):
             run_sweep(configs, simulate=recording(asked, answering_with(_make_fleet_results(n_homes=n_homes))))
         assert asked == []
 

@@ -2,14 +2,15 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Finance CLI commands for householder bill and distribution analysis."""
 
-import enum
 from pathlib import Path
-from typing import Annotated, Mapping, Optional, Sequence
+from typing import Annotated, Optional, Sequence
 
 import typer
 
 from solar_challenge.board_report import AssumptionSection, FlexBlock, GridServicesIncome, generate_finance_report
 from solar_challenge.cli.utils import (
+    ASSUMPTION_BASES,
+    AssumptionMode,
     EndOption,
     StartOption,
     handle_errors,
@@ -22,7 +23,6 @@ from solar_challenge.cli.utils import (
 from solar_challenge.config import load_scenario
 from solar_challenge.finance import (
     FinanceConfig,
-    OwnUseBasis,
     bill_distribution,
     with_own_use_basis,
 )
@@ -46,14 +46,6 @@ from solar_challenge.projection import (
 app = typer.Typer(help="Financial analysis commands")
 
 
-class AssumptionMode(str, enum.Enum):
-    """Self-consumption assumption mode for bill calculation."""
-
-    physics = "physics"
-    spreadsheet = "spreadsheet"
-    both = "both"
-
-
 def _grid_services_income(fleet_results: FleetResults, pricing: GridServicesModel) -> Optional[GridServicesIncome]:
     """What *pricing* books on *fleet_results*, the bill run's fleet, or None when it prices no grid services.
 
@@ -75,14 +67,6 @@ def _grid_services_income(fleet_results: FleetResults, pricing: GridServicesMode
         battery_discharge_kw=sum(battery.max_discharge_kw for battery in batteries),
         at_events=at_events,
     )
-
-
-_BASES: Mapping[AssumptionMode, tuple[OwnUseBasis, ...]] = {
-    AssumptionMode.physics: (OwnUseBasis.SIMULATED,),
-    AssumptionMode.spreadsheet: (OwnUseBasis.OVERRIDE,),
-    AssumptionMode.both: (OwnUseBasis.SIMULATED, OwnUseBasis.OVERRIDE),
-}
-"""The own-use bases each --assumptions mode reports, one column each."""
 
 
 def _assumption_section(
@@ -221,7 +205,7 @@ def run(
             project=project,
             cost_recovery=cost_recovery,
         )
-        for basis in _BASES[assumptions]
+        for basis in ASSUMPTION_BASES[assumptions]
     }
 
     report = generate_finance_report(

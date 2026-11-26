@@ -113,11 +113,16 @@ ASSUMPTION_LABELS: Mapping[OwnUseBasis, str] = {
 """The word that heads a finance report's column of each own-use basis."""
 
 
+def _assumption_label(self_consumption_override: Optional[float]) -> str:
+    """The board's name of an own-use assumption: Physics, or Spreadsheet with the self-consumption it overrides to."""
+    if self_consumption_override is None:
+        return ASSUMPTION_LABELS[OwnUseBasis.SIMULATED]
+    return f"{ASSUMPTION_LABELS[OwnUseBasis.OVERRIDE]} ({self_consumption_override * 100:g}% self-consumption)"
+
+
 def _column_label(section: AssumptionSection) -> str:
-    """The header of *section*'s column: its basis's label, then the self-consumption its finance overrides, when it sets one."""
-    label = ASSUMPTION_LABELS[own_use_basis(section.finance)]
-    override = section.finance.self_consumption_override
-    return label if override is None else f"{label} ({override * 100:g}% self-consumption)"
+    """The header of *section*'s column: the assumption its finance is on."""
+    return _assumption_label(section.finance.self_consumption_override)
 
 
 def _computations_carried(section: AssumptionSection) -> tuple[str, ...]:
@@ -617,7 +622,13 @@ def generate_config_ranking_report(
 ) -> str:
     """Generate the board-readable config-ranking report.
 
-    Renders two markdown tables and an optional sensitivity section:
+    The report opens, above its first heading, with the self-consumption
+    assumption every table and the sensitivity panel were computed under,
+    read from ``ranked.self_consumption_override``: Physics, or Spreadsheet
+    with the fraction every config's own-use was overridden to, named as
+    the finance report heads that assumption's column.
+
+    It then renders two markdown tables and an optional sensitivity section:
 
     - **Table 1 — Cost-Recovery Rank**: one row per feasible config in
       ``ranked.results``, sorted ascending by ``representative_outlay_gbp``.
@@ -654,8 +665,10 @@ def generate_config_ranking_report(
     Raises:
         ValueError: When a feasible config's binding has no label, naming it.
     """
+    report = f"Self-consumption assumption: **{_assumption_label(ranked.self_consumption_override)}**\n\n"
+
     # ---- Table 1: COST-RECOVERY RANK ----------------------------------------
-    report = "## Cost-Recovery Rank\n\n"
+    report += "## Cost-Recovery Rank\n\n"
 
     if not ranked.results:
         report += "*No feasible configurations found.*\n"
