@@ -9,9 +9,11 @@ import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.web import fleet_presets
 from solar_challenge.web.builtin_scenarios import scenario_files_in
 from solar_challenge.web.fleet_presets import fleet_preset_names_among
+from solar_challenge.web.fleet_scenario import fleet_form_from_yaml
 from tests._default_pv_pool_fleet import DEFAULT_PV_POOL_FLEET_YAML
 from tests._error_records import error_records
 
@@ -41,6 +43,23 @@ def test_the_files_the_fleet_form_loads_are_named_in_their_order(tmp_path: Path)
     (tmp_path / "home.yaml").write_text(_HOME_SCENARIO)
 
     assert fleet_preset_names_among(scenario_files_in(tmp_path)) == ("a-fleet", "b-fleet")
+
+
+def test_a_scenario_the_fleet_form_refuses_is_left_out_and_a_debug_record_names_the_file_and_the_refusal(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    home = tmp_path / "home.yaml"
+    home.write_text(_HOME_SCENARIO)
+    with pytest.raises(ConfigurationError) as refusal:
+        fleet_form_from_yaml(_HOME_SCENARIO)
+
+    with caplog.at_level(logging.DEBUG, logger="solar_challenge.web.fleet_presets"):
+        assert fleet_preset_names_among(scenario_files_in(tmp_path)) == ()
+
+    [record] = [record for record in caplog.records if record.name == "solar_challenge.web.fleet_presets"]
+    assert record.levelno == logging.DEBUG
+    assert str(home) in record.getMessage()
+    assert str(refusal.value) in record.getMessage()
 
 
 def test_a_file_is_named_as_its_text_reads_now(tmp_path: Path) -> None:
@@ -82,7 +101,7 @@ def test_a_file_that_cannot_be_read_as_utf8_text_is_left_out_and_a_warning_names
 
 
 def _scenario_text_unique_to(test_name: str) -> str:
-    """_FLEET_SCENARIO under a comment naming *test_name*: _yaml_loads memoises by text, so a test that patches the reader judges text no other test has."""
+    """_FLEET_SCENARIO under a comment naming *test_name*: _yaml_refusal memoises by text, so a test that patches the reader judges text no other test has."""
     return f"# {test_name}\n{_FLEET_SCENARIO}"
 
 

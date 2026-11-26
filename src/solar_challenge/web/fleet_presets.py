@@ -43,7 +43,7 @@ def _preset_text(path: Path) -> str:
 
 
 def _loads(path: Path) -> bool:
-    """Whether the fleet form loads the scenario file at *path*: not a scenario it refuses, nor a file that cannot be read as UTF-8 text, which a warning names."""
+    """Whether the fleet form loads the scenario file at *path*: not a scenario it refuses, which a DEBUG record names with the refusal, nor a file that cannot be read as UTF-8 text, which a warning names."""
     try:
         yaml_text = _preset_text(path)
     except (OSError, UnicodeDecodeError) as exc:
@@ -53,19 +53,23 @@ def _loads(path: Path) -> bool:
             exc,
         )
         return False
-    return _yaml_loads(yaml_text)
+    refusal = _yaml_refusal(yaml_text)
+    if refusal is not None:
+        logger.debug(
+            "Scenario file %s is not offered as a fleet preset, since the fleet form refuses it: %s", path, refusal
+        )
+    return refusal is None
 
 
 @functools.lru_cache
-def _yaml_loads(yaml_text: str) -> bool:
-    """Whether the fleet form loads the scenario YAML *yaml_text*, rather than refusing it; memoised by the text itself, so an edited file is judged afresh.
+def _yaml_refusal(yaml_text: str) -> str | None:
+    """The fleet form's refusal of the scenario YAML *yaml_text*, as refusal_text answers it; None when the form loads it. Memoised by the text itself, so an edited file is judged afresh.
 
-    A ValueError that is not a ConfigurationError leaves the file out too, logged by
-    refusal_text as a probable defect.
+    A ValueError that is not a ConfigurationError is a refusal too, which refusal_text logs
+    once, at ERROR, as a probable defect.
     """
     try:
         fleet_form_from_yaml(yaml_text)
     except ValueError as refusal:
-        refusal_text(refusal)
-        return False
-    return True
+        return refusal_text(refusal)
+    return None
