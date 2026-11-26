@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import fleet_summary_rows, home_summary_rows
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
 from tests._finance_builders import make_window
@@ -48,6 +49,7 @@ def _home_summary(**changes: float | None) -> SummaryStatistics:
             total_import_cost_gbp=0.56,
             total_export_revenue_gbp=0.24,
             net_cost_gbp=0.32,
+            load_energy_kwh={LoadKind.HOUSEHOLD: 8.0},
         ),
         **changes,
     )

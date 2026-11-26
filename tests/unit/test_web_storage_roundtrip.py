@@ -1,7 +1,7 @@
 """Storage regression tests for RunStorage roundtrip, corruption, and edge cases.
 
 Tests cover:
-- C4 regression: heat_pump_load survives home and fleet roundtrips
+- C4 regression: a heat pump's additional load survives home and fleet roundtrips
 - grid_charge_cost survives home and fleet roundtrips, and a run saved without it
   reloads it as None
 - total_grid_charge_kwh survives a home roundtrip, and a summary saved without it
@@ -130,7 +130,9 @@ def _make_simulation_results(
         export_revenue=_make_series(index, 0.04, "export_revenue_gbp"),
         tariff_rate=_make_series(index, 0.25, "tariff_rate_per_kwh"),
         strategy_name="self_consumption",
-        heat_pump_load=_make_series(index, 0.6, "heat_pump_load_kw") if include_heat_pump else None,
+        additional_loads=(
+            {LoadKind.HEAT_PUMP: _make_series(index, 0.6, "heat_pump_load_kw")} if include_heat_pump else {}
+        ),
         grid_charge_cost=(
             _make_series(index, 0.01, "grid_charge_cost_gbp") if include_grid_charge_cost else None
         ),
@@ -164,9 +166,9 @@ def _make_summary(
         total_export_revenue_gbp=3.0,
         net_cost_gbp=2.0,
         strategy_name=strategy_name,
-        total_heat_pump_load_kwh=10.0 if include_heat_pump else None,
-        peak_heat_pump_load_kw=0.6 if include_heat_pump else None,
-        heat_pump_load_ratio=0.125 if include_heat_pump else None,
+        load_energy_kwh=(
+            {LoadKind.HOUSEHOLD: 70.0, LoadKind.HEAT_PUMP: 10.0} if include_heat_pump else {LoadKind.HOUSEHOLD: 80.0}
+        ),
     )
 
 
@@ -224,11 +226,11 @@ def _read_json(path: Path) -> Any:
 
 
 class TestHeatPumpHomeRoundtrip:
-    """C4 regression: heat_pump_load data survives home save/load roundtrip."""
+    """C4 regression: a heat pump's additional load survives home save/load roundtrip."""
 
     def test_heat_pump_home_roundtrip(self, storage: RunStorage) -> None:
-        """Save a home SimulationResults with heat_pump_load, load it back,
-        verify heat_pump_load survives the roundtrip."""
+        """Save a home SimulationResults with a heat pump's additional load, load it back,
+        verify the heat pump's load survives the roundtrip."""
         config = _make_home_config()
         results = _make_simulation_results(include_heat_pump=True)
         summary = _make_summary(include_heat_pump=True)
@@ -243,23 +245,20 @@ class TestHeatPumpHomeRoundtrip:
 
         loaded_results = storage.load_run("hp-home-001").results
 
-        # heat_pump_load must not be None
-        assert loaded_results.heat_pump_load is not None
-        # Values must match the original
         pd.testing.assert_series_equal(
-            loaded_results.heat_pump_load,
-            results.heat_pump_load,
+            loaded_results.additional_loads[LoadKind.HEAT_PUMP],
+            results.additional_loads[LoadKind.HEAT_PUMP],
             check_names=False,
             check_freq=False,
         )
 
 
 class TestHeatPumpFleetRoundtrip:
-    """C4 regression: heat_pump_load data survives fleet save/load roundtrip."""
+    """C4 regression: a heat pump's additional load survives fleet save/load roundtrip."""
 
     def test_heat_pump_fleet_roundtrip(self, storage: RunStorage) -> None:
-        """Save a fleet with heat_pump_load per home, load it back,
-        verify heat_pump_load survives for each home."""
+        """Save a fleet with a heat pump's additional load per home, load it back,
+        verify each home's heat pump load survives."""
         index = _make_index()
         home_configs = [_make_home_config(f"Home {i}") for i in range(2)]
         home_results = [_make_simulation_results(index, include_heat_pump=True) for _ in range(2)]
@@ -282,12 +281,12 @@ class TestHeatPumpFleetRoundtrip:
         loaded_fleet = storage.load_run("hp-fleet-001").fleet_results
 
         for i, loaded_home in enumerate(loaded_fleet.per_home_results):
-            assert loaded_home.heat_pump_load is not None, (
-                f"Home {i}: heat_pump_load should not be None after roundtrip"
+            assert LoadKind.HEAT_PUMP in loaded_home.additional_loads, (
+                f"Home {i}: the heat pump's load should be kept after roundtrip"
             )
             pd.testing.assert_series_equal(
-                loaded_home.heat_pump_load,
-                home_results[i].heat_pump_load,
+                loaded_home.additional_loads[LoadKind.HEAT_PUMP],
+                home_results[i].additional_loads[LoadKind.HEAT_PUMP],
                 check_names=False,
                 check_freq=False,
             )
@@ -870,10 +869,9 @@ class TestFullHomeRoundtrip:
             loaded = getattr(loaded_results, field_name)
             pd.testing.assert_series_equal(loaded, original, check_names=False, check_freq=False)
 
-        # heat_pump_load
-        assert loaded_results.heat_pump_load is not None
+        # The heat pump's additional load
         pd.testing.assert_series_equal(
-            loaded_results.heat_pump_load, results.heat_pump_load,
+            loaded_results.additional_loads[LoadKind.HEAT_PUMP], results.additional_loads[LoadKind.HEAT_PUMP],
             check_names=False, check_freq=False,
         )
 
@@ -885,8 +883,7 @@ class TestFullHomeRoundtrip:
         assert loaded_summary.total_demand_kwh == summary.total_demand_kwh
         assert loaded_summary.self_consumption_ratio == summary.self_consumption_ratio
         assert loaded_summary.strategy_name == summary.strategy_name
-        assert loaded_summary.total_heat_pump_load_kwh == summary.total_heat_pump_load_kwh
-        assert loaded_summary.peak_heat_pump_load_kw == summary.peak_heat_pump_load_kw
+        assert loaded_summary.load_energy_kwh == summary.load_energy_kwh
 
         # DB record check
         run = storage.run_record("full-home-001")
@@ -947,9 +944,8 @@ class TestFullFleetRoundtrip:
             pd.testing.assert_series_equal(
                 loaded.demand, original.demand, check_names=False, check_freq=False,
             )
-            assert loaded.heat_pump_load is not None
             pd.testing.assert_series_equal(
-                loaded.heat_pump_load, original.heat_pump_load,
+                loaded.additional_loads[LoadKind.HEAT_PUMP], original.additional_loads[LoadKind.HEAT_PUMP],
                 check_names=False, check_freq=False,
             )
 
@@ -1177,11 +1173,10 @@ class TestStoredParquetColumns:
             "import_cost": "import_cost_gbp",
             "export_revenue": "export_revenue_gbp",
             "tariff_rate": "tariff_rate_per_kwh",
-            "heat_pump_load": "heat_pump_load_kw",
             "grid_charge_cost": "grid_charge_cost_gbp",
             "grid_charge": "grid_charge_kw",
         }
-        stored_column_by_additional_load = {LoadKind.EV: "ev_load_kw"}
+        stored_column_by_additional_load = {LoadKind.HEAT_PUMP: "heat_pump_load_kw", LoadKind.EV: "ev_load_kw"}
         value_by_column = {
             column: float(position)
             for position, column in enumerate(

@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import parse_fleet_config
+from solar_challenge.demand import LoadKind
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
@@ -590,6 +591,7 @@ class TestFleetSummary:
             total_import_cost_gbp=0.75,
             total_export_revenue_gbp=0.125,
             net_cost_gbp=0.625,
+            load_energy_kwh={LoadKind.HOUSEHOLD: 6.0},
         )
         medium_array = SummaryStatistics(
             total_generation_kwh=16.0,
@@ -608,6 +610,7 @@ class TestFleetSummary:
             total_import_cost_gbp=1.5,
             total_export_revenue_gbp=1.75,
             net_cost_gbp=-0.25,
+            load_energy_kwh={LoadKind.HOUSEHOLD: 8.0},
         )
         large_array = SummaryStatistics(
             total_generation_kwh=40.0,
@@ -626,6 +629,7 @@ class TestFleetSummary:
             total_import_cost_gbp=1.5,
             total_export_revenue_gbp=3.75,
             net_cost_gbp=-2.25,
+            load_energy_kwh={LoadKind.HOUSEHOLD: 16.0},
         )
 
         assert aggregate_home_summaries([small_array, medium_array, large_array]) == FleetSummary(

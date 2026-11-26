@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.main import app
+from solar_challenge.demand import LoadKind
 from solar_challenge.finance import (
     BillBreakdown,
     BillDistribution,
@@ -71,6 +72,7 @@ def _make_summary(
         total_export_revenue_gbp=total_export_revenue_gbp,
         net_cost_gbp=net_cost_gbp,
         pricing=pricing,
+        load_energy_kwh={LoadKind.HOUSEHOLD: total_demand_kwh},
     )
 
 

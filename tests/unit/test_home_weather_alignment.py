@@ -10,6 +10,7 @@ import time
 import numpy as np
 import pandas as pd
 import pytest
+from solar_challenge.demand import LoadKind
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig
@@ -309,9 +310,9 @@ class TestSimulateHomeAlignsWeatherByUTCInstant:
             weather=weather_for(config, weather),
         )
 
-        assert results.heat_pump_load is not None
+        heat_pump_load = results.additional_loads[LoadKind.HEAT_PUMP]
         pd.testing.assert_index_equal(
-            results.heat_pump_load.index[results.heat_pump_load > 0],
+            heat_pump_load.index[heat_pump_load > 0],
             _NOON_HOUR_BST_ON_2024_06_21,
             check_names=False,
         )
@@ -359,7 +360,7 @@ class TestSimulateHomeRepeatsTheTMYs28FebruaryOnALeapDay:
             weather=weather_for(config, weather),
         )
 
-        assert results.heat_pump_load is not None
-        feb_28 = results.heat_pump_load.loc["2024-02-28"]
+        heat_pump_load = results.additional_loads[LoadKind.HEAT_PUMP]
+        feb_28 = heat_pump_load.loc["2024-02-28"]
         assert feb_28.sum() > 0
-        np.testing.assert_array_equal(results.heat_pump_load.loc["2024-02-29"].to_numpy(), feb_28.to_numpy())
+        np.testing.assert_array_equal(heat_pump_load.loc["2024-02-29"].to_numpy(), feb_28.to_numpy())

@@ -23,6 +23,7 @@ import pandas as pd
 
 from solar_challenge.board_report import FlexBlock, generate_finance_report
 from solar_challenge.config import load_config, load_fleet_config
+from solar_challenge.demand import LoadKind
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
 from solar_challenge.gridservices import GridServicesBand
@@ -212,6 +213,7 @@ def test_finance_report_renders_flex_value_block() -> None:
         net_cost_gbp=202.2,
         window=make_window(days=365),
         pricing=RunPricing(0.23, 4.1),
+        load_energy_kwh={LoadKind.HOUSEHOLD: 3400.0},
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,

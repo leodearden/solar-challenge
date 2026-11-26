@@ -8,18 +8,15 @@ Tests cover:
   additional_loads' keys as load kinds, and refuses a household entry, a load off
   demand's rows, one holding no number or of a bool dtype, and additional loads that
   exceed demand in a row by more than 1e-9 kW; within it, the household's load is 0
-- TestHeatPumpLoadIsAdditionalLoadsHeatPump: heat_pump_load and
-  additional_loads[HEAT_PUMP] are one series, and two different ones are refused
 - TestAdditionalLoadsInFramesAndAmounts: to_dataframe writes each additional load under
   its column, from_dataframe reads it back, and each has an energy amount
 - TestAdditionalLoadsPickle: results keep their additional loads through pickle, as a
   fleet's worker returns them
-- TestSummaryLoadEnergy: SummaryStatistics.load_energy_kwh, {} by default, held by load
-  kind, each a real number of at least 0 and no boolean, an infinite one kept, agreeing with
-  total_heat_pump_load_kwh, and
-  load_share, each load's share of demand
+- TestSummaryLoadEnergy: SummaryStatistics.load_energy_kwh, held by load kind, each a
+  real number of at least 0 and no boolean, an infinite one kept, and load_share, each
+  load's share of demand
 - TestCalculateSummaryLoadEnergy: calculate_summary fills load_energy_kwh with each
-  load's energy, summing to demand's, and the heat-pump fields from it
+  load's energy, summing to demand's
 """
 
 import copy
@@ -171,32 +168,6 @@ class TestAdditionalLoadsAreRefusedUnlessTheyArePartsOfDemand:
         assert refusal.value.column == "ev_load_kw"
 
 
-class TestHeatPumpLoadIsAdditionalLoadsHeatPump:
-    def test_a_heat_pump_load_alone_is_the_additional_heat_pump_load(self) -> None:
-        heat_pump = _flat(_HEAT_PUMP_KW)
-
-        results = _results(heat_pump_load=heat_pump)
-
-        pd.testing.assert_series_equal(results.additional_loads[LoadKind.HEAT_PUMP], heat_pump, check_names=False)
-
-    def test_an_additional_heat_pump_load_alone_is_the_heat_pump_load(self) -> None:
-        heat_pump = _flat(_HEAT_PUMP_KW)
-
-        results = _results(additional_loads={LoadKind.HEAT_PUMP: heat_pump})
-
-        assert results.heat_pump_load is not None
-        pd.testing.assert_series_equal(results.heat_pump_load, heat_pump, check_names=False)
-
-    def test_a_heat_pump_load_that_differs_from_the_additional_heat_pump_load_is_refused(self) -> None:
-        with pytest.raises(SeriesRefused) as refusal:
-            _results(
-                heat_pump_load=_flat(_HEAT_PUMP_KW),
-                additional_loads={LoadKind.HEAT_PUMP: _flat(_HEAT_PUMP_KW / 2)},
-            )
-
-        assert refusal.value.column == "heat_pump_load_kw"
-
-
 class TestAdditionalLoadsInFramesAndAmounts:
     def test_to_dataframe_writes_each_additional_load_once_under_its_column_and_no_household_load(self) -> None:
         columns = list(_results_with_a_heat_pump_and_an_ev().to_dataframe().columns)
@@ -236,7 +207,7 @@ _TOTAL_DEMAND_KWH = 10.0
 
 
 def _summary(**given: object) -> SummaryStatistics:
-    """A summary of _TOTAL_DEMAND_KWH of demand, all of it imported, with *given* in place of any of its arguments."""
+    """A summary of _TOTAL_DEMAND_KWH of demand, all of it imported and the household's, with *given* in place of any of its arguments."""
     totals = {
         "total_generation_kwh": 0.0,
         "total_demand_kwh": _TOTAL_DEMAND_KWH,
@@ -254,14 +225,12 @@ def _summary(**given: object) -> SummaryStatistics:
         "total_import_cost_gbp": 0.0,
         "total_export_revenue_gbp": 0.0,
         "net_cost_gbp": 0.0,
+        "load_energy_kwh": {LoadKind.HOUSEHOLD: _TOTAL_DEMAND_KWH},
     }
     return SummaryStatistics(**(totals | given))
 
 
 class TestSummaryLoadEnergy:
-    def test_a_summary_built_without_it_has_no_load_energy(self) -> None:
-        assert _summary().load_energy_kwh == {}
-
     def test_it_is_held_by_load_kind_in_load_kind_order_without_item_assignment(self) -> None:
         energy = _summary(load_energy_kwh={"heat_pump": 2.0, "household": 6.0}).load_energy_kwh
 
@@ -297,23 +266,6 @@ class TestSummaryLoadEnergy:
 
     def test_an_infinite_energy_is_kept_as_the_summary_s_other_infinite_totals_are(self) -> None:
         assert _summary(load_energy_kwh={"heat_pump": math.inf}).load_energy_kwh == {LoadKind.HEAT_PUMP: math.inf}
-
-    def test_a_heat_pump_total_that_differs_from_its_load_energy_is_refused_naming_both(self) -> None:
-        with pytest.raises(ValueError) as refusal:
-            _summary(total_heat_pump_load_kwh=3.0, load_energy_kwh={LoadKind.HEAT_PUMP: 2.0})
-
-        assert "3.0" in str(refusal.value)
-        assert "2.0" in str(refusal.value)
-
-    @pytest.mark.parametrize(
-        ("total", "energy"),
-        [(2.0, {LoadKind.HEAT_PUMP: 2.0}), (None, {LoadKind.HEAT_PUMP: 2.0}), (3.0, {})],
-        ids=["equal", "total-unset", "energy-unset"],
-    )
-    def test_a_heat_pump_total_that_agrees_with_its_load_energy_or_either_unset_constructs(
-        self, total: float | None, energy: dict[LoadKind, float]
-    ) -> None:
-        _summary(total_heat_pump_load_kwh=total, load_energy_kwh=energy)
 
     def test_a_load_s_share_is_its_energy_over_demand_s_and_0_for_a_load_it_lacks(self) -> None:
         summary = _summary(load_energy_kwh={LoadKind.HOUSEHOLD: 8.0, LoadKind.HEAT_PUMP: 2.0})
@@ -353,21 +305,3 @@ class TestCalculateSummaryLoadEnergy:
         summary = calculate_summary(_results())
 
         assert summary.load_energy_kwh == {LoadKind.HOUSEHOLD: pytest.approx(summary.total_demand_kwh)}
-
-    def test_the_heat_pump_fields_follow_its_load_energy(self) -> None:
-        results = _results_with_a_heat_pump_and_an_ev()
-
-        summary = calculate_summary(results)
-
-        assert summary.total_heat_pump_load_kwh == summary.load_energy_kwh[LoadKind.HEAT_PUMP]
-        assert summary.peak_heat_pump_load_kw == results.additional_loads[LoadKind.HEAT_PUMP].max()
-        assert summary.heat_pump_load_ratio == summary.load_share(LoadKind.HEAT_PUMP)
-
-    def test_a_home_without_a_heat_pump_has_no_heat_pump_fields(self) -> None:
-        summary = calculate_summary(_results(additional_loads={LoadKind.EV: _flat(_EV_KW)}))
-
-        assert (summary.total_heat_pump_load_kwh, summary.peak_heat_pump_load_kw, summary.heat_pump_load_ratio) == (
-            None,
-            None,
-            None,
-        )

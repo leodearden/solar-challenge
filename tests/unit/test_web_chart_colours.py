@@ -125,6 +125,7 @@ _SUMMARY = SummaryStatistics(
     total_export_revenue_gbp=0.0,
     net_cost_gbp=0.0,
     total_grid_charge_kwh=4.0,
+    load_energy_kwh={LoadKind.HOUSEHOLD: 80.0},
 )
 _SWEEP_POINTS = tuple(charts.SweepPoint(value, _SUMMARY) for value in (2.0, 4.0, 6.0))
 _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]

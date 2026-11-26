@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.home import (
     HomeConfig,
     RunPricing,
@@ -142,28 +143,37 @@ class TestHomeConfigSEGField:
 
 
 def _series_field_names() -> list[str]:
-    """SimulationResults' fields annotated pd.Series or Optional[pd.Series], in declaration order."""
+    """SimulationResults' series fields, those annotated pd.Series or Optional[pd.Series] whose metadata names their column, in declaration order."""
     hints = typing.get_type_hints(SimulationResults)
     return [
         field.name
         for field in dataclasses.fields(SimulationResults)
-        if hints[field.name] in (pd.Series, typing.Optional[pd.Series])
+        if hints[field.name] in (pd.Series, typing.Optional[pd.Series]) and field.metadata
     ]
 
 
-def _results_with_every_series_set() -> SimulationResults:
-    """Results whose every series, optional ones included, varies and holds values no other series holds.
+def _results_with_every_series_set(*, with_heat_pump: bool = True) -> SimulationResults:
+    """Results whose every series, optional ones included, and, unless with_heat_pump is False, whose heat pump's additional load vary and hold values no other series holds.
 
     Demand's are the largest, so that it holds the heat pump's load.
     """
     index = pd.date_range("2024-06-21 10:00", periods=60, freq="1min", tz="Europe/London")
     names = _series_field_names()
+
+    def rising_from(base: int) -> pd.Series:
+        return pd.Series(np.arange(60.0) + 100.0 * base, index=index)
+
     return SimulationResults(
         strategy_name="tou_optimized",
-        **{
-            name: pd.Series(np.arange(60.0) + 100.0 * (len(names) if name == "demand" else position), index=index)
-            for position, name in enumerate(names)
-        },
+        additional_loads={LoadKind.HEAT_PUMP: rising_from(len(names))} if with_heat_pump else {},
+        **{name: rising_from(len(names) + 1 if name == "demand" else position) for position, name in enumerate(names)},
+    )
+
+
+def _results_with_no_optional_series() -> SimulationResults:
+    """_results_with_every_series_set's results with no heat pump and neither optional series set."""
+    return dataclasses.replace(
+        _results_with_every_series_set(with_heat_pump=False), grid_charge_cost=None, grid_charge=None
     )
 
 
@@ -243,11 +253,13 @@ class TestSimulationResults:
             original.to_dataframe(), strategy_name=original.strategy_name
         )
 
-        assert restored.heat_pump_load is not None
         assert restored.grid_charge_cost is not None
         assert restored.grid_charge is not None
         for name in _series_field_names():
             pd.testing.assert_series_equal(getattr(restored, name), getattr(original, name), obj=name)
+        pd.testing.assert_series_equal(
+            restored.additional_loads[LoadKind.HEAT_PUMP], original.additional_loads[LoadKind.HEAT_PUMP]
+        )
         assert restored.strategy_name == "tou_optimized"
 
     @pytest.mark.parametrize(
@@ -263,7 +275,12 @@ class TestSimulationResults:
 
         frame = results.to_dataframe()
 
-        assert sorted(getattr(results, name).name for name in _series_field_names()) == sorted(frame.columns)
+        assert sorted(
+            [
+                *(getattr(results, name).name for name in _series_field_names()),
+                *(load.name for load in results.additional_loads.values()),
+            ]
+        ) == sorted(frame.columns)
         for name in _series_field_names():
             series = getattr(results, name)
             pd.testing.assert_series_equal(frame[series.name], series, obj=name)
@@ -299,7 +316,7 @@ class TestSimulationResults:
             sample_results.to_dataframe(), strategy_name="self_consumption"
         )
 
-        assert restored.heat_pump_load is None
+        assert LoadKind.HEAT_PUMP not in restored.additional_loads
         assert restored.grid_charge_cost is None
         assert restored.grid_charge is None
 
@@ -356,8 +373,8 @@ class TestSimulationResultsHoldsNumbers:
                 "battery_soc", "battery_soc_kwh", lambda index: pd.Series("x", index=index), id="a-level-of-strings"
             ),
             pytest.param(
-                "heat_pump_load",
-                "heat_pump_load_kw",
+                "grid_charge",
+                "grid_charge_kw",
                 lambda index: pd.Series("x", index=index),
                 id="an-optional-series-of-strings",
             ),
@@ -469,7 +486,7 @@ class TestPerStepAmounts:
                 "battery_discharge_kwh": results.battery_discharge / 60,
                 "grid_import_kwh": results.grid_import / 60,
                 "grid_export_kwh": results.grid_export / 60,
-                "heat_pump_load_kwh": results.heat_pump_load / 60,
+                "heat_pump_load_kwh": results.additional_loads[LoadKind.HEAT_PUMP] / 60,
                 "grid_charge_kwh": results.grid_charge / 60,
                 "import_cost_gbp": results.import_cost,
                 "export_revenue_gbp": results.export_revenue,
@@ -480,13 +497,7 @@ class TestPerStepAmounts:
 
     def test_an_unset_optional_series_has_no_amount_column(self):
         """An optional series left unset has no amount column."""
-        amounts = dataclasses.replace(
-            _results_with_every_series_set(),
-            heat_pump_load=None,
-            additional_loads={},
-            grid_charge_cost=None,
-            grid_charge=None,
-        ).per_step_amounts()
+        amounts = _results_with_no_optional_series().per_step_amounts()
 
         assert sorted(amounts.columns) == sorted(
             [
@@ -503,13 +514,13 @@ class TestPerStepAmounts:
         )
 
     @pytest.mark.parametrize(
-        "unset",
-        [{}, {"heat_pump_load": None, "additional_loads": {}, "grid_charge_cost": None, "grid_charge": None}],
+        "build",
+        [_results_with_every_series_set, _results_with_no_optional_series],
         ids=["every_series_set", "optional_series_unset"],
     )
-    def test_total_amounts_are_the_row_amounts_summed_over_the_run(self, unset):
+    def test_total_amounts_are_the_row_amounts_summed_over_the_run(self, build):
         """Each run total is its row-amount column's sum, keyed by that column."""
-        results = dataclasses.replace(_results_with_every_series_set(), **unset)
+        results = build()
 
         assert results.total_amounts() == pytest.approx(results.per_step_amounts().sum().to_dict())
 
@@ -1234,21 +1245,23 @@ class TestCalculateSummary:
         assert summary.total_demand_kwh == 0.0
         assert summary.grid_dependency_ratio == 0.0
 
-    def test_heat_pump_load_ratio_is_the_heat_pumps_load_over_the_runs_demand(self):
-        """8 kWh of heat-pump load in a 40 kWh demand is 0.2, though the run generated 60 kWh and imported 10."""
+    def test_the_heat_pumps_load_share_is_its_load_over_the_runs_demand(self):
+        """8 kWh of heat-pump load in a 40 kWh demand is a share of 0.2, though the run generated 60 kWh and imported 10."""
         run = make_sim_results(self_kwh=30.0, export_kwh=30.0, import_kwh=10.0, days=1)
         heat_pump_kw = 8.0 / (len(run.demand) * run.window.step_hours)
         summary = calculate_summary(
-            dataclasses.replace(run, heat_pump_load=pd.Series(heat_pump_kw, index=run.demand.index))
+            dataclasses.replace(
+                run, additional_loads={LoadKind.HEAT_PUMP: pd.Series(heat_pump_kw, index=run.demand.index)}
+            )
         )
 
         assert (
             summary.total_generation_kwh,
             summary.total_grid_import_kwh,
-            summary.total_heat_pump_load_kwh,
+            summary.load_energy_kwh[LoadKind.HEAT_PUMP],
             summary.total_demand_kwh,
         ) == pytest.approx((60.0, 10.0, 8.0, 40.0))
-        assert summary.heat_pump_load_ratio == pytest.approx(0.2)
+        assert summary.load_share(LoadKind.HEAT_PUMP) == pytest.approx(0.2)
 
     def test_calculate_summary_takes_no_seg_rate(self, sample_results):
         """A run's export revenue is priced when it is simulated, so its summary takes no SEG rate."""
@@ -1344,7 +1357,7 @@ class TestCalculateSummaryWindow:
 
 _TWO_JUNE_DAYS = SimulationWindow(date(2024, 6, 1), date(2024, 6, 2), timedelta(minutes=1), "Europe/London")
 
-_SIXTEEN_REQUIRED_FIGURES = {
+_REQUIRED_FIGURES = {
     "total_generation_kwh": 100.0,
     "total_demand_kwh": 80.0,
     "total_self_consumption_kwh": 60.0,
@@ -1361,11 +1374,12 @@ _SIXTEEN_REQUIRED_FIGURES = {
     "total_import_cost_gbp": 5.0,
     "total_export_revenue_gbp": 8.0,
     "net_cost_gbp": -3.0,
+    "load_energy_kwh": {LoadKind.HOUSEHOLD: 80.0},
 }
-"""A summary's sixteen required figures, by keyword."""
+"""A summary's seventeen required figures, by keyword: the sixteen 0.5.0 required, and each load's energy."""
 
 _FIGURES_IN_THE_POSITIONS_OF_0_5_0 = (100.0, 80.0, 60.0, 20.0, 40.0, 10.0, 8.0, 3.5, 2.5, 0.6, 0.25, 0.4, 7, 5.0, 6.0, -1.0)
-"""A summary's sixteen required figures as a 0.5.0 caller passed them by position: simulation_days, 7, is the thirteenth."""
+"""A summary's sixteen 0.5.0 required figures as a 0.5.0 caller passed them by position: simulation_days, 7, is the thirteenth."""
 
 
 class TestSummaryStatistics:
@@ -1373,14 +1387,14 @@ class TestSummaryStatistics:
 
     def test_all_fields_present(self):
         """SummaryStatistics has all required fields."""
-        stats = SummaryStatistics(**_SIXTEEN_REQUIRED_FIGURES)
+        stats = SummaryStatistics(**_REQUIRED_FIGURES)
         assert stats.total_generation_kwh == 100.0
         assert stats.window == _TWO_JUNE_DAYS
 
     def test_a_summary_takes_no_seg_revenue(self):
         """A run's SEG income is its total_export_revenue_gbp, priced at its home's SEG rate, so a summary holds no second copy."""
         with pytest.raises(TypeError, match="seg_revenue_gbp"):
-            SummaryStatistics(**_SIXTEEN_REQUIRED_FIGURES, seg_revenue_gbp=None)
+            SummaryStatistics(**_REQUIRED_FIGURES, seg_revenue_gbp=None)
 
     def test_a_summarys_simulation_days_are_its_windows_days(self):
         assert home_summary(window=_TWO_JUNE_DAYS).simulation_days == 2
@@ -1390,7 +1404,11 @@ class TestSummaryStatistics:
         [
             pytest.param(lambda: home_summary(window=None), None, id="none"),
             pytest.param(
-                lambda: SummaryStatistics(*_FIGURES_IN_THE_POSITIONS_OF_0_5_0), 7, id="a-0.5.0-positional-day-count"
+                lambda: SummaryStatistics(
+                    *_FIGURES_IN_THE_POSITIONS_OF_0_5_0, load_energy_kwh={LoadKind.HOUSEHOLD: 80.0}
+                ),
+                7,
+                id="a-0.5.0-positional-day-count",
             ),
         ],
     )

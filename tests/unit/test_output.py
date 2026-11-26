@@ -73,7 +73,7 @@ def _run_with_distinct_rising_series(
         import_cost=series(0.002),
         export_revenue=series(0.001),
         tariff_rate=series(0.3),
-        heat_pump_load=series(1.2) if with_optional_series else None,
+        additional_loads={LoadKind.HEAT_PUMP: series(1.2)} if with_optional_series else {},
         grid_charge_cost=series(0.0005) if with_optional_series else None,
         grid_charge=series(0.4) if with_optional_series else None,
     )
@@ -602,7 +602,7 @@ class TestPeriodTotalsAndPeaks:
             "battery_discharge_kwh": summary.total_battery_discharge_kwh,
             "grid_import_kwh": summary.total_grid_import_kwh,
             "grid_export_kwh": summary.total_grid_export_kwh,
-            "heat_pump_load_kwh": summary.total_heat_pump_load_kwh,
+            "heat_pump_load_kwh": summary.load_energy_kwh[LoadKind.HEAT_PUMP],
             "import_cost_gbp": summary.total_import_cost_gbp,
             "export_revenue_gbp": summary.total_export_revenue_gbp,
             "grid_charge_cost_gbp": summary.total_grid_charge_cost_gbp,

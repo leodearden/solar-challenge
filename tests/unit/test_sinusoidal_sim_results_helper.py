@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from solar_challenge.demand import LoadKind
 from solar_challenge.home import calculate_summary
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 
@@ -49,7 +50,7 @@ def test_results_have_no_battery_activity_no_heat_pump_and_no_prices() -> None:
         results.tariff_rate,
     ):
         assert (series == 0.0).all(), series.name
-    assert results.heat_pump_load is None
+    assert LoadKind.HEAT_PUMP not in results.additional_loads
 
 
 @pytest.mark.parametrize(

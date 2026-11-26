@@ -24,6 +24,7 @@ import dataclasses
 import json
 from datetime import date
 
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
@@ -49,6 +50,7 @@ _HOME_SUMMARY = SummaryStatistics(
     total_import_cost_gbp=5.0,
     total_export_revenue_gbp=6.0,
     net_cost_gbp=-1.0,
+    load_energy_kwh={LoadKind.HOUSEHOLD: 80.0},
 )
 
 _FLEET_SUMMARY = FleetSummary(
