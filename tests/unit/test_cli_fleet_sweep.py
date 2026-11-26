@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`fleet sweep`, on every sweep path (knob, variable and YAML), exports one CSV per point named after the swept parameter and a summary of every point, and creates no output directory when it refuses its period; on the --param path, each point simulates where its substituted location: block puts it."""
+"""`fleet sweep`, on every sweep path (knob, variable and YAML), exports one CSV per point named after the swept parameter and a summary of every point, and creates no output directory when it refuses its period; on the --param path, each point simulates where its substituted location: block puts it, and a knob sweep reads each placeholder of its document at its default, refusing one without a default."""
 
 from pathlib import Path
 
@@ -184,6 +184,49 @@ def test_a_knob_given_by_an_alias_labels_its_points_by_the_knobs_canonical_name(
         "sweep_summary.csv",
     ]
     assert list(pd.read_csv(Path("out", "sweep_summary.csv"))["param"]) == ["seg_tariff_pence_per_kwh"] * 2
+
+
+def _battery_ratio_fleet(multiplier: object) -> dict[str, object]:
+    """A document of the two-home fleet whose battery capacity is multiplier times its PV capacity."""
+    return {
+        "fleet_distribution": two_home_fleet_distribution(
+            battery={"capacity_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": multiplier}}
+        )
+    }
+
+
+_PV_CAPACITY_SWEEP = ("--param", "pv_capacity_kw", "--min", "3", "--max", "5", "--steps", "2", "--mode", "linear")
+
+
+def test_a_knob_sweep_reads_each_placeholder_of_the_document_at_its_default() -> None:
+    """Each point exports the frame of the same sweep of the document holding the placeholder's default in its place."""
+    literal = _sweep_document(_battery_ratio_fleet(1.0), *_PV_CAPACITY_SWEEP)
+    Path("out").rename("literal")
+
+    result = _sweep_document(_battery_ratio_fleet("${BATTERY_RATIO:1.0}"), *_PV_CAPACITY_SWEEP)
+
+    assert literal.exit_code == 0, literal.output
+    assert result.exit_code == 0, result.output
+    assert sorted(path.name for path in Path("out").iterdir()) == [
+        "pv_capacity_kw_3.0000.csv",
+        "pv_capacity_kw_5.0000.csv",
+        "sweep_summary.csv",
+    ]
+    for point in ("pv_capacity_kw_3.0000.csv", "pv_capacity_kw_5.0000.csv"):
+        pd.testing.assert_frame_equal(
+            pd.read_csv(Path("out", point)), pd.read_csv(Path("literal", point)), check_exact=True
+        )
+
+
+def test_a_knob_sweep_of_a_document_holding_a_placeholder_without_a_default_is_refused_naming_its_path() -> None:
+    result = _sweep_document(_battery_ratio_fleet("${BATTERY_RATIO}"), *_PV_CAPACITY_SWEEP)
+
+    assert result.exit_code == 1
+    assert (
+        "fleet_distribution.battery.capacity_kwh.multiplier: variable 'BATTERY_RATIO' is not supplied and has no default"
+        in " ".join(result.stderr.split())
+    )
+    assert not Path("out").exists()
 
 
 def test_a_sweep_given_no_mode_spaces_its_points_as_sweepspecs_default_mode_does() -> None:
