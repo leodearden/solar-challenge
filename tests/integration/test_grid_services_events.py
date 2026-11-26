@@ -8,12 +8,12 @@ the flat per-kW term, gated by FinanceConfig.grid_services_model.
 
 Covers, after the shared helpers:
 - B3: supersede takes effect.
-- Guard (C6): finance run refuses a capacity_at_events scenario with no
-  grid_services_events block before any simulation.
+- Guard (C6): finance run refuses a scenario whose grid_services_model is the
+  retired string selector before any simulation.
 - C1, C2: each simulated age, seed or bisection trial, books its own fleet's
   event income.
 - An event window the simulated period never enters warns once per projection.
-- B4: the flat model refuses an events configuration and prices the fleet
+- B4: the default pricing is no grid services, and prices the fleet
   differently from the events model.
 - B5: solve-still-holds + I4 rate-independence.
 - ε: the finance report and the CLI render the Grid Services Income section.
@@ -40,7 +40,6 @@ import solar_challenge
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.board_report import GridServicesIncome, generate_finance_report
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.flex import FLEX_VALUE_BANDS
@@ -50,6 +49,7 @@ from solar_challenge.gridservices import (
     EventWindow,
     GridServicesBand,
     GridServicesEventsConfig,
+    NoGridServices,
     compute_grid_services_at_events,
 )
 from solar_challenge.home import RunPricing, SimulationResults, SummaryStatistics
@@ -184,18 +184,8 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     simulate = _constant_simulate(fr)
 
     events_cfg = GridServicesEventsConfig(band="central")
-    finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,  # the only rate the events model admits
-    )
-    finance_flat0 = dataclasses.replace(
-        finance_base,
-        grid_services_model="flat",
-        grid_services_events=None,
-        grid_services_income_per_kw_per_year_gbp=0.0,  # flat at rate 0: no grid-services income
-    )
+    finance_events = dataclasses.replace(finance_base, grid_services_model=events_cfg)
+    finance_flat0 = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
 
     # Direct event-derived figure (the expected value for the delta)
     expected_gs = compute_grid_services_at_events(fr, events_cfg).annual_income_gbp
@@ -225,16 +215,16 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Guard (C6) — None events → ConfigurationError before any simulation
+# Guard (C6) — the retired string selector → ConfigurationError before any simulation
 # ---------------------------------------------------------------------------
 
 
 def test_finance_run_refuses_the_events_model_without_events_before_simulating(
     tmp_path: Path,
 ) -> None:
-    """C6: finance run on the board scenario with its grid_services_events block deleted exits 1 naming the block, and simulates no fleet."""
+    """C6: finance run on the board scenario whose grid_services_model is the retired string selector exits 1 naming the block, and simulates no fleet."""
     document = yaml.safe_load(SCENARIO.read_text(encoding="utf-8"))
-    del document["finance"]["grid_services_events"]
+    document["finance"]["grid_services_model"] = "capacity_at_events"
     path = tmp_path / SCENARIO.name
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     simulated: list[FleetConfig] = []
@@ -250,7 +240,7 @@ def test_finance_run_refuses_the_events_model_without_events_before_simulating(
     stderr = " ".join(result.stderr.split())
     assert result.exit_code == 1, result.output
     assert "Configuration error:" in stderr
-    assert "grid_services_events" in stderr
+    assert "finance.grid_services_model" in stderr
     assert simulated == []
 
 
@@ -305,11 +295,7 @@ def soh_tracking_projections() -> _SohTrackingProjections:
         n_homes=2, asset_life_years=25, battery_config=BatteryConfig(capacity_kwh=5.0)
     )
     finance_none = dataclasses.replace(finance, own_use_rate_pence_per_kwh=1.0)
-    finance_events = dataclasses.replace(
-        finance_none,
-        grid_services_model="capacity_at_events",
-        grid_services_events=GridServicesEventsConfig(),
-    )
+    finance_events = dataclasses.replace(finance_none, grid_services_model=GridServicesEventsConfig())
     events_fleets_by_age: dict[int, FleetResults] = {}
     return _SohTrackingProjections(
         events=project_multi_year(
@@ -399,10 +385,7 @@ def _june_only_fleet_on_two_unentered_windows() -> tuple[ScenarioConfig, Finance
     )
     finance_events = dataclasses.replace(
         finance,
-        grid_services_model="capacity_at_events",
-        grid_services_events=GridServicesEventsConfig(
-            event_windows=(DEFAULT_EVENT_WINDOWS[0], march_window)
-        ),
+        grid_services_model=GridServicesEventsConfig(event_windows=(DEFAULT_EVENT_WINDOWS[0], march_window)),
     )
     return scenario, finance_events, _june_only_simulate
 
@@ -443,46 +426,31 @@ def test_the_packages_frozen_solve_attributes_a_projection_warning_to_its_caller
 # ---------------------------------------------------------------------------
 
 
-def test_b4_the_flat_model_refuses_an_events_configuration_and_differs_from_the_events_model() -> None:
-    """B4: the flat model is FinanceConfig's default, refuses an events configuration it
-    would not read, and prices the same fleet differently from capacity_at_events.
+def test_b4_the_default_pricing_is_no_grid_services_and_differs_from_the_events_model() -> None:
+    """B4: FinanceConfig's default pricing is no grid services, and it prices the
+    same fleet differently from capacity_at_events.
 
-    (1) FinanceConfig.grid_services_model default is "flat".
-    (2) Attaching grid_services_events under the flat model is refused at construction,
-        naming grid_services_events.
-    (3) Flat curve ≠ capacity_at_events curve for the same fleet (teeth).
+    (1) FinanceConfig.grid_services_model default is NoGridServices().
+    (2) The no-grid-services curve ≠ capacity_at_events curve for the same fleet (teeth).
     """
     scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
 
-    # (1) FinanceConfig.grid_services_model field default is "flat"
-    # (decoupled from the board YAML, which ships capacity_at_events after task-76 ε flip)
+    # (1) FinanceConfig.grid_services_model field default is NoGridServices()
+    # (decoupled from the board YAML, which ships capacity_at_events)
     _gs_field = next(
         f for f in dataclasses.fields(finance_base) if f.name == "grid_services_model"
     )
-    assert _gs_field.default == "flat", (
-        "FinanceConfig.grid_services_model field default must be 'flat'"
+    assert _gs_field.default == NoGridServices(), (
+        "FinanceConfig.grid_services_model field default must be NoGridServices()"
     )
 
-    # (2) flat with an events configuration attached → refused
-    # Build from an explicitly flat base (board YAML ships capacity_at_events after ε flip)
-    finance_flat_base = dataclasses.replace(
-        finance_base, grid_services_model="flat", grid_services_events=None
-    )
-    with pytest.raises(ConfigurationError, match="grid_services_events"):
-        dataclasses.replace(
-            finance_flat_base,
-            grid_services_events=GridServicesEventsConfig(band="central"),
-        )
-
-    # (3) flat ≠ capacity_at_events (teeth — confirms supersede is real)
+    # (2) no grid services ≠ capacity_at_events (teeth — confirms supersede is real)
+    finance_flat_base = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
     finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=GridServicesEventsConfig(band="central"),
-        grid_services_income_per_kw_per_year_gbp=0.0,
+        finance_base, grid_services_model=GridServicesEventsConfig(band="central")
     )
     curve_flat = project_multi_year(scenario, finance_flat_base, simulate=simulate)
     curve_events = project_multi_year(scenario, finance_events, simulate=simulate)
@@ -522,18 +490,8 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
     simulate = _constant_simulate(fr)
 
     events_cfg = GridServicesEventsConfig(band="central")
-    finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,
-    )
-    finance_flat0 = dataclasses.replace(
-        finance_base,
-        grid_services_model="flat",
-        grid_services_events=None,
-        grid_services_income_per_kw_per_year_gbp=0.0,
-    )
+    finance_events = dataclasses.replace(finance_base, grid_services_model=events_cfg)
+    finance_flat0 = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
 
     # (1) solve converges (finite rate, valid binding)
     sol = solve_cost_recovery_rate(scenario, finance_events, simulate=simulate)
@@ -704,16 +662,16 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     # The rendered event-derived £ must be present (positive)
     assert "£" in result.output, "Output must contain a £ figure"
 
-    assert finance.grid_services_events is not None, (
-        f"{SCENARIO} (grid_services_model={finance.grid_services_model!r}) has no "
-        "grid_services_events block, so the supersede inequality cannot be checked"
+    assert isinstance(finance.grid_services_model, GridServicesEventsConfig), (
+        f"{SCENARIO} (grid_services_model={finance.grid_services_model!r}) does not price "
+        "capacity at events, so the supersede inequality cannot be checked"
     )
     flat_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
     sigma = sum(
         h.battery_config.max_discharge_kw
         for h in homes if h.battery_config is not None
     )
-    gse_direct = compute_grid_services_at_events(fr, finance.grid_services_events)
+    gse_direct = compute_grid_services_at_events(fr, finance.grid_services_model)
     assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
         f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
         f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
@@ -827,8 +785,8 @@ def test_b10_finance_run_renders_the_booked_grid_services_income_with_the_econom
     """
     path = _board_scenario_without_its_flex_band(tmp_path)
     _scenario, finance = board_econ_scenario()
-    pricing = finance.grid_services_events
-    assert pricing is not None
+    pricing = finance.grid_services_model
+    assert isinstance(pricing, GridServicesEventsConfig)
     answered: list[FleetResults] = []
     by_age: dict[int, FleetResults] = {}
 
@@ -866,10 +824,10 @@ def test_b10_finance_run_renders_the_booked_grid_services_income_with_the_econom
 def test_b11_the_flex_blocks_grid_services_row_reads_the_booked_events_income() -> None:
     """finance run --flex-band central on the board scenario: the grid-services row is the events income per battery home and per kW."""
     scenario, finance = board_econ_scenario()
-    assert finance.grid_services_events is not None
+    assert isinstance(finance.grid_services_model, GridServicesEventsConfig)
     fr = _synthetic_fleet_results_in_window(list(scenario.homes))
     batteries = [home.battery_config for home in scenario.homes if home.battery_config is not None]
-    income = compute_grid_services_at_events(fr, finance.grid_services_events).annual_income_gbp
+    income = compute_grid_services_at_events(fr, finance.grid_services_model).annual_income_gbp
     homes, kw = len(batteries), sum(battery.max_discharge_kw for battery in batteries)
     assert income > 0.0
 

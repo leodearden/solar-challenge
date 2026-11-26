@@ -158,9 +158,6 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
         retained_cash_floor_per_home_per_year_gbp=finance_data.get(
             "retained_cash_floor_per_home_per_year_gbp", 27.0
         ),
-        grid_services_income_per_kw_per_year_gbp=finance_data.get(
-            "grid_services_income_per_kw_per_year_gbp", 0.0
-        ),
     )
 
     # ---- Householder bill A/B (suppress <360-day annualisation warning) ------

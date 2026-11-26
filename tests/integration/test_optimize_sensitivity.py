@@ -20,7 +20,7 @@ from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
-from solar_challenge.gridservices import GridServicesEventsConfig
+from solar_challenge.gridservices import FlatGridServices, GridServicesEventsConfig, NoGridServices
 from solar_challenge.home import RunPricing, SimulationResults
 from solar_challenge.optimize import (
     ConfigPoint,
@@ -74,7 +74,7 @@ def _make_finance(
         grant_gbp=grant_gbp,
         vat_rate=0.05,
         battery_cost_per_kwh_gbp=battery_cost_per_kwh_gbp,
-        grid_services_income_per_kw_per_year_gbp=grid_services_income,
+        grid_services_model=NoGridServices() if grid_services_income == 0 else FlatGridServices(grid_services_income),
     )
 
 
@@ -431,7 +431,8 @@ class TestBaseline:
     def test_a_value_that_leaves_every_scenario_equal_reuses_the_baseline(
         self, knob_name: str, own_value: float, other_value: float
     ) -> None:
-        assert getattr(_interior_finance(), knob_name) == own_value
+        scenario = _make_scenario(finance=_interior_finance())
+        assert KNOBS[knob_name].apply(scenario, own_value) == scenario
         base_configs = self._base_configs()
         one_sweep: list[FleetConfig] = []
         baseline = run_sweep(base_configs, simulate=recording(one_sweep, _paired_const_simulate))
@@ -874,12 +875,8 @@ class TestSensitivityPanelGuards:
 
 
 def test_a_flat_rate_axis_under_the_events_model_is_refused() -> None:
-    """A flat grid-services rate swept over a capacity_at_events scenario is refused by FinanceConfig's rule, which the knob's rebuilt finance runs, so a library caller of sensitivity_panel gets the refusal too."""
-    finance = dataclasses.replace(
-        _interior_finance(),
-        grid_services_model="capacity_at_events",
-        grid_services_events=GridServicesEventsConfig(),
-    )
+    """A flat grid-services rate swept over a capacity_at_events scenario is refused by the grid-services knob, which reads no flat rate there, so a library caller of sensitivity_panel gets the refusal too."""
+    finance = dataclasses.replace(_interior_finance(), grid_services_model=GridServicesEventsConfig())
     base_configs = enumerate_configs(
         _make_scenario(finance=finance), pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
     )
