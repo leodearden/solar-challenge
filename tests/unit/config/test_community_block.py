@@ -27,6 +27,11 @@ _SHARING_MODE_RETIRED = (
 _A_COMMUNITY_BATTERY_BLOCK: dict[str, Any] = {"community_battery": {"capacity_kwh": 20.0}}
 _A_SCENARIO_SETTING_SHARING_MODE: dict[str, Any] = {"homes": [{}], "community": {"sharing_mode": "p2p"}}
 
+_ONE_SCENARIO_DOCUMENTS = [
+    pytest.param({"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}, id="bare"),
+    pytest.param({"scenario": {"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}}, id="scenario-block"),
+]
+
 
 def _scenario_file(tmp_path: Path, document: dict[str, Any], *, name: str = "scenario.yaml") -> Path:
     """The path of *document*, written as YAML to *name* under *tmp_path*."""
@@ -303,20 +308,6 @@ period:
 
         assert str(refusal.value) == str(scenario_refusal.value)
 
-    @pytest.mark.parametrize(
-        "document",
-        [
-            pytest.param({"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}, id="bare"),
-            pytest.param({"scenario": {"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}}, id="scenario-block"),
-        ],
-    )
-    def test_load_community_configs_reads_a_one_scenario_document_as_load_community_config_does(
-        self, tmp_path: Path, document: dict[str, Any]
-    ) -> None:
-        path = _scenario_file(tmp_path, document)
-
-        assert load_community_configs(path) == [load_community_config(path)]
-
 
 class TestTheCommunityBlockOfEachScenario:
     """Every scenario's community: block, as load_community_configs reads it at that scenario's path."""
@@ -333,21 +324,18 @@ class TestTheCommunityBlockOfEachScenario:
         assert first.community_battery.capacity_kwh == 20.0
         assert second is None
 
-    @pytest.mark.parametrize(
-        "document",
-        [
-            pytest.param({"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}, id="bare"),
-            pytest.param({"scenario": {"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}}, id="scenario-block"),
-        ],
-    )
-    def test_load_community_configs_reads_the_community_block_of_a_one_scenario_document(
+    @pytest.mark.parametrize("document", _ONE_SCENARIO_DOCUMENTS)
+    def test_load_community_configs_reads_a_one_scenario_document_as_load_community_config_does(
         self, tmp_path: Path, document: dict[str, Any]
     ) -> None:
-        (community,) = load_community_configs(_scenario_file(tmp_path, document))
+        path = _scenario_file(tmp_path, document)
+
+        (community,) = load_community_configs(path)
 
         assert community is not None
         assert community.community_battery is not None
         assert community.community_battery.capacity_kwh == 20.0
+        assert community == load_community_config(path)
 
     @pytest.mark.parametrize(
         ("document", "path"),
