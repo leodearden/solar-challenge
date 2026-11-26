@@ -32,6 +32,7 @@ from solar_challenge.dispatch import (
     PeakShavingStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import default_runner
@@ -433,3 +434,53 @@ def test_each_input_type_factory_builds_a_valid_instance_of_its_class(name: str,
     instance = INPUT_TYPES[name]()
 
     assert type(instance) is discovered[name]
+
+
+@pytest.mark.parametrize(
+    ("value", "bad", "expected"),
+    [
+        (4.0, math.nan, math.nan),
+        ((1,), True, (True,)),
+        (((16, 19),), 2.5, ((2.5, 19),)),
+        (frozenset({0}), "x", frozenset({"x"})),
+    ],
+    ids=["scalar", "tuple", "pairs", "frozenset"],
+)
+def test_a_bad_number_takes_the_place_of_the_first_number_of_a_field_s_value(
+    value: object, bad: object, expected: object
+) -> None:
+    assert repr(with_bad_number(value, bad)) == repr(expected)
+
+
+@pytest.mark.parametrize(("name", "field", "bad"), refusal_cases())
+def test_each_input_type_refuses_each_bad_number_in_each_numeric_field_by_name(
+    name: str, field: str, bad: object
+) -> None:
+    valid = INPUT_TYPES[name]()
+    value = getattr(valid, field)
+    assert value is not None, f"INPUT_TYPES' factory for {name} leaves {field} None, so its read is not tried: give it a value"
+
+    with pytest.raises(ConfigurationError) as refusal:
+        dataclasses.replace(valid, **{field: with_bad_number(value, bad)})
+
+    message = str(refusal.value)
+    assert field in message and repr(bad) in message, message
+
+
+@pytest.mark.parametrize(
+    ("construct", "field", "bad"),
+    [
+        (lambda: SEGTariff("x", math.nan), "rate_pence_per_kwh", math.nan),
+        (lambda: HeatPumpConfig("ASHP", math.nan, 8000.0), "thermal_capacity_kw", math.nan),
+        (lambda: EVConfig("7kW", True), "arrival_hour", True),
+    ],
+    ids=["SEGTariff", "HeatPumpConfig", "EVConfig"],
+)
+def test_the_named_library_constructions_are_refused_by_name(
+    construct: Callable[[], object], field: str, bad: object
+) -> None:
+    with pytest.raises(ConfigurationError) as refusal:
+        construct()
+
+    message = str(refusal.value)
+    assert field in message and repr(bad) in message, message
