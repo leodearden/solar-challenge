@@ -19,18 +19,14 @@ Usage::
 
 import pytest
 
-#: Each falsy JSON value other than null, with the type name a "must be a mapping" refusal names.
-FALSY_NON_NULL_VALUES = (
-    pytest.param("", "str", id="empty-string"),
-    pytest.param(False, "bool", id="false"),
-    pytest.param(0, "int", id="zero"),
-    pytest.param([], "list", id="empty-array"),
-)
-
 #: The falsy values a form body's top-level field sends, with the type name a "must be a
-#: mapping" refusal names: those FALSY_NON_NULL_VALUES holds but "", which reads as not sent.
+#: mapping" refusal names: each falsy JSON value but null and "", which read as not sent.
 FALSY_SENT_VALUES = (
     pytest.param(False, "bool", id="false"),
     pytest.param(0, "int", id="zero"),
     pytest.param([], "list", id="empty-array"),
 )
+
+#: Each falsy JSON value other than null, with the type name a "must be a mapping" refusal
+#: names: FALSY_SENT_VALUES and "".
+FALSY_NON_NULL_VALUES = (pytest.param("", "str", id="empty-string"), *FALSY_SENT_VALUES)

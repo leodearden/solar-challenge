@@ -298,8 +298,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             refuses (the error is its own refusal), if pv_kw, battery_kwh or
             a sent consumption_kwh lies outside its fleet component's
             value_range, PV's, the battery's or the load's (the error names
-            the field, the range and the value sent), or if required fields
-            are missing or invalid. A nested block sent (heat_pump, seg,
+            the field, the range and the value sent). A nested block sent (heat_pump, seg,
             tariff or dispatch_strategy) is read by the block's grammar, and
             a block that grammar refuses, one that is not a mapping or
             carries an unrecognised key included, raises the grammar's own

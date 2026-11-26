@@ -91,7 +91,7 @@ Full configuration form exposing all `HomeConfig` parameters, with run execution
 |-------|--------|-------|
 | **PV System** | Capacity (0.5-20 kW slider), Azimuth (compass widget or 0-360), Tilt (0-90), Module efficiency (%), Inverter efficiency (%), Inverter capacity (kW, optional) | A field the body does not send takes `PVConfig`'s default (a south-facing azimuth), not a web copy; see [Fields not sent](#fields-not-sent) |
 | **Battery** | Enable toggle, Capacity (kWh), Max charge rate (kW), Max discharge rate (kW), Dispatch strategy picker: self-consumption / TOU-optimised / peak-shaving | Strategy-specific sub-forms: TOU -> peak hours, off-peak hours; Peak-shaving -> import limit kW |
-| **Load** | Mode radio: "Annual consumption" (kWh input) OR "By occupants" (1-5+ dropdown), Stochastic toggle, Seed (optional) | Occupant mode shows the simulator's own default for that household size (`OFGEM_TDCV_BY_OCCUPANTS`) |
+| **Load** | Mode radio: "Annual consumption" (kWh input) OR "By occupants" (1-5+ dropdown), Stochastic toggle | Occupant mode shows the simulator's own default for that household size (`OFGEM_TDCV_BY_OCCUPANTS`). No seed input: see [Fields not sent](#fields-not-sent) |
 | **Heat Pump** | Enable toggle, Type: ASHP / GSHP radio, Thermal capacity (kW), Annual heat demand (kWh) | Only visible when enabled |
 | **Tariff** | Preset selector: Flat / Economy 7 / Economy 10 / Custom, Custom: add/remove TOU periods (start time, end time, rate, name) | SEG export rate (p/kWh, optional) |
 | **Location** | Preset dropdown (Bristol, London, Edinburgh, Manchester) + Custom (lat, lon, altitude), Name field | Map pin would be nice but not required |

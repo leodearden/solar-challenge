@@ -260,7 +260,7 @@ class TestParseDateRange:
             ),
         ],
     )
-    def test_null_days_and_empty_or_null_start_and_end_read_as_not_sent(
+    def test_a_window_field_sent_as_null_or_empty_text_reads_as_not_sent(
         self, data: dict, window: tuple[str, str]
     ) -> None:
         """A days, start or end sent as null or "" reads as not sent, so the body runs the window it does send."""
@@ -646,7 +646,7 @@ class TestParseHomeConfigNestedBlockPresence:
         ("key", "block"),
         [pytest.param(key, block, id=key) for key, block in NESTED_BLOCKS.items()],
     )
-    def test_null_block_means_none_as_an_absent_one_does(
+    def test_a_block_sent_as_null_or_empty_text_means_none_as_an_absent_one_does(
         self, key: str, block: NestedBlock, unsent: object
     ) -> None:
         """A block sent as null or "", like an absent one, means none: no heat pump, SEG or tariff, and a battery that names no strategy, so dispatches self-consumption."""
