@@ -233,6 +233,22 @@ class ComponentLimits:
         """Its subject and unit, e.g. 'PV Capacity (kW)'."""
         return f"{self.subject} ({self.unit})"
 
+    def editor_spec(self, spec: DistributionSpec, path: str) -> object:
+        """What its editor loads for *spec*, the grammar's reading of its field at *path*: write_distribution_spec(spec) for a null, a number, or a spec of one of its editor_types.
+
+        Raises:
+            ConfigurationError: For a spec of any other type, which its editor cannot hold,
+                naming *path*, the type written and its editor_types' names.
+        """
+        written = write_distribution_spec(spec)
+        offered = [each.name for each in self.editor_types]
+        if not isinstance(written, dict) or written["type"] in offered:
+            return written
+        raise ConfigurationError(
+            f"{path} must be a fixed value or one of the distributions the {self.subject} editor "
+            f"holds ({', '.join(offered)}), got {written['type']!r}"
+        )
+
     def as_json(self) -> dict[str, Any]:
         """This component as #page-limits writes it: its names, step, value_range as its bounds, new_row_value, start as the editor holds it, and the editor types and scalar form its editor offers."""
         (scalar_key,) = self.scalar_form.spec_keys

@@ -13,7 +13,7 @@ import math
 import random
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, TypeGuard
+from typing import Any
 
 
 from solar_challenge.errors import ConfigurationError
@@ -228,16 +228,6 @@ def _require_dict(value: object, field: str) -> dict[str, Any]:
     return value
 
 
-def _is_distribution(value: object) -> TypeGuard[dict[str, Any]]:
-    """Whether *value* is a fleet form distribution: a mapping with a type."""
-    return isinstance(value, dict) and "type" in value
-
-
-def _is_fixed_value(value: object) -> bool:
-    """Whether *value* is a fleet form block's fixed value: any value but null or a mapping."""
-    return value is not None and not isinstance(value, dict)
-
-
 @dataclasses.dataclass(frozen=True)
 class _EditorRows:
     """An editor distribution's *key* rows, each a mapping of a value and its *column*, which fleet_distribution.py's grammar spells as parallel lists: values, and the *grammar_key* list, which the preview reads with *read_column*."""
@@ -313,7 +303,7 @@ def _fields_under(path: str) -> dict[str, str]:
 def distribution_grammar_spec(
     distribution: Mapping[str, Any], fields: Mapping[str, str]
 ) -> dict[str, Any]:
-    """fleet_distribution.py's grammar spec of *distribution*, a distribution as the distribution editor holds it, translated in shape only; :func:`distribution_form_spec` reads such a spec back.
+    """fleet_distribution.py's grammar spec of *distribution*, a distribution as the distribution editor holds it, translated in shape only.
 
     A weighted_discrete's values rows become its values and weights lists, and a
     shuffled_pool's entries rows its values and counts lists, each cell as sent; a
@@ -406,63 +396,3 @@ def _preview_spec(distribution: Mapping[str, Any], fields: Mapping[str, str]) ->
             )
         )
     return {"type": dist_type, **read}
-
-
-def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
-    """The fleet form's distribution for the fleet_distribution.py grammar *spec* at *path*: the inverse, in shape, of the form's conversion of a block's distribution (see :func:`_parse_component_distribution`).
-
-    *spec* is one the grammar accepts.  The form's distribution is the editor's: a fixed
-    value, which the grammar spells as a number or as a fixed distribution, and which the
-    form holds as its number; a normal with both clamps; a uniform; or weighted_discrete
-    or shuffled_pool rows.  The form's conversion translates shape only and the grammar
-    reads the numbers, so this reads the numbers of the spec the grammar accepted: a
-    shuffled_pool's counts by :func:`read_pool_counts`, and any other number by
-    :func:`~solar_challenge.number_fields.as_finite_float`, a boolean refused though the
-    grammar reads it as 1 or 0.
-
-    Raises:
-        ConfigurationError: For a *spec* the editor cannot hold, naming *path*: an absent
-            distribution, a type the editor has no form for, a normal without both clamps,
-            a value that is not a finite number, a boolean included, or shuffled_pool
-            counts :func:`read_pool_counts` refuses.
-    """
-    if _is_fixed_value(spec):
-        return as_finite_float(spec, path)
-    if _is_distribution(spec) and spec["type"] == "fixed":
-        return as_finite_float(spec.get("value"), f"{path}.value")
-    if not _is_distribution(spec) or _editor_type(spec["type"]) is None:
-        raise ConfigurationError(
-            f"{path} must be a fixed value or one of the fleet page's distributions "
-            f"({', '.join(_EDITOR_TYPES)}), got {spec!r}"
-        )
-    dist_type = spec["type"]
-    if dist_type == "normal":
-        return {"type": dist_type, **_form_numbers(spec, path, ("mean", "std", "min", "max"))}
-    if dist_type == "uniform":
-        return {"type": dist_type, **_form_numbers(spec, path, ("min", "max"))}
-    values = _form_number_list(spec["values"], f"{path}.values")
-    if dist_type == "weighted_discrete":
-        weights = _form_number_list(spec["weights"], f"{path}.weights")
-        return {
-            "type": dist_type,
-            "values": [{"value": value, "weight": weight} for value, weight in zip(values, weights)],
-        }
-    counts = read_pool_counts(
-        [(f"{path}.counts[{index}]", count) for index, count in enumerate(spec["counts"])],
-        path,
-    )
-    return {
-        "type": dist_type,
-        "entries": [{"value": value, "count": count} for value, count in zip(values, counts)],
-    }
-
-
-def _form_numbers(spec: Mapping[str, Any], path: str, keys: Iterable[str]) -> dict[str, float]:
-    """The *keys* of the *path* distribution *spec*, each read by :func:`~solar_challenge.number_fields.as_finite_float`, a missing one as None."""
-    return {key: as_finite_float(spec.get(key), f"{path}.{key}") for key in keys}
-
-
-def _form_number_list(numbers: Iterable[Any], path: str) -> list[float]:
-    """Each of *numbers*, the *path* list, read by :func:`~solar_challenge.number_fields.as_finite_float`."""
-    return [as_finite_float(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
-
