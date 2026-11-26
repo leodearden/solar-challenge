@@ -119,6 +119,21 @@ This is a dated record. Re-measure before relying on it.
     `tests/integration/test_pvgis.py::TestPVGISTMY::test_the_committed_bristol_tmy_equals_the_live_one`,
     which the offline lane's `pvgis` job runs after every merge, fails once the entry no
     longer does (task 1139).
+  - On 2026-11-26 PVGIS's live v5_3 TMY for Bristol changed: every month differs from the
+    entry above, and the TMY now selects 2012, 2006, 2015, 2019, 2016, 2020, 2016, 2010,
+    2007, 2019, 2008 and 2017 for January to December (radiation database PVGIS-SARAH3,
+    meteo database ERA5). The offline lane's `pvgis` passes 20261126T153449-7578ad and
+    20261126T161602-666eb6 failed the equality test. Task 1754 rewrote
+    `tests/fixtures/weather_cache/tmy_28dd93105658.csv` from that response. Its GHI is still
+    1069.46 kWh/m², since `PvgisTmy` scales the year to the same 2005–2020 mean. On it,
+    measured at main 666eb6e5 (CPython 3.12.3, pvlib 0.15.1, pandas 3.1.1, numpy 2.4.6),
+    the default 4 kW has 1240.34 kWh/m² in plane, against 1236.12, and yields 1011.10 kWh
+    per wired kWp, a performance ratio of 0.8152 (lossless 0.9498), against 1012.12 on the
+    entry above. The yield moves −0.10%, inside the yield guard's 1%, so
+    `validation.BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP` stays 1012.1. The ratio moves
+    −0.44% because it divides by the in-plane insolation, which rose.
+    The figures below are of the earlier entry;
+    `git show 666eb6e5:tests/fixtures/weather_cache/tmy_28dd93105658.csv` restores it.
   - The clear day is `tests/_synthetic_weather.py::synthetic_june_weather` called with `"2024-06-21"`.
   - Each SAPM figure is the same chain with every array's temperature-model parameters
     set back to pvlib's SAPM `open_rack_glass_glass` set. It reproduces main's figures
