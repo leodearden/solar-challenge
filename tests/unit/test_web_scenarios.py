@@ -33,7 +33,6 @@ from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES, ComponentLimits
-from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS, read_form_fleet
 from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
@@ -41,6 +40,7 @@ from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_na
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._error_records import error_records
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._fleet_form import fleet_reader_refusal
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
 from tests._html_select_options import option_texts
 from tests._plotly_figure import traces_by_name
@@ -201,13 +201,6 @@ def _validation_with_pv_pool(client: FlaskClient, values: list[float], counts: l
     return response.get_json()
 
 
-def _fleet_reader_refusal(form: dict[str, Any]) -> str:
-    """The str() of read_form_fleet's refusal of the fleet blocks the builder *form* posts."""
-    with pytest.raises(ConfigurationError) as refusal:
-        read_form_fleet({key: form[key] for key in FLEET_DISTRIBUTION_FORM_KEYS if key in form})
-    return str(refusal.value)
-
-
 class TestScenarioAPI:
     """Tests for the /api/scenarios/* endpoints."""
 
@@ -327,7 +320,7 @@ class TestScenarioAPI:
         read_form_fleet's words, naming the pool at the form's path, n_homes and the pool's size.
         """
         values = [3.0, 4.0, 5.0]
-        refusal = _fleet_reader_refusal(_form_with_pv_pool(values, [20, 40, 30]))
+        refusal = fleet_reader_refusal(_form_with_pv_pool(values, [20, 40, 30]))
 
         assert _validation_with_pv_pool(client, values, [20, 40, 40]) == {"valid": True, "errors": []}
         assert _validation_with_pv_pool(client, values, [20, 40, 30]) == {"valid": False, "errors": [refusal]}
@@ -395,7 +388,7 @@ class TestScenarioAPI:
     ) -> None:
         """E7: a pool of 10**12 values for 10 homes is refused with read_form_fleet's one refusal, which holds the counts to n_homes before any value of the pool is built, naming pv.capacity_kw at the form's path, the counts' total and n_homes; a pool of 10 values for those homes validates."""
         form = _form_with_pv_pool([4.0], [10**12], n_homes=10)
-        refusal = _fleet_reader_refusal(form)
+        refusal = fleet_reader_refusal(form)
 
         assert _validation_with_pv_pool(client, [4.0], [10], n_homes=10) == {"valid": True, "errors": []}
         assert _validation_with_pv_pool(client, [4.0], [10**12], n_homes=10) == {"valid": False, "errors": [refusal]}

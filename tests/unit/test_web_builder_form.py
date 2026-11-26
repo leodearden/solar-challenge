@@ -24,10 +24,9 @@ from solar_challenge.web.fleet_components import (
     MAX_FLEET_HOMES,
     ComponentLimits,
 )
-from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS, read_form_fleet
 from solar_challenge.web.fleet_scenario import parse_fleet_form
 from tests._error_records import error_records
-from tests._fleet_form import valid_distribution_form
+from tests._fleet_form import fleet_reader_refusal, valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS, whole_number_forms
 
@@ -63,14 +62,6 @@ def _with_pv(spec: object, form: dict[str, object] = _ACCEPTED_FORM) -> dict[str
 def _pv_pool(values: list[object], counts: list[object]) -> dict[str, object]:
     """A shuffled pool of *values*, each given to its count of *counts* homes, as the grammar spells it."""
     return {"type": "shuffled_pool", "values": values, "counts": counts}
-
-
-def _fleet_reader_refusal(form: dict[str, object]) -> str:
-    """The str() of read_form_fleet's refusal of the fleet blocks *form* posts, its n_homes and each component block."""
-    blocks = {key: form[key] for key in FLEET_DISTRIBUTION_FORM_KEYS if key in form}
-    with pytest.raises(ConfigurationError) as refusal:
-        read_form_fleet(blocks)
-    return str(refusal.value)
 
 
 def _written_fleet(form: dict[str, object]) -> Any:
@@ -183,7 +174,7 @@ class TestScenarioFromBuilderForm:
         written: Any = _written_fleet(form)[component][limits.grammar_key]
         for step in written_at:
             written = written[step]
-        refusal = _fleet_reader_refusal(form)
+        refusal = fleet_reader_refusal(form)
 
         assert written is value
         assert builder_form_errors(form) == [refusal]
@@ -249,7 +240,7 @@ class TestScenarioFromBuilderForm:
         self, form: dict[str, object], named: tuple[str, ...]
     ) -> None:
         """The builder writes each block as sent and reads it with the fleet page's reader, so a refusal names the field the page posted, never its fleet_distribution path."""
-        refusal = _fleet_reader_refusal(form)
+        refusal = fleet_reader_refusal(form)
 
         assert {key: _written_fleet(form)[key] for key in ("pv", "battery")} == {
             key: form[key] for key in ("pv", "battery")
@@ -262,7 +253,7 @@ class TestScenarioFromBuilderForm:
         """A form without a name and with a refused fleet has the dashboard's reason, then read_form_fleet's."""
         form = {key: value for key, value in _with_pv({"type": "normal"}).items() if key != "name"}
 
-        assert builder_form_errors(form) == ["Scenario name is required.", _fleet_reader_refusal(form)]
+        assert builder_form_errors(form) == ["Scenario name is required.", fleet_reader_refusal(form)]
 
     def test_a_number_of_homes_with_a_fractional_part_is_refused_naming_it(self) -> None:
         """The number of homes with a fractional part is refused, not truncated."""
@@ -313,7 +304,7 @@ class TestScenarioFromBuilderForm:
         """A shuffled pool's count is written into the scenario as sent; ShuffledPoolDistribution refuses one below 0 or with a fractional part, and the fleet's F6 refuses counts that do not total its homes, before any value of the pool is built: n_homes, at most MAX_FLEET_HOMES, bounds every pool."""
         form = _with_pv(_pv_pool([3, 4], [2, count]))
         counts = _written_fleet(form)["pv"]["capacity_kw"]["counts"]
-        refusal = _fleet_reader_refusal(form)
+        refusal = fleet_reader_refusal(form)
 
         assert counts[1] is count
         assert builder_form_errors(form) == [refusal]
@@ -512,7 +503,7 @@ class TestBuilderFormErrors:
         )
         form = _with_component(_ACCEPTED_FORM, component, value)
         reason = (
-            _fleet_reader_refusal(form)
+            fleet_reader_refusal(form)
             if component.key == "battery" and beyond == "below"
             else f"{component.key}.{component.grammar_key} must be {value_range} for every home, "
             f"got {value!r} for home 1"

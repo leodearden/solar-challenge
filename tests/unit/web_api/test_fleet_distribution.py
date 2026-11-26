@@ -20,13 +20,13 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
-from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS, sample_distribution
+from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from tests._default_pv_pool_fleet import DEFAULT_PV_POOL_FLEET_FORM, DEFAULT_PV_POOL_FLEET_HOMES
 from tests._error_records import error_records
 from tests._falsy_json_values import FALSY_SENT_VALUES
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
-from tests._fleet_form import FLEET_FORM_BLOCKS, FLEET_FORM_COMPONENT_BLOCKS
+from tests._fleet_form import FLEET_FORM_BLOCKS, FLEET_FORM_COMPONENT_BLOCKS, form_fleet_blocks
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES
@@ -72,15 +72,10 @@ POOLS_THE_GRAMMAR_REFUSES = [
 ]
 
 
-def fleet_blocks(body: dict) -> dict:
-    """The fleet form *body*'s fleet blocks, its FLEET_DISTRIBUTION_FORM_KEYS, as sent."""
-    return {key: body[key] for key in FLEET_DISTRIBUTION_FORM_KEYS if key in body}
-
-
 def grammar_refusal(body: dict) -> str:
     """The str() of fleet_distribution.py's grammar's refusal of the fleet form *body*'s fleet blocks, read as sent at the form's own paths."""
     with pytest.raises(ConfigurationError) as refusal:
-        parse_fleet_distribution_config(fleet_blocks(body), block_path="")
+        parse_fleet_distribution_config(form_fleet_blocks(body), block_path="")
     return str(refusal.value)
 
 
@@ -871,7 +866,7 @@ class TestFleetFromDistribution:
         """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches fleet_distribution.py's grammar and is a 400 whose error is the grammar's refusal, naming battery's capacity_kwh; no fleet is queued."""
         body = {**self._VALID_BODY, "battery": {}}
         with pytest.raises(ConfigurationError) as grammar_refusal:
-            parse_fleet_distribution_config(fleet_blocks(body), block_path="")
+            parse_fleet_distribution_config(form_fleet_blocks(body), block_path="")
         resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(grammar_refusal.value)}
@@ -918,7 +913,7 @@ class TestFleetFromDistribution:
         """A distribution sent without a parameter or its rows reaches fleet_distribution.py's grammar without them, not with an invented default, and is a 400 whose error is the grammar's refusal naming each missing key; no fleet is queued."""
         body = {**self._VALID_BODY, **patch}
         with pytest.raises(ConfigurationError) as grammar_refusal:
-            parse_fleet_distribution_config(fleet_blocks(body), block_path="")
+            parse_fleet_distribution_config(form_fleet_blocks(body), block_path="")
         resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(grammar_refusal.value)}
@@ -1028,7 +1023,7 @@ class TestFleetFromDistribution:
             "pv": {"capacity_kw": {"type": "shuffled_pool", "values": [4.0], "counts": [count]}},
         }
         with pytest.raises(ConfigurationError) as grammar_refusal:
-            parse_fleet_distribution_config(fleet_blocks(body), block_path="")
+            parse_fleet_distribution_config(form_fleet_blocks(body), block_path="")
         resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(grammar_refusal.value)}
@@ -1048,7 +1043,7 @@ class TestFleetFromDistribution:
         }
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(
-                parse_fleet_distribution_config(fleet_blocks(body), block_path=""),
+                parse_fleet_distribution_config(form_fleet_blocks(body), block_path=""),
                 read_location(body["location"]),
             )
         resp = client.post("/api/simulate/fleet-from-distribution", json=body)
@@ -1189,7 +1184,7 @@ class TestFleetFromDistribution:
         """A block setting sent as a mapping that fleet_distribution.py's grammar refuses reaches the grammar unchanged, and is a 400 whose error is the grammar's own refusal, naming the setting; no fleet is queued."""
         body = {**self._VALID_BODY, **patch}
         with pytest.raises(ConfigurationError) as grammar_refusal:
-            parse_fleet_distribution_config(fleet_blocks(body), block_path="")
+            parse_fleet_distribution_config(form_fleet_blocks(body), block_path="")
         resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(grammar_refusal.value)}
@@ -1224,7 +1219,7 @@ class TestFleetFromDistribution:
         """The fleet form has no toggle for a block: a pv/battery/load block's enabled, true, false, 0 or null, reaches fleet_distribution.py's grammar, which has no such key, and is a 400 whose error is the grammar's refusal naming it; no fleet is queued. A fleet without batteries leaves its battery block out or sends it null."""
         body = {**self._VALID_BODY, block: {**settings, "enabled": value}}
         with pytest.raises(ConfigurationError) as grammar_refusal:
-            parse_fleet_distribution_config(fleet_blocks(body), block_path="")
+            parse_fleet_distribution_config(form_fleet_blocks(body), block_path="")
         resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
         assert resp.get_json() == {"error": str(grammar_refusal.value)}

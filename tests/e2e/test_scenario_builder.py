@@ -13,13 +13,13 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from pytest_playwright import CreateContextCallback
 
 from solar_challenge.config import load_fleet_config
-from solar_challenge.fleet_distribution import write_distribution_spec
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, days_window
+from tests._fleet_form import start_spec
 from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._css_transitions import finish_the_css_transitions
 from tests.e2e._fetches_handled import (
@@ -503,16 +503,6 @@ def _spec_sent(sent: dict[str, Any], card: _Card) -> Any:
     return sent[card.key][card.grammar_key]
 
 
-def _start_spec(card: _Card, name: str) -> Any:
-    """*card*'s component's start spec of the editor type named *name*, written as the grammar reads it."""
-    (written,) = [
-        written
-        for written in (write_distribution_spec(spec) for spec in FLEET_COMPONENTS[card.key].start.specs)
-        if isinstance(written, dict) and written["type"] == name
-    ]
-    return written
-
-
 @pytest.mark.parametrize("card", _CARD_PARAMS)
 def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set_its_distribution(
     page: Page, live_server: str, card: _Card
@@ -626,7 +616,7 @@ def test_each_card_opens_at_its_components_start_which_the_builder_sends_as_the_
     sent = open_builder(page, live_server).request.post_data_json
 
     assert {card.key: sent[card.key] for card in _CARDS} == {
-        card.key: {card.grammar_key: _start_spec(card, FLEET_COMPONENTS[card.key].start.shown)} for card in _CARDS
+        card.key: {card.grammar_key: start_spec(FLEET_COMPONENTS[card.key], FLEET_COMPONENTS[card.key].start.shown)} for card in _CARDS
     }
 
 
@@ -649,7 +639,7 @@ def test_a_card_set_to_a_distribution_sends_its_start_spec_of_that_type(
     sent = _form_sent_on_validate(page)
 
     assert {card.key: _spec_sent(sent, card) for card in _CARDS} == {
-        card.key: _start_spec(card, type_value) for card in _CARDS
+        card.key: start_spec(FLEET_COMPONENTS[card.key], type_value) for card in _CARDS
     }
 
 
@@ -887,7 +877,7 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
 
     fleet = load_fleet_config(path)
 
-    pool = _start_spec(_CARDS[0], "shuffled_pool")
+    pool = start_spec(FLEET_COMPONENTS[_CARDS[0].key], "shuffled_pool")
     assert Counter(home.pv_config.capacity_kw for home in fleet.homes) == dict(
         zip(pool["values"], pool["counts"], strict=True)
     )

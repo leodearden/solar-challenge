@@ -14,8 +14,9 @@ from typing import Any, NamedTuple
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
-from solar_challenge.fleet_distribution import write_distribution_spec
+from solar_challenge.fleet_distribution import DISTRIBUTION_TYPES
 from solar_challenge.web.fleet_components import ComponentLimits, page_limits
+from tests._fleet_form import start_spec
 from tests.e2e._scenario_builder_page import open_builder
 
 _COMPONENTS = page_limits().components
@@ -23,14 +24,8 @@ _PV = _COMPONENTS["pv"]
 _BATTERY = _COMPONENTS["battery"]
 
 
-def _start_spec(component: ComponentLimits, name: str) -> Any:
-    """*component*'s start spec of the editor type named *name*, written as the grammar reads it."""
-    (written,) = [
-        written
-        for written in (write_distribution_spec(spec) for spec in component.start.specs)
-        if isinstance(written, dict) and written["type"] == name
-    ]
-    return written
+_NORMAL = DISTRIBUTION_TYPES["normal"]
+_NORMAL_MAX_TITLE = next(parameter.title for parameter in _NORMAL.parameters if parameter.key == "max")
 
 
 class _FleetPageEditor(NamedTuple):
@@ -87,7 +82,7 @@ def _choose(page: Page, editor: _FleetPageEditor, component: ComponentLimits, ti
     ("title", "spec"),
     [
         pytest.param(_PV.scalar_form.title, _PV.start.fixed, id=_PV.scalar_form.name),
-        *(pytest.param(each.title, _start_spec(_PV, each.name), id=each.name) for each in _PV.editor_types),
+        *(pytest.param(each.title, start_spec(_PV, each.name), id=each.name) for each in _PV.editor_types),
     ],
 )
 def test_each_pv_editor_type_posts_its_start_spec_as_the_grammar_writes_it_on_both_pages(
@@ -107,10 +102,10 @@ def test_each_pv_editor_type_posts_its_start_spec_as_the_grammar_writes_it_on_bo
 def test_blanking_normals_max_posts_max_null(page: Page, live_server: str, editor: _FleetPageEditor) -> None:
     """A blanked Max (clamp) posts max null, which the grammar reads as no upper clamp."""
     editor.open(page, live_server)
-    _choose(page, editor, _PV, "Normal (Gaussian)")
-    editor.control(page, _PV, "spinbutton", "Max (clamp)").fill("")
+    _choose(page, editor, _PV, _NORMAL.title)
+    editor.control(page, _PV, "spinbutton", _NORMAL_MAX_TITLE).fill("")
 
-    assert editor.posted(page)["pv"] == {"capacity_kw": {**_start_spec(_PV, "normal"), "max": None}}
+    assert editor.posted(page)["pv"] == {"capacity_kw": {**start_spec(_PV, "normal"), "max": None}}
 
 
 @pytest.mark.parametrize("editor", _PAGES)
@@ -120,7 +115,7 @@ def test_blanking_a_battery_pool_value_posts_null(page: Page, live_server: str, 
     expect(editor.control(page, _BATTERY, "combobox", "Distribution Type")).to_have_value(_BATTERY.start.shown)
     editor.control(page, _BATTERY, "spinbutton", "Value 1").fill("")
 
-    pool = _start_spec(_BATTERY, "shuffled_pool")
+    pool = start_spec(_BATTERY, "shuffled_pool")
     assert editor.posted(page)["battery"] == {
         "capacity_kwh": {**pool, "values": [None, *pool["values"][1:]]}
     }

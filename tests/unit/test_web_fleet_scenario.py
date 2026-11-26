@@ -28,7 +28,7 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
-from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS, read_form_fleet
+from solar_challenge.web.fleet_config import read_form_fleet
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
     ParsedFleetForm,
@@ -39,7 +39,7 @@ from solar_challenge.web.fleet_scenario import (
 )
 from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from solar_challenge.web.simulation_params import parse_seg_tariff
-from tests._fleet_form import valid_distribution_form
+from tests._fleet_form import form_fleet_blocks, valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {
@@ -371,7 +371,7 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
         form = {**_FLEET_FORM, key: value, "battery": {"capacity_kwh": {"type": "uniform"}}}
         with pytest.raises(ConfigurationError):
             read_block()
-        blocks = {name: form[name] for name in FLEET_DISTRIBUTION_FORM_KEYS if name in form}
+        blocks = form_fleet_blocks(form)
         with pytest.raises(ConfigurationError) as expected:
             parse_fleet_distribution_config(blocks, block_path="")
         with pytest.raises(ConfigurationError) as refusal:
@@ -409,7 +409,7 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
     ) -> None:
         """A cleared PV input posts null, refused at pv.capacity_kw before any home is generated, not as a home's null draw under fleet_distribution."""
         form = {**_FLEET_FORM, "pv": {"capacity_kw": spec}}
-        blocks = {name: form[name] for name in FLEET_DISTRIBUTION_FORM_KEYS if name in form}
+        blocks = form_fleet_blocks(form)
         with pytest.raises(ConfigurationError) as expected:
             read_form_fleet(blocks)
         with pytest.raises(ConfigurationError) as refusal:
