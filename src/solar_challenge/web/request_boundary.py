@@ -95,6 +95,11 @@ def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str
         )
 
 
+def present_fields(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The top-level fields form *body* sends: one sent as null, or as '' (a cleared input), is not sent, and a nested block's contents are that block's grammar's to read."""
+    return {key: value for key, value in body.items() if value is not None and value != ""}
+
+
 def require_encodable_text(text: str, what: str) -> str:
     """Return *text*, a request's *what*, which must encode as UTF-8, the encoding sqlite3 binds text in.
 
