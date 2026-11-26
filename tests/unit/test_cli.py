@@ -1435,11 +1435,11 @@ class TestFleetSweepRefusesAFileItCannotSweep:
                 id="alias-that-is-also-a-variable",
             ),
             pytest.param(
-                "name: Street\nfleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
                 ("--param", "battery_cost", "--min", "100", "--max", "200", "--steps", "2"),
                 "--param 'battery_cost' names the knob 'battery_cost_per_kwh_gbp', "
                 "which sets the scenario's finance block and no home's simulation",
-                id="finance-knob-of-a-file-without-finance",
+                id="knob-that-edits-no-home",
             ),
         ],
     )

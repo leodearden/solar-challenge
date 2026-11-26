@@ -152,7 +152,7 @@ class TestEachKnobIsOnePureFormPreservingEdit:
     def test_apply_changes_only_its_target_and_keeps_the_form(
         self, knob: Knob, form: Callable[[], ScenarioConfig]
     ) -> None:
-        """The argument is unchanged, the form and home count are kept, the leaves changed are the target's, and a second apply changes nothing."""
+        """The argument is unchanged, the form and home count are kept, the leaves changed are the target's and lie in the part knob.target names, and a second apply changes nothing."""
         scenario = form()
         before = copy.deepcopy(scenario)
         value = _value_for(knob)
@@ -166,6 +166,7 @@ class TestEachKnobIsOnePureFormPreservingEdit:
         target = _target_paths(knob)
         assert changed, f"{knob.name} at {value} changed nothing"
         assert {path for path in changed if not target.fullmatch(path)} == set()
+        assert {path for path in changed if not _TARGET_PATHS[knob.target].fullmatch(path)} == set()
         assert knob.apply(result, value) == result
 
     def test_the_seg_knob_refuses_a_rate_a_home_carries_another_of(self) -> None:
@@ -187,20 +188,6 @@ class TestEachKnobIsOnePureFormPreservingEdit:
 
 class TestEachKnobDeclaresWhatItEdits:
     """Each knob's target names the part of a scenario its apply edits: each stored home, the SEG rate or the finance block."""
-
-    @pytest.mark.parametrize("form", _FORMS, ids=["fleet", "single-home"])
-    @pytest.mark.parametrize("knob", tuple(KNOBS.values()), ids=lambda knob: knob.name)
-    def test_every_path_apply_changes_lies_in_the_part_its_target_names(
-        self, knob: Knob, form: Callable[[], ScenarioConfig]
-    ) -> None:
-        """apply changes some leaf, and every leaf it changes lies in the part of the scenario knob.target names."""
-        scenario = form()
-
-        result = knob.apply(scenario, _value_for(knob))
-
-        changed = _changed_paths(scenario, result)
-        assert changed, f"{knob.name} changed nothing"
-        assert {path for path in changed if not _TARGET_PATHS[knob.target].fullmatch(path)} == set()
 
     def test_the_home_knobs_are_the_five_install_load_and_degradation_settings(self) -> None:
         """The HOMES knobs are the install, load and degradation settings, the SEG knob alone sets the SEG rate, and every other knob sets finance."""

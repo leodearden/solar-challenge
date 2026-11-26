@@ -458,7 +458,7 @@ def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
 
 
 def _home_knob_named(name: str) -> Knob:
-    """The knob *name* names, which must edit homes.
+    """The knob *name* names, which must be one of _HOME_KNOBS, the knobs fleet sweep sweeps and lists.
 
     Raises:
         ConfigurationError: If the knob edits no home, so every point would
@@ -466,7 +466,7 @@ def _home_knob_named(name: str) -> Knob:
             fleet sweep sweeps.
     """
     knob = knob_named(name)
-    if knob.target is not KnobTarget.HOMES:
+    if knob not in _HOME_KNOBS:
         raise ConfigurationError(
             f"--param {name!r} names the knob {knob.name!r}, which sets {knob.target.value} and no home's "
             f"simulation, so every point would simulate the same fleet; {_SWEPT_KNOBS}"
