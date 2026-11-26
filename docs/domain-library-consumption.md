@@ -2687,6 +2687,366 @@ takes that label in place of the value. When they re-pin, consumers build a
 
 **Results that move** — each entry: which figure moves and by how much where measured (task N).
 
+**Task 182.** A tariff whose periods share one rate has no cheap period, so time-of-use
+dispatch on it is self-consumption. The 0.5.0 tag classifies a minute as cheap
+when its rate is at or below the mean of the period rates, so every minute of a
+flat tariff such as `TariffConfig.flat_rate(0.25)` or
+`economy_7(off_peak_rate=0.25, peak_rate=0.25)` is a cheap minute there;
+`simulate_timestep_tou` holds the battery through all of them and imports the
+whole shortfall. Task 182 changed that on `main`, and task 838 carries it on: a
+flat tariff's `cheap_minutes_of_day` is empty and `is_cheap_at` is `False` at
+every minute. A 2 kW shortfall for an hour against a fresh
+`Battery(BatteryConfig.default_5kwh())` (2.5 kWh stored) at 03:00 on a flat
+0.25 £/kWh tariff discharges 0 kWh and imports 2.0 kWh (£0.50) on the tag, and
+discharges 1.95 kWh and imports 0.05 kWh (£0.0125) now, the result
+`simulate_timestep` returns with no tariff. A home goes the same way under
+`simulate_home`, and so under `FleetRunner` and `home run`. On the tag, a
+`HomeConfig` whose `dispatch_strategy` is `'tou_optimized'` on a flat tariff,
+with a battery that names no strategy of its own, runs through
+`simulate_timestep_tou` (task 904's note), so its battery never discharges over
+the whole run and only charges from surplus PV; it now discharges as
+self-consumption does. The `GridChargeContext` that `simulate_timestep` builds
+from a tariff for a grid-charging battery changes with it: its
+`is_cheap_period` is `True` at every minute of a flat tariff on the tag and
+`False` at every minute now. Yet no built-in dispatch charged from the grid on
+a flat tariff on the tag: `compute_grid_charge_power_kw` refused a charge whose
+peak rate does not cover the round-trip loss, and a flat tariff's peak rate,
+being its current rate, never covers it. So grid-charge figures do not move.
+What does change is the `is_cheap_period` that a consumer's own
+`DispatchStrategy` receives in `grid_charge_ctx`. Tariffs with a rate spread
+classify as before task 182, apart from what task 838's note describes.
+Consumers who run time-of-use dispatch on a flat tariff, through
+`simulate_timestep_tou` or through `simulate_home` (and so `FleetRunner` and
+`home run`) with a `HomeConfig` whose `dispatch_strategy` is `'tou_optimized'`,
+re-baseline the figures built on that dispatch when they re-pin. Consumers
+whose own `DispatchStrategy` reads `grid_charge_ctx.is_cheap_period` on a flat
+tariff check what it does now that the flag is `False`. Other consumers need no
+change.
+
+**Task 236.** `create_pv_system`, `create_model_chain` and
+`simulate_pv_output` run every voltage-matched CEC inverter at
+`PVConfig.inverter_efficiency` at rated output
+(`Pdco = Paco / inverter_efficiency`), the default 0.96 included; the 0.5.0 tag
+keeps the picked inverter's catalogue efficiency (0.892–0.983 across the
+default-rated capacities) whenever `inverter_efficiency` is exactly 0.96. With
+the system losses, on Bristol's scaled TMY, default-config annual AC moves by
+−2.3% to +6.9% per capacity: 3 kWp +0.5%, 3.68 kWp +2.0%, 4 kWp −0.7%, 5 kWp
+−1.1%, 6 kWp −1.3% ([pv-inverter-efficiency.md](pv-inverter-efficiency.md) §3).
+The `PVSystem` that `create_pv_system` returns, which is also the `system` of
+the model chain `create_model_chain` returns, names the picked CEC library row
+in its `inverter` attribute, where the tag leaves `None`; custom and PVWatts
+inverters still give `None`. Consumers re-baseline every figure that depends on
+PV generation at the default efficiency when they re-pin.
+
+**Task 240.** `create_pv_system` and `simulate_pv_output`
+no longer treat a battery inverter/charger as a candidate inverter, so they pick
+a different inverter for 23 of the 992 census configs; the 0.5.0 tag may pick a
+battery inverter/charger. Annual AC moves by +4.03% at 7.2 kW DC and +1.92% at
+7.3 kW, and by +3.72% at 2.6 kW, all with the inverter unset; by +11% to +44%
+for 0.3–1.0 kW arrays on 3.0, 3.68 and 5.0 kW inverters; and by −3.42% for
+0.7–1.0 kW on 3.68 kW. The headline 3, 4, 5 and 6 kWp configs keep their picks
+([pv-inverter-string-matching.md](pv-inverter-string-matching.md) §7). Consumers
+re-baseline the figures for those configs when they re-pin.
+
+**Task 252.** `PVConfig` gains a last keyword,
+`system_losses`, the fraction of each array's DC power lost before the
+inverter. Its default is PVWatts v5's 14.08%
+(`pvlib.pvsystem.pvwatts_losses() / 100`), and a value outside [0, 1) raises
+`ValueError`. On the same weather, every PV output is lower than the 0.5.0
+tag's. AC falls by about 14% where the inverter does not clip (Bristol's
+default 4 kW on its scaled TMY: 4664 to 4004 kWh), and by less where it clips,
+because the loss is taken before the inverter
+([pv-system-losses.md](pv-system-losses.md)). `system_losses=0.0` gives the
+output without system losses. Consumers re-baseline every figure that depends
+on PV generation when they re-pin, bills and the cost-recovery rate included.
+
+**Task 285.** `get_tmy_data` multiplies the TMY's `ghi`,
+`dni` and `dhi` by one factor, so that the year's GHI equals the mean annual GHI
+of PVGIS's 2005–2020 hourly series for the point; the 0.5.0 tag returns PVGIS's
+TMY unscaled. At Bristol, the TMY's annual GHI goes from 992.3 to 1069.5 kWh/m²
+and the default 4 kW system's annual AC from 4328 to 4664 kWh (+7.8%); each
+point has its own factor, from 0.936 (Glasgow) to 1.078 (Bristol) at the seven
+UK points measured
+([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md) §4, §6). Temperature
+and wind are unchanged. Fetching the TMY now also requests that hourly series,
+and every weather cache entry written before the change is ignored
+([Network I/O](#network-io)). Consumers re-baseline every figure that depends on
+PV generation when they re-pin, bills and the cost-recovery rate included, and
+rebuild any pre-built cache with `WeatherCache.put`.
+
+**Task 460.** `simulate_fleet`, `simulate_fleet_iter` and
+`simulate_multi_sweep_iter`, and so `solve_cost_recovery_rate`'s default
+`simulate`, fetch each distinct home location's TMY once, in the calling
+process, and pass it to their worker processes. So a `WeatherCache` installed
+with `set_weather_cache` now serves a parallel fleet under every
+multiprocessing start method. On the 0.5.0 tag, a worker started by
+`forkserver` (Linux's default from Python 3.14) or `spawn` (macOS's default)
+ignored that cache, read the working directory's `.cache/weather` and fetched
+PVGIS on a miss: offline the run failed with `WeatherDataError`, and online it
+simulated from PVGIS's live TMY instead of the injected one.
+
+**Task 580.** a `Battery` whose SOC an assigned SOC limit
+has moved past moves no energy further past it. While the SOC is below
+`min_soc_kwh`, `discharge` returns 0.0 and leaves the SOC unchanged, and
+`available_discharge_capacity_kwh` is 0.0; while it is above `max_soc_kwh`,
+`charge` and `available_charge_capacity_kwh` do the same. On the 0.5.0 tag
+these returned negative amounts: `discharge` raised the SOC to the floor and
+`charge` lowered it to the ceiling. So a `simulate_timestep` or
+`simulate_timestep_tou` step could report a negative battery discharge, with
+self-consumption lowered and grid import raised by as much. It could also
+report a negative battery charge, with grid export raised by as much, or grid
+import lowered by as much for a charge from the grid. `validate_energy_balance`
+accepted all of these. Charging up from below the floor, discharging down from
+above the ceiling, and a battery whose SOC is within its limits behave as on
+the tag. Consumers that move a SOC limit past the SOC, as a min-SOC register
+write can, need no change when they re-pin, and any correction they make for
+the negative amounts can go.
+
+**Task 708.** an EV whose `EVConfig.smart_charging_mode`
+is `"solar"` or `"off_peak"` now charges only while it is home. Each day's
+session is one unbroken run inside the stay from `arrival_hour` to
+`departure_hour`, covering as much of the mode's window (10:00–16:00, or
+Economy 7's 00:30–07:30) as it can, on either day of an overnight stay, and
+starting as early as it can. A window too short for the charge is used whole,
+with the rest charged just before it opens, or from arrival when that is later.
+On the 0.5.0 tag such a session started when the window opened and could run
+past departure: a 3.6 kW, 35 kWh off-peak EV home from 18:00 to 07:00 charged
+from 00:30 until 10:14, and now charges from 21:16 until 07:00. The tag also
+looked only at the arrival day's solar window, and only at the next night's
+off-peak window for an overnight stay: a 7 kW, 35 kWh solar EV home from 18:00
+to 12:00 charged from 18:00 until 23:00, and now charges from 07:00 until 12:00
+the next morning. `"none"` is unchanged. The demand that `simulate_home` and
+`simulate_fleet` return changes for homes with such EVs, and so do the figures
+built on it, `solve_cost_recovery_rate`'s included; consumers re-baseline them
+when they re-pin.
+
+**Task 778.** `SummaryStatistics` gains a last keyword,
+`window`, defaulting to `None`: the `SimulationWindow`, imported from
+`solar_challenge.timebase`, that its totals were computed over. Building one
+raises `ValueError`, naming both values, when `window` is set and
+`simulation_days` is not its `days`. Code that builds one without a window
+needs no change. `calculate_summary` sets `window` to its results' `window`,
+and `simulation_days` to that window's `days`: the calendar dates the results'
+index covers on its own clock, first and last both counted. The 0.5.0 tag
+counts the whole 24-hour days between the index's first and last rows, plus
+one. So for an index that crosses the October clock change but not the March
+one, the tag counts one day more: 62 for a `Europe/London` minute index from
+2024-10-01 00:00 to 2024-11-30 23:59, which now reads 61. A `simulate_home` run
+whose last day is the October change day counts its window's days, 2 for
+2024-10-26..27, as the tag does. `FleetSummary.simulation_days`, read from the
+first home's summary, changes the same way. The web app stores each summary's
+window, its days as ISO 8601 dates and its cadence as an ISO 8601 duration
+such as `P0DT0H1M0S`; a summary it stored before the field existed loads with
+`window` `None`. Consumers that read `simulation_days` for windows crossing the
+October change re-check them when they re-pin.
+
+**Task 779.** `simulate_community` reads each row's length
+from the window of the fleet's index, `SimulationWindow.of_index` of
+`FleetResults.total_grid_export`'s index. It does so in both sharing modes,
+whether or not it bills. The community battery steps at the window's cadence,
+and billing prices each row's kWh over it. It now raises `ValueError` for a
+fleet index no window describes: an empty index; one row without a
+fixed-duration `freq`; unevenly spaced rows, naming the first position whose
+gap differs and both gaps; or an index that is not a `DatetimeIndex`, naming
+its type and dtype. The 0.5.0 tag reads the length from the index's first two
+rows, and takes one minute for a single row or an empty index. The only
+refusal it states is of a billed index whose last gap differs from its first,
+so it prices a fleet whose index lacks one middle row with no error. The fleets
+`simulate_fleet` returns are spaced one minute apart, so their community
+results are unchanged. Consumers that build a `FleetResults` on another index
+re-check it when they re-pin.
+
+**Task 810.** `simulate_pv_output` and
+`create_model_chain` apply a `PVConfig`'s ageing to each array's DC power
+before the inverter, in the same step as `system_losses`, carrying task 284's
+change; the 0.5.0 tag multiplies `simulate_pv_output`'s AC by the degradation
+factor, after the inverter has clipped, and leaves `create_model_chain`'s AC
+un-aged. So an aged inverter-limited array now keeps more of its new AC, and an
+unclipped one slightly less: on Bristol's scaled TMY at age 20, 6 kW on a
+3.68 kW inverter keeps 0.9186 of its new annual AC instead of 0.9000, and the
+default sizes keep 0.8976–0.8991 ([pv-system-losses.md](pv-system-losses.md)
+§4). A run chain's `results.losses` holds the combined fraction of DC power
+kept. `apply_degradation` is unchanged, so applying it to `simulate_pv_output`'s
+output for an aged `PVConfig` ages the array twice. Consumers re-baseline every
+figure for an aged PV system when they re-pin, `project_multi_year`'s later
+years and the cost-recovery rate included.
+
+**Task 841.** `TariffConfig.economy_7()` and `TariffConfig.economy_10()` built without rates
+now charge 0.13 £/kWh off-peak and 0.35 £/kWh peak (ruling D34), the rates the
+new `tariff.PRESET_RATES`, outside `__all__`, states for each preset. The 0.5.0
+tag charges 0.09/0.25 £/kWh on Economy 7 and 0.08/0.27 £/kWh on Economy 10.
+Their signatures' defaults render the new values, and the `get_rate`,
+`rates_for` and `peak_rate` of such a tariff, and
+`calculate_bill` over it, read the new rates. A scenario `tariff:` block of
+type `economy_7` or `economy_10` that sets no rate is charged them too. Their
+cheap minutes, the task 838 line's `cheap_minutes_of_day`, are unchanged,
+Economy 7's 420 and Economy 10's 600, since both stay two-rate. The scenarios
+`example-economy7.yaml`, `bristol-arbitrage.yaml` and `bristol-phase1-flex.yaml`
+no longer restate Economy 7 at 0.09/0.25 £/kWh, so they re-price. Measured on
+base f12e6a1 over 2024, `solar-challenge home run
+scenarios/bristol-arbitrage.yaml --start 2024-01-01 --end 2024-12-31` prints a
+grid import cost of £298.84 and a net cost of £-69.05, where it printed
+£208.96 and £-158.93, on the same 1844.0 kWh of import. `solar-challenge
+finance run scenarios/bristol-phase1-flex.yaml` gives its representative
+householder an import cost of £314.48 (was £253.89), a total outlay of £827.92
+(was £727.72), a saving vs baseline of £274.25, 24.9% (was £366.45, 33.5%), and
+a self-consumption fraction of 34.7% (was 51.5%), and its fleet bill a mean of
+£832.76 (was £728.06) and a median of £827.90 (was £727.69).
+`example-economy7.yaml`'s load is stochastic with no seed, so each run draws
+its own profile: its `home run` over 2024 printed a grid import cost of
+£337.87 and £346.85 in two runs after the change, and £240.05 in one before.
+Consumers that keep the tag's prices pass `off_peak_rate` and `peak_rate`
+explicitly when they re-pin, to either classmethod or as keys of a scenario's
+preset block; consumers that already pass both rates need no change.
+
+**Task 865.** `compute_soh` counts one
+equivalent full cycle per usable capacity of discharged energy, where the 0.5.0
+tag counts one per two usable capacities, so its cycle fade doubles:
+`compute_soh(12.0, 12000.0, 4.0, BatteryConfig(capacity_kwh=5.0))` returns 0.61
+where the tag returns 0.685. Its signature is unchanged, and so is a single
+run's SOH, which counts no throughput. Multi-year battery SOH, later-year
+own-use and the cost-recovery solve move for battery fleets
+([cost-recovery-finance-model.md](cost-recovery-finance-model.md) §4). The
+platform needs no code change: it does not call `compute_soh`, though the rate
+its `recommend_rate` takes from `solve_cost_recovery_rate` moves for a battery
+fleet.
+
+**Task 900.** `Battery.charge` returns the energy it drew from the bus, before
+`charge_efficiency`; the 0.5.0 tag returns the energy stored, after it. Its
+state-of-charge update is unchanged, so no dispatch decision moves.
+`simulate_timestep`'s and `simulate_timestep_tou`'s `grid_export` no longer
+includes the battery's PV charge loss, and their `grid_import` includes all the
+grid energy grid charging drew. `EnergyFlowResult.battery_charge` and
+`grid_charge`, `SimulationResults`' `battery_charge` and `grid_charge` series and
+`SummaryStatistics`' `total_battery_charge_kwh`, `total_grid_charge_kwh` and
+`total_pv_charge_kwh` are drawn energies, 1 / `charge_efficiency` times the tag's
+(2.56% higher at the default 0.975); `total_grid_to_demand_kwh` is unchanged, and
+so are every field's name and type and `validate_energy_balance`'s formula.
+Measured on `scenarios/bristol-arbitrage.yaml` over 2024-01-15 with the committed
+Bristol TMY: grid import 8.116274 to 8.170810 kWh, export 0.003555 to 0.000000
+kWh, grid charge 2.126889 to 2.181425 kWh, import cost £1.383597 to £1.388505.
+Consumers re-read any stored-basis assumption on `battery_charge` or
+`grid_charge` when they re-pin: the energy stored is `charge_efficiency ×
+battery_charge`, and the state of charge changes by `charge_efficiency ×
+battery_charge − battery_discharge / discharge_efficiency`. Runs saved before
+this change keep the stored basis and the export it booked.
+
+**Task 906.** `generate_load_profile` gains a last,
+keyword-only parameter, `household_model`, which defaults to the new
+`solar_challenge.load.richardsonpy_household`, so a call without it runs
+richardsonpy as on the 0.5.0 tag. Its type is `HouseholdModel`: it is called
+once per stochastic window with the `LoadConfig` and the window's dates, and
+returns a `DaySimulator`, called once per date for that day's 1,440 one-minute
+values in W. A model that raises, or gives a day of another length, gives the
+Elexon profile with the fallback warning. A call now leaves the caller's
+`random` and `numpy.random` states as it found them, and stochastic windows run
+one at a time across threads, so seeded profiles generated concurrently equal
+their serial ones. An unseeded profile draws fresh entropy, where on the tag
+one generated right after a seeded profile continues that profile's generators,
+and so repeats on every run. A seed outside 0 to `2**32 - 1` now gives a
+reproducible stochastic profile, distinct for s and −s, where the tag gives the
+Elexon profile with a warning. A seed from 0 to `2**32 - 1` gives the tag's
+profile, with one exception: in a window that starts in summer time and runs
+past the change that sets the clocks back (October in Europe/London), each day
+from the one after the change through the day the clocks next go forward is now
+simulated as its own weekday and day of the year, where the tag simulates it as
+the day before's. Such a window's profile differs from the tag's on every day,
+since a window is scaled to its seasonal energy as a whole, and that energy now
+counts each of those days at its own month's factor, where the tag counts the
+first of a month at the month before's: at 3,400 kWh a year, 2024-10-26 to
+2024-11-02 has 73.59 kWh, where the tag gives 72.19. Consumers need no change
+when they re-pin; those with such windows re-baseline the figures built on
+them.
+
+**Task 1362.** `Battery.discharge` never returns more than the
+requested power, capped at `max_discharge_kw`, times the duration. The 0.5.0
+tag returns the energy it withdraws times `discharge_efficiency`, which for
+fewer than 1% of requests at the default 0.975 rounds one ulp above that
+product; the state of charge still falls by the energy withdrawn. So a step's
+`battery_discharge` no longer exceeds the self-consumption it is part of, where
+the tag's can by an ulp: from `simulate_timestep_tou`, and from
+`simulate_timestep` under any dispatch strategy that asks the battery for no
+more than `demand_kw - generation_kw`, as each built-in strategy does. Over
+such steps, `SummaryStatistics.total_battery_discharge_kwh` from
+`calculate_summary` no longer exceeds `total_self_consumption_kwh` either.
+`simulate_timestep_tou`'s expensive-period discharge now asks the battery for
+`demand_kw - generation_kw` whenever that is above 0, as the dispatch
+strategies do, rather than for the step's shortfall energy divided by its
+duration whenever that energy is above 0. On a step with both PV and a
+shortfall, that quotient can round an ulp away from `demand_kw -
+generation_kw`; on a step whose demand exceeds its generation by too little
+for their energies to differ, the tag asks for nothing, where the battery now
+delivers that difference in power for the step. So on a tariff with no rate
+spread, a step whose demand exceeds its generation gives exactly the results
+`simulate_timestep` gives under its default self-consumption strategy; a step
+with surplus PV can still differ from them in the last digit. Each of these
+changes moves a result by an ulp-sized amount; consumers need no change when
+they re-pin.
+
+For readers of [cost-recovery-finance-model.md](cost-recovery-finance-model.md): the entries below are its release notes, and each § in them is a section of that doc.
+
+**Task 219.** CBS revenue no longer deducts the grid-charge cost (§4); the 0.5.0 tag still does.
+
+**Task 271.** on a simulated window under 360 days, `project_multi_year` annualises own-use, export, import and battery-discharge kWh (§4, §7.6); the 0.5.0 tag sums them over the window.
+
+**Task 281.** with `self_consumption_override` set, each home's own-use is capped at its demand and the surplus generation is counted as export (§3, §4); the 0.5.0 tag bills override × generation uncapped.
+
+**Task 295.** each simulated age's battery SOH counts the battery throughput from installation to that age (§4, §7.6); the 0.5.0 tag ages each seed with the throughput up to the previous seed only, so a battery fleet's mid-life battery SOH and own-use read high there.
+
+**Task 307.** on a home with no tariff configured, the override path prices its grid import at the retail baseline rate, with the physics path's `UserWarning` (§3); the 0.5.0 tag prices that import at £0.
+
+**Task 308.** with `self_consumption_override` set, `project_multi_year`'s own-use revenue, and so the cost-recovery solve's rate base, is each home's capped override own-use, the own-use its bill charges (§2, §4, §5); the 0.5.0 tag keeps both on basis C.
+
+**Task 656.** `project_multi_year`, and so `solve_cost_recovery_rate`, raises `ValueError` when a simulated age, seed or bisection trial, gives a NaN or infinite value for any aggregate §4 requires to be finite, naming the age and each such aggregate with its value; the 0.5.0 tag projects a NaN own-use or revenue on a one-year asset life as 0 kWh and £0 and passes an infinity through, drops a bisection trial whose aggregate is NaN, accepts a non-finite battery discharge, and stops on a non-finite seed of a longer life in scipy's PCHIP with "`y` must contain only finite values", which names no age.
+
+**Task 702.** `YearPoint.fleet_self_consumption_kwh`, the fleet's billed own-use (§4) and the cost-recovery solve's rate base (§5), is renamed `fleet_billed_own_use_kwh`; the 0.5.0 tag has the old name. `project_multi_year` also no longer floors a year's `fleet_revenue_gbp` at £0, so a `simulate` whose fleet earns a negative revenue projects, and the solve prices, that loss; the 0.5.0 tag projects it as £0. Its adaptive refinement measures each metric's interpolation error against the magnitude of that metric's age-0 value, so a fleet whose revenue is negative at age 0 and varies with age converges as the fleet earning the mirror revenue does; the 0.5.0 tag divides that fleet's revenue error by 1e-9, so its bisection typically runs to `MAX_NODES` and reports a meaningless `interp_error_estimate`. Fleets `simulate_fleet` builds are unaffected: their own-use, SEG and grid-services income is never negative.
+
+**Task 778.** the `sim_days_h` by which a home's window under 360 days is annualised (§4, *Annual basis*) is its calendar days, as `calculate_summary` now counts them. For a window that crosses the October clock change but not the March one, such as 2024-10-01 to 2024-11-30, that is 61 days, so `k_h = 365/61`; the 0.5.0 tag's `simulation_days` counts 62.
+
+**Task 782.** each home's window totals are scaled to the window's year by `k_h = year_days / days`, whatever the window's length, in the bills (§3) and in the projection (§4, *Annual basis*); `year_days` is 365 or 366 for a window within one calendar year and 365.25 for one that crosses a new year. The 360-day threshold is retired, and with it the rule the task 271 and 778 notes describe, so a window of 360 to 365 days is scaled too, and a 2024 window by 366/days, where the 0.5.0 tag's bills scale a window under 360 days by 365/days and any other by 1. The standing charge covers `year_days` days (§3): 366 in 2024, where the tag always bills 365. `householder_bill` no longer emits the tag's short-period `UserWarning`, nor `project_multi_year` the short-window one added since the tag. `householder_bill` and `bill_distribution` raise `ValueError` for a summary with no window, naming `calculate_summary`, and for a `simulation_days` other than their summaries' own, naming both; `householder_bill` for own-use below 0 or above the window's `total_demand_kwh`, naming both; and `bill_distribution` for summaries over different windows, as `project_multi_year` does for a fleet whose homes cover different windows, naming both windows (§3, §4). `BillDistribution` and `MultiYearCurve` carry `annualised_from`, the window their yearly figures were annualised from, None for `spreadsheet_revenue_curve`'s curve of yearly assumptions. §7.6's physics column, three June days of 2024, now scales by `k = 366/3 = 122`, not 365/3. When they re-pin, consumers re-check any bill, projection or solved rate of a window that is not one whole non-leap calendar year, give each summary they bill its window (`calculate_summary` sets it), pass the summaries' own `simulation_days`, and read `annualised_from` where they relied on the short-period warning to flag a short window.
+
+**Task 783.** `generate_finance_report` (`finance run`) and `generate_config_ranking_report` (`optimize configs`) print, under their first heading, "*Yearly figures are extrapolated ×<annualisation_scale, 3 dp> from a <days>-day window (<first day> to <last day>), not whole calendar years.*" when their bills' `annualised_from` window runs other than from 1 January to 31 December (§4, *Annual basis*; §9). The notice replaces the short-period warnings that task 782's note retires. A distribution with no `annualised_from`, which only a hand-built one has, renders none, and neither does a ranking with no feasible config. The CLI's status lines and `optimize configs`' large-sweep warning count the run's calendar days: a run that starts on GMT and ends on BST, such as 2024-03-31 to 2024-04-01, counts 2 days where the 0.5.0 tag counts 1. When they re-pin, consumers that parse either report expect the notice paragraph after its first heading.
+
+**Task 801.** `project_multi_year` prices grid-services income from each simulated age's own fleet, seed and bisection-trial ages alike (§4, §8.1), so capacity-at-events income falls with battery SOH; the 0.5.0 tag books the age-0 event figure at every age. A flat rate prices the batteries of the `home_configs` that `simulate` returns, where the 0.5.0 tag sums the scenario's homes; `FleetRunner.simulate` pairs them with the homes each age simulates, the scenario's, so its flat figure is unchanged, and an injected `simulate` must return those homes' batteries (§4; task 1119's note). An event window the simulated period never enters is named in one `UserWarning` per projection (§4); the 0.5.0 tag prices it at £0 silently.
+
+**Task 804.** The model's grid-services pricing is now named by `FinanceConfig.grid_services_model`,
+which holds `NoGridServices()`, `FlatGridServices(g)` or a
+`GridServicesEventsConfig`, in §4, §6's no-flex identity, §7's assumptions
+table and §8.1, where the retired `grid_services_income_per_kw_per_year_gbp`,
+`grid_services_events` and `grid_services_model_of` stood. No figure moves:
+the migrated board scenarios load to the same pricing. Readers read §8 under
+the new field name.
+
+**Task 837.** Capacity-at-events income in `project_multi_year` and `finance run` is priced at the mean over event days of the fleet's daily firm spare capacity, under the events configuration's `delivery_baseline`, `operational` by default (§4, §8.1); the 0.5.0 tag takes the minimum over every in-window timestep of the season, so one minute at a battery's SOC floor zeroes that home for the whole season there. The finance report's capacity-at-events table adds the capacity available on 50% and on 90% of event days and the evening self-use an event displaces per event, shown for a single event window and as — for several, and that self-use's value per year, summed over the windows, £0 for a home simulated without a tariff; the income is gross of it (§8.1). Re-read any capacity-at-events figure taken from the 0.5.0 tag; flat and no-grid-services figures are unchanged.
+
+**Task 848.** `scenarios/bristol-phase1-flex.yaml`, the board fleet, now sizes each battery's cheap-period grid charge by the `trailing_14_days` forecast (`docs/grid-charge-forecast.md`), where the 0.5.0 tag fills every battery to 90% every night. Measured on its 100 homes over 2024 on the committed Bristol TMY at task/848's step-14 commit (`docs/grid-charge-forecast.md` §6 says which, and why main's changes since leave the figures standing), against the same runs with `forecast: pv_blind`: per-home net cost (import cost less export at 4.1 p) £226.27 to £201.87 a year; grid charge 1,070.79 to 649.02 kWh and export 2,598.65 to 2,221.90 kWh a home; the mean householder bill at the scenario's 15 p own-use rate £832.76 to £850.60, as basis-C own use (demand − import, §2) rises by the import it replaces; mean fleet surplus £13,910 to £17,166 a year, min DSCR 1.83× to 2.11×, equity IRR 0.9% to 2.5% and payback 23.0 to 20.0 years; the solved cost-recovery own-use rate 7.96 to 7.35 p/kWh, and the mean householder outlay at it £714.21 to £691.32. Re-read any figure of this fleet taken from the 0.5.0 tag; a scenario whose `grid_charging:` block names no forecast is unchanged.
+
+**Task 865.** each simulated age's battery SOH counts one equivalent full cycle per usable capacity of discharged energy (§4, *Battery ageing*); the 0.5.0 tag counts one per two usable capacities, so its cycle fade is half the configured `cycle_fade_per_equivalent_full_cycle`, and a battery fleet's later-year battery SOH and own-use read high there and its solved own-use rate low.
+
+**Task 900.** On the physics path a battery's PV charge loss is no longer booked as export, so it no longer earns SEG income, and grid charging's charge loss is now imported, so import cost and the informational `total_grid_charge_cost_gbp` rise and basis-C own-use (demand − import, §2) falls by it; the 0.5.0 tag books the battery's charge on the energy it stored, after its charge losses. Measured on `scenarios/bristol-phase1-flex.yaml` (100 homes, 2024, committed Bristol TMY, at main 3dd45073 and with this change): export 260,369.288 to 259,864.839 kWh, SEG income (export at 4.1 p) £10,675.14 to £10,654.46; import 194,119.676 to 196,796.663 kWh, import cost £23,069.57 to £23,310.50; grid charge 104,402.491 to 107,079.478 kWh; basis-C own-use 163,131.393 to 160,454.406 kWh (−1.64%), so a solved own-use rate rises. Re-read any battery fleet's board figure taken from the 0.5.0 tag; a fleet without batteries is unchanged.
+
+**Task 922.** Finance now prices each home's grid flows by how its simulated run was priced (`SummaryStatistics.pricing`, §3, §4), instead of inferring it from the pounds the run reported. A home on a £0 tariff is billed £0 of import with no warning, where the 0.5.0 tag billed it at the retail rate with the "no tariff configured" warning. With `self_consumption_override` set, a home that simulated no export earns the CBS its SEG at its own rate on the override's export: £49.20 on 1,200 kWh at 4.1 p, where the tag gives £0.00. A priced override home that simulated no import is billed the override's import at its tariff's time-weighted mean rate rather than at retail. Physics bills and projections do not move beyond float precision. When they re-pin, board readers re-check the bills of homes on a £0 tariff, the override-mode SEG revenue, and the solved own-use rates that read them.
+
+**Task 925.** With `self_consumption_override` set (the spreadsheet assumption), each projection year's fleet export and import (`YearPoint.fleet_export_kwh` and `fleet_import_kwh`, §4) are now the override's split, Σ_homes generation − own-use and demand − own-use, which is the export the year's SEG revenue is priced on. So for a fleet on one SEG rate, a year's SEG revenue ÷ its fleet export is that rate. The 0.5.0 tag reports the simulated export and import beside SEG revenue priced on the override's export. Each home's bill does not move, and nor do each simulated age's own-use and revenue: the bill and the projection now read one ledger per home (§3, *One ledger per home*), which assembles the same figures once. The projection's adaptive choice of which ages to simulate now measures the fleet export's and import's interpolation error against the age-0 fleet generation and demand (§4, *Node selection*), not against their own age-0 values. So a fleet that imports nothing at age 0, under the override with own-use capped at demand or on the simulated basis with a battery covering its demand, no longer simulates up to 12 ages and reports an `interp_error_estimate` of billions of percent. On either basis a projection can therefore simulate different ages: its interpolated years, its `interp_error_estimate` and the solved rate that reads them can move, within the error target, while each simulated age's own figures do not. When they re-pin, board readers re-check projections and the solved rates that read them.
+
+**Task 928.** The CBS-revenue projection (§4), the cost-recovery solve (§5) and the capex coupling (§6) are now in `projection.py`, above `finance.py`'s bill arithmetic, and their Source lines name it. No figure moves: a fake-simulator `finance run --project --cost-recovery --assumptions both` report is byte-identical before and after the move. When they re-pin, readers follow the Source lines to `projection.py`.
+
+**Task 929.** Each projection year's revenue between simulated ages (§4, *Per-year revenue*) is now the own-use rate × that year's billed own-use / 100 plus the year's income, SEG plus grid services, with own-use and income each interpolated by PCHIP through their values at the simulated ages; revenue itself is no longer interpolated. The projection's choice of which ages to simulate (§4, *Node selection*) now measures the income's interpolation error, not the revenue's, against its largest value at the seed ages, and the own-use's against its largest value there, so it reads no own-use rate. So the cost-recovery solve (§5) is exact: its shifted line is a re-projection at every rate, and its solved rate no longer moves with the configured `own_use_rate_pence_per_kwh`. The 0.5.0 tag (solar-challenge-v0.5.0) interpolates revenue itself: on task 720's nodes its shifted line was off a re-projection by up to £38.74 in a year, and on the same nodes its solved rate moves by 0.017 p/kWh across configured rates of 0, 15 and 23 p. Board figures move with it, where review-all S8 estimated per-year revenue between simulated ages by £41–150 a year and the solved rate by at most 0.01 p/kWh. Measured on `scenarios/bristol-phase1.yaml` as `finance run` projects it (100 homes, 15 p own-use rate, the committed Bristol TMY), the simulated ages (0, 6, 12, 24), the `interp_error_estimate` (0.686 %) and every year's own-use do not move, and a year's revenue moves by up to £94.71 (year 17, £33,239.53 to £33,334.24), £22.83 a year higher on the mean, which at that fleet's mean own-use moves its solved rate by about −0.014 p/kWh (derived from the mean, not solved), more than S8's 0.01 p/kWh estimate. A fleet whose income is £0 at age 0, at a 0 p own-use rate, no longer simulates 12 ages and reports an `interp_error_estimate` of billions of percent. `solar_challenge.projection` gains `project_fleet(fleet, finance, *, simulate, error_target_pct=1.0)`, the projection of a `ScenarioFleet`, returning a frozen `FleetProjection` whose `curve` is `project_multi_year`'s and whose `age0_summaries` are each home's summary of the fleet simulated at age 0, in fleet order. When they re-pin, board readers re-check projections and solved rates; a library consumer that wants the age-0 summaries reads `project_fleet(...).age0_summaries`.
+
+**Task 930.** `solar_challenge.projection` gains `CostRecoveryRun(projection, economics, solution)`, `run_cost_recovery(fleet, finance, *, simulate)` and `fewest_simulated_ages(asset_life_years)` (§5). `run_cost_recovery` projects a fleet once at the configured own-use rate, and that one projection gives its economics, its solve and the solve's outlay. `solve_cost_recovery_rate` is that run's solution: it bills its outlay on the projection's age-0 summaries, the same fleet it used to simulate a second time as `cr4-solve-age0`. So the solve now asks its simulator for 5 fleets at a 25-year life instead of 6, and its projection's warnings name the solve's caller. `optimize.run_sweep` makes one projection per config: 5 simulations at a 25-year life where main before this change asks 12, and 3 at a 3-year life where it asks 8. `ConfigResult` gains `baseline_own_use_rate_pence_per_kwh`, the configured rate its baseline pair is priced at. Its `baseline_outlay_gbp` now bills the new-install age-0 fleet with the scenario's SEG. The figure moves for scenarios whose batteries carry a configured age or SOH, because their age-0 battery is now at SOH 1.0: the 0.5.0 tag billed, for example, the calendar 0.88 of a 6-year battery. That figure is one axis of the board's Pareto front. `generate_config_ranking_report`'s second table is now headed '## Configured-Rate Trade-Off' and gains a 'Configured Rate (p/kWh)' column; the 0.5.0 tag prints '## Fixed-15p Trade-Off'. `finance run --project --cost-recovery` now asks for 6 simulations where main before this change asks 12, or 5 where the age-0 fleet is the bill run's (9 before). `optimize configs`' large-sweep warning counts at least `fewest_simulated_ages` per config's projection. The counts were measured with a constant stand-in simulator, on main at this task's merge base and on this change. When they re-pin, board readers re-check baseline outlays and the Pareto front on aged-battery scenarios. Report parsers read the new heading and column. Code that constructs `ConfigResult` passes `baseline_own_use_rate_pence_per_kwh`. A consumer that wants the projection, the economics and the solve from one projection calls `run_cost_recovery`.
+
+**Task 936.** `project_economics` now prices the PV capex term (§6) on the new `MultiYearCurve.fleet_pv_dc_kw`, the PV DC the curve's generation came from, in kWp, refused at construction unless > 0 and finite: Σ `pv.wired_dc_capacity_kw` of the fleet's homes for a `project_fleet` or `project_multi_year` curve, the whole modules of the template the simulator wires, and `n_homes × pv_kwp` for `spreadsheet_revenue_curve`; the roof, battery and inverter terms stay per home. The 0.5.0 tag (solar-challenge-v0.5.0) prices each home's nameplate `pv_config.capacity_kw`, modules the projection never generates from. Measured on `scenarios/bristol-phase1.yaml` (100 homes, the committed Bristol TMY), the PV basis moves from 430.0 to 420.4494 kWp, so capex moves from £630,000.00 to £620,449.40, debt from £95,000.00 to £92,612.35, annual debt service from £10,430.49 to £10,168.34, the minimum DSCR from 1.998 to 2.050, the equity IRR from 2.20 % to 2.50 % and the net surplus from £153.36 to £154.93 a home a year; payback stays at year 20, every year's revenue and own-use are bit-identical, and the solved own-use rate moves from 7.5071 to 7.4139 p/kWh (the 0.5.0 figure derived from its curve by the solve's closed form, §5, which gives this tree's live solve to 15 significant figures). CR6's synthetic no-flex anchor (§7), whose 5.5 kWp homes each wire 5.606 kWp, moves from £775,000 to £785,599.20 of capex and from £131,250 to £133,899.80 of debt, its solved rate from 12.2232 to 12.3104 p/kWh and its saving from £226 to £224, and its 0.70-override solve (§5) from 7.190096 to 7.241437 p/kWh; the [FIN] spreadsheet gate stays £775,000 on 550 kWp. An optimize config of 3 kWp homes is priced at the 2.803 kWp each wires. When they re-pin, board readers re-read capex, payback and solved rates, and a consumer that constructs `MultiYearCurve` by hand passes `fleet_pv_dc_kw`.
+
+**Task 970.** §9's report, with its Cost-Recovery Analysis block, is now rendered by `board_report.generate_finance_report` (`src/solar_challenge/board_report.py`), where the 0.5.0 tag renders it in `output.generate_finance_report`; the move leaves its text byte for byte as it was. A cost-recovery binding outside `'floor'`, `'rate_clamped_zero'` and `'infeasible_above_retail'` is now refused with a `ValueError` naming it, in the finance report and in `optimize configs`' config ranking, where the finance report rendered it as *✘ INFEASIBLE: required rate exceeds retail*; every solution `solve_cost_recovery_rate` returns carries one of those three, so no report of one changes. Readers who follow §9's Source to the code read it from `board_report.py` when they re-pin.
+
+**Task 973.** `finance run --assumptions` now drives the projection, the project economics and the cost-recovery solve from each mode's own `FinanceConfig`, as it already drove the bill (§3, *Override (spreadsheet-assumption) path*): `physics` clears any override, `spreadsheet` keeps the scenario's or sets 0.70, and `both` runs the two, one projection per mode. The 0.5.0 tag computes the economics and the solve once, on the scenario's `finance:` block whatever the mode, so its `physics` economics carry a scenario's YAML override and its `spreadsheet` economics ignore the 0.70 it bills at. Every table of the bill, project-economics and cost-recovery blocks, the per-home bill distribution and the outlay at the solved rate among them, is now one value column per mode, headed `Physics` or `Spreadsheet (<override>% self-consumption)` (§9); in those blocks the '## Householder Bill (Physics Assumptions)' and '## Householder Bill — Physics vs Spreadsheet Assumptions' headings, and the single 'Value' column, go. The flexibility-value block (`--flex-band`), which no mode changes, renders once with its own columns, as before. The figures that move are those of a mode the scenario's finance block is not on. On `scenarios/bristol-fin-calibration.yaml`, whose block sets 0.70, `--assumptions physics` over 1-7 June 2024 now reports a mean fleet surplus of £50,328 a year, min DSCR 3.95×, equity IRR 11.3% and a CBS net surplus at the solved rate of £138.60 a home, where it reported the spreadsheet's £53,486, 4.20×, 11.9% and £117.92; its payback, 9.0 years, and its solved rate, clamped to 0.00 p/kWh, do not move. On `scenarios/bristol-phase1.yaml`, which sets no override, `--assumptions spreadsheet` over the same week now solves at 2.65 p/kWh, with a mean fleet surplus of £37,129, min DSCR 4.22×, equity IRR 11.9% and payback in 9.0 years, where it reported physics' 2.14 p/kWh, £28,804, 3.37×, 8.7% and 11.0 years. Readers of the report read each figure's mode from its column's header when they re-pin.
+
+**Task 974.** The finance report renders the grid-services income beside the economics it changes (§8.1, §9): whenever the scenario's pricing books grid services, with or without `--flex-band`, a Grid Services Income section follows Project Economics, naming the model with its band and delivery baseline, or the flat rate; giving, when the run projects, the income each mode's projection booked at year 1 and at year N; and holding this window's fleet table, the same under every assumption, with the capacity-at-events rows that rendered only inside the flexibility-value block, the single-window rule now covering the per-event capacity row too. The flexibility-value block's grid-services row is now the booked income per battery home and per kW, under a headline of the band's time-shift plus it, where the 0.5.0 tag shows the consulting band whatever the scenario books; a scenario that prices no grid services shows the consulting figure there labelled not booked, and the block cites docs/flexibility-buildability.md where it printed "(PRD §6)". Re-read any flexibility-value headline taken from the 0.5.0 tag for a scenario that books grid services: its grid-services figure was the consulting band, not the scenario's income.
+
+**Task 1119.** `project_multi_year`, and so the cost-recovery solve, raises `ValueError` when its `simulate` returns, for an age t, a fleet that is not §4's F_t, the scenario's homes at age t: one whose `home_configs` hold another number of homes, or do not carry the scenario's batteries in order, state of health aside. Grid-services income is priced from F_t's batteries (§4), so such a fleet would misprice it, a flat rate at £0 for a fleet returned without batteries. The message names the age's fleet, `proj-age-<t>`, then both numbers of homes, or the first home whose batteries differ and both batteries; the 0.5.0 tag accepts such a fleet. When they re-pin, consumers whose injected `simulate` builds its own results return the batteries of the homes it is asked to simulate, as `FleetRunner.simulate` does.
+
+**Task 1270.** `optimize configs` gains `--assumptions`, `physics` (the default) or `spreadsheet`, and ranks every config, computes the configured-rate trade-off and runs the sensitivity panel under that mode's `FinanceConfig`, `finance.with_own_use_basis` of the scenario's, as `finance run` computes each mode (§3, *Override (spreadsheet-assumption) path*): `physics` clears any override, and `spreadsheet` keeps the scenario's or sets 0.70. `--assumptions both`, which names two assumptions, is refused as a configuration error before any simulation; run once per assumption. The 0.5.0 tag ranks under the scenario's `finance:` block as written, so on `scenarios/bristol-fin-calibration.yaml`, whose block sets 0.70, the ranking, the trade-off and the sensitivity panel are now physics' where the tag ranked under the override; `--assumptions spreadsheet` reproduces the tag's ranking. Scenarios that set no override rank as before. The ranking report now names its assumption on its first line, `Self-consumption assumption: **Physics**` or `Self-consumption assumption: **Spreadsheet (70% self-consumption)**`, above `## Cost-Recovery Rank`. Readers of the report read the assumption from that line when they re-pin, and pass `--assumptions spreadsheet` to rank a calibration scenario under its override.
+
 **Additive** — each entry (task N).
 
 ---
