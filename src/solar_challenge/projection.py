@@ -10,8 +10,8 @@ Provides:
   - ``YearPoint`` — frozen dataclass for one year in a multi-year projection.
   - ``MultiYearCurve`` — frozen dataclass for a full multi-year projection curve.
   - ``ProjectEconomics`` — frozen dataclass of project-level economics.
-  - ``FleetProjection`` — frozen dataclass of a fleet's projection curve and
-    its age-0 per-home summaries.
+  - ``FleetProjection`` — frozen dataclass of a fleet's projection curve, its
+    age-0 per-home summaries and its grid-services income at each simulated age.
   - ``MAX_NODES`` — cap on the number of ages a projection interpolates through.
   - ``fewest_simulated_ages`` — the fewest ages a projection over an asset life
     simulates.
@@ -237,7 +237,7 @@ class MultiYearCurve:
 
 @dataclass(frozen=True)
 class FleetProjection:
-    """A fleet's multi-year projection, and each home's summary of the fleet simulated at age 0."""
+    """A fleet's multi-year projection, each home's summary of the fleet simulated at age 0, and the grid-services income priced at every simulated age."""
 
     curve: MultiYearCurve
     """The projection over the asset life."""
