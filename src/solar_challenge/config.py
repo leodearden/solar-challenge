@@ -21,6 +21,7 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
+    Sequence,
     TypeVar,
     Union,
 )
@@ -45,7 +46,7 @@ from solar_challenge.fleet_distribution import (
 from solar_challenge.gridservices import GridServicesBand
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
-from solar_challenge.number_fields import as_finite_float
+from solar_challenge.number_fields import as_finite_float, as_finite_floats
 from solar_challenge.scenario_blocks import (
     HOME_BLOCK_KEYS,
     RETIRED_DISPATCH_STRATEGY_KEY,
@@ -844,9 +845,31 @@ def fleet_of(scenario: ScenarioConfig, *, name: Optional[str] = None) -> FleetCo
     return FleetConfig(homes=scenario.simulated_homes(), name=scenario.name if name is None else name)
 
 
-def sweep_point_fleet(param_name: str, value: float, scenario: ScenarioConfig) -> FleetConfig:
-    """The fleet of the sweep point at *value*: the fleet *scenario* simulates, named after the swept parameter *param_name* and the value."""
-    return fleet_of(scenario, name=f"{param_name}={value:.4f}")
+_LONGEST_FLOAT_REPR = 24
+"""The most characters repr gives a float: a sign, 17 significant digits, a point and a five-character exponent, as in repr(-2.2250738585072014e-308)."""
+
+
+def sweep_value_labels(values: Sequence[float]) -> tuple[str, ...]:
+    """Each of a sweep's *values* as the text naming its point: at four decimals, or at the fewest more at which no two distinct values share a text; or each value's repr where such a text would be longer than any float's repr, so every label fits in a file name.
+
+    Raises:
+        ConfigurationError: If a value is not a finite number, naming its index and the value.
+    """
+    numbers = as_finite_floats(values, "values")
+    distinct = len(set(numbers))
+    decimals = 4
+    while True:
+        labels = tuple(f"{number:.{decimals}f}" for number in numbers)
+        if max(map(len, labels), default=0) > _LONGEST_FLOAT_REPR:
+            return tuple(repr(number) for number in numbers)
+        if len(set(labels)) == distinct:
+            return labels
+        decimals += 1
+
+
+def sweep_point_fleet(param_name: str, value_label: str, scenario: ScenarioConfig) -> FleetConfig:
+    """The fleet of a sweep point: the fleet *scenario* simulates, named after the swept parameter *param_name* and *value_label*, sweep_value_labels' text for the point."""
+    return fleet_of(scenario, name=f"{param_name}={value_label}")
 
 
 def parse_fleet_config(document: object) -> FleetConfig:
@@ -949,7 +972,8 @@ def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig
 
     Each fleet is the sweep_point_fleet of the point's scenario, as parse_sweep_scenarios builds
     it, named '<placement>.multiplier=<value>' after the swept_parameter_path of the sweep's
-    field, e.g. 'battery.capacity_kwh.multiplier=0.1000'.
+    field, the value at four decimals or as many more as sweep_value_labels needs to tell the
+    points apart, e.g. 'battery.capacity_kwh.multiplier=0.1000'.
 
     Returns:
         (sweep value, the point's FleetConfig) for each sweep point, in sweep order
@@ -958,7 +982,11 @@ def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig
         ConfigurationError: as parse_sweep_scenarios refuses the document
     """
     placement, points = _swept_scenarios(document)
-    return [(value, sweep_point_fleet(swept_parameter_path(placement), value, scenario)) for value, scenario in points]
+    labels = sweep_value_labels([value for value, _ in points])
+    return [
+        (value, sweep_point_fleet(swept_parameter_path(placement), label, scenario))
+        for label, (value, scenario) in zip(labels, points, strict=True)
+    ]
 
 
 def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:

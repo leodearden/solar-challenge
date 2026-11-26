@@ -22,6 +22,7 @@ from solar_challenge.scenario_knobs import (
     FLAT_PRICING_REMEDY,
     KNOBS,
     Knob,
+    KnobTarget,
     flat_rate_pricing,
     is_knob_name,
     knob_listing,
@@ -116,7 +117,7 @@ _PRICING_TARGETS = {"grid_services_income_per_kw_per_year_gbp": "finance.grid_se
 _FINANCE_FIELD_NAMES = frozenset(field.name for field in dataclasses.fields(FinanceConfig))
 
 
-def _target(knob: Knob) -> re.Pattern[str]:
+def _target_paths(knob: Knob) -> re.Pattern[str]:
     """The paths, of a scenario's leaves, that *knob* may change."""
     if knob.name in _HOME_TARGETS:
         return re.compile(rf"(home|homes\[\d+\])\.{re.escape(_HOME_TARGETS[knob.name])}([.\[].*)?")
@@ -136,6 +137,12 @@ def _value_for(knob: Knob) -> float:
 
 _FORMS: tuple[Callable[[], ScenarioConfig], ...] = (_fleet, _single_home)
 
+_TARGET_PATHS = {
+    KnobTarget.HOMES: re.compile(r"(home|homes\[\d+\])\..+"),
+    KnobTarget.SEG_RATE: re.compile(r"seg_tariff_pence_per_kwh"),
+    KnobTarget.FINANCE: re.compile(r"finance\..+"),
+}
+
 
 class TestEachKnobIsOnePureFormPreservingEdit:
     """Every knob's apply returns a new scenario of the form it was given, changing only the knob's target."""
@@ -145,7 +152,7 @@ class TestEachKnobIsOnePureFormPreservingEdit:
     def test_apply_changes_only_its_target_and_keeps_the_form(
         self, knob: Knob, form: Callable[[], ScenarioConfig]
     ) -> None:
-        """The argument is unchanged, the form and home count are kept, the leaves changed are the target's, and a second apply changes nothing."""
+        """The argument is unchanged, the form and home count are kept, the leaves changed are the target's and lie in the part knob.target names, and a second apply changes nothing."""
         scenario = form()
         before = copy.deepcopy(scenario)
         value = _value_for(knob)
@@ -156,9 +163,10 @@ class TestEachKnobIsOnePureFormPreservingEdit:
         assert (result.home is None) == (scenario.home is None)
         assert len(result.homes) == len(scenario.homes)
         changed = _changed_paths(scenario, result)
-        target = _target(knob)
+        target = _target_paths(knob)
         assert changed, f"{knob.name} at {value} changed nothing"
         assert {path for path in changed if not target.fullmatch(path)} == set()
+        assert {path for path in changed if not _TARGET_PATHS[knob.target].fullmatch(path)} == set()
         assert knob.apply(result, value) == result
 
     def test_the_seg_knob_refuses_a_rate_a_home_carries_another_of(self) -> None:
@@ -176,6 +184,20 @@ class TestEachKnobIsOnePureFormPreservingEdit:
 
         assert applied.window() == scenario.window()
         assert applied.get_location() == scenario.get_location()
+
+
+class TestEachKnobDeclaresWhatItEdits:
+    """Each knob's target names the part of a scenario its apply edits: each stored home, the SEG rate or the finance block."""
+
+    def test_the_home_knobs_are_the_five_install_load_and_degradation_settings(self) -> None:
+        """The HOMES knobs are the install, load and degradation settings, the SEG knob alone sets the SEG rate, and every other knob sets finance."""
+        by_target = {
+            target: {name for name, knob in KNOBS.items() if knob.target is target} for target in KnobTarget
+        }
+
+        assert by_target[KnobTarget.HOMES] == set(_HOME_TARGETS)
+        assert by_target[KnobTarget.SEG_RATE] == {"seg_tariff_pence_per_kwh"}
+        assert by_target[KnobTarget.FINANCE] == set(KNOBS) - set(_HOME_TARGETS) - {"seg_tariff_pence_per_kwh"}
 
 
 class TestTheBatteryKnob:

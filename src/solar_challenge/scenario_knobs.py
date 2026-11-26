@@ -7,6 +7,7 @@ import dataclasses
 import typing
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
+from enum import Enum
 from types import MappingProxyType
 from typing import Optional
 
@@ -19,6 +20,14 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float
 
 
+class KnobTarget(Enum):
+    """The part of a scenario a knob's edit sets."""
+
+    HOMES = "each stored home"
+    SEG_RATE = "the scenario's SEG rate"
+    FINANCE = "the scenario's finance block"
+
+
 @dataclass(frozen=True)
 class Knob:
     """A setting of a scenario that a sweep or a sensitivity axis varies.
@@ -29,10 +38,13 @@ class Knob:
         apply: The knob's one edit, pure: a new scenario with the setting at the
             value given, in the form (home or homes) of the scenario given, which
             it leaves unchanged.
+        target: The part of a scenario apply edits; a consumer that reports only
+            simulated energy sweeps only HOMES knobs.
     """
 
     name: str
     apply: Callable[[ScenarioConfig, float], ScenarioConfig]
+    target: KnobTarget
 
 
 def _home_knob(name: str, edit: Callable[[HomeConfig, float], HomeConfig]) -> Knob:
@@ -41,7 +53,7 @@ def _home_knob(name: str, edit: Callable[[HomeConfig, float], HomeConfig]) -> Kn
     def apply(scenario: ScenarioConfig, value: float) -> ScenarioConfig:
         return scenario.map_homes(lambda home: edit(home, value))
 
-    return Knob(name, apply)
+    return Knob(name, apply, target=KnobTarget.HOMES)
 
 
 def _with_pv_capacity(home: HomeConfig, kw: float) -> HomeConfig:
@@ -100,7 +112,7 @@ def _finance_knob(field: str) -> Knob:
         finance = _required_finance(scenario, field, field)
         return replace(scenario, finance=replace(finance, **{field: value}))  # type: ignore[arg-type]  # debt: ticket tkt_0RXDDPSS2PASXMGCK3XCD1FW0A
 
-    return Knob(field, apply)
+    return Knob(field, apply, target=KnobTarget.FINANCE)
 
 
 _FLAT_GRID_SERVICES_KNOB = "grid_services_income_per_kw_per_year_gbp"
@@ -181,8 +193,8 @@ KNOBS, ALIASES = _registry(
         _home_knob("battery_capacity_kwh", _with_battery_capacity),
         _home_knob("annual_consumption_kwh", _with_annual_consumption),
         _home_knob("degradation_rate_per_year", _with_pv_degradation),
-        Knob("seg_tariff_pence_per_kwh", _with_seg_rate),
-        Knob(_FLAT_GRID_SERVICES_KNOB, _with_flat_grid_services),
+        Knob("seg_tariff_pence_per_kwh", _with_seg_rate, target=KnobTarget.SEG_RATE),
+        Knob(_FLAT_GRID_SERVICES_KNOB, _with_flat_grid_services, target=KnobTarget.FINANCE),
         *(_finance_knob(field) for field in _real_number_finance_fields()),
     ),
     {

@@ -109,7 +109,7 @@ Built on top of simulation results; this is the board-facing decision layer:
 - `finance.py` — Per-householder bills, fleet bill distributions, the home ledger and cash-flow maths
 - `projection.py` — the multi-year projection, project economics and cost-recovery solve, above finance (`scenario_fleet` resolves a scenario's homes and window once)
 - `optimize.py` — Discrete install-config sweeps ranked by cost recovery
-- `scenario_knobs.py` — the settings a sweep or a sensitivity axis varies: each a named `Knob` whose `apply` is its one pure `ScenarioConfig` edit (`KNOBS`), one alias table (`ALIASES`) and `knob_named`, which resolves either; above `config`, below `optimize` and the CLI
+- `scenario_knobs.py` — the settings a sweep or a sensitivity axis varies: each a named `Knob` whose `apply` is its one pure `ScenarioConfig` edit and whose `target` declares which part of the scenario it edits (`KNOBS`), one alias table (`ALIASES`) and `knob_named`, which resolves either; above `config`, below `optimize` and the CLI
 - `flex.py` / `gridservices.py` — Flexibility value model and grid-services event-window pricing
 - `community.py` — Post-hoc peer-to-peer community netting over `FleetResults` (homes are not re-simulated)
 - `board_report.py` — the board's markdown reports, `finance run`'s finance report and `optimize configs`' config ranking, with one binding-label table and one formatter set
@@ -127,7 +127,7 @@ The scenario grammar is three modules that import in one direction, at any scope
 
 Typer-based; subcommand groups are registered in `cli/main.py` (run `solar-challenge --help` for the authoritative list).
 
-`fleet sweep` sweeps one axis. `--param NAME` resolves NAME through `scenario_knobs`' registry (`knob_named`) first, then as the document's `${NAME}`, refusing a name with both readings or neither; without `--param`, it sweeps the YAML sweep at a `fleet_distribution.SWEEP_PLACEMENTS` field. `SweepSpec` generates every axis's points, each named `<axis label>=<value>` and written to `<axis label>_<value>.csv`.
+`fleet sweep` sweeps one axis. `--param NAME` resolves NAME through `scenario_knobs`' registry (`knob_named`) first, then as the document's `${NAME}`, refusing a name with both readings or neither, and a knob whose `target` is not `KnobTarget.HOMES`, since every point would simulate the same fleet; without `--param`, it sweeps the YAML sweep at a `fleet_distribution.SWEEP_PLACEMENTS` field. `SweepSpec` generates every axis's points, each named `<axis label>=<value>` and written to `<axis label>_<value>.csv`, the value at four decimals, or the fewest more that tell the points apart (`config.sweep_value_labels`).
 
 ### Output & Validation
 

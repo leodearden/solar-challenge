@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`fleet sweep`, on every sweep path (knob, variable and YAML), exports one CSV per point named after the swept parameter and a summary of every point, and creates no output directory when it refuses its period; on the --param path, each point simulates where its substituted location: block puts it, and a knob sweep reads each placeholder of its document at its default, refusing one without a default."""
+"""`fleet sweep`, on every sweep path (knob, variable and YAML), exports one CSV per point named after the swept parameter and a summary of every point, and creates no output directory when it refuses its period; on the --param path, each point simulates where its substituted location: block puts it, and a knob sweep reads each placeholder of its document at its default, refusing one without a default; a knob that edits no home is refused, and the help lists the knobs it sweeps."""
 
 from pathlib import Path
 
@@ -30,6 +30,11 @@ _SUMMARY_COLUMNS = [
     "grid_import_kwh",
     "grid_export_kwh",
 ]
+
+_SWEPT_KNOBS = (
+    "the knobs fleet sweep sweeps, each with its aliases: pv_capacity_kw, inverter_capacity_kw, "
+    "battery_capacity_kwh, annual_consumption_kwh, degradation_rate_per_year (degradation)"
+)
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
 bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
@@ -175,15 +180,81 @@ def test_the_progress_bar_counts_every_home_of_every_point(
 
 
 def test_a_knob_given_by_an_alias_labels_its_points_by_the_knobs_canonical_name() -> None:
-    result = _sweep(2.0, "--param", "seg", "--min", "5", "--max", "15", "--steps", "2", "--mode", "linear")
+    result = _sweep(
+        2.0, "--param", "degradation", "--min", "0.005", "--max", "0.01", "--steps", "2", "--mode", "linear"
+    )
 
     assert result.exit_code == 0, result.output
     assert sorted(path.name for path in Path("out").iterdir()) == [
-        "seg_tariff_pence_per_kwh_15.0000.csv",
-        "seg_tariff_pence_per_kwh_5.0000.csv",
+        "degradation_rate_per_year_0.0050.csv",
+        "degradation_rate_per_year_0.0100.csv",
         "sweep_summary.csv",
     ]
-    assert list(pd.read_csv(Path("out", "sweep_summary.csv"))["param"]) == ["seg_tariff_pence_per_kwh"] * 2
+    assert list(pd.read_csv(Path("out", "sweep_summary.csv"))["param"]) == ["degradation_rate_per_year"] * 2
+
+
+def test_points_that_share_a_four_decimal_label_are_each_exported_and_listed_under_a_wider_one() -> None:
+    """Three degradation rates 2.5e-5 apart all read 0.0001 at four decimals, so each point is labelled at five."""
+    result = _sweep(
+        2.0, "--param", "degradation", "--min", "0.0001", "--max", "0.00015", "--steps", "3", "--mode", "linear"
+    )
+
+    body_rows = [line for line in result.stdout.splitlines() if line.startswith("│")]
+    assert result.exit_code == 0, result.output
+    assert sorted(path.name for path in Path("out").iterdir()) == [
+        "degradation_rate_per_year_0.00010.csv",
+        "degradation_rate_per_year_0.00013.csv",
+        "degradation_rate_per_year_0.00015.csv",
+        "sweep_summary.csv",
+    ]
+    assert len(pd.read_csv(Path("out", "sweep_summary.csv"))) == 3
+    assert [row.split("│")[1].strip() for row in body_rows] == ["0.00010", "0.00013", "0.00015"]
+
+
+@pytest.mark.parametrize(
+    ("name", "canonical"),
+    [
+        ("battery_cost", "battery_cost_per_kwh_gbp"),
+        ("grant_gbp", "grant_gbp"),
+        ("retained_floor", "retained_cash_floor_per_home_per_year_gbp"),
+        ("self_consumption_override", "self_consumption_override"),
+        ("own_use_rate_pence_per_kwh", "own_use_rate_pence_per_kwh"),
+        ("seg", "seg_tariff_pence_per_kwh"),
+        ("grid_services", "grid_services_income_per_kw_per_year_gbp"),
+    ],
+)
+def test_a_knob_that_edits_no_home_is_refused_naming_it_and_the_knobs_it_sweeps(name: str, canonical: str) -> None:
+    """Such a knob leaves every home's simulation as it was, so every point would simulate the same fleet."""
+    result = _sweep(2.0, "--param", name, "--min", "0.1", "--max", "0.2", "--steps", "2", "--mode", "linear")
+
+    refusal = " ".join(result.stderr.split())
+    assert result.exit_code == 1
+    assert f"--param '{name}' names the knob '{canonical}', which sets" in refusal
+    assert f"and no home's simulation, so every point would simulate the same fleet; {_SWEPT_KNOBS}" in refusal
+    assert not Path("out").exists()
+
+
+def test_the_param_help_lists_only_the_knobs_it_sweeps() -> None:
+    result = runner.invoke(app, ["fleet", "sweep", "--help"], catch_exceptions=False)
+
+    text = table_text(result.stdout)
+    assert result.exit_code == 0
+    assert _SWEPT_KNOBS in text
+    assert [
+        name
+        for name in (
+            "seg_tariff_pence_per_kwh",
+            "battery_cost_per_kwh_gbp",
+            "grant_gbp",
+            "retained_cash_floor_per_home_per_year_gbp",
+            "grid_services_income_per_kw_per_year_gbp",
+            "own_use_rate_pence_per_kwh",
+            "self_consumption_override",
+            "battery_cost",
+            "retained_floor",
+        )
+        if name in text
+    ] == []
 
 
 def _battery_ratio_fleet(multiplier: object) -> dict[str, object]:

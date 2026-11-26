@@ -42,6 +42,7 @@ from solar_challenge.config import (
     parse_sweep_scenarios,
     substitute_config_variables,
     sweep_point_fleet,
+    sweep_value_labels,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
@@ -51,9 +52,14 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec, swept_parameter_path
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.scenario_knobs import Knob, is_knob_name, knob_listing, knob_named
+from solar_challenge.scenario_knobs import KNOBS, Knob, KnobTarget, is_knob_name, knob_named, names_with_aliases
 
 app = typer.Typer(help="Fleet simulation commands")
+
+_HOME_KNOBS = tuple(knob for knob in KNOBS.values() if knob.target is KnobTarget.HOMES)
+
+_SWEPT_KNOBS = f"the knobs fleet sweep sweeps, each with its aliases: {names_with_aliases(_HOME_KNOBS)}"
+"""The clause naming every knob fleet sweep sweeps, those that edit homes, that its --param help and refusals end with."""
 
 
 def _export_fleet_results(results: FleetResults, output: Path) -> None:
@@ -210,7 +216,8 @@ def sweep(
             "--param",
             help=(
                 "What the sweep varies: a knob, by its name or an alias, else NAME, the ${NAME} "
-                "placeholders of the document; a name with both readings is refused; " + knob_listing()
+                "placeholders of the document; a name with both readings is refused, and so is a knob "
+                "that edits no home; " + _SWEPT_KNOBS
             ),
         ),
     ] = None,
@@ -261,7 +268,9 @@ def sweep(
        knob registry first, by a knob's name or an alias, and then as the
        NAME of the ${NAME} or ${NAME:default} placeholders of the config,
        each the whole value of a key; the sweep refuses a --param with both
-       readings or neither. A knob sweep reads the config once, each
+       readings or neither. It also refuses a knob that edits no home's
+       simulation, the SEG rate or a finance setting, because every point
+       would simulate the same fleet. A knob sweep reads the config once, each
        placeholder at its default, and sets the knob to each point's value,
        from --min to --max. A variable sweep replaces every placeholder of
        NAME with the point's value; a placeholder --param does not name
@@ -270,7 +279,9 @@ def sweep(
 
     Each point is labelled <axis label>=<value> and written to
     <axis label>_<value>.csv: the axis label is the knob's canonical name,
-    the variable's NAME, or the path of the YAML sweep's field.
+    the variable's NAME, or the path of the YAML sweep's field, and the
+    value is at four decimals, or more where two points would otherwise
+    share a label.
 
     Example YAML-defined sweep:
 
@@ -320,7 +331,11 @@ def sweep(
         f"{source} sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
         f"({sweep_spec.steps} steps, {sweep_spec.mode})"
     )
-    fleets = [sweep_point_fleet(param_name, value, scenario) for value, scenario in sweep_points]
+    labels = sweep_value_labels([value for value, _ in sweep_points])
+    fleets = [
+        sweep_point_fleet(param_name, label, scenario)
+        for label, (_, scenario) in zip(labels, sweep_points, strict=True)
+    ]
 
     # Create output directory if needed
     if output_dir is not None:
@@ -343,7 +358,7 @@ def sweep(
         ):
             sweep_results[index] = fleet_results
             if output_dir is not None:
-                _export_sweep_point(output_dir, param_name, sweep_points[index][0], fleet_results)
+                _export_sweep_point(output_dir, param_name, labels[index], fleet_results)
 
     results_summary = [
         _sweep_summary_row(param_name, sweep_value, sweep_results[index])
@@ -351,7 +366,7 @@ def sweep(
     ]
 
     # Print summary table
-    _print_sweep_summary(results_summary)
+    _print_sweep_summary(labels, results_summary)
 
     # Save summary CSV
     if output_dir is not None:
@@ -363,7 +378,7 @@ def sweep(
 
 @dataclass(frozen=True)
 class _KnobAxis:
-    """A --param sweep of a knob: each point is the document's one scenario with the knob set to the point's value."""
+    """A --param sweep of a knob that edits homes: each point is the document's one scenario with the knob set to the point's value."""
 
     knob: Knob
 
@@ -421,7 +436,8 @@ def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
 
     Raises:
         ConfigurationError: If *name* names both a knob and a variable of *document*, or
-            neither, listing the document's variables and the knobs.
+            neither, listing the document's variables and the knobs fleet sweep sweeps;
+            or if it names a knob that edits no home.
     """
     variables = config_variables(document)
     is_knob = is_knob_name(name)
@@ -432,13 +448,30 @@ def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
             f"${{{name}}}; rename the variable to sweep it, or remove it to sweep the knob"
         )
     if is_knob:
-        return _KnobAxis(knob_named(name))
+        return _KnobAxis(_home_knob_named(name))
     if is_variable:
         return _VariableAxis(name)
     held = f"its variables: {', '.join(repr(each) for each in variables)}" if variables else "it holds no variables"
     raise ConfigurationError(
-        f"--param {name!r} names no knob and no variable of the document; {held}; {knob_listing()}"
+        f"--param {name!r} names no knob and no variable of the document; {held}; {_SWEPT_KNOBS}"
     )
+
+
+def _home_knob_named(name: str) -> Knob:
+    """The knob *name* names, which must be one of _HOME_KNOBS, the knobs fleet sweep sweeps and lists.
+
+    Raises:
+        ConfigurationError: If the knob edits no home, so every point would
+            simulate the same fleet, naming it, what it sets and the knobs
+            fleet sweep sweeps.
+    """
+    knob = knob_named(name)
+    if knob not in _HOME_KNOBS:
+        raise ConfigurationError(
+            f"--param {name!r} names the knob {knob.name!r}, which sets {knob.target.value} and no home's "
+            f"simulation, so every point would simulate the same fleet; {_SWEPT_KNOBS}"
+        )
+    return knob
 
 
 def _yaml_sweep(
@@ -477,9 +510,9 @@ def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:
     return homes_done
 
 
-def _export_sweep_point(output_dir: Path, param_name: str, sweep_value: float, fleet_results: FleetResults) -> None:
-    """Export a completed sweep point to its CSV under output_dir."""
-    _export_fleet_results(fleet_results, output_dir / f"{param_name}_{sweep_value:.4f}.csv")
+def _export_sweep_point(output_dir: Path, param_name: str, value_label: str, fleet_results: FleetResults) -> None:
+    """Export a completed sweep point, labelled value_label, to its CSV under output_dir."""
+    _export_fleet_results(fleet_results, output_dir / f"{param_name}_{value_label}.csv")
 
 
 def _sweep_summary_row(
@@ -498,8 +531,8 @@ def _sweep_summary_row(
     }
 
 
-def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
-    """Print sweep summary table."""
+def _print_sweep_summary(labels: Iterable[str], results: list[dict[str, Any]]) -> None:
+    """Print sweep summary table: each point's row of results under its label."""
     table = Table(title="Sweep Results Summary")
     table.add_column("Value", justify="right")
     table.add_column("Self-Consumption", justify="right")
@@ -507,9 +540,9 @@ def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
     table.add_column("Import (kWh)", justify="right")
     table.add_column("Export (kWh)", justify="right")
 
-    for r in results:
+    for label, r in zip(labels, results, strict=True):
         table.add_row(
-            f"{r['sweep_value']:.4f}",
+            label,
             f"{r['self_consumption_ratio']:.1%}",
             f"{r['total_generation_kwh']:.1f}",
             f"{r['grid_import_kwh']:.1f}",

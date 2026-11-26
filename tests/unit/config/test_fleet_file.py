@@ -21,6 +21,7 @@ from solar_challenge.config import (
     parse_sweep_fleet_configs,
     parse_sweep_scenarios,
     sweep_point_fleet,
+    sweep_value_labels,
 )
 from solar_challenge.dispatch import GridChargeConfig, SelfConsumptionStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
@@ -785,6 +786,48 @@ class TestParseSweepScenarios:
             assert scenario == load_scenario(fixed_capacity_file)
 
 
+class TestSweepValueLabels:
+    """sweep_value_labels names each point of a sweep at four decimals, or at the fewest more that tell its distinct values apart."""
+
+    def test_values_four_decimals_tell_apart_are_labelled_at_four(self) -> None:
+        assert sweep_value_labels((5.0, 10.0)) == ("5.0000", "10.0000")
+
+    def test_values_four_decimals_do_not_tell_apart_are_labelled_at_the_fewest_more_that_do(self) -> None:
+        assert sweep_value_labels((0.0001, 0.000125, 0.00015)) == ("0.00010", "0.00013", "0.00015")
+
+    def test_a_fine_degradation_sweep_labels_each_point_apart_and_near_its_value(self) -> None:
+        """A 41-step sweep from 0.004 to 0.006 steps by 5e-5, which four decimals cannot tell apart."""
+        values = SweepSpec(min=0.004, max=0.006, steps=41, mode="linear").get_values()
+
+        labels = sweep_value_labels(values)
+
+        assert len(set(labels)) == 41
+        assert [
+            (label, value) for label, value in zip(labels, values, strict=True) if abs(float(label) - value) > 5e-6
+        ] == []
+
+    def test_equal_values_share_a_label(self) -> None:
+        assert sweep_value_labels((1.0, 1.0)) == ("1.0000", "1.0000")
+
+    @pytest.mark.parametrize(
+        ("values", "labels"),
+        [
+            pytest.param((1e-300, 2e-300), ("1e-300", "2e-300"), id="tiny"),
+            pytest.param((1e30, 2e30), ("1e+30", "2e+30"), id="huge"),
+        ],
+    )
+    def test_values_whose_fixed_point_labels_would_outrun_a_floats_repr_are_labelled_by_repr(
+        self, values: tuple[float, ...], labels: tuple[str, ...]
+    ) -> None:
+        """No label is longer than a float's repr, so each fits in the CSV file name fleet sweep writes."""
+        assert sweep_value_labels(values) == labels
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"])
+    def test_a_value_that_is_not_finite_is_refused_naming_it(self, value: float) -> None:
+        with pytest.raises(ConfigurationError, match=re.escape(f"values[1] must be a finite number, got {value!r}")):
+            sweep_value_labels((1.0, value, float("nan")))
+
+
 class TestParseSweepFleetConfigs:
     """parse_sweep_fleet_configs builds each point of a fleet file's sweep as load_fleet_config builds that point's file."""
 
@@ -822,13 +865,26 @@ class TestParseSweepFleetConfigs:
         fleets = parse_sweep_fleet_configs(document)
 
         swept_parameter = swept_parameter_path(FleetFieldPath("battery", "capacity_kwh"))
+        points = parse_sweep_scenarios(document)
         assert fleets == [
-            (value, sweep_point_fleet(swept_parameter, value, scenario))
-            for value, scenario in parse_sweep_scenarios(document)
+            (value, sweep_point_fleet(swept_parameter, label, scenario))
+            for label, (value, scenario) in zip(sweep_value_labels([v for v, _ in points]), points, strict=True)
         ]
         assert [fleet.name for _, fleet in fleets] == [
             "battery.capacity_kwh.multiplier=1.2500",
             "battery.capacity_kwh.multiplier=2.5000",
+        ]
+
+    def test_points_closer_than_four_decimals_are_named_at_the_fewest_more_that_tell_them_apart(self) -> None:
+        """Three points 5e-5 apart would share the name ...=1.0000 at four decimals, so each is named at five."""
+        sweep = {"type": "sweep", "min": 1.0, "max": 1.0001, "steps": 3, "mode": "linear"}
+
+        fleets = parse_sweep_fleet_configs(_fleet_file(_proportional_to_pv(sweep), tariff=_ECONOMY_7))
+
+        assert [fleet.name for _, fleet in fleets] == [
+            "battery.capacity_kwh.multiplier=1.00000",
+            "battery.capacity_kwh.multiplier=1.00005",
+            "battery.capacity_kwh.multiplier=1.00010",
         ]
 
     @pytest.mark.parametrize(

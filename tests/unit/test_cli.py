@@ -1409,14 +1409,15 @@ class TestFleetSweepRefusesAFileItCannotSweep:
                 "    capacity_kwh: {type: proportional_to, source: pv.capacity_kw, multiplier: '${BATTERY_RATIO:1.0}'}\n",
                 ("--param", "BATTERY_RATI0", "--min", "0.5", "--max", "2", "--steps", "2"),
                 "--param 'BATTERY_RATI0' names no knob and no variable of the document; "
-                "its variables: 'BATTERY_RATIO'; the knobs, each with its aliases: pv_capacity_kw, inverter_capacity_kw",
+                "its variables: 'BATTERY_RATIO'; "
+                "the knobs fleet sweep sweeps, each with its aliases: pv_capacity_kw, inverter_capacity_kw",
                 id="param-sweep-of-a-variable-no-placeholder-names",
             ),
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
                 ("--param", "battery_kwh", "--min", "5", "--max", "10", "--steps", "2"),
                 "--param 'battery_kwh' names no knob and no variable of the document; "
-                "it holds no variables; the knobs, each with its aliases: pv_capacity_kw",
+                "it holds no variables; the knobs fleet sweep sweeps, each with its aliases: pv_capacity_kw",
                 id="name-that-is-neither-in-a-document-without-variables",
             ),
             pytest.param(
@@ -1434,11 +1435,11 @@ class TestFleetSweepRefusesAFileItCannotSweep:
                 id="alias-that-is-also-a-variable",
             ),
             pytest.param(
-                "name: Street\nfleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
                 ("--param", "battery_cost", "--min", "100", "--max", "200", "--steps", "2"),
-                "Knob 'battery_cost_per_kwh_gbp' sets finance.battery_cost_per_kwh_gbp, "
-                "but scenario 'Street' has no finance block",
-                id="finance-knob-of-a-file-without-finance",
+                "--param 'battery_cost' names the knob 'battery_cost_per_kwh_gbp', "
+                "which sets the scenario's finance block and no home's simulation",
+                id="knob-that-edits-no-home",
             ),
         ],
     )
