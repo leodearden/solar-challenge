@@ -13,22 +13,12 @@ the web tests it needs the web extra.
 """
 
 import dataclasses
-from types import ModuleType
 
 import pytest
 
-from tests._package_modules import package_modules
+from tests._package_modules import module_level_dataclasses, package_modules
 
 pytest.importorskip("flask")
-
-
-def _module_level_dataclasses(module: ModuleType) -> list[type]:
-    """Return the dataclasses *module* defines at its top level."""
-    return [
-        value
-        for value in vars(module).values()
-        if isinstance(value, type) and value.__module__ == module.__name__ and dataclasses.is_dataclass(value)
-    ]
 
 
 def _is_hashable(value: object) -> bool:
@@ -45,7 +35,7 @@ def _unhashable_field_defaults() -> dict[str, str]:
     return {
         f"{module.__name__}.{cls.__qualname__}.{field.name}": repr(field.default)
         for module in package_modules()
-        for cls in _module_level_dataclasses(module)
+        for cls in module_level_dataclasses(module)
         for field in dataclasses.fields(cls)
         if field.default is not dataclasses.MISSING and not _is_hashable(field.default)
     }
