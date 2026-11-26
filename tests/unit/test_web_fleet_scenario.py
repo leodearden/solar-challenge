@@ -293,6 +293,27 @@ class TestParseFleetFormRefusalOrder:
             parse_fleet_form({**ungeneratable, key: value})
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
+    def test_a_fleet_above_the_dashboards_bound_is_refused_before_any_home_is_generated(self) -> None:
+        """A fleet whose pv capacity of 0 only the generation of its homes refuses gets the dashboard's bound on its size, so a fleet the page cannot run costs no home generation."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_form({**_FLEET_FORM_WITHOUT_A_POOL, "n_homes": MAX_FLEET_HOMES + 1, "pv": {"capacity_kw": 0}})
+
+        assert str(refusal.value) == f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
+
+
+#: The refused tariff and SEG parse_fleet_form's scenario reader refuses before the fleet_distribution block, each with its block reader's reading of it.
+_A_REFUSED_TARIFF_OR_SEG_WITH_ITS_READERS_READING = [
+    pytest.param("tariff", {"type": "flat_rate"}, lambda: parse_tariff_config({"type": "flat_rate"}), id="tariff"),
+    pytest.param("seg", {}, lambda: parse_seg_rate({}), id="seg"),
+]
+
+#: A battery capacity of a sweep multiplier of three points times each home's PV capacity.
+_A_SWEPT_BATTERY_CAPACITY: dict[str, Any] = {
+    "type": "proportional_to",
+    "source": "pv.capacity_kw",
+    "multiplier": {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3},
+}
+
 
 class TestParseFleetFormReadsItsDocumentThroughParseScenario:
     """parse_fleet_form's run is its scenario document as config.parse_scenario reads it, so the simulate endpoint and the export are one reading."""
@@ -333,6 +354,26 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
         with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
             parse_fleet_form(form)
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+
+    @pytest.mark.parametrize(("key", "value", "read_block"), _A_REFUSED_TARIFF_OR_SEG_WITH_ITS_READERS_READING)
+    def test_a_refused_tariff_or_seg_is_refused_before_the_dashboards_bound_on_the_fleet(
+        self, key: str, value: Any, read_block: Callable[[], object]
+    ) -> None:
+        """The reader reads the tariff and SEG before the fleet, so a fleet the dashboard cannot run gets the earlier block's refusal."""
+        form = {**_FLEET_FORM_WITHOUT_A_POOL, "n_homes": MAX_FLEET_HOMES + 1, key: value}
+        with pytest.raises(ConfigurationError) as expected:
+            read_block()
+        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+            parse_fleet_form(form)
+        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+
+    def test_a_fleet_that_sweeps_is_refused_as_parse_scenario_refuses_its_document(self) -> None:
+        """A sweep defines one fleet per point, which 'fleet sweep' runs, so the form's one fleet is refused naming the swept field."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_form({**_FLEET_FORM, "battery": {"capacity_kwh": _A_SWEPT_BATTERY_CAPACITY}})
+
+        assert "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points" in str(refusal.value)
+        assert "'fleet sweep'" in str(refusal.value)
 
 
 #: Each component's fixed value no home may hold (P3), with the refusal parse_fleet_form gives a fleet form fixing it.
