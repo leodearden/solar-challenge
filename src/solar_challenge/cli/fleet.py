@@ -51,9 +51,14 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec, swept_parameter_path
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.scenario_knobs import Knob, is_knob_name, knob_listing, knob_named
+from solar_challenge.scenario_knobs import KNOBS, Knob, KnobTarget, is_knob_name, knob_named, names_with_aliases
 
 app = typer.Typer(help="Fleet simulation commands")
+
+_HOME_KNOBS = tuple(knob for knob in KNOBS.values() if knob.target is KnobTarget.HOMES)
+
+_SWEPT_KNOBS = f"the knobs fleet sweep sweeps, each with its aliases: {names_with_aliases(_HOME_KNOBS)}"
+"""The clause naming every knob fleet sweep sweeps, those that edit homes, that its --param help and refusals end with."""
 
 
 def _export_fleet_results(results: FleetResults, output: Path) -> None:
@@ -210,7 +215,8 @@ def sweep(
             "--param",
             help=(
                 "What the sweep varies: a knob, by its name or an alias, else NAME, the ${NAME} "
-                "placeholders of the document; a name with both readings is refused; " + knob_listing()
+                "placeholders of the document; a name with both readings is refused, and so is a knob "
+                "that edits no home; " + _SWEPT_KNOBS
             ),
         ),
     ] = None,
@@ -261,7 +267,9 @@ def sweep(
        knob registry first, by a knob's name or an alias, and then as the
        NAME of the ${NAME} or ${NAME:default} placeholders of the config,
        each the whole value of a key; the sweep refuses a --param with both
-       readings or neither. A knob sweep reads the config once, each
+       readings or neither. It also refuses a knob that edits no home's
+       simulation, the SEG rate or a finance setting, because every point
+       would simulate the same fleet. A knob sweep reads the config once, each
        placeholder at its default, and sets the knob to each point's value,
        from --min to --max. A variable sweep replaces every placeholder of
        NAME with the point's value; a placeholder --param does not name
@@ -363,7 +371,7 @@ def sweep(
 
 @dataclass(frozen=True)
 class _KnobAxis:
-    """A --param sweep of a knob: each point is the document's one scenario with the knob set to the point's value."""
+    """A --param sweep of a knob that edits homes: each point is the document's one scenario with the knob set to the point's value."""
 
     knob: Knob
 
@@ -421,7 +429,8 @@ def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
 
     Raises:
         ConfigurationError: If *name* names both a knob and a variable of *document*, or
-            neither, listing the document's variables and the knobs.
+            neither, listing the document's variables and the knobs fleet sweep sweeps;
+            or if it names a knob that edits no home.
     """
     variables = config_variables(document)
     is_knob = is_knob_name(name)
@@ -432,13 +441,30 @@ def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
             f"${{{name}}}; rename the variable to sweep it, or remove it to sweep the knob"
         )
     if is_knob:
-        return _KnobAxis(knob_named(name))
+        return _KnobAxis(_home_knob_named(name))
     if is_variable:
         return _VariableAxis(name)
     held = f"its variables: {', '.join(repr(each) for each in variables)}" if variables else "it holds no variables"
     raise ConfigurationError(
-        f"--param {name!r} names no knob and no variable of the document; {held}; {knob_listing()}"
+        f"--param {name!r} names no knob and no variable of the document; {held}; {_SWEPT_KNOBS}"
     )
+
+
+def _home_knob_named(name: str) -> Knob:
+    """The knob *name* names, which must edit homes.
+
+    Raises:
+        ConfigurationError: If the knob edits no home, so every point would
+            simulate the same fleet, naming it, what it sets and the knobs
+            fleet sweep sweeps.
+    """
+    knob = knob_named(name)
+    if knob.target is not KnobTarget.HOMES:
+        raise ConfigurationError(
+            f"--param {name!r} names the knob {knob.name!r}, which sets {knob.target.value} and no home's "
+            f"simulation, so every point would simulate the same fleet; {_SWEPT_KNOBS}"
+        )
+    return knob
 
 
 def _yaml_sweep(
