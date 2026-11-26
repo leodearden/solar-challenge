@@ -195,24 +195,24 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     scenario's own homes are never generated: the import's one generation is
     parse_fleet_form's, of the form loaded, so a refusal found only while generating homes,
     such as a battery dispatch reaching its tariff's cheap period, comes from
-    parse_fleet_form, and a setting named in not_loaded is never generated.  The form loads exactly what it
-    holds: the name, the period's dates, the fleet size and seed, the pv, battery and load
-    distributions, the battery's dispatch strategy, the tariff and the SEG.  A name, period
-    or seed the scenario leaves out is left out of the form too, and the fleet page runs its
-    own default for it.  A null battery capacity reads as 0 kWh, a home with no battery
-    either way.  A battery dispatch strategy on its tariff's clock, which the form has no
-    control for, is named in not_loaded, and the page runs self-consumption.  An economy
-    tariff's rate the scenario leaves out loads as its PRESET_RATES rate, the rate
-    parse_scenario charges it.  A setting the form needs but cannot hold exactly is
-    refused, naming it, since loading it anyway would run a different fleet.  A period
-    the page cannot run, ending before it starts or longer than MAX_WINDOW_DAYS days, is
-    refused naming period.start_date and period.end_date.  fleet_distribution.py's grammar
-    refuses a fleet size or seed that is not a whole number; the dashboard's bounds then
-    refuse a fleet size above MAX_FLEET_HOMES, or a seed beyond -MAX_FLEET_SEED to
-    MAX_FLEET_SEED, naming fleet_distribution.n_homes or fleet_distribution.seed, and the
-    form holds the size and seed the grammar read.  Every other setting, and a location
-    other than the page's, is named in not_loaded.  A form the page could not run, as
-    parse_fleet_form refuses it, is refused too.
+    parse_fleet_form, and a setting named in not_loaded is never generated.  The form loads
+    exactly what it holds: the name, the period's dates, the fleet size and seed, the pv,
+    battery and load distributions, the battery's dispatch strategy, the tariff and the SEG.
+    A name, period or seed the scenario leaves out is left out of the form too, and the fleet
+    page runs its own default for it.  A null battery capacity reads as 0 kWh, a home with no
+    battery either way.  A battery dispatch strategy on its tariff's clock, which the form
+    has no control for, is named in not_loaded, and the page runs self-consumption.  An
+    economy tariff's rate the scenario leaves out loads as its PRESET_RATES rate, the rate
+    parse_scenario charges it.  A setting the form needs but cannot hold exactly is refused,
+    naming it, since loading it anyway would run a different fleet.  A period the page cannot
+    run, ending before it starts or longer than MAX_WINDOW_DAYS days, is refused naming
+    period.start_date and period.end_date.  fleet_distribution.py's grammar refuses a fleet
+    size or seed that is not a whole number; the dashboard's bounds then refuse a fleet size
+    above MAX_FLEET_HOMES, or a seed beyond -MAX_FLEET_SEED to MAX_FLEET_SEED, naming
+    fleet_distribution.n_homes or fleet_distribution.seed, and the form holds the size and
+    seed the grammar read.  Every other setting, and a location other than the page's, is
+    named in not_loaded.  A form the page could not run, as parse_fleet_form refuses it, is
+    refused too.
 
     Raises:
         ValueError: For a document that is not a fleet_distribution scenario, a period the
