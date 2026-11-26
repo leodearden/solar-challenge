@@ -270,16 +270,27 @@ def number_types(annotation: object) -> frozenset[type]:
 def numeric_fields(cls: type) -> dict[str, frozenset[type]]:
     """Return the number types each numeric field of the dataclass *cls* mentions, in field order.
 
-    Its hints are resolved where they can be, and read as each field's annotation text where a name imported under
-    TYPE_CHECKING leaves them unresolvable.
+    Its hints are resolved together where they can be. Where a name imported under TYPE_CHECKING leaves one
+    unresolvable, each field's hint is resolved on its own (field_hint), so only a field naming such a name is read as
+    its annotation text, in which an alias of int or float is not seen.
     """
     fields = dataclasses.fields(cls)
     try:
         hints = typing.get_type_hints(cls)
     except NameError:
-        hints = {field.name: field.type for field in fields}
+        hints = {field.name: field_hint(cls, field.type) for field in fields}
     types_by_field = {field.name: number_types(hints[field.name]) for field in fields}
     return {name: types for name, types in types_by_field.items() if types}
+
+
+def field_hint(cls: type, annotation: object) -> object:
+    """Return the *annotation* of a field of *cls*, its text resolved in the module defining *cls*, or left as text if it names a name that module does not bind."""
+    if not isinstance(annotation, str):
+        return annotation
+    try:
+        return eval(annotation, dict(vars(sys.modules[cls.__module__])))
+    except NameError:
+        return annotation
 
 
 def numeric_dataclasses(modules: Iterable[ModuleType]) -> dict[str, type]:
@@ -378,11 +389,14 @@ _SEEDED_MODULE_NAME = "seeded_numeric_dataclasses"
 _SEEDED_SOURCE = '''
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 if TYPE_CHECKING:
     from decimal import Decimal
+
+Kilowatts = float
 
 
 @dataclass(frozen=True)
@@ -390,9 +404,17 @@ class SeededRate:
     rate: Optional[float]
     counts: tuple[int, ...]
     share: int | float
+    power: Kilowatts
+    unit: Literal["int"]
     label: str
     flag: bool
     other: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class SeededRule:
+    kind: Literal["int", "float"]
+    apply: Callable[[str, float], str]
 
 
 @dataclass
@@ -408,7 +430,7 @@ class NotADataclass:
 
 @pytest.fixture
 def seeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """A module defining one numeric dataclass, whose hints a TYPE_CHECKING import leaves unresolvable, beside a dataclass with no numeric field and a plain class with one."""
+    """A module defining a numeric dataclass whose hints a TYPE_CHECKING import leaves unresolvable and one whose hints resolve, beside a dataclass with no numeric field and a plain class with one."""
     path = tmp_path / f"{_SEEDED_MODULE_NAME}.py"
     path.write_text(_SEEDED_SOURCE, encoding="utf-8")
     spec = importlib.util.spec_from_file_location(_SEEDED_MODULE_NAME, path)
@@ -422,14 +444,20 @@ def seeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 def test_discovery_finds_a_dataclass_with_a_numeric_field_in_any_annotation_even_when_its_hints_cannot_be_resolved(
     seeded: ModuleType,
 ) -> None:
-    seeded_rate = seeded.SeededRate
-
-    assert numeric_dataclasses([seeded]) == {f"{seeded.__name__}.SeededRate": seeded_rate}
-    assert numeric_fields(seeded_rate) == {
+    assert numeric_dataclasses([seeded]) == {
+        f"{seeded.__name__}.SeededRate": seeded.SeededRate,
+        f"{seeded.__name__}.SeededRule": seeded.SeededRule,
+    }
+    assert numeric_fields(seeded.SeededRate) == {
         "rate": frozenset({float}),
         "counts": frozenset({int}),
         "share": frozenset({int, float}),
+        "power": frozenset({float}),
     }
+
+
+def test_discovery_reads_a_callable_s_parameter_list_but_not_a_literal_s_values(seeded: ModuleType) -> None:
+    assert numeric_fields(seeded.SeededRule) == {"apply": frozenset({float})}
 
 
 def test_top_level_modules_are_the_modules_directly_under_the_package() -> None:
@@ -444,9 +472,10 @@ def test_an_unclassified_numeric_dataclass_is_reported_by_name_with_the_classifi
 ) -> None:
     messages = unclassified(numeric_dataclasses([seeded]))
 
-    assert len(messages) == 1, messages
-    for part in (f"{seeded.__name__}.SeededRate", "INPUT_TYPES", "NOT_INPUT_TYPES", "classify it"):
-        assert part in messages[0], messages[0]
+    assert len(messages) == 2, messages
+    for name, message in zip(("SeededRate", "SeededRule"), messages, strict=True):
+        for part in (f"{seeded.__name__}.{name}", "INPUT_TYPES", "NOT_INPUT_TYPES", "classify it"):
+            assert part in message, message
 
 
 @pytest.fixture(scope="module")
