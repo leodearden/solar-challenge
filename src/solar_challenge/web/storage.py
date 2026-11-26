@@ -65,7 +65,7 @@ from solar_challenge.web.stored_runs import (
     stored_format_version,
     write_run_documents,
 )
-from solar_challenge.web.text_options import one_of
+from solar_challenge.web.text_options import one_of, read_one_of
 
 logger = logging.getLogger(__name__)
 
@@ -701,9 +701,9 @@ class RunQuery:
     per_page: int = 20
 
     def __post_init__(self) -> None:
-        one_of(self.sort, RUN_SORTS, "sort")
+        read_one_of(self.sort, RUN_SORTS, "sort")
         if self.run_type is not None:
-            one_of(self.run_type, RUN_TYPES, "run_type")
+            read_one_of(self.run_type, RUN_TYPES, "run_type")
         if self.page < 1:
             raise ConfigurationError(f"page is {self.page!r}, not a page number: pages are numbered from 1")
         if not 1 <= self.per_page <= _MAX_RUNS_PER_PAGE:

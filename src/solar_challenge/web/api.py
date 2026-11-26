@@ -57,7 +57,7 @@ from solar_challenge.web.simulation_params import parse_home_config, with_defaul
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
-from solar_challenge.web.text_options import one_of
+from solar_challenge.web.text_options import read_one_of
 from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
 logger = logging.getLogger(__name__)
@@ -586,12 +586,12 @@ def _run_query_from(args: Mapping[str, str]) -> RunQuery:
     """
     run_type = args.get("type")
     return RunQuery(
-        run_type=one_of(run_type, RUN_TYPES, "type") if run_type else None,
+        run_type=read_one_of(run_type, RUN_TYPES, "type") if run_type else None,
         text=args.get("q") or None,
         created_from=_date_parameter(args, "date_from"),
         created_to=_date_parameter(args, "date_to"),
-        sort=one_of(args.get("sort", "created_at"), RUN_SORTS, "sort"),
-        descending=one_of(args.get("order", "desc"), ("asc", "desc"), "order") == "desc",
+        sort=read_one_of(args.get("sort", "created_at"), RUN_SORTS, "sort"),
+        descending=read_one_of(args.get("order", "desc"), ("asc", "desc"), "order") == "desc",
         page=as_whole_number(args.get("page", 1), "page"),
         per_page=as_whole_number(args.get("per_page", 20), "per_page"),
     )
