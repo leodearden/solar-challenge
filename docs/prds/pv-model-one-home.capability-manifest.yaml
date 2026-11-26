@@ -98,8 +98,8 @@ tasks:
           pattern: "ac_power = apply_degradation\\("
           paths: ["src/solar_challenge/pv.py"]
           expect: absent
-      - name: "bare-run-warns-policy-run-does-not"
-        binding: "probe: a bare run_model over synthetic_june_weather('2024-06-21') emits 39 RuntimeWarnings from scipy/optimize/_chandrupatla.py. [Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]: since task 823 (84297320) a bare run emits 0, measured on main ad4b7537; β's test runs one- and two-array chains through run_model_chain under simplefilter('error', RuntimeWarning) and asserts none"
+      - name: "policy-run-raises-no-runtime-warning"
+        binding: "probe: a bare run_model over synthetic_june_weather('2024-06-21') emits 39 RuntimeWarnings from scipy/optimize/_chandrupatla.py. [Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]: since task 823 (84297320) a bare run emits 0, measured on main ad4b7537; β's test runs one- and two-array chains through run_model_chain under simplefilter('error', RuntimeWarning) and asserts none. [Amended 2026-11-26, task 810, review]: renamed from bare-run-warns-policy-run-does-not, which named the decompose premise"
         verdict: PASS
         delivered_check:
           kind: manual

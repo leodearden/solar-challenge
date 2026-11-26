@@ -160,7 +160,7 @@ Heuristics served:
 8. **One run policy.** `run_model_chain(model_chain, weather_data) -> ModelChain` runs the chain, with no warning filter, and returns it. **[Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]**
    - Build and run stay separate because `scripts/measure_mppt_window.py`'s `census` reads a chain's pick before deciding whether to run it.
    - It is module-public, not in `__all__` (open question 4).
-   - `simulate_pv_output` is `run_model_chain(create_model_chain(...), weather).results.ac / 1000`, clipped at 0.
+   - `simulate_pv_output` is `ac_power_kw(run_model_chain(create_model_chain(...), weather))`. `ac_power_kw(model_chain)` is the one home of the W-to-kW conversion and the clip at 0, and both measurement scripts read AC through it. **[Amended 2026-11-26, task 810]**
    - The scripts' three copies and the tests' `_QUIET_DIODE_SOLVER` and three marks go.
    - `measure_pv_performance_ratio.measure` reads each configuration's in-plane irradiation and AC from one run, so the script stops mixing the two entry points.
 9. **Ageing has one home** (D26, fk-3ccbba41d836).
@@ -216,8 +216,11 @@ def wired_dc_capacity_kw(config: PVConfig) -> float: ...
 def run_model_chain(model_chain: ModelChain, weather_data: pd.DataFrame) -> ModelChain: ...
     # runs model_chain over weather_data, with no warning filter; returns it run. [Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]
     # Every chain create_model_chain(_picking_from) builds already applies system losses and ageing on DC (task 284).
+def ac_power_kw(model_chain: ModelChain) -> pd.Series: ...
+    # a run chain's results.ac / 1000, clipped at 0; module-public, not in __all__; both measurement scripts read AC through it
+    # [Amended 2026-11-26, task 810]
 def simulate_pv_output(config, location, weather_data) -> pd.Series: ...   # frozen signature unchanged
-    # run_model_chain(create_model_chain(config, location), weather_data).results.ac / 1000, clipped at 0
+    # ac_power_kw(run_model_chain(create_model_chain(config, location), weather_data)) [Amended 2026-11-26, task 810]
 
 # src/solar_challenge/validation.py
 UK_YIELD_BENCHMARK_KWH_PER_KWP: tuple[float, float] = (300.0, 1200.0)   # renamed from _UK_…
