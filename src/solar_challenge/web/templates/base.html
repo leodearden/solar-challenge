@@ -16,6 +16,8 @@
 
     {% block head %}{% endblock %}
 
+    <!-- Handles Alpine's cancelled x-transition hides, which Alpine rejects before it can catch them (must load before Alpine core) -->
+    <script defer src="{{ url_for('static', filename='js/alpine-cancelled-transitions.js') }}"></script>
     <!-- followJobProgress, the one reader of a job's progress stream, which each script that follows a job calls (must load before Alpine core) -->
     <script defer src="{{ url_for('static', filename='js/job-progress-stream.js') }}"></script>
     <!-- progressTracker, the component templates/simulate/partials/progress-tracker.html opens (must load before Alpine core) -->

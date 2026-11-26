@@ -9,7 +9,9 @@ offers Fixed Value, which Run sends as the card's capacity, that Import YAML,
 clicked or reached with Tab and pressed with Enter or Space, shows each
 distribution in its card, that a fleet exported as YAML imports back into the
 form, that Load Preset offers only presets that load, fills the form and names
-the preset's settings the form has no control for, that Load Preset of a fleet
+the preset's settings the form has no control for, that Load Preset right after
+Enable Battery is unchecked throws no error, even when the browser renders no
+animation frame, that Load Preset of a fleet
 of identical homes shows each card at Fixed Value, that a preset without a
 period runs the page's default period, that the page shows why an imported
 file cannot load or a fleet cannot export, that the simulation name reaches
@@ -31,6 +33,10 @@ from tests.e2e._css_transitions import finish_the_css_transitions
 from tests.e2e._economy_rates import (
     ECONOMY_7_AT_THE_TYPED_PEAK_RATE,
     type_a_peak_rate_under_economy_7_then_visit_economy_10,
+)
+from tests.e2e._fetches_handled import (
+    record_fetches_started_and_handled,
+    wait_until_the_page_has_handled_every_fetch_it_started,
 )
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES
 from tests.e2e._job_requests import a_job_state, job_state_frame
@@ -596,6 +602,24 @@ def test_fleet_load_preset_fills_the_form_and_names_what_it_did_not_load(
         "finance",
     ):
         expect(page.get_by_role("status")).to_contain_text(not_loaded)
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+
+def test_fleet_load_preset_that_re_enables_the_battery_while_the_browser_renders_no_frame_throws_no_error(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """Load Preset right after Enable Battery is unchecked re-enables the battery without an error, even when the browser renders no animation frame."""
+    withhold_animation_frames(page)
+    record_fetches_started_and_handled(page)
+    page.goto(live_server + "/simulate/fleet")
+    battery = page.get_by_role("checkbox", name="Enable Battery", exact=True)
+    battery.uncheck()
+    expect(battery).not_to_be_checked()
+
+    page.get_by_role("combobox", name="Load Preset", exact=True).select_option("bristol-phase1")
+
+    expect(battery).to_be_checked()
+    wait_until_the_page_has_handled_every_fetch_it_started(page)
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 
