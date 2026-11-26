@@ -390,10 +390,17 @@ class TestSensitivityPanelStructure:
 # ---------------------------------------------------------------------------
 
 
+def _overridden(scenario: ScenarioConfig, override: float) -> FinanceConfig:
+    """*scenario*'s finance with its own-use overridden to the fraction *override*."""
+    assert scenario.finance is not None
+    return dataclasses.replace(scenario.finance, self_consumption_override=override)
+
+
 class TestBaseline:
     """sensitivity_panel takes the baseline sweep its caller ran over base_configs: it sweeps
     each axis value once, reuses the baseline for a value that leaves every scenario equal, and
-    refuses, before any simulation, a baseline of other points or another floor and a repeated value.
+    refuses, before any simulation, a baseline of other points, another floor or another own-use
+    assumption, and a repeated value.
     """
 
     def _base_configs(self, pv_kwp: float = 4.0) -> list[tuple[ConfigPoint, ScenarioConfig]]:
@@ -486,6 +493,29 @@ class TestBaseline:
 
         assert "50.0" in str(refusal.value)
         assert "60.0" in str(refusal.value)
+        assert panel_asked == []
+
+    def test_a_baseline_on_another_own_use_assumption_is_refused_naming_both(self) -> None:
+        base_configs = self._base_configs()
+        baseline = run_sweep(
+            [
+                (point, dataclasses.replace(scenario, finance=_overridden(scenario, 0.6)))
+                for point, scenario in base_configs
+            ],
+            simulate=_paired_const_simulate,
+        )
+        panel_asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError) as refusal:
+            sensitivity_panel(
+                base_configs,
+                {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
+                baseline=baseline,
+                simulate=recording(panel_asked, _paired_const_simulate),
+            )
+
+        assert "None" in str(refusal.value)
+        assert "0.6" in str(refusal.value)
         assert panel_asked == []
 
     def test_base_configs_at_two_floors_are_refused_naming_both_floors_and_no_run_sweep(self) -> None:
