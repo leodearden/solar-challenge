@@ -9,7 +9,7 @@ import contextlib
 import json
 import math
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -901,9 +901,12 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
 
 @dataclass(frozen=True)
 class FleetScenario:
-    """A bare fleet scenario document read in parse_scenario's order up to its homes: its scenario-level blocks and its fleet, no home generated."""
+    """A bare fleet scenario document read in parse_scenario's order up to its homes: its scenario-level blocks and its fleet, no home generated.
 
-    _blocks: _ScenarioLevelBlocks
+    Only read_fleet_scenario builds one; its interface is fleet, location and scenario().
+    """
+
+    _blocks: _ScenarioLevelBlocks = field(repr=False)
     fleet: FleetDistributionConfig
 
     @property
