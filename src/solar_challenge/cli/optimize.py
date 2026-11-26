@@ -33,7 +33,14 @@ from solar_challenge.optimize import (
     sensitivity_panel,
 )
 from solar_challenge.projection import fewest_simulated_ages
-from solar_challenge.scenario_knobs import KNOBS, Knob, knob_named, names_with_aliases
+from solar_challenge.scenario_knobs import (
+    FLAT_PRICING_REMEDY,
+    FLAT_RATE_UNREAD_UNDER_EVENTS,
+    KNOBS,
+    Knob,
+    knob_named,
+    names_with_aliases,
+)
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
@@ -45,12 +52,6 @@ _RETAINED_FLOOR_KNOB = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
 
 # The --sensitivity names swept when the flag is not given, in report order.
 _DEFAULT_SENSITIVITY_NAMES: tuple[str, ...] = ("retained_floor", "grid_services")
-
-# Why --grid-services-kw and the grid_services axis have nothing to set under the events model.
-_FLAT_RATE_UNREAD_UNDER_EVENTS = (
-    f"the flat grid-services rate, {_FLAT_RATE_KNOB.name}, "
-    "which the scenario's capacity_at_events grid_services_model does not read"
-)
 
 # A sensitivity axis as --sensitivity names it: the name as written, and the knob it names.
 _NamedAxis = tuple[str, Knob]
@@ -151,7 +152,7 @@ def _resolve_sensitivity_axes(
     if refused:
         raise ConfigurationError(
             f"--sensitivity names {', '.join(refused)}, which sweeps "
-            f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}; drop it from --sensitivity"
+            f"{FLAT_RATE_UNREAD_UNDER_EVENTS}; drop it from --sensitivity"
         )
     return requested, ()
 
@@ -169,8 +170,7 @@ def _with_grid_services_kw(
         return scenario
     if isinstance(pricing, GridServicesEventsConfig):
         raise ConfigurationError(
-            f"--grid-services-kw sets {_FLAT_RATE_UNREAD_UNDER_EVENTS}; drop the flag or "
-            "set the scenario's finance.grid_services_model to type: flat"
+            f"--grid-services-kw sets {FLAT_RATE_UNREAD_UNDER_EVENTS}; drop the flag or {FLAT_PRICING_REMEDY}"
         )
     return _FLAT_RATE_KNOB.apply(scenario, grid_services_kw)
 
@@ -302,7 +302,7 @@ def configs(
         print_info(
             cli,
             f"Sensitivity axis {name} omitted from the default: it sweeps "
-            f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
+            f"{FLAT_RATE_UNREAD_UNDER_EVENTS}."
         )
 
     days = base.window().days

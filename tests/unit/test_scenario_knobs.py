@@ -19,6 +19,7 @@ from solar_challenge.gridservices import FlatGridServices, GridServicesEventsCon
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.scenario_knobs import (
     ALIASES,
+    FLAT_PRICING_REMEDY,
     KNOBS,
     Knob,
     is_knob_name,
@@ -338,6 +339,19 @@ class TestFinanceKnobs:
         assert new.finance is not None
         assert new.finance.grid_services_model == NoGridServices()
 
+    @pytest.mark.parametrize(
+        ("rate", "requirement"),
+        [(-1.0, "at least 0"), (float("nan"), "a finite number"), (float("inf"), "a finite number")],
+    )
+    def test_grid_services_refuses_a_rate_below_zero_or_not_finite_naming_itself_and_the_bound_it_applies(
+        self, rate: float, requirement: str
+    ) -> None:
+        """The knob takes 0 as no grid services, so it refuses below 0 itself, under its own name, rather than leaving FlatGridServices to refuse 0 and below."""
+        with pytest.raises(ConfigurationError) as refused:
+            knob_named("grid_services").apply(_default_fleet(), rate)
+
+        assert str(refused.value) == f"grid_services_income_per_kw_per_year_gbp must be {requirement}, got {rate!r}"
+
     def test_grid_services_leaves_the_argument_scenario_unchanged(self) -> None:
         scenario = _default_fleet()
         before = copy.deepcopy(scenario)
@@ -359,6 +373,8 @@ class TestFinanceKnobs:
 
         assert "grid_services_income_per_kw_per_year_gbp" in str(refused.value)
         assert "capacity_at_events" in str(refused.value)
+        assert repr(scenario.name) in str(refused.value)
+        assert str(refused.value).endswith(FLAT_PRICING_REMEDY)
 
     def test_a_finance_knob_on_a_scenario_without_finance_is_refused_naming_the_knob_and_the_scenario(self) -> None:
         """With finance None the knob raises ConfigurationError naming itself and the scenario, not a TypeError."""

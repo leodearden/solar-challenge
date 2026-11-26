@@ -16,6 +16,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.gridservices import FlatGridServices, GridServicesEventsConfig, GridServicesModel, NoGridServices
 from solar_challenge.home import HomeConfig
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float
 
 
 @dataclass(frozen=True)
@@ -104,22 +105,31 @@ def _finance_knob(field: str) -> Knob:
 
 _FLAT_GRID_SERVICES_KNOB = "grid_services_income_per_kw_per_year_gbp"
 
+FLAT_RATE_UNREAD_UNDER_EVENTS = (
+    f"the flat grid-services rate, {_FLAT_GRID_SERVICES_KNOB}, "
+    "which the scenario's capacity_at_events grid_services_model does not read"
+)
+"""Why the flat grid-services knob, and every flag or axis that sets it, has nothing to set under capacity-at-events pricing: the clause each such refusal quotes."""
+
+FLAT_PRICING_REMEDY = "set the scenario's finance.grid_services_model to type: flat"
+"""The form to write that each refusal of the flat rate under capacity-at-events pricing ends with."""
+
 
 def _with_flat_grid_services(scenario: ScenarioConfig, rate: float) -> ScenarioConfig:
-    """*scenario* priced at the flat grid-services rate *rate* (£/kW/yr), or at no grid services at exactly 0; FlatGridServices refuses a negative rate.
+    """*scenario* priced at the flat grid-services rate *rate* (£/kW/yr), or at no grid services at exactly 0.
 
     Raises:
         ConfigurationError: If *scenario* has no finance block, or its
-            finance prices capacity at events, which reads no flat rate.
+            finance prices capacity at events, which reads no flat rate; or
+            if *rate* is not a finite number at least 0, naming the knob.
     """
     finance = _required_finance(scenario, _FLAT_GRID_SERVICES_KNOB, "grid_services_model")
     if isinstance(finance.grid_services_model, GridServicesEventsConfig):
         raise ConfigurationError(
-            f"Knob {_FLAT_GRID_SERVICES_KNOB!r} sets the flat grid-services rate, which scenario "
-            f"{scenario.name!r}'s capacity_at_events grid_services_model does not read; "
-            "set its finance.grid_services_model to type: flat"
+            f"Scenario {scenario.name!r} cannot take {FLAT_RATE_UNREAD_UNDER_EVENTS}; {FLAT_PRICING_REMEDY}"
         )
-    pricing: GridServicesModel = NoGridServices() if rate == 0 else FlatGridServices(rate)
+    income = as_finite_float(rate, _FLAT_GRID_SERVICES_KNOB, NON_NEGATIVE)
+    pricing: GridServicesModel = NoGridServices() if income == 0 else FlatGridServices(income)
     return replace(scenario, finance=replace(finance, grid_services_model=pricing))
 
 
