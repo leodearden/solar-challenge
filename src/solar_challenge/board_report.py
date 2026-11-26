@@ -16,7 +16,7 @@ from solar_challenge.finance import (
     OwnUseBasis,
     own_use_basis,
 )
-from solar_challenge.flex import FLEX_VALUE_BANDS, FlexibilityValueBand
+from solar_challenge.flex import FlexibilityValueBand, resolve_flex_band
 from solar_challenge.gridservices import (
     DeliveryBaseline,
     FlatGridServices,
@@ -183,11 +183,11 @@ class GridServicesIncome:
         self._refuse_an_income_its_pricing_did_not_book()
 
     def _refuse_another_pricing(self) -> None:
-        """Refuse a pricing that books no income, and a breakdown its pricing does not make or one it lacks."""
+        """Refuse a pricing other than flat or events pricing, and a breakdown its pricing does not make or one it lacks."""
         if not isinstance(self.pricing, (FlatGridServices, GridServicesEventsConfig)):
             raise ValueError(
-                "GridServicesIncome is booked by a FlatGridServices or a GridServicesEventsConfig; "
-                f"NoGridServices books nothing, so it has no income to render: got pricing={self.pricing!r}"
+                "GridServicesIncome is booked by a FlatGridServices or a GridServicesEventsConfig "
+                f"(NoGridServices books nothing): got pricing={self.pricing!r}"
             )
         if isinstance(self.pricing, FlatGridServices) and self.at_events is not None:
             raise ValueError(
@@ -334,10 +334,14 @@ class FlexBlock:
     band: GridServicesBand
     """The band whose consulting figures the block shows."""
 
+    def __post_init__(self) -> None:
+        """Hold band as the GridServicesBand it names, raising ConfigurationError, naming the value, for one naming no band."""
+        object.__setattr__(self, "band", GridServicesBand.parse(self.band, what="FlexBlock.band"))
+
     @property
     def consulting(self) -> FlexibilityValueBand:
-        """The band's consulting figures, from :data:`~solar_challenge.flex.FLEX_VALUE_BANDS`."""
-        return FLEX_VALUE_BANDS[self.band]
+        """The band's consulting figures, as :func:`~solar_challenge.flex.resolve_flex_band` reads them."""
+        return resolve_flex_band(self.band)
 
 
 def _model_line(pricing: FlatGridServices | GridServicesEventsConfig) -> str:
@@ -385,31 +389,46 @@ _FLEET_INCOME_ROWS: _Rows[GridServicesIncome] = (
 )
 """This window's fleet income, under every pricing."""
 
-_AT_EVENTS_ROWS: _Rows[GridServicesAtEvents] = (
-    ("Per-event available capacity", lambda events: _one_window_figure(events.per_window_avail_kw, "kW")),
-    ("Capacity on 50% of event days", lambda events: _one_window_figure(events.per_window_avail_p50_kw, "kW")),
-    ("Capacity on 90% of event days", lambda events: _one_window_figure(events.per_window_avail_p90_kw, "kW")),
+def _at_events(income: GridServicesIncome) -> GridServicesAtEvents:
+    """*income*'s capacity-at-events breakdown.
+
+    Raises:
+        ValueError: Naming the pricing, when it is flat, which makes no breakdown.
+    """
+    if income.at_events is None:
+        raise ValueError(f"only events pricing makes a capacity-at-events breakdown, got pricing={income.pricing!r}")
+    return income.at_events
+
+
+_AT_EVENTS_ROWS: _Rows[GridServicesIncome] = (
+    ("Per-event available capacity", lambda income: _one_window_figure(_at_events(income).per_window_avail_kw, "kW")),
+    (
+        "Capacity on 50% of event days",
+        lambda income: _one_window_figure(_at_events(income).per_window_avail_p50_kw, "kW"),
+    ),
+    (
+        "Capacity on 90% of event days",
+        lambda income: _one_window_figure(_at_events(income).per_window_avail_p90_kw, "kW"),
+    ),
     (
         "Evening self-use displaced, per event",
-        lambda events: _one_window_figure(events.per_window_displaced_self_use_kwh_per_event, "kWh"),
+        lambda income: _one_window_figure(_at_events(income).per_window_displaced_self_use_kwh_per_event, "kWh"),
     ),
     (
         "Evening self-use displaced, value per year",
-        lambda events: f"£{sum(events.per_window_displaced_import_gbp_per_year):,.0f}",
+        lambda income: f"£{sum(_at_events(income).per_window_displaced_import_gbp_per_year):,.0f}",
     ),
 )
-"""This window's capacity-at-events breakdown, after its fleet income."""
+"""Under events pricing, this window's capacity-at-events breakdown, after its fleet income."""
 
 
 def _window_table(grid_services: GridServicesIncome) -> str:
     """This window's fleet income, then under events pricing its breakdown and the notes that read it."""
-    table = _table(
-        "### This window's fleet, the same under every assumption", "Metric", ["Value"], _FLEET_INCOME_ROWS, [grid_services]
-    )
     events = grid_services.at_events
+    rows = _FLEET_INCOME_ROWS if events is None else _FLEET_INCOME_ROWS + _AT_EVENTS_ROWS
+    table = _table("### This window's fleet, the same under every assumption", "Metric", ["Value"], rows, [grid_services])
     if events is None:
         return table
-    breakdown = "".join(_markdown_row([label, cell(events)]) + "\n" for label, cell in _AT_EVENTS_ROWS)
     notes = (
         "\n*The income is gross of the evening self-use an event displaces, which householders then import; it "
         "is not netted off. That import is valued at each home's simulated tariff, £0 for a home simulated "
@@ -417,7 +436,7 @@ def _window_table(grid_services: GridServicesIncome) -> str:
     )
     if len(events.per_window_avail_kw) > 1:
         notes += "\n*— is one event window's figure, which does not sum over several windows.*\n"
-    return table + breakdown + notes
+    return table + notes
 
 
 def _grid_services_section(
@@ -443,10 +462,8 @@ def _flexibility_value_block(flex: FlexBlock, grid_services: Optional[GridServic
             ]
         )
         headline_gbp = consulting.total_gbp
-        footnote = f"""*Figures from consulting model §1.1/§1.4; band = {flex.band}.
-Time-shift basis: net import-cost reduction (off-peak charge cost captured in
-grid_import). Grid-services rate: £{consulting.grid_services_per_kw_gbp:.1f}/kW-discharge/yr
-(docs/flexibility-buildability.md).*"""
+        sourced = "Figures"
+        grid_services_basis = f"Grid-services rate: £{consulting.grid_services_per_kw_gbp:.1f}/kW-discharge/yr"
     else:
         per_home = grid_services.per_battery_home_gbp
         per_kw = grid_services.per_discharge_kw_gbp
@@ -458,10 +475,11 @@ grid_import). Grid-services rate: £{consulting.grid_services_per_kw_gbp:.1f}/kW
             ]
         )
         headline_gbp = consulting.time_shift_gbp + (0.0 if per_home is None else per_home)
-        footnote = f"""*Time-shift from consulting model §1.1/§1.4; band = {flex.band}.
-Time-shift basis: net import-cost reduction (off-peak charge cost captured in
-grid_import). Grid services: what the scenario's pricing books on this window's
-fleet, per battery home and per kW of battery discharge (docs/flexibility-buildability.md).*"""
+        sourced = "Time-shift"
+        grid_services_basis = (
+            "Grid services: what the scenario's pricing books on this window's\n"
+            "fleet, per battery home and per kW of battery discharge"
+        )
     return f"""
 ## Flexibility Value (per battery home)
 
@@ -473,7 +491,10 @@ Band: **{flex.band}**
 {grid_services_row}
 | **Headline total** | **£{headline_gbp:.0f}** | — |
 
-{footnote}
+*{sourced} from consulting model §1.1/§1.4; band = {flex.band}.
+Time-shift basis: net import-cost reduction (off-peak charge cost captured in
+grid_import). {grid_services_basis}
+(docs/flexibility-buildability.md).*
 """
 
 

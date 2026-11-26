@@ -19,7 +19,9 @@ from collections.abc import Callable
 import pytest
 
 from solar_challenge.board_report import AssumptionSection, FlexBlock, GridServicesIncome, generate_finance_report
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import OwnUseBasis
+from solar_challenge.flex import FLEX_VALUE_BANDS
 from solar_challenge.gridservices import (
     FlatGridServices,
     GridServicesAtEvents,
@@ -112,6 +114,11 @@ class TestGridServicesIncomeRefusals:
                 lambda: _flat_income(pricing=NoGridServices(), annual_income_gbp=0.0, battery_homes=0, battery_discharge_kw=0.0),
                 ("NoGridServices()",),
                 id="no-grid-services",
+            ),
+            pytest.param(
+                lambda: _flat_income(pricing="flat", annual_income_gbp=0.0, battery_homes=0, battery_discharge_kw=0.0),
+                ("pricing='flat'", "FlatGridServices", "GridServicesEventsConfig"),
+                id="a-value-that-is-no-pricing",
             ),
         ],
     )
@@ -328,5 +335,13 @@ class TestFlexBlockGridServicesRow:
         assert "docs/flexibility-buildability.md" in report
 
     def test_its_consulting_figures_are_its_bands(self) -> None:
-        assert _CENTRAL.consulting.name == "central"
-        assert (_CENTRAL.consulting.time_shift_gbp, _CENTRAL.consulting.total_gbp) == (250.0, 280.0)
+        assert _CENTRAL.consulting is FLEX_VALUE_BANDS[GridServicesBand.CENTRAL]
+
+    def test_it_holds_the_band_a_word_names(self) -> None:
+        assert FlexBlock("high").band is GridServicesBand.HIGH
+
+    def test_it_refuses_a_word_naming_no_band_naming_its_field_the_bands_and_the_word(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            FlexBlock("medium")
+
+        assert str(refused.value) == "FlexBlock.band must be one of low, central, high, got 'medium'"
