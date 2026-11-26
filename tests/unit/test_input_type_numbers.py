@@ -66,7 +66,6 @@ _BAD_NUMBERS: tuple[object, ...] = (math.nan, math.inf, -math.inf, True, "x")
 _FRACTION = 2.5
 
 
-
 def _scenario() -> ScenarioConfig:
     """A one-day scenario of one home, with a SEG rate."""
     june_day = date(2025, 6, 1)
@@ -317,9 +316,9 @@ def stale(discovered: Collection[str]) -> list[str]:
     )
 
 
-def bad_numbers(number_types: frozenset[type]) -> tuple[object, ...]:
-    """Return the values a field mentioning *number_types* is tried with: the bad numbers, and a fraction if the field is whole."""
-    return (*_BAD_NUMBERS, _FRACTION) if number_types == frozenset({int}) else _BAD_NUMBERS
+def bad_numbers(field_types: frozenset[type]) -> tuple[object, ...]:
+    """Return the values a field whose annotation mentions *field_types* is tried with: the bad numbers, and a fraction if the field is whole."""
+    return (*_BAD_NUMBERS, _FRACTION) if field_types == frozenset({int}) else _BAD_NUMBERS
 
 
 def with_bad_number(value: object, bad: object) -> object:
@@ -331,16 +330,20 @@ def with_bad_number(value: object, bad: object) -> object:
     return bad
 
 
-def refusal_cases() -> list[pytest.ParameterSet]:
-    """Return a (dotted name, field, bad value) case for each bad value of each numeric field of each discovered input type that EXCLUDED_FIELDS does not exclude."""
-    discovered = numeric_dataclasses(top_level_modules())
+def refusal_cases(discovered: Mapping[str, type]) -> list[pytest.ParameterSet]:
+    """Return a (dotted name, field, bad value) case for each bad value of each numeric field of each *discovered* input type that EXCLUDED_FIELDS does not exclude."""
     return [
         pytest.param(name, field, bad, id=f"{name.removeprefix('solar_challenge.')}.{field}-{bad!r}")
         for name in sorted(INPUT_TYPES.keys() & discovered.keys())
-        for field, number_types in numeric_fields(discovered[name]).items()
+        for field, field_types in numeric_fields(discovered[name]).items()
         if (name, field) not in EXCLUDED_FIELDS
-        for bad in bad_numbers(number_types)
+        for bad in bad_numbers(field_types)
     ]
+
+
+#: The numeric dataclasses of the modules directly under solar_challenge, keyed by dotted name; discovered once, at
+#: collection, for the refusal cases and every test of the real tree.
+_DISCOVERED: Mapping[str, type] = numeric_dataclasses(top_level_modules())
 
 
 _SEEDED_MODULE_NAME = "seeded_numeric_dataclasses"
@@ -420,24 +423,24 @@ def test_an_unclassified_numeric_dataclass_is_reported_by_name_with_the_classifi
 
 
 @pytest.fixture(scope="module")
-def discovered() -> dict[str, type]:
+def discovered() -> Mapping[str, type]:
     """The numeric dataclasses of the modules directly under solar_challenge, keyed by dotted name."""
-    return numeric_dataclasses(top_level_modules())
+    return _DISCOVERED
 
 
-def test_every_numeric_dataclass_under_solar_challenge_is_classified(discovered: dict[str, type]) -> None:
+def test_every_numeric_dataclass_under_solar_challenge_is_classified(discovered: Mapping[str, type]) -> None:
     messages = unclassified(discovered)
 
     assert messages == [], "\n".join(messages)
 
 
-def test_no_classified_class_is_stale(discovered: dict[str, type]) -> None:
+def test_no_classified_class_is_stale(discovered: Mapping[str, type]) -> None:
     messages = stale(discovered)
 
     assert messages == [], "\n".join(messages)
 
 
-def test_a_classified_class_no_longer_discovered_is_reported_as_stale(discovered: dict[str, type]) -> None:
+def test_a_classified_class_no_longer_discovered_is_reported_as_stale(discovered: Mapping[str, type]) -> None:
     messages = stale(discovered.keys() - {"solar_challenge.seg.SEGTariff"})
 
     assert len(messages) == 1, messages
@@ -449,19 +452,27 @@ def test_no_class_is_both_an_input_type_and_not_one() -> None:
     assert INPUT_TYPES.keys() & NOT_INPUT_TYPES.keys() == set()
 
 
-def test_every_excluded_field_is_a_numeric_field_of_an_input_type(discovered: dict[str, type]) -> None:
+def test_every_excluded_field_is_a_numeric_field_of_an_input_type(discovered: Mapping[str, type]) -> None:
     for name, field in EXCLUDED_FIELDS:
         assert name in INPUT_TYPES, f"EXCLUDED_FIELDS' entry ({name!r}, {field!r}) names no class of INPUT_TYPES"
-        assert field in numeric_fields(discovered[name]), (
-            f"EXCLUDED_FIELDS' entry ({name!r}, {field!r}) names no numeric field of {name}"
+        cls = discovered.get(name)
+        assert cls is not None, (
+            f"EXCLUDED_FIELDS' entry ({name!r}, {field!r}) names {name}, which is not discovered:"
+            " test_no_classified_class_is_stale reports its stale INPUT_TYPES entry"
         )
+        assert field in numeric_fields(cls), f"EXCLUDED_FIELDS' entry ({name!r}, {field!r}) names no numeric field of {name}"
 
 
 @pytest.mark.parametrize("name", sorted(INPUT_TYPES))
-def test_each_input_type_factory_builds_a_valid_instance_of_its_class(name: str, discovered: dict[str, type]) -> None:
+def test_each_input_type_factory_builds_a_valid_instance_of_its_class(name: str, discovered: Mapping[str, type]) -> None:
+    cls = discovered.get(name)
+    assert cls is not None, (
+        f"INPUT_TYPES names {name}, which is not discovered: test_no_classified_class_is_stale reports the stale entry"
+    )
+
     instance = INPUT_TYPES[name]()
 
-    assert type(instance) is discovered[name]
+    assert type(instance) is cls
 
 
 @pytest.mark.parametrize(
@@ -480,7 +491,7 @@ def test_a_bad_number_takes_the_place_of_the_first_number_of_a_field_s_value(
     assert repr(with_bad_number(value, bad)) == repr(expected)
 
 
-@pytest.mark.parametrize(("name", "field", "bad"), refusal_cases())
+@pytest.mark.parametrize(("name", "field", "bad"), refusal_cases(_DISCOVERED))
 def test_each_input_type_refuses_each_bad_number_in_each_numeric_field_by_name(
     name: str, field: str, bad: object
 ) -> None:
