@@ -484,6 +484,13 @@ def _baseline_top(
             f"retained-cash floor of {floor!r} £/home/yr but the baseline was solved at "
             f"{baseline.retained_cash_floor_gbp!r}"
         )
+    override = _common_override(base_configs)
+    if baseline.self_consumption_override != override:
+        raise ValueError(
+            "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs set a "
+            f"self_consumption_override of {override!r} but the baseline was solved at "
+            f"{baseline.self_consumption_override!r}"
+        )
     if baseline.cheapest_feasible is None:
         raise ValueError(
             "baseline run_sweep has no feasible config; cannot form a sensitivity panel"
@@ -562,8 +569,9 @@ def sensitivity_panel(
     Raises:
         ValueError: Before any simulation, if *base_configs* is empty, *axes*
             is empty, an axis has no values or repeats one, *baseline*'s
-            evaluated points or retained-cash floor differ from
-            *base_configs*', or *baseline* has no feasible config.  Each axis
+            evaluated points, retained-cash floor or self-consumption
+            override differ from *base_configs*', or *baseline* has no
+            feasible config.  Each axis
             also propagates any ValueError (ConfigurationError included) that
             its ``knob.apply`` raises.
     """
