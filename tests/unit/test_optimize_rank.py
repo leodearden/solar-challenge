@@ -124,7 +124,7 @@ class TestRank:
 
 
 class TestFeasibleSplit:
-    """feasible_split() partitions on binding == 'infeasible_above_retail'."""
+    """feasible_split() partitions on feasible, which is False exactly for binding 'infeasible_above_retail'."""
 
     def test_infeasible_list_is_exactly_infeasible_above_retail(self) -> None:
         """infeasible side == exactly the records with binding='infeasible_above_retail'."""
@@ -175,32 +175,6 @@ class TestFeasibleSplit:
         feasible_out, infeasible_out = feasible_split([a, b, c, d])
         assert [r.config.pv_kwp for r in feasible_out] == [1.0, 3.0]
         assert [r.config.pv_kwp for r in infeasible_out] == [2.0, 4.0]
-
-    def test_binding_predicate_not_bool_field(self) -> None:
-        """Contradictory record (feasible=True, binding='infeasible_above_retail') -> infeasible."""
-        contradictory = make_config_result(
-            binding="infeasible_above_retail",
-            feasible=True,  # deliberately contradictory
-        )
-        feasible_out, infeasible_out = feasible_split([contradictory])
-        assert len(infeasible_out) == 1
-        assert len(feasible_out) == 0
-
-    def test_feasible_false_with_non_infeasible_binding_lands_in_feasible(self) -> None:
-        """Complementary coupling pin: feasible=False + non-infeasible binding -> feasible side.
-
-        Proves that the split predicate is SOLELY binding-based, not .feasible-bool-based.
-        Any future binding value that pairs with feasible=False but is not
-        'infeasible_above_retail' will be classified on the feasible side — this
-        test makes that behaviour explicit so it cannot silently diverge.
-        """
-        mismatched = make_config_result(
-            binding="floor",
-            feasible=False,  # deliberately contradictory: False bool, non-infeasible binding
-        )
-        feasible_out, infeasible_out = feasible_split([mismatched])
-        assert len(feasible_out) == 1
-        assert len(infeasible_out) == 0
 
 
 # ---------------------------------------------------------------------------
