@@ -401,7 +401,7 @@ def _heat_pump_and_ev_results() -> SimulationResults:
 
 
 class TestLoadEnergyRoundtrip:
-    """A run's loads, and its summary's load_energy_kwh, survive a roundtrip; a summary saved before the field loads it as {}."""
+    """A run's loads, and its summary's load_energy_kwh, survive a roundtrip; a summary in the current format lacking load_energy_kwh is refused."""
 
     def test_home_run_reloads_each_load_and_its_load_energy(self, storage: RunStorage) -> None:
         results = _heat_pump_and_ev_results()
@@ -421,26 +421,24 @@ class TestLoadEnergyRoundtrip:
         for kind, load in results.loads.items():
             pd.testing.assert_series_equal(loaded.results.loads[kind], load, check_freq=False)
 
-    def test_a_heat_pump_run_saved_before_load_energy_loads_none_and_its_heat_pump_load(
+    def test_a_summary_in_the_current_format_lacking_its_load_energy_is_refused_naming_it(
         self, storage: RunStorage
     ) -> None:
+        """A summary saved before the field is brought forward by the stored-run format's v10 step, so one in the current format always holds it."""
         storage.save_home_run(
-            run_id="pre-load-energy-001",
+            run_id="no-load-energy-001",
             config=_make_home_config(),
             results=_make_simulation_results(include_heat_pump=True),
             summary=_make_summary(include_heat_pump=True),
             name="Saved Run",
         )
-        run_dir = stored_run_dir(storage, "pre-load-energy-001")
-        stored = _read_json(run_dir / "summary.json")
+        summary_path = stored_run_dir(storage, "no-load-energy-001") / "summary.json"
+        stored = _read_json(summary_path)
         del stored["load_energy_kwh"]
-        (run_dir / "summary.json").write_text(json.dumps(stored, indent=2))
+        summary_path.write_text(json.dumps(stored, indent=2))
 
-        loaded = storage.load_run("pre-load-energy-001")
-
-        assert loaded.summary.load_energy_kwh == {}
-        frame = pd.read_parquet(run_dir / "data.parquet")
-        assert (loaded.results.loads[LoadKind.HEAT_PUMP].to_numpy() == frame["heat_pump_load_kw"].to_numpy()).all()
+        with pytest.raises(StoredRunUnreadable, match="load_energy_kwh"):
+            storage.load_run("no-load-energy-001")
 
     def test_a_stored_load_energy_keyed_by_no_load_kind_is_refused_naming_it(self, storage: RunStorage) -> None:
         storage.save_home_run(

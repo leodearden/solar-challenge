@@ -60,6 +60,11 @@ pre_469_home, legacy_fleet and pre_786_dispatch_home were saved before summaries
 window, so none of their SummaryStatistics documents holds one; the stored-run format's v5 step
 derives each from the time series the summary's results stored.
 
+Every fixture was saved before summaries held each load's energy, so each of its
+SummaryStatistics documents holds a null total_heat_pump_load_kwh, peak_heat_pump_load_kw and
+heat_pump_load_ratio and no load_energy_kwh; the stored-run format's v10 step drops the three and
+gives each summary its load_energy_kwh, its household's energy alone, as none ran a heat pump.
+
 The fixtures, in STORED_RUN_FIXTURES' order:
 
 - pre_469_home: a home run with a 5 kWh battery and no dispatch strategy.

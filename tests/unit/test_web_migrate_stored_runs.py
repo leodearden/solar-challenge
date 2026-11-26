@@ -1131,7 +1131,11 @@ def test_after_migrate_store_each_stored_summary_holds_its_household_s_energy_an
 def test_migrate_store_gives_a_heat_pump_home_s_summary_stored_before_summaries_held_each_load_s_energy_both_energies_reporting_nothing_of_it(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:
-    """B9: its summary.json and its runs row hold its household's energy, its demand less its heat pump's, and its heat pump's, and the run loads."""
+    """B9: its summary.json and its runs row hold its household's energy, its demand less its heat pump's, and its heat pump's, and the run loads.
+
+    The report names only v7's drops of the copy's battery efficiency, which it holds as
+    pre_867_round_trip_home does: nothing of its summary.
+    """
     store = store_at_version_1
     copy_id = install_pre_s12_heat_pump_home(Database(store), store.parent, run_id="pre-s12-heat-pump-home")
 
@@ -1144,7 +1148,7 @@ def test_migrate_store_gives_a_heat_pump_home_s_summary_stored_before_summaries_
         each
         for each in (*report.dropped_values, *report.rewritten_values, *report.unmigrated_runs)
         if each.run_id == copy_id
-    ] == []
+    ] == [DroppedValue(copy_id, document, *_PRE_867_BATTERY_ROUND_TRIP) for document in ("config.json", "runs.config_json")]
     assert copy_id not in report.caught_up_runs
     loaded = _storage_of(store).load_run(copy_id)
     assert isinstance(loaded, StoredHomeRun)
