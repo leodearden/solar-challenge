@@ -14,36 +14,18 @@ from flask.testing import FlaskClient
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import Interval, as_whole_number
 from solar_challenge.web import api
-from solar_challenge.web.api import SWEEP_MAX_STEPS, api_bp
+from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.builder_form import scenario_from_builder_form
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_scenario import parse_fleet_form
 from solar_challenge.web.simulation_params import parse_date_range, parse_home_config
+from tests._api_routes import api_routes
 from tests._error_records import error_records
 from tests._raising import raising
 from tests._fleet_form import valid_distribution_form
 
 
 _API_ENDPOINTS_THAT_READ_NO_JSON_BODY = frozenset({"api.import_fleet_yaml"})
-
-
-def _api_body_method_routes() -> list[tuple[str, str, str]]:
-    """Return the endpoint, method and path of every POST, PUT and PATCH route of the api blueprint.
-
-    A path argument is filled with a value that names no record, e.g. no-such-run_id.
-    """
-    api_only = Flask(__name__, static_folder=None)
-    api_only.register_blueprint(api_bp)
-    urls = api_only.url_map.bind("localhost")
-    return [
-        (
-            rule.endpoint,
-            method,
-            urls.build(rule.endpoint, {name: f"no-such-{name}" for name in rule.arguments}, method=method),
-        )
-        for rule in api_only.url_map.iter_rules()
-        for method in sorted({"POST", "PUT", "PATCH"}.intersection(rule.methods or ()))
-    ]
 
 
 class TestErrorPaths:
@@ -89,7 +71,7 @@ class TestErrorPaths:
         ("method", "path"),
         [
             pytest.param(method, path, id=endpoint)
-            for endpoint, method, path in _api_body_method_routes()
+            for endpoint, method, path in api_routes({"POST", "PUT", "PATCH"})
             if endpoint not in _API_ENDPOINTS_THAT_READ_NO_JSON_BODY
         ],
     )
@@ -104,7 +86,7 @@ class TestErrorPaths:
 
     def test_no_stale_endpoint_is_listed_as_reading_no_json_body(self) -> None:
         """Every endpoint exempted from the shared 400 is still a POST, PUT or PATCH route of the api blueprint."""
-        body_method_endpoints = {endpoint for endpoint, _, _ in _api_body_method_routes()}
+        body_method_endpoints = {endpoint for endpoint, _, _ in api_routes({"POST", "PUT", "PATCH"})}
         assert _API_ENDPOINTS_THAT_READ_NO_JSON_BODY - body_method_endpoints == set()
 
     @pytest.mark.parametrize(
