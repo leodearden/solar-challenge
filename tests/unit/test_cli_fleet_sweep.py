@@ -242,8 +242,10 @@ def test_a_sweep_given_no_mode_spaces_its_points_as_sweepspecs_default_mode_does
 def test_a_mode_no_sweep_mode_names_is_refused_by_the_option_naming_both_modes() -> None:
     result = _sweep("${CAP}", "--param", "CAP", "--min", "5", "--max", "10", "--steps", "2", "--mode", "log")
 
+    text = table_text(result.stderr)
     assert result.exit_code == 2
-    assert "Invalid value for '--mode': 'log' is not one of 'linear', 'geometric'." in table_text(result.stderr)
+    assert "Invalid value for '--mode':" in text
+    assert "'log' is not one of 'linear', 'geometric'." in text
     assert not Path("out").exists()
 
 
