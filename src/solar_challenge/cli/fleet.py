@@ -32,6 +32,7 @@ from solar_challenge.cli.utils import (
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
     ScenarioConfig,
+    config_variables,
     detect_fleet_sweep_spec,
     fleet_of,
     load_community_config,
@@ -50,7 +51,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec, swept_parameter_path
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.scenario_knobs import Knob, is_knob_name, knob_named
+from solar_challenge.scenario_knobs import KNOBS, Knob, is_knob_name, knob_named, names_with_aliases
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -396,8 +397,34 @@ def _param_sweep(
     if min_val is None or max_val is None:
         raise ConfigurationError("CLI sweep requires --min and --max values")
     sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=SweepMode.parse(mode))
-    axis: SweepAxis = KnobAxis(knob_named(param)) if is_knob_name(param) else VariableAxis(param)
+    axis = _sweep_axis(raw_config, param)
     return axis.label, sweep_spec, axis.scenarios(raw_config, sweep_spec.get_values())
+
+
+def _sweep_axis(document: Mapping[str, Any], name: str) -> SweepAxis:
+    """The axis --param *name* sweeps: the knob it names, else the variable of *document* it names.
+
+    Raises:
+        ConfigurationError: If *name* names both a knob and a variable of *document*, or
+            neither, listing the document's variables and the knobs.
+    """
+    variables = config_variables(document)
+    is_knob = is_knob_name(name)
+    is_variable = name in variables
+    if is_knob and is_variable:
+        raise ConfigurationError(
+            f"--param {name!r} names both the knob {knob_named(name).name!r} and the document's variable "
+            f"${{{name}}}; rename the variable to sweep it, or remove it to sweep the knob"
+        )
+    if is_knob:
+        return KnobAxis(knob_named(name))
+    if is_variable:
+        return VariableAxis(name)
+    held = f"its variables: {', '.join(repr(each) for each in variables)}" if variables else "it holds no variables"
+    raise ConfigurationError(
+        f"--param {name!r} names no knob and no variable of the document; {held}; "
+        f"the knobs, each with its aliases: {names_with_aliases(KNOBS.values())}"
+    )
 
 
 def _yaml_sweep(
