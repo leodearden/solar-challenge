@@ -453,7 +453,7 @@ class TestChatDegradation:
         field: str,
         type_name: str,
     ) -> None:
-        """A message or run_id is a JSON string, never the text str() makes of another value: any other value gets a lone failed frame naming the field and its type, the model is not called and no chat turn is saved; the refusal is no defect, so nothing is logged at ERROR."""
+        """A message is a JSON string and a run_id a JSON string or null, never the text str() makes of another value: any other value gets a lone failed frame naming the field and its type, the model is not called and no chat turn is saved; the refusal is no defect, so nothing is logged at ERROR."""
         resp = client.post("/assistant/chat", json=body)
 
         assert resp.status_code == 200
@@ -986,17 +986,25 @@ class TestRunContextInjection:
             f"Unknown run_id should not appear in injected content; got: {last_content!r}"
         )
 
+    @pytest.mark.parametrize(
+        "run_id_field",
+        [
+            pytest.param({}, id="run-id-absent"),
+            pytest.param({"run_id": None}, id="run-id-null"),
+        ],
+    )
     def test_no_run_id_leaves_user_message_unchanged(
         self,
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
+        run_id_field: dict[str, None],
     ) -> None:
-        """POST without run_id: messages[-1]['content'] equals exactly the user message."""
+        """POST without run_id, or with a null one: messages[-1]['content'] equals exactly the user message."""
         anthropic_api.set_chunks(["plain reply"])
 
         resp = client.post(
             "/assistant/chat",
-            json={"message": "plain message no run"},
+            json={"message": "plain message no run", **run_id_field},
         )
         assert resp.status_code == 200
         resp.get_data(as_text=True)

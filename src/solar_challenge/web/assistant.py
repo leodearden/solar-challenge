@@ -49,7 +49,12 @@ from solar_challenge.web.fleet_components import (
     MAX_WINDOW_DAYS,
 )
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.request_boundary import read_string, refusal_text, request_json_object
+from solar_challenge.web.request_boundary import (
+    read_optional_string,
+    read_string,
+    refusal_text,
+    request_json_object,
+)
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import (
     CHAT_DELTA,
@@ -1353,11 +1358,13 @@ def chat() -> Response:
     """Stream an AI assistant reply as Server-Sent Events.
 
     Request JSON body: ``{"message": "<user text>", "run_id": "<optional>"}``.
-    A ``run_id`` puts that run's summary in front of the message as context.
-    A body that is not a JSON object, a message or run_id that is not a JSON
-    string or holds a lone surrogate (the frame names it), an unset
-    ANTHROPIC_API_KEY, a message without text and a client that cannot be built
-    are each answered with a lone ``failed`` frame, and no turn is stored.
+    A ``run_id`` puts that run's summary in front of the message as context;
+    a null run_id, like an absent one, is no run context. A body that is not a
+    JSON object, a message that is not a JSON string, a run_id that is neither
+    a JSON string nor null, a field holding a lone surrogate (the frame names
+    the field), an unset ANTHROPIC_API_KEY, a message without text and a client
+    that cannot be built are each answered with a lone ``failed`` frame, and no
+    turn is stored.
 
     The frames are web/sse.py's chat catalogue: ``delta`` and ``tool`` while the
     reply streams, then ``done``, or ``failed`` carrying the notice to show.
@@ -1368,7 +1375,7 @@ def chat() -> Response:
     try:
         data = request_json_object()
         user_message = read_string(data.get("message", ""), "message").strip()
-        run_id = read_string(data.get("run_id", ""), "run_id").strip()
+        run_id = (read_optional_string(data.get("run_id"), "run_id") or "").strip()
     except ValueError as refusal:
         return _refused_turn(refusal_text(refusal))
     refusal_reason = _refusal(user_message)
