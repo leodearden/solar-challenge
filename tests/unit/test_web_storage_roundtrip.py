@@ -61,6 +61,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
+from solar_challenge.ev import EVChargerType, EVConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import (
     HomeConfig,
@@ -964,6 +965,31 @@ class TestFullFleetRoundtrip:
         assert run.name == "Full Fleet Test"
         assert run.type == "fleet"
         assert run.n_homes == n_homes
+
+
+class TestEVConfigRoundtrip:
+    """An EV config, its charger type and smart charging mode held as their members, loads as the members their stored values name."""
+
+    def test_a_home_run_with_an_off_peak_ev_loads_equal_to_the_one_saved(self, storage: RunStorage) -> None:
+        config = dataclasses.replace(
+            _make_home_config(),
+            tariff_config=TariffConfig.economy_7(),
+            ev_config=EVConfig("7kW", 18, 7, 35.0, "off_peak"),
+        )
+
+        storage.save_home_run(
+            run_id="ev-home-001",
+            config=config,
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+            name="Saved Run",
+        )
+
+        loaded_config = storage.load_run("ev-home-001").config
+
+        assert loaded_config == config
+        assert loaded_config.ev_config is not None
+        assert loaded_config.ev_config.charger_type is EVChargerType.FAST
 
 
 class TestTupleFieldRoundtrip:

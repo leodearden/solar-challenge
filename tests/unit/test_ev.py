@@ -184,6 +184,9 @@ class TestEVConfigBasics:
     def test_the_default_smart_charging_mode_is_held_as_its_member(self):
         assert EVConfig("7kW").smart_charging_mode is SmartChargingMode.NONE
 
+    def test_the_default_smart_charging_mode_beside_a_charger_type_given_as_a_member_is_held_as_its_member(self):
+        assert EVConfig(EVChargerType.FAST, 18).smart_charging_mode is SmartChargingMode.NONE
+
     def test_a_member_given_is_held_as_that_member(self):
         config = EVConfig(EVChargerType.RAPID, smart_charging_mode=SmartChargingMode.SOLAR)
 
