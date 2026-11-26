@@ -242,8 +242,6 @@ class SimulationResults:
         export_revenue: Revenue from grid export in £
         tariff_rate: Tariff rate in £/kWh
         strategy_name: Name of the dispatch strategy used
-        heat_pump_load: The heat pump's electrical load in kW, None without a heat pump;
-            transitional, it is one series with additional_loads[LoadKind.HEAT_PUMP]
         grid_charge: Optional power the battery drew from the grid in kW, a part of
             both battery_charge and grid_import (None when tariff_config is None)
         pricing: How the run's grid flows were priced (None for results simulate_home did
@@ -254,9 +252,8 @@ class SimulationResults:
         additional_loads: The loads within demand besides the household's, in kW, by
             LoadKind, each on demand's rows and written under its kind's column; held as a
             PerLoad, its keys read by LoadKind.parse. Construction refuses, with
-            SeriesRefused, a household entry, a heat_pump_load that differs from its heat
-            pump entry, an entry off demand's rows, and additional loads that exceed demand
-            by more than 1e-9 kW in a row, naming that row. loads holds the household's
+            SeriesRefused, a household entry, an entry off demand's rows, and additional
+            loads that exceed demand by more than 1e-9 kW in a row, naming that row. loads holds the household's
             load, demand less these, beside them.
     """
 
@@ -272,7 +269,6 @@ class SimulationResults:
     export_revenue: pd.Series = field(metadata=_money("export_revenue_gbp"))
     tariff_rate: pd.Series = field(metadata=_level("tariff_rate_per_kwh"))
     strategy_name: str = "self_consumption"
-    heat_pump_load: Optional[pd.Series] = None
     # Per-timestep slice of import_cost spent charging the battery from the grid, in £
     # (None when tariff_config is None).
     grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
@@ -302,10 +298,10 @@ class SimulationResults:
         self._refuse_additional_loads_above_demand()
 
     def _settle_additional_loads(self) -> None:
-        """Hold additional_loads as a PerLoad holding heat_pump_load, each on demand's index and named its kind's column, and heat_pump_load as its heat pump entry.
+        """Hold additional_loads as a PerLoad, each load on demand's index and named its kind's column.
 
         Each load is refused on its own (its dtype, then a row holding no number) before it is
-        compared with heat_pump_load or demand's rows.
+        compared with demand's rows.
         """
         loads = dict(PerLoad(self.additional_loads))
         if LoadKind.HOUSEHOLD in loads:
@@ -314,24 +310,13 @@ class SimulationResults:
             )
         for kind, load in loads.items():
             _refuse_unless_an_amount(kind.column, load)
-        heat_pump = self.heat_pump_load
-        if heat_pump is not None:
-            _refuse_unless_an_amount(LoadKind.HEAT_PUMP.column, heat_pump)
-            if not loads.setdefault(LoadKind.HEAT_PUMP, heat_pump).equals(heat_pump):
-                raise SeriesRefused(
-                    LoadKind.HEAT_PUMP.column,
-                    "differs from heat_pump_load, which is additional_loads' heat pump load: give one of them, "
-                    "or both as one series",
-                )
         rows = self.demand.index
         for kind, load in loads.items():
             difference = describe_first_differing_row(load.index, rows, "demand")
             if difference is not None:
                 raise SeriesRefused(kind.column, f"is not on demand's rows: {difference}")
             loads[kind] = load.set_axis(rows).rename(kind.column)
-        settled = PerLoad(loads)
-        object.__setattr__(self, "additional_loads", settled)
-        object.__setattr__(self, "heat_pump_load", settled.get(LoadKind.HEAT_PUMP))
+        object.__setattr__(self, "additional_loads", PerLoad(loads))
 
     def _household_kw(self) -> pd.Series:
         """Demand less the additional loads, on demand's rows, named the household's column."""
