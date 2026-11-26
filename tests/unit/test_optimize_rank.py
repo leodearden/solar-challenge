@@ -126,7 +126,7 @@ class TestRank:
 
 
 class TestFeasibleSplit:
-    """feasible_split() partitions on binding == 'infeasible_above_retail'."""
+    """feasible_split() partitions on feasible, which is False exactly for binding 'infeasible_above_retail'."""
 
     def test_infeasible_list_is_exactly_infeasible_above_retail(self) -> None:
         """infeasible side == exactly the records with binding='infeasible_above_retail'."""
