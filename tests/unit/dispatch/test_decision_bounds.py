@@ -252,28 +252,42 @@ _AN_ULP_ABOVE_KW = math.nextafter(_POWER_KW, math.inf)
 
 
 class _Step(NamedTuple):
-    """A step's generation and demand, and the PV excess and shortfall they leave, all in kW."""
+    """A step's generation and demand, the PV excess and shortfall they leave, and the export the shortfall leaves room for under a 2.5 kW discharge limit, all in kW."""
 
     generation_kw: float
     demand_kw: float
     excess_kw: float
     shortfall_kw: float
+    max_export_kw: float
 
 
 STEPS = [
-    pytest.param(_Step(3.0, 1.0, excess_kw=2.0, shortfall_kw=0.0), id="excess"),
-    pytest.param(_Step(1.0, 3.0, excess_kw=0.0, shortfall_kw=2.0), id="shortfall"),
-    pytest.param(_Step(1.5, 1.5, excess_kw=0.0, shortfall_kw=0.0), id="balanced"),
+    pytest.param(_Step(3.0, 1.0, excess_kw=2.0, shortfall_kw=0.0, max_export_kw=2.5), id="excess"),
+    pytest.param(_Step(1.0, 3.0, excess_kw=0.0, shortfall_kw=2.0, max_export_kw=0.5), id="shortfall"),
+    pytest.param(_Step(1.5, 1.5, excess_kw=0.0, shortfall_kw=0.0, max_export_kw=2.5), id="balanced"),
     pytest.param(
-        _Step(_POWER_KW, _AN_ULP_ABOVE_KW, excess_kw=0.0, shortfall_kw=4.440892098500626e-16), id="short-by-an-ulp"
+        _Step(
+            _POWER_KW,
+            _AN_ULP_ABOVE_KW,
+            excess_kw=0.0,
+            shortfall_kw=4.440892098500626e-16,
+            max_export_kw=2.4999999999999996,
+        ),
+        id="short-by-an-ulp",
     ),
     pytest.param(
-        _Step(_AN_ULP_ABOVE_KW, _POWER_KW, excess_kw=4.440892098500626e-16, shortfall_kw=0.0), id="over-by-an-ulp"
+        _Step(_AN_ULP_ABOVE_KW, _POWER_KW, excess_kw=4.440892098500626e-16, shortfall_kw=0.0, max_export_kw=2.5),
+        id="over-by-an-ulp",
     ),
-    pytest.param(_Step(0.1 + 0.2, 0.3, excess_kw=5.551115123125783e-17, shortfall_kw=0.0), id="0.1+0.2-over-0.3"),
-    pytest.param(_Step(0.0, 2.0, excess_kw=0.0, shortfall_kw=2.0), id="no-pv"),
-    pytest.param(_Step(2.0, 0.0, excess_kw=2.0, shortfall_kw=0.0), id="no-demand"),
-    pytest.param(_Step(0.0, 3.0, excess_kw=0.0, shortfall_kw=3.0), id="shortfall-beyond-the-discharge-limit"),
+    pytest.param(
+        _Step(0.1 + 0.2, 0.3, excess_kw=5.551115123125783e-17, shortfall_kw=0.0, max_export_kw=2.5),
+        id="0.1+0.2-over-0.3",
+    ),
+    pytest.param(_Step(0.0, 2.0, excess_kw=0.0, shortfall_kw=2.0, max_export_kw=0.5), id="no-pv"),
+    pytest.param(_Step(2.0, 0.0, excess_kw=2.0, shortfall_kw=0.0, max_export_kw=2.5), id="no-demand"),
+    pytest.param(
+        _Step(0.0, 3.0, excess_kw=0.0, shortfall_kw=3.0, max_export_kw=0.0), id="shortfall-beyond-the-discharge-limit"
+    ),
 ]
 
 
@@ -288,12 +302,8 @@ class TestTheLimitsForAStep:
             excess_kw=step.excess_kw,
             shortfall_kw=step.shortfall_kw,
             max_charge_kw=_MAX_CHARGE_KW,
-            max_export_kw=max(0.0, _MAX_DISCHARGE_KW - step.shortfall_kw),
+            max_export_kw=step.max_export_kw,
         )
-
-    def test_a_shortfall_beyond_the_discharge_limit_leaves_no_export(self) -> None:
-        limits = StepLimits.for_step(0.0, 3.0, max_charge_kw=_MAX_CHARGE_KW, max_discharge_kw=_MAX_DISCHARGE_KW)
-        assert limits.max_export_kw == 0.0
 
 
 def _on_2024_01_15_at(hour: int) -> datetime:
