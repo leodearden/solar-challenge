@@ -14,7 +14,8 @@ from solar_challenge.fleet_distribution import (
     FleetDistributionConfig,
     parse_fleet_distribution_config,
 )
-from solar_challenge.scenario_blocks import require_list, require_mapping
+from solar_challenge.number_fields import as_finite_floats, as_whole_numbers
+from solar_challenge.scenario_blocks import require_mapping
 from solar_challenge.web import fleet_config
 from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_config import sample_distribution
@@ -156,40 +157,48 @@ class TestFleetConfigHelpers:
         assert str(exc_info.value) == str(expected.value)
 
     @pytest.mark.parametrize(
-        ("dist_type", "params", "list_key"),
+        ("dist_type", "params", "list_key", "list_reader"),
         [
             pytest.param(
                 "weighted_discrete",
                 {"values": "ab", "weights": [1]},
                 "values",
+                as_finite_floats,
                 id="weighted-discrete-str-values",
             ),
             pytest.param(
                 "weighted_discrete",
                 {"values": [3.0], "weights": {"w": 1}},
                 "weights",
+                as_finite_floats,
                 id="weighted-discrete-mapping-weights",
             ),
             pytest.param(
                 "shuffled_pool",
                 {"values": {"value": 3.0}, "counts": [1]},
                 "values",
+                as_finite_floats,
                 id="shuffled-pool-mapping-values",
             ),
             pytest.param(
                 "shuffled_pool",
                 {"values": [3.0], "counts": 1},
                 "counts",
+                as_whole_numbers,
                 id="shuffled-pool-int-counts",
             ),
         ],
     )
     def test_sample_distribution_refuses_a_list_that_is_not_a_list_naming_it_under_params(
-        self, dist_type: str, params: dict, list_key: str
+        self,
+        dist_type: str,
+        params: dict,
+        list_key: str,
+        list_reader: Callable[[object, str], object],
     ) -> None:
-        """A weighted_discrete's or a shuffled_pool's values, or its paired list, sent as something other than a list is refused as require_list refuses it, naming the list under params."""
+        """A weighted_discrete's or a shuffled_pool's values, or its paired list, sent as something other than a list is refused as number_fields' list reader of its kind, the one fleet_distribution.py reads the list with, refuses it, naming the list under params."""
         with pytest.raises(ConfigurationError) as expected:
-            require_list(f"params.{list_key}", params[list_key])
+            list_reader(params[list_key], f"params.{list_key}")
         with pytest.raises(ConfigurationError) as exc_info:
             sample_distribution(dist_type, params, 3)
         assert str(exc_info.value) == str(expected.value)

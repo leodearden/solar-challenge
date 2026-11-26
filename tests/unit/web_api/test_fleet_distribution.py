@@ -175,7 +175,7 @@ class TestPreviewDistribution:
             ),
             pytest.param(
                 {"type": "shuffled_pool", "params": {"values": [4.0], "counts": "x"}},
-                "params.counts: must be a list, got str",
+                "params.counts must be a list of whole numbers, got 'x'",
                 id="shuffled-pool-str-counts",
             ),
             pytest.param(

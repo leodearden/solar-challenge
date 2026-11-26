@@ -2,8 +2,8 @@
 """The fleet a dashboard form's blocks describe, held to the dashboard's bounds, and the distribution preview's sampler.
 
 read_form_fleet reads a form's fleet blocks as a fleet_distribution: block's are, at the
-form's own paths, with nothing invented. The preview never runs the grammar, so it reads
-its own numbers.
+form's own paths, with nothing invented. sample_distribution reads a distribution in the
+grammar's spelling but never runs the grammar, so it reads and bounds its own numbers.
 """
 
 from __future__ import annotations
@@ -11,15 +11,21 @@ from __future__ import annotations
 import dataclasses
 import math
 import random
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import FleetDistributionConfig, parse_fleet_distribution_config
-from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
-from solar_challenge.scenario_blocks import child_path
+from solar_challenge.number_fields import (
+    Interval,
+    as_finite_float,
+    as_finite_floats,
+    as_whole_number,
+    as_whole_numbers,
+)
+from solar_challenge.scenario_blocks import child_path, require_mapping
 from solar_challenge.web.fleet_components import (
     FLEET_SIZE,
     MAX_FLEET_HOMES,
@@ -43,26 +49,6 @@ def refuse_a_fleet_the_dashboard_cannot_run(fleet: FleetDistributionConfig, path
         read_fleet_seed(fleet.seed, child_path(path, "seed"))
 
 
-def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list[int]:
-    """Read *counts*, each count of the *pool_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
-
-    Raises:
-        ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
-            naming a count's field and the value sent.
-        ConfigurationError: When the counts total more than MAX_FLEET_HOMES, more values than a
-            dashboard fleet has homes to take, naming *pool_field* and the total.
-    """
-    read_counts = [
-        as_whole_number(value, field, within=Interval(0, MAX_FLEET_HOMES)) for field, value in counts
-    ]
-    total = sum(read_counts)
-    if total > MAX_FLEET_HOMES:
-        raise ConfigurationError(
-            f"{pool_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
-        )
-    return read_counts
-
-
 def sample_distribution(
     dist_type: str, params: object, n_samples: object = 100
 ) -> list[float]:
@@ -72,9 +58,9 @@ def sample_distribution(
         dist_type: Distribution type, sent in the field ``type``. One of the types the
             distribution editor offers: ``'normal'``, ``'uniform'``,
             ``'weighted_discrete'``, ``'shuffled_pool'``.
-        params: The distribution's other keys, as the distribution editor holds them,
-            read by :func:`_preview_spec` as the distribution named ``params``; must be a
-            dict holding what its type is drawn from.
+        params: The distribution's other keys, in fleet_distribution.py's spelling: a
+            weighted_discrete's values and weights lists, a shuffled_pool's values and
+            counts lists. A key sent as null is left out.
         n_samples: Number of samples to generate, a whole number from 1 to
             :data:`MAX_FLEET_HOMES`.
 
@@ -82,22 +68,16 @@ def sample_distribution(
         List of sampled values, each a finite float.
 
     Raises:
-        ConfigurationError: If n_samples is not a whole number from 1 to MAX_FLEET_HOMES
-            (see :func:`~solar_challenge.number_fields.as_whole_number`).
-        ConfigurationError: If params are not a dict (see :func:`_require_dict`),
-            :func:`_preview_spec` refuses the distribution, naming type or the field under
-            ``params``, params leave out what the type is drawn from (see
-            :func:`_refuse_a_preview_without_what_its_type_is_drawn_from`),
-            :func:`_draw_samples` cannot draw from them, or they draw a sample that is not
-            a finite number, as finite params whose draws overflow a float can; that error
-            names params and the sample.
+        ConfigurationError: For an n_samples that is not a whole number from 1 to
+            MAX_FLEET_HOMES; params that are not a mapping; a type the editor does not
+            offer; params without what the type is drawn from; a parameter or list cell
+            that is not a finite number, or a count the preview cannot pool; lists of
+            unequal length; params the sampler cannot draw from; or a sample that is not a
+            finite number, as finite params whose draws overflow a float can. Each names
+            its field under params, or the sample.
     """
     n_samples = as_whole_number(n_samples, "n_samples", within=FLEET_SIZE)
-    params = _require_dict(params, "params")
-    fields = {**_fields_under("params"), "type": "type"}
-    distribution = {**params, "type": dist_type}
-    spec = _preview_spec(distribution, fields)
-    _refuse_a_preview_without_what_its_type_is_drawn_from(distribution, fields)
+    spec = _preview_spec(dist_type, require_mapping("params", params))
     samples = _draw_samples(spec, n_samples)
     for sample in samples:
         if not math.isfinite(sample):
@@ -105,25 +85,6 @@ def sample_distribution(
                 f"params must draw samples that are finite numbers, got a sample of {sample!r}"
             )
     return samples
-
-
-def _refuse_a_preview_without_what_its_type_is_drawn_from(
-    distribution: Mapping[str, Any], fields: Mapping[str, str]
-) -> None:
-    """Refuse *distribution*, an editor distribution of a type the editor offers, when it leaves out, or sends as null, a key the preview draws its type from: the preview never runs fleet_distribution.py's grammar, which would name it.
-
-    Raises:
-        ConfigurationError: Naming the first such key's field, from *fields*, and the keys the
-            type is drawn from.
-    """
-    dist_type = distribution["type"]
-    drawn_from = _EDITOR_TYPES[dist_type].drawn_from
-    for key in drawn_from:
-        if distribution.get(key) is None:
-            raise ConfigurationError(
-                f"{fields[key]} must be given: the preview draws a {dist_type} distribution "
-                f"from its {' and '.join(drawn_from)}"
-            )
 
 
 def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
@@ -160,7 +121,7 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
 
     if dist_type == "shuffled_pool":
         if not spec["values"]:
-            raise ConfigurationError("shuffled_pool requires non-empty 'entries' list")
+            raise ConfigurationError("shuffled_pool requires non-empty 'values' list")
         pool: list[float] = []
         for value, count in zip(spec["values"], spec["counts"]):
             pool.extend([value] * count)
@@ -217,44 +178,45 @@ def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
         )
 
 
-def _require_dict(value: object, field: str) -> dict[str, Any]:
-    """Return *value*, refusing one that is not a dict.
-
-    Raises:
-        ConfigurationError: If *value* is not a dict; the error names *field* and the type sent.
-    """
-    if not isinstance(value, dict):
-        raise ConfigurationError(f"{field} must be a mapping, got {type(value).__name__}")
-    return value
-
-
 @dataclasses.dataclass(frozen=True)
 class _EditorRows:
-    """An editor distribution's *key* rows, each a mapping of a value and its *column*, which fleet_distribution.py's grammar spells as parallel lists: values, and the *grammar_key* list, which the preview reads with *read_column*."""
+    """A distribution's rows as fleet_distribution.py's grammar spells them, parallel lists: its values, and the *paired_key* list, which the preview reads with *read_paired*."""
 
-    key: str
-    column: str
-    grammar_key: str
-    #: Reads the column whole for the preview, from its (field, value sent) cells and the
-    #: rows' field, so its rule may bound each cell or the column's total.
-    read_column: Callable[[list[tuple[str, Any]], str], Sequence[float]]
+    paired_key: str
+    #: Reads the paired list sent, under its field, for the preview, so its rule may bound
+    #: each cell or the list's total.
+    read_paired: Callable[[object, str], Sequence[float]]
 
 
 @dataclasses.dataclass(frozen=True)
 class _EditorType:
-    """A distribution type the distribution editor offers: its scalar parameters, the editor keys the preview draws it from, and its rows, if it has rows."""
+    """A distribution type the distribution editor offers: its scalar parameters, the keys the preview draws it from, and its rows, if it has rows."""
 
     parameters: tuple[str, ...]
-    #: The editor keys the preview draws the type from: the forms leave a missing one for
-    #: fleet_distribution.py's grammar to name, and only the preview, which never runs the grammar,
-    #: refuses it.
+    #: The keys the preview draws the type from: the forms leave a missing one for
+    #: fleet_distribution.py's grammar to name, and only the preview, which never runs the
+    #: grammar, refuses it.
     drawn_from: tuple[str, ...]
     rows: _EditorRows | None = None
 
 
-def _finite_floats(cells: Iterable[tuple[str, Any]]) -> list[float]:
-    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field."""
-    return [as_finite_float(value, field) for field, value in cells]
+def _preview_pool_counts(counts: object, counts_field: str) -> tuple[int, ...]:
+    """Read *counts*, a shuffled pool's counts list sent in *counts_field*, as the counts of the pool the preview builds: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most MAX_FLEET_HOMES.
+
+    The preview never runs fleet_distribution.py's grammar, whose F6 holds a fleet's pools to
+    its n_homes, so it bounds the pool it builds itself.
+
+    Raises:
+        ConfigurationError: For a list or count as_whole_numbers refuses, naming its field, or
+            counts totalling more than MAX_FLEET_HOMES, naming *counts_field* and the total.
+    """
+    read_counts = as_whole_numbers(counts, counts_field, within=Interval(0, MAX_FLEET_HOMES))
+    total = sum(read_counts)
+    if total > MAX_FLEET_HOMES:
+        raise ConfigurationError(
+            f"{counts_field} must total at most {MAX_FLEET_HOMES}, got {total}"
+        )
+    return read_counts
 
 
 #: The distribution types the fleet pages' distribution editor holds besides a fixed value.
@@ -263,127 +225,62 @@ _EDITOR_TYPES: Mapping[str, _EditorType] = MappingProxyType({
     "uniform": _EditorType(parameters=("min", "max"), drawn_from=("min", "max")),
     "weighted_discrete": _EditorType(
         parameters=(),
-        drawn_from=("values",),
-        rows=_EditorRows(
-            "values", "weight", "weights", lambda cells, _rows_field: _finite_floats(cells)
-        ),
+        drawn_from=("values", "weights"),
+        rows=_EditorRows("weights", as_finite_floats),
     ),
     "shuffled_pool": _EditorType(
         parameters=(),
-        drawn_from=("entries",),
-        rows=_EditorRows("entries", "count", "counts", read_pool_counts),
+        drawn_from=("values", "counts"),
+        rows=_EditorRows("counts", _preview_pool_counts),
     ),
 })
 
 
-def _editor_type(dist_type: object) -> _EditorType | None:
-    """The distribution editor's record of *dist_type*; None for a type the editor does not offer, or one that is not a string."""
-    return _EDITOR_TYPES.get(dist_type) if isinstance(dist_type, str) else None
+def _preview_spec(dist_type: object, params: Mapping[str, Any]) -> dict[str, Any]:
+    """The spec the preview draws from: *dist_type* and *params*, a distribution in fleet_distribution.py's spelling, each parameter and list cell its type draws read under its field, ``params.<key>`` or ``params.<list>[index]``.
 
-
-#: The keys of a distribution as the distribution editor holds it: the keys a form's
-#: *fields* map for :func:`distribution_grammar_spec`.
-DISTRIBUTION_KEYS = ("type", "mean", "std", "min", "max", "values", "entries")
-
-
-def _fields_under(path: str) -> dict[str, str]:
-    """Each key of an editor distribution, mapped to its field in the distribution at *path*: ``path.key``."""
-    return {key: f"{path}.{key}" for key in DISTRIBUTION_KEYS}
-
-
-def distribution_grammar_spec(
-    distribution: Mapping[str, Any], fields: Mapping[str, str]
-) -> dict[str, Any]:
-    """fleet_distribution.py's grammar spec of *distribution*, a distribution as the distribution editor holds it, translated in shape only.
-
-    A weighted_discrete's values rows become its values and weights lists, and a
-    shuffled_pool's entries rows its values and counts lists, each cell as sent; a
-    distribution that sends either list beside its rows is refused, since the rows would
-    overwrite it.  A key the distribution sends as null is left out, for
-    fleet_distribution.py's grammar to name.  Every other key, a key its type does not read
-    included, passes as sent, and so does every type and every number, for the grammar to
-    read or refuse naming them.  *fields* maps each editor key to the field a form sends it
-    in, which every refusal names.
+    A key sent as null is left out, and a key its type does not draw is ignored.
 
     Raises:
-        ConfigurationError: For rows sent beside a list they become, naming the rows' field and the
-            list; or for rows :func:`_rows_spec` refuses, naming the rows' field.
+        ConfigurationError: For a type the editor does not offer, naming type and the type
+            sent; params without a key the type is drawn from, naming it; a parameter, list
+            or cell those reads refuse, naming its field; or lists of unequal length, naming
+            both.
     """
-    spec = {key: value for key, value in distribution.items() if value is not None}
-    editor_type = _editor_type(spec.get("type"))
-    rows = None if editor_type is None else editor_type.rows
-    if rows is not None and rows.key in spec:
-        sent_rows = spec.pop(rows.key)
-        lists_beside = [key for key in ("values", rows.grammar_key) if key in spec]
-        if lists_beside:
-            raise ConfigurationError(
-                f"{fields[rows.key]} gives the {spec['type']}'s values and {rows.grammar_key}, "
-                f"so its distribution must not also send {' and '.join(map(repr, lists_beside))}"
-            )
-        spec.update(_rows_spec(sent_rows, fields[rows.key], rows))
-    return spec
-
-
-def _rows_spec(sent_rows: object, rows_field: str, rows: _EditorRows) -> dict[str, list[Any]]:
-    """The values list and the *rows* column list of *sent_rows*, an editor distribution's rows sent in *rows_field*, as fleet_distribution.py's grammar spells them, each cell as sent.
-
-    Raises:
-        ConfigurationError: Naming *rows_field*, with a row's index, for rows that are not a list,
-            or a row that is not a mapping or lacks its value or its column.
-    """
-    if not isinstance(sent_rows, list):
-        raise ConfigurationError(f"{rows_field} must be a list, got {type(sent_rows).__name__}")
-    values: list[Any] = []
-    column: list[Any] = []
-    for index, sent_row in enumerate(sent_rows):
-        row_field = f"{rows_field}[{index}]"
-        row = _require_dict(sent_row, row_field)
-        if not {"value", rows.column} <= row.keys():
-            raise ConfigurationError(
-                f"{row_field} must be a mapping with 'value' and {rows.column!r}, got {row!r}"
-            )
-        values.append(row["value"])
-        column.append(row[rows.column])
-    return {"values": values, rows.grammar_key: column}
-
-
-def _preview_spec(distribution: Mapping[str, Any], fields: Mapping[str, str]) -> dict[str, Any]:
-    """The spec the preview draws *distribution*, an editor distribution, from: its type, each parameter its type draws read by as_finite_float, and its rows' values and column read under each cell's field, ``<rows field>[index].<cell>``.
-
-    The preview never runs fleet_distribution.py's grammar, so it reads the numbers of
-    :func:`distribution_grammar_spec`'s translation itself, under *fields*, the field each
-    editor key is sent in.  A key its type does not draw is ignored.
-
-    Raises:
-        ConfigurationError: For a type the editor does not offer, naming its field and the type
-            sent; for rows :func:`distribution_grammar_spec` refuses; or for a parameter or
-            cell those reads refuse, naming its field.
-    """
-    dist_type = distribution.get("type")
-    editor_type = _editor_type(dist_type)
+    editor_type = _EDITOR_TYPES.get(dist_type) if isinstance(dist_type, str) else None
     if editor_type is None:
         raise ConfigurationError(
-            f"{fields['type']} must be one of {', '.join(_EDITOR_TYPES)}, got {dist_type!r}"
+            f"type must be one of {', '.join(_EDITOR_TYPES)}, got {dist_type!r}"
         )
-    spec = distribution_grammar_spec(distribution, fields)
-    read: dict[str, Any] = {
-        key: as_finite_float(spec[key], fields[key])
-        for key in editor_type.parameters
-        if key in spec
-    }
-    rows = editor_type.rows
-    if rows is not None and distribution.get(rows.key) is not None:
-        rows_field = fields[rows.key]
-        read["values"] = _finite_floats(
-            (f"{rows_field}[{index}].value", value) for index, value in enumerate(spec["values"])
-        )
-        read[rows.grammar_key] = list(
-            rows.read_column(
-                [
-                    (f"{rows_field}[{index}].{rows.column}", cell)
-                    for index, cell in enumerate(spec[rows.grammar_key])
-                ],
-                rows_field,
+    for key in editor_type.drawn_from:
+        if params.get(key) is None:
+            raise ConfigurationError(
+                f"params.{key} must be given: the preview draws a {dist_type} distribution "
+                f"from its {' and '.join(editor_type.drawn_from)}"
             )
+    spec: dict[str, Any] = {
+        key: as_finite_float(params[key], f"params.{key}")
+        for key in editor_type.parameters
+        if params.get(key) is not None
+    }
+    if editor_type.rows is not None:
+        spec.update(_preview_rows(params, editor_type.rows))
+    return {"type": dist_type, **spec}
+
+
+def _preview_rows(params: Mapping[str, Any], rows: _EditorRows) -> dict[str, Sequence[float]]:
+    """The values list and the *rows* paired list of *params*, each cell read under ``params.<list>[index]``.
+
+    Raises:
+        ConfigurationError: For a list or cell the reads refuse, naming its field, or lists of
+            unequal length, naming both and their lengths.
+    """
+    paired_field = f"params.{rows.paired_key}"
+    values = as_finite_floats(params["values"], "params.values")
+    paired = rows.read_paired(params[rows.paired_key], paired_field)
+    if len(values) != len(paired):
+        raise ConfigurationError(
+            f"params.values and {paired_field} must have the same length, "
+            f"got {len(values)} and {len(paired)}"
         )
-    return {"type": dist_type, **read}
+    return {"values": values, rows.paired_key: paired}
