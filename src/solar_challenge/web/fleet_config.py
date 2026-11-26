@@ -19,7 +19,7 @@ from typing import Any, TypeGuard
 
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import FleetDistributionConfig
+from solar_challenge.fleet_distribution import FleetDistributionConfig, parse_fleet_distribution_config
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_blocks import child_path
 from solar_challenge.web.fleet_components import (
@@ -180,8 +180,25 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
     )
 
 
-#: The top-level keys of a fleet form that form_to_fleet_distribution_config reads.
+#: The top-level keys of a dashboard form that read_form_fleet reads: its fleet's blocks.
 FLEET_DISTRIBUTION_FORM_KEYS: frozenset[str] = frozenset({"n_homes", "seed", "pv", "battery", "load"})
+
+
+def read_form_fleet(blocks: Mapping[str, Any]) -> FleetDistributionConfig:
+    """The fleet *blocks*, a dashboard form's n_homes, seed and pv, battery and load blocks, describe: read as a fleet_distribution: block's are, at the form's own paths, with nothing invented, and held to the dashboard's bounds.
+
+    A battery block may not set a dispatch strategy: every battery takes the form's.
+
+    Raises:
+        ConfigurationError: For a battery block setting a dispatch strategy, a block the grammar
+            refuses, or a fleet the dashboard cannot run, naming the field as the form posts it.
+    """
+    battery = blocks.get("battery")
+    if isinstance(battery, dict):
+        _refuse_battery_dispatch_strategy(battery)
+    fleet = parse_fleet_distribution_config(dict(blocks), block_path="")
+    refuse_a_fleet_the_dashboard_cannot_run(fleet, "")
+    return fleet
 
 
 def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, Any]:
