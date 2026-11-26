@@ -729,13 +729,34 @@ def load_config(path: Union[str, Path]) -> dict[str, Any]:
         )
 
 
-def _one_scenario(document: object) -> ScenarioConfig:
+@dataclass(frozen=True)
+class _ScenarioInDocument:
+    """A scenario block as its document holds it, unread, and the path it sits at: "" for a bare document, "scenario" for a scenario: block, "scenarios[i]" for a scenarios: entry."""
+
+    block_path: str
+    block: object
+
+    def scenario(self) -> ScenarioConfig:
+        """The scenario, as parse_scenario reads it at its path."""
+        return parse_scenario(self.block, block_path=self.block_path)
+
+    def community(self) -> Optional[CommunityConfig]:
+        """The scenario's community: block, as parse_community_config reads it at <its path>.community; None when it sets none.
+
+        Raises:
+            ConfigurationError: for a scenario block that is no mapping, or as
+                parse_community_config refuses the community: block.
+        """
+        scenario = require_mapping(self.block_path, self.block)
+        return parse_community_config(scenario.get("community"), block_path=child_path(self.block_path, "community"))
+
+
+def _the_one_scenario_in(document: object) -> _ScenarioInDocument:
     """The one scenario *document* holds: itself, as a bare scenario, or its scenario: block, which it holds alone.
 
     Raises:
         ConfigurationError: for a document that is no mapping; a scenarios: document, naming how
-            many scenarios it holds; a scenario: block beside another top-level key; or as
-            parse_scenario refuses the scenario.
+            many scenarios it holds; or a scenario: block beside another top-level key.
     """
     mapping = require_mapping("", document)
     if "scenarios" in mapping:
@@ -747,17 +768,34 @@ def _one_scenario(document: object) -> ScenarioConfig:
         )
     if "scenario" in mapping:
         refuse_unrecognised_keys("", mapping, {"scenario"})
-        return parse_scenario(mapping["scenario"], block_path="scenario")
-    return parse_scenario(mapping)
+        return _ScenarioInDocument("scenario", mapping["scenario"])
+    return _ScenarioInDocument("", mapping)
+
+
+def _every_scenario_in(document: dict[str, Any]) -> list[_ScenarioInDocument]:
+    """Every scenario *document* holds: each entry of its scenarios: list, else its one scenario.
+
+    Raises:
+        ConfigurationError: for a scenarios: list beside another top-level key, or one that is
+            no list; or as _the_one_scenario_in refuses a document without one.
+    """
+    if "scenarios" not in document:
+        return [_the_one_scenario_in(document)]
+    refuse_unrecognised_keys("", document, {"scenarios"})
+    return [
+        _ScenarioInDocument(f"scenarios[{index}]", scenario)
+        for index, scenario in enumerate(require_list("scenarios", document["scenarios"]))
+    ]
 
 
 def load_scenario(path: Union[str, Path]) -> ScenarioConfig:
     """The one scenario the file at *path* holds, bare or as its scenario: block, as parse_scenario reads it.
 
     Raises:
-        ConfigurationError: as load_config refuses the file, or _one_scenario its document.
+        ConfigurationError: as load_config refuses the file, _the_one_scenario_in its document,
+            or parse_scenario the scenario.
     """
-    return _one_scenario(load_config(path))
+    return _the_one_scenario_in(load_config(path)).scenario()
 
 
 def load_scenarios(path: Union[str, Path]) -> list[ScenarioConfig]:
@@ -768,14 +806,17 @@ def load_scenarios(path: Union[str, Path]) -> list[ScenarioConfig]:
             top-level key; or as parse_scenario refuses an entry at scenarios[i], or as
             load_scenario refuses the one scenario.
     """
-    document = load_config(path)
-    if "scenarios" not in document:
-        return [_one_scenario(document)]
-    refuse_unrecognised_keys("", document, {"scenarios"})
-    return [
-        parse_scenario(scenario, block_path=f"scenarios[{index}]")
-        for index, scenario in enumerate(require_list("scenarios", document["scenarios"]))
-    ]
+    return [each.scenario() for each in _every_scenario_in(load_config(path))]
+
+
+def load_community_configs(path: Union[str, Path]) -> list[Optional[CommunityConfig]]:
+    """Each scenario's community: block, in load_scenarios' order, read at <the scenario's path>.community; None for a scenario that sets none.
+
+    Raises:
+        ConfigurationError: as load_config refuses the file; as load_scenarios refuses where its
+            scenarios sit; or as parse_community_config refuses a community: block.
+    """
+    return [each.community() for each in _every_scenario_in(load_config(path))]
 
 
 def load_home_config(path: Union[str, Path]) -> HomeConfig:
@@ -814,7 +855,7 @@ def parse_fleet_config(document: object) -> FleetConfig:
         ConfigurationError: as load_scenario refuses the same document, a fleet_distribution:
             block that sweeps included, naming the sweep's field and 'fleet sweep'.
     """
-    return fleet_of(_one_scenario(document))
+    return fleet_of(_the_one_scenario_in(document).scenario())
 
 
 def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
