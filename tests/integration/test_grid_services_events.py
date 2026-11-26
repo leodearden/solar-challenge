@@ -219,7 +219,7 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_finance_run_refuses_the_events_model_without_events_before_simulating(
+def test_finance_run_refuses_the_retired_string_selector_before_simulating(
     tmp_path: Path,
 ) -> None:
     """C6: finance run on the board scenario whose grid_services_model is the retired string selector exits 1 naming the block, and simulates no fleet."""
