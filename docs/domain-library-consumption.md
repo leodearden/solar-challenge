@@ -30,7 +30,7 @@ on a host that has a clone at that exact path.
 
 ```toml
 dependencies = [
-  "solar-challenge @ git+https://github.com/leodearden/solar-challenge.git@solar-challenge-v0.5.0",
+  "solar-challenge @ git+https://github.com/leodearden/solar-challenge.git@solar-challenge-v0.6.0",
 ]
 ```
 
@@ -68,7 +68,7 @@ The tag pin **insulates** each consuming worktree:
    if the tag is not on `origin`.
 4. Commit both `pyproject.toml` and `uv.lock` together as a single reviewed
    platform commit with a message like:
-   `chore(deps): bump solar-challenge to solar-challenge-vX.Y.Z`.
+   `chore(deps): bump solar-challenge to solar-challenge-v0.6.0`.
 5. Open a PR; CI verifies the new surface before merge.
 
 ---
@@ -81,7 +81,8 @@ Tags use the prefix `solar-challenge-` followed by a semantic version:
 solar-challenge-v0.2.0   ← API freeze (first release tag)
 solar-challenge-v0.3.0   ← next minor (additive surface changes)
 solar-challenge-v0.4.0   ← basis-C cost-recovery + arbitrage
-solar-challenge-v0.5.0   ← current release (CBS amount due: own-use VAT + collectable total)
+solar-challenge-v0.5.0   ← CBS amount due: own-use VAT + collectable total
+solar-challenge-v0.6.0   ← current release (one release window for the review-all program; Python floor 3.11)
 solar-challenge-v1.0.0   ← first stable / breaking-change boundary (future)
 ```
 
