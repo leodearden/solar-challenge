@@ -16,25 +16,234 @@ import math
 import re
 import sys
 import typing
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
+from datetime import date, time, timedelta
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.community import CommunityBillingConfig
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.dispatch import (
+    ChargeWindow,
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
+from solar_challenge.ev import EVConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet import default_runner
+from solar_challenge.fleet_distribution import (
+    ComponentDistribution,
+    FleetDistributionConfig,
+    NormalDistribution,
+    ProportionalDistribution,
+    ShuffledPoolDistribution,
+    SweepSpec,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
+)
+from solar_challenge.flex import FlexibilityValueBand
+from solar_challenge.gridservices import EventWindow, FlatGridServices, GridServicesEventsConfig, GridServicesRateBand
+from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
+from solar_challenge.optimize import ConfigPoint
+from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffPeriod
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
 from tests._exemption_reasons import Permanent, Transitional
 from tests._package_modules import module_level_dataclasses, top_level_modules
 
 _BAD_NUMBERS: tuple[object, ...] = (math.nan, math.inf, -math.inf, True, "x")
 
-#: Each input type's dotted name, to a factory of a valid instance of it.
-INPUT_TYPES: Mapping[str, Callable[[], object]] = {}
+
+
+def _scenario() -> ScenarioConfig:
+    """A one-day scenario of one home, with a SEG rate."""
+    june_day = date(2025, 6, 1)
+    return ScenarioConfig(
+        name="Guard",
+        period=SimulationWindow(june_day, june_day, ONE_MINUTE, "Europe/London"),
+        home=HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig()),
+        seg_tariff_pence_per_kwh=15.0,
+    )
+
+
+#: Each input type's dotted name, to a factory of a valid instance of it that gives every numeric field a value and
+#: every tuple field one element.
+INPUT_TYPES: Mapping[str, Callable[[], object]] = {
+    "solar_challenge.battery.BatteryConfig": lambda: BatteryConfig(capacity_kwh=5.0, soh=0.9),
+    "solar_challenge.community.CommunityBillingConfig": lambda: CommunityBillingConfig(seg_rate_pence_per_kwh=15.0),
+    "solar_challenge.config.ScenarioConfig": _scenario,
+    "solar_challenge.dispatch.GridChargeConfig": lambda: GridChargeConfig(target_soc_fraction=0.8),
+    "solar_challenge.dispatch.TOUOptimizedStrategyConfig": lambda: TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+    "solar_challenge.dispatch.PeakShavingStrategyConfig": lambda: PeakShavingStrategyConfig(import_limit_kw=2.0),
+    "solar_challenge.dispatch.ChargeWindow": lambda: ChargeWindow(
+        days=frozenset({0}),
+        start=time(1),
+        duration=timedelta(hours=3),
+        target_soc_fraction=0.8,
+        allow_discharge=False,
+    ),
+    "solar_challenge.ev.EVConfig": lambda: EVConfig("7kW"),
+    "solar_challenge.finance.FinanceConfig": lambda: FinanceConfig(
+        standing_charge_pence_per_day=50.0, self_consumption_override=0.5
+    ),
+    "solar_challenge.fleet.FleetRunner": lambda: dataclasses.replace(default_runner(), max_workers=2),
+    "solar_challenge.fleet_distribution.WeightedDiscreteDistribution": lambda: WeightedDiscreteDistribution(
+        values=(4.0,), weights=(1.0,)
+    ),
+    "solar_challenge.fleet_distribution.NormalDistribution": lambda: NormalDistribution(
+        mean=4.0, std=1.0, min=2.0, max=6.0
+    ),
+    "solar_challenge.fleet_distribution.UniformDistribution": lambda: UniformDistribution(min=1.0, max=2.0),
+    "solar_challenge.fleet_distribution.ShuffledPoolDistribution": lambda: ShuffledPoolDistribution(
+        values=(4.0,), counts=(2,)
+    ),
+    "solar_challenge.fleet_distribution.SweepSpec": lambda: SweepSpec(min=1.0, max=2.0, steps=3),
+    "solar_challenge.fleet_distribution.ProportionalDistribution": lambda: ProportionalDistribution(
+        source="pv.capacity_kw", multiplier=1.5, offset=0.5
+    ),
+    "solar_challenge.fleet_distribution.FleetDistributionConfig": lambda: FleetDistributionConfig(
+        n_homes=2, pv=ComponentDistribution({"capacity_kw": 4.0}), seed=1
+    ),
+    "solar_challenge.flex.FlexibilityValueBand": lambda: FlexibilityValueBand(
+        name="central",
+        time_shift_gbp=100.0,
+        grid_services_per_home_gbp=4.0,
+        grid_services_per_kw_gbp=1.5,
+        total_gbp=120.0,
+        provenance="guard",
+    ),
+    "solar_challenge.gridservices.GridServicesRateBand": lambda: GridServicesRateBand(
+        1.0, 2.0, flat_gbp_per_kw_per_year=3.0
+    ),
+    "solar_challenge.gridservices.EventWindow": lambda: EventWindow(
+        months=(1,), weekdays=(0,), hours=(17,), events_per_year=12, event_hours=3.0
+    ),
+    "solar_challenge.gridservices.GridServicesEventsConfig": lambda: GridServicesEventsConfig(
+        availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=2.0
+    ),
+    "solar_challenge.gridservices.FlatGridServices": lambda: FlatGridServices(10.0),
+    "solar_challenge.heat_pump.HeatPumpConfig": lambda: HeatPumpConfig("ASHP"),
+    "solar_challenge.load.LoadConfig": lambda: LoadConfig(
+        annual_consumption_kwh=3000.0, household_occupants=3, seed=1
+    ),
+    "solar_challenge.location.Location": lambda: Location(51.45, -2.58, altitude=10.0),
+    "solar_challenge.optimize.ConfigPoint": lambda: ConfigPoint(4.0, 5.0, 3.0),
+    "solar_challenge.pv.PVConfig": lambda: PVConfig(
+        capacity_kw=4.0, module_efficiency=0.2, temperature_coefficient=-0.004, inverter_capacity_kw=4.0
+    ),
+    "solar_challenge.seg.SEGTariff": lambda: SEGTariff("Outgoing", 15.0),
+    "solar_challenge.tariff.TariffPeriod": lambda: TariffPeriod("00:00", "00:00", 0.25),
+}
+
+_COMPUTED_RESULT = Permanent(
+    "a computed result: the package builds it from values already read, and a broken invariant of its own raises plain"
+    " ValueError (errors.ConfigurationError's docstring; docs/prds/errors-leaf.md, contract C4)"
+)
+_PRIVATE_VALUE = Permanent(
+    "a module-private value its own module builds from numbers an input type has already read or from the module's"
+    " own constants; no caller gives its numbers"
+)
+_LIBRARY_VALUE = Permanent(
+    "a library value: its instances are the package's own tables or pvlib's catalogue rows, never numbers a user gives"
+)
+_GRAMMAR_TABLE = Permanent(
+    "a row of the fleet grammar's own tables: int and float appear only in the spec types and builder signatures it"
+    " names, not as numbers it holds"
+)
 
 #: Each other numeric dataclass's dotted name, to the reason it refuses no bad number by name.
-NOT_INPUT_TYPES: Mapping[str, Permanent] = {}
+NOT_INPUT_TYPES: Mapping[str, Permanent] = {
+    "solar_challenge.battery.SocEnvelope": _COMPUTED_RESULT,
+    "solar_challenge.board_report.GridServicesIncome": _COMPUTED_RESULT,
+    "solar_challenge.community.CommunityResults": _COMPUTED_RESULT,
+    "solar_challenge.dispatch.DispatchDecision": _COMPUTED_RESULT,
+    "solar_challenge.dispatch.GridChargeContext": _COMPUTED_RESULT,
+    "solar_challenge.dispatch.StepLimits": _COMPUTED_RESULT,
+    "solar_challenge.finance.AnnualPhysics": _COMPUTED_RESULT,
+    "solar_challenge.finance.BillBreakdown": _COMPUTED_RESULT,
+    "solar_challenge.finance.BillDistribution": _COMPUTED_RESULT,
+    "solar_challenge.finance.CostRecoverySolution": _COMPUTED_RESULT,
+    "solar_challenge.finance.HomeLedger": _COMPUTED_RESULT,
+    "solar_challenge.fleet.FleetSummary": _COMPUTED_RESULT,
+    "solar_challenge.flow.EnergyFlowResult": _COMPUTED_RESULT,
+    "solar_challenge.gridservices.GridServicesAtEvents": _COMPUTED_RESULT,
+    "solar_challenge.home.RunPricing": _COMPUTED_RESULT,
+    "solar_challenge.home.SummaryStatistics": _COMPUTED_RESULT,
+    "solar_challenge.optimize.ConfigResult": _COMPUTED_RESULT,
+    "solar_challenge.optimize.RankedSweep": _COMPUTED_RESULT,
+    "solar_challenge.optimize.SensitivityAxis": _COMPUTED_RESULT,
+    "solar_challenge.optimize.SensitivityPanel": _COMPUTED_RESULT,
+    "solar_challenge.output.CommunityMetrics": _COMPUTED_RESULT,
+    "solar_challenge.output.SeasonSummary": _COMPUTED_RESULT,
+    "solar_challenge.projection.FleetProjection": _COMPUTED_RESULT,
+    "solar_challenge.projection.MultiYearCurve": _COMPUTED_RESULT,
+    "solar_challenge.projection.ProjectEconomics": _COMPUTED_RESULT,
+    "solar_challenge.projection.YearPoint": _COMPUTED_RESULT,
+    "solar_challenge.projection._NodeData": _COMPUTED_RESULT,
+    "solar_challenge.validation.ValidationResult": _COMPUTED_RESULT,
+    "solar_challenge.battery._SocLimitsAndEfficiencies": _PRIVATE_VALUE,
+    "solar_challenge.ev._ChargeRows": _PRIVATE_VALUE,
+    "solar_challenge.ev._DayOnRows": _PRIVATE_VALUE,
+    "solar_challenge.fleet._HomeJob": _PRIVATE_VALUE,
+    "solar_challenge.flow._BatteryExchange": _PRIVATE_VALUE,
+    "solar_challenge.flow._StepEnergies": _PRIVATE_VALUE,
+    "solar_challenge.grid_charge_forecast._CheapWindow": _PRIVATE_VALUE,
+    "solar_challenge.grid_charge_forecast._TrailingRule": _PRIVATE_VALUE,
+    "solar_challenge.gridservices._EventDayTotals": _PRIVATE_VALUE,
+    "solar_challenge.home._DispatchPath": _PRIVATE_VALUE,
+    "solar_challenge.output._LoadSeason": _PRIVATE_VALUE,
+    "solar_challenge.projection._DrivenMetric": _PRIVATE_VALUE,
+    "solar_challenge.projection._NodeSelection": _PRIVATE_VALUE,
+    "solar_challenge.pv._Inverter": _PRIVATE_VALUE,
+    "solar_challenge.pv._NoctSamInput": _PRIVATE_VALUE,
+    "solar_challenge.pv._NoctSamModule": _PRIVATE_VALUE,
+    "solar_challenge.pv._StringGroup": _PRIVATE_VALUE,
+    "solar_challenge.validation._PvSizeThresholds": _PRIVATE_VALUE,
+    "solar_challenge.heat_pump.CopCurve": _LIBRARY_VALUE,
+    "solar_challenge.number_fields.Interval": _LIBRARY_VALUE,
+    "solar_challenge.pv.CecInverter": _LIBRARY_VALUE,
+    "solar_challenge.scenario_knobs.Knob": _LIBRARY_VALUE,
+    "solar_challenge.tariff.PresetRates": _LIBRARY_VALUE,
+    "solar_challenge.fleet_distribution.DistributionType": _GRAMMAR_TABLE,
+    "solar_challenge.fleet_distribution.DrawnKindRule": _GRAMMAR_TABLE,
+    "solar_challenge.fleet_distribution.ComponentDistribution": Permanent(
+        "a spec container: each draw is a spec type of INPUT_TYPES or a scalar the grammar reads at parse, and each"
+        " setting is read by the generated home's own input type (docs/prds/finite-quantities.md §5.3, §5.4)"
+    ),
+    "solar_challenge.config._Placeholder": Permanent(
+        "a ${NAME:default} placeholder, whose default config's placeholder reader reads with"
+        " number_fields.as_finite_float before building it"
+    ),
+    "solar_challenge.config._ScenarioLevelBlocks": Permanent(
+        "a private bundle whose seg_tariff_pence_per_kwh is read by the ScenarioConfig built from it"
+    ),
+}
+
+_OUTCOME_VALUES = Permanent(
+    "outcome values, which may be words such as a heat_pump_type, so the generated home's own type reads each"
+    " (docs/prds/finite-quantities.md §4 decision 6)"
+)
+_PVLIB_PARAMETERS = Transitional(
+    "S14, the PV-model stream, which owns PVConfig's pvlib parameter mappings (docs/prds/finite-quantities.md §5.4,"
+    " §11)"
+)
 
 #: Each numeric field of an input type that is not tried, as (dotted name, field), to the reason.
-EXCLUDED_FIELDS: Mapping[tuple[str, str], Permanent | Transitional] = {}
+EXCLUDED_FIELDS: Mapping[tuple[str, str], Permanent | Transitional] = {
+    ("solar_challenge.fleet_distribution.WeightedDiscreteDistribution", "values"): _OUTCOME_VALUES,
+    ("solar_challenge.fleet_distribution.ShuffledPoolDistribution", "values"): _OUTCOME_VALUES,
+    ("solar_challenge.pv.PVConfig", "custom_module_params"): _PVLIB_PARAMETERS,
+    ("solar_challenge.pv.PVConfig", "custom_inverter_params"): _PVLIB_PARAMETERS,
+}
 
 _NUMBER_TYPES_BY_NAME: Mapping[str, type] = {"int": int, "float": float}
 
@@ -91,6 +300,18 @@ def unclassified(discovered: Iterable[str]) -> list[str]:
         for name in sorted(discovered)
         if name not in INPUT_TYPES and name not in NOT_INPUT_TYPES
     ]
+
+
+def stale(discovered: Collection[str]) -> list[str]:
+    """Return a message for each INPUT_TYPES or NOT_INPUT_TYPES entry whose dotted name is not among the *discovered*, sorted."""
+    tables: Mapping[str, Collection[str]] = {"INPUT_TYPES": INPUT_TYPES, "NOT_INPUT_TYPES": NOT_INPUT_TYPES}
+    return sorted(
+        f"{table} entry {name} names no numeric dataclass a module directly under solar_challenge defines: remove or"
+        " rename the stale entry"
+        for table, names in tables.items()
+        for name in names
+        if name not in discovered
+    )
 
 
 _SEEDED_MODULE_NAME = "seeded_numeric_dataclasses"
