@@ -160,6 +160,17 @@ class TestEachKnobIsOnePureFormPreservingEdit:
         with pytest.raises(ConfigurationError, match=r"homes\[2\].*4\.1.*6\.0"):
             KNOBS["seg_tariff_pence_per_kwh"].apply(_fleet(), 6.0)
 
+    @pytest.mark.parametrize("form", _FORMS, ids=["fleet", "single-home"])
+    @pytest.mark.parametrize("knob", tuple(KNOBS.values()), ids=lambda knob: knob.name)
+    def test_apply_keeps_the_window_and_the_location(self, knob: Knob, form: Callable[[], ScenarioConfig]) -> None:
+        """No knob moves a scenario's window or location, so every point of a `fleet sweep` of a knob simulates over the window of its first point."""
+        scenario = form()
+
+        applied = knob.apply(scenario, _value_for(knob))
+
+        assert applied.window() == scenario.window()
+        assert applied.get_location() == scenario.get_location()
+
 
 class TestTheBatteryKnob:
     """battery_capacity_kwh: 0 removes every battery, a capacity resizes a battery or gives a home without one a default one."""
