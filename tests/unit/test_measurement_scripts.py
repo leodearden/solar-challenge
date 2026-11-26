@@ -11,6 +11,7 @@ scripts/measure_charge_window_bills.py and scripts/measure_grid_charge_forecast.
 
 import dataclasses
 import statistics
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
@@ -34,6 +35,7 @@ from solar_challenge.pv import (
     candidate_cec_inverters,
     create_model_chain,
     create_pv_system,
+    run_model_chain,
     simulate_pv_output,
     usable_cec_inverters,
     wired_dc_capacity_kw,
@@ -54,12 +56,6 @@ from tests._repository_paths import SCENARIOS_DIR
 from tests._scripts import load_script
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
-
-_QUIET_DIODE_SOLVER = pytest.mark.filterwarnings(
-    "ignore:invalid value encountered:RuntimeWarning"
-)
-"""Silences the RuntimeWarnings pvlib's single-diode solver raises over the dark hours of a model chain's run."""
-
 
 @pytest.fixture(scope="module")
 def mppt_window() -> ModuleType:
@@ -108,7 +104,6 @@ def _default_array_on(inverter: dict[str, float]) -> ModelChain:
 class TestMeasureMpptWindow:
     """measure_mppt_window measures pv.py's own pick and model chain under each sizing (docs/pv-inverter-string-matching.md §3)."""
 
-    @_QUIET_DIODE_SOLVER
     def test_main_measures_each_sizing_at_each_inverter_capacity_offline(
         self,
         mppt_window: ModuleType,
@@ -124,7 +119,6 @@ class TestMeasureMpptWindow:
         assert sorted(zip(census_rows["sizing"], census_rows["inverter_kw"])) == sizing_and_column
         assert set(census_rows["dc_kw"]) == {4.0}
 
-    @_QUIET_DIODE_SOLVER
     def test_the_stc_sizings_annual_ac_is_the_pv_models(
         self,
         mppt_window: ModuleType,
@@ -144,7 +138,6 @@ class TestMeasureMpptWindow:
                 f"STC sizing, {row.dc_kw} kW dc in the {row.inverter_kw!r} inverter column"
             )
 
-    @_QUIET_DIODE_SOLVER
     def test_each_sizing_keeps_its_strings_ceiling_headroom_under_mppt_high(
         self,
         mppt_window: ModuleType,
@@ -164,7 +157,6 @@ class TestMeasureMpptWindow:
                 f"inverter's Mppt_high of {row.mppt_high_v:.1f} V"
             )
 
-    @_QUIET_DIODE_SOLVER
     def test_main_without_cache_dir_reads_the_tmy_from_the_cache_the_variable_names(
         self,
         mppt_window: ModuleType,
@@ -188,6 +180,33 @@ class TestMeasureMpptWindow:
         )
         assert not (working / DEFAULT_CACHE_DIR).exists()
 
+    @pytest.mark.filterwarnings("error::RuntimeWarning")
+    def test_measure_year_runs_with_no_runtime_warning_though_main_has_not_run(
+        self, mppt_window: ModuleType, one_day_tmy: pd.DataFrame
+    ) -> None:
+        config = PVConfig.default_4kw()
+
+        year = mppt_window.measure_year(create_model_chain(config, Location.bristol()), one_day_tmy)
+
+        assert year.ac_kwh == pytest.approx(
+            simulate_pv_output(config, Location.bristol(), one_day_tmy).sum(), rel=1e-9
+        )
+
+    def test_main_leaves_the_process_warning_filters_as_it_found_them(
+        self, mppt_window: ModuleType, tmp_path: Path
+    ) -> None:
+        """A first run inside catch_warnings makes every import main makes, so no first import adds a filter of its own to the run measured."""
+        cache_dir = tmp_path / "weather-cache"
+        _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir))
+        argv = ["--cache-dir", str(cache_dir), "--dc-kw", "4"]
+        with warnings.catch_warnings():
+            mppt_window.main(argv)
+        before = list(warnings.filters)
+
+        mppt_window.main(argv)
+
+        assert warnings.filters == before
+
     def test_strings_held_at_either_edge_keep_at_most_their_maximum_power_less_the_same_losses(
         self, mppt_window: ModuleType, one_day_tmy: pd.DataFrame
     ) -> None:
@@ -200,7 +219,7 @@ class TestMeasureMpptWindow:
         """
         inverter = create_pv_system(PVConfig.default_4kw()).inverter_parameters
         in_window = _default_array_on(inverter)
-        in_window.run_model(one_day_tmy)
+        run_model_chain(in_window, one_day_tmy)
         v_mp = in_window.results.dc["v_mp"]
         producing_v_mp = v_mp[v_mp > 0]
         narrowed = {
@@ -303,7 +322,6 @@ def site(
 class TestMeasureTmyIrradiation:
     """measure_tmy_irradiation measures a TMY against the real years its months come from (docs/tmy-irradiation-scaling.md §3)."""
 
-    @_QUIET_DIODE_SOLVER
     def test_the_tmys_factor_is_the_real_years_mean_ghi_over_its_own(
         self, site: Any, year_factors: dict[int, float]
     ) -> None:
@@ -314,7 +332,6 @@ class TestMeasureTmyIrradiation:
         assert site.peak_by_tmy["annual"] == pytest.approx(site.peak_by_tmy["raw"] * mean_factor)
         assert site.peak_by_tmy["monthly"] == pytest.approx(site.peak_by_tmy["raw"] * mean_factor)
 
-    @_QUIET_DIODE_SOLVER
     def test_each_tmy_month_ranks_its_source_year_among_the_real_years(
         self, site: Any, year_factors: dict[int, float]
     ) -> None:
@@ -327,7 +344,6 @@ class TestMeasureTmyIrradiation:
             [1 / mean_factor - 1] * 12
         )
 
-    @_QUIET_DIODE_SOLVER
     def test_its_ac_is_the_default_systems_from_the_pv_model(
         self, site: Any, synthetic_tmy: pd.DataFrame, real_years: pd.DataFrame
     ) -> None:
@@ -342,7 +358,6 @@ class TestMeasureTmyIrradiation:
             simulate_pv_output(PVConfig.default_4kw(), Location.bristol(), synthetic_tmy).sum()
         )
 
-    @_QUIET_DIODE_SOLVER
     def test_a_measured_site_prints_its_name_and_factor(
         self, tmy_irradiation: ModuleType, site: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -373,7 +388,6 @@ def performance_site(pv_performance_ratio: ModuleType, synthetic_tmy: pd.DataFra
 class TestMeasurePvPerformanceRatio:
     """measure_pv_performance_ratio measures the default system's yield and performance ratio with and without its system losses (docs/pv-system-losses.md §1)."""
 
-    @_QUIET_DIODE_SOLVER
     def test_its_ac_is_the_pv_models_with_and_without_the_system_losses(
         self, performance_site: Any, synthetic_tmy: pd.DataFrame
     ) -> None:
@@ -387,12 +401,12 @@ class TestMeasurePvPerformanceRatio:
             simulate_pv_output(lossless, Location.bristol(), synthetic_tmy).sum()
         )
 
-    @_QUIET_DIODE_SOLVER
     def test_its_yields_are_per_wired_kwp_and_per_in_plane_irradiation(
         self, performance_site: Any, synthetic_tmy: pd.DataFrame
     ) -> None:
-        chain = create_model_chain(PVConfig.default_4kw(), Location.bristol())
-        chain.run_model(synthetic_tmy)
+        chain = run_model_chain(
+            create_model_chain(PVConfig.default_4kw(), Location.bristol()), synthetic_tmy
+        )
         in_plane = chain.results.total_irrad
         first_array = in_plane[0] if isinstance(in_plane, tuple) else in_plane
 
@@ -407,7 +421,6 @@ class TestMeasurePvPerformanceRatio:
                 year.kwh_per_kwp / performance_site.poa_kwh_per_m2
             )
 
-    @_QUIET_DIODE_SOLVER
     def test_a_measured_site_prints_its_name_and_performance_ratios(
         self,
         pv_performance_ratio: ModuleType,
@@ -443,7 +456,6 @@ def sunless_day_bills(charge_window_bills: ModuleType) -> list[Any]:
 class TestMeasureChargeWindowBills:
     """measure_charge_window_bills bills bristol-arbitrage's home under each of its four arms (scripts/measure_charge_window_bills.py, docs/scheduled-charge-windows.md)."""
 
-    @_QUIET_DIODE_SOLVER
     def test_it_bills_the_four_arms_in_order_each_with_its_summary_and_bill(
         self, sunless_day_bills: list[Any]
     ) -> None:
@@ -452,7 +464,6 @@ class TestMeasureChargeWindowBills:
             assert isinstance(arm.summary, SummaryStatistics), arm.arm
             assert isinstance(arm.bill, BillBreakdown), arm.arm
 
-    @_QUIET_DIODE_SOLVER
     def test_each_bill_is_its_runs_import_cost_basis_c_own_use_and_standing_charge(
         self, charge_window_bills: ModuleType, sunless_day_bills: list[Any]
     ) -> None:
@@ -469,14 +480,12 @@ class TestMeasureChargeWindowBills:
                 finance.standing_charge_pence_per_day * summary.simulation_days / 100
             ), arm.arm
 
-    @_QUIET_DIODE_SOLVER
     def test_every_arm_but_c_charges_from_the_grid(self, sunless_day_bills: list[Any]) -> None:
         grid_charge_kwh = {arm.arm: arm.summary.total_grid_charge_kwh for arm in sunless_day_bills}
 
         assert grid_charge_kwh["C"] == 0.0
         assert all(grid_charge_kwh[label] > 0.0 for label in "ABD"), grid_charge_kwh
 
-    @_QUIET_DIODE_SOLVER
     def test_main_prints_each_arms_bill_and_what_it_was_measured_on_offline(
         self,
         charge_window_bills: ModuleType,
@@ -502,7 +511,6 @@ class TestMeasureChargeWindowBills:
         for label in "ABCD":
             assert sum(row.startswith(f"| {label} |") for row in rows) == 1, label
 
-    @_QUIET_DIODE_SOLVER
     def test_main_without_cache_dir_reads_the_tmy_from_the_cache_the_variable_names(
         self,
         charge_window_bills: ModuleType,
@@ -617,13 +625,11 @@ class TestMeasureGridChargeForecast:
             pd.Timestamp("2024-06-01", tz="Europe/London"),
         )
 
-    @_QUIET_DIODE_SOLVER
     def test_it_runs_every_home_under_each_forecast_in_order(self, forecast_arms: list[Any]) -> None:
         assert [arm.forecast for arm in forecast_arms] == list(GRID_CHARGE_FORECASTS)
         for arm in forecast_arms:
             assert [home.summary.grid_charge_forecast for home in arm.homes] == [arm.forecast] * _FORECAST_HOMES
 
-    @_QUIET_DIODE_SOLVER
     def test_each_homes_net_cost_in_each_season_adds_up_to_its_net_cost_over_the_window(
         self, forecast_arms: list[Any]
     ) -> None:
@@ -635,7 +641,6 @@ class TestMeasureGridChargeForecast:
                     home.summary.net_cost_gbp, rel=1e-9, abs=1e-9
                 ), arm.forecast
 
-    @_QUIET_DIODE_SOLVER
     def test_the_householder_bill_is_bill_distributions_mean_which_finance_refuses_perfect_foresight(
         self, grid_charge_forecast: ModuleType, forecast_arms: list[Any]
     ) -> None:
@@ -653,7 +658,6 @@ class TestMeasureGridChargeForecast:
                     summaries, finance
                 ).mean_gbp, arm.forecast
 
-    @_QUIET_DIODE_SOLVER
     def test_trailing_14_days_runs_as_pv_blind_until_it_has_14_days_of_history(
         self, forecast_arms: list[Any]
     ) -> None:
@@ -663,7 +667,6 @@ class TestMeasureGridChargeForecast:
             assert dataclasses.replace(trailing.summary, grid_charge_forecast="pv_blind") == pv_blind.summary
             assert trailing.net_cost_by_season_gbp == pv_blind.net_cost_by_season_gbp
 
-    @_QUIET_DIODE_SOLVER
     def test_perfect_foresight_grid_charges_less_than_pv_blind_on_sunny_days(self, forecast_arms: list[Any]) -> None:
         """The clear days' PV refills the battery, stranding grid charge that perfect foresight leaves out."""
         arms = {arm.forecast: arm for arm in forecast_arms}
@@ -671,7 +674,6 @@ class TestMeasureGridChargeForecast:
         for pv_blind, foresight in zip(arms["pv_blind"].homes, arms["perfect_foresight"].homes, strict=True):
             assert foresight.summary.total_grid_charge_kwh < pv_blind.summary.total_grid_charge_kwh
 
-    @_QUIET_DIODE_SOLVER
     def test_main_prints_each_forecasts_per_home_means_and_their_deltas_and_what_they_were_measured_on_offline(
         self,
         grid_charge_forecast: ModuleType,

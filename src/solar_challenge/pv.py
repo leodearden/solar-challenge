@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """PV system configuration and modelling."""
 
-import contextlib
 import functools
 import math
 import warnings
@@ -232,7 +231,8 @@ class PVConfig:
         custom_inverter_params: Optional custom pvlib inverter parameters dict
 
         # Degradation parameters (PV-DGR)
-        system_age_years: Age of the PV system in years (default 0.0 = new system)
+        system_age_years: Age of the PV system in years (default 0.0 = new system); its
+            ageing lowers each array's DC power before the inverter, with the system losses
         degradation_rate_per_year: Annual capacity degradation as a fraction
             (default 0.005 = 0.5%/year, typical for crystalline silicon panels)
 
@@ -745,19 +745,6 @@ def _adjust_bracket(template: Mapping[str, float], coefficient: float) -> tuple[
     return 100 - half_width, 100 + half_width
 
 
-@contextlib.contextmanager
-def _quiet_single_diode_solver() -> Iterator[None]:
-    """Ignore the RuntimeWarning "invalid value encountered" from scipy's _chandrupatla, which pvlib's single-diode solution runs to find the maximum-power point: on a curve with no power, such as a dark hour's or that of a module with none at STC, it divides 0 by 0, yet still finds that curve's maximum power."""
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="invalid value encountered",
-            category=RuntimeWarning,
-            module=r"scipy\.optimize\._chandrupatla",
-        )
-        yield
-
-
 def _modelled_gamma(module_params: Mapping[str, float]) -> float:
     """The module's temperature coefficient of maximum power, per K, as the model chain models it.
 
@@ -767,12 +754,23 @@ def _modelled_gamma(module_params: Mapping[str, float]) -> float:
     is not above 0 W has no temperature coefficient of maximum power, so the result is
     NaN, never a division by 0; _require_adjust_reaches refuses that NaN as it refuses
     any NaN end.
+
+    Such a module makes scipy's _chandrupatla, which pvlib's single-diode solution runs to
+    find the maximum-power point, divide 0 by 0, so this solve ignores the "invalid value
+    encountered" RuntimeWarning that raises; the module's refusal is PVConfig's, through
+    that NaN.
     """
     cell_temperatures_c = 25.0 + _GAMMA_HALF_STEP_K * np.array([-1.0, 0.0, 1.0])
     diode = PVSystem(module_parameters=dict(module_params)).calcparams_cec(
         np.full(3, 1000.0), cell_temperatures_c
     )
-    with _quiet_single_diode_solver():
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="invalid value encountered",
+            category=RuntimeWarning,
+            module=r"scipy\.optimize\._chandrupatla",
+        )
         p_cold, p_stc, p_hot = pvlib.pvsystem.singlediode(*diode)["p_mp"]
     if not p_stc > 0:
         return math.nan
@@ -1066,13 +1064,19 @@ def _dc_after_losses(
     return dc.assign(i_mp=dc["i_mp"] * kept_fraction, p_mp=dc["p_mp"] * kept_fraction)
 
 
-def _deduct_system_losses(model_chain: ModelChain, system_losses: float) -> ModelChain:
-    """pvlib's losses-model step: each array's DC output less system_losses, for the inverter model to read.
+def _dc_kept_fraction(config: PVConfig) -> float:
+    """The fraction of each array's DC power that reaches the inverter: what the system losses and the modules' ageing leave, combined as PVWatts combines its loss categories."""
+    return (1 - config.system_losses) * calculate_degradation_factor(
+        config.system_age_years, config.degradation_rate_per_year
+    )
 
-    Like pvlib's own losses models, it records the fraction of DC power kept in
+
+def _deduct_dc_losses(model_chain: ModelChain, kept_fraction: float) -> ModelChain:
+    """pvlib's losses-model step: each array's DC output scaled to kept_fraction, for the inverter model to read.
+
+    Like pvlib's own losses models, it records the kept fraction in
     results.losses.
     """
-    kept_fraction = 1 - system_losses
     model_chain.results.losses = kept_fraction
     dc = model_chain.results.dc
     if isinstance(dc, tuple):
@@ -1096,8 +1100,10 @@ def create_model_chain_picking_from(
     CecInverter must name a row there. Custom inverter parameters and PVWatts
     modules ignore the candidates, and their system's inverter is None.
 
-    Each array's DC power falls by config.system_losses before the inverter
-    model reads it, at unchanged voltage (docs/pv-system-losses.md).
+    Each array's DC power falls by config.system_losses and by the modules'
+    ageing (calculate_degradation_factor of config.system_age_years and
+    config.degradation_rate_per_year) before the inverter model reads it, at
+    unchanged voltage (docs/pv-system-losses.md).
 
     Args:
         config: PV system configuration
@@ -1141,7 +1147,7 @@ def create_model_chain_picking_from(
         location=pvlib_location,
         aoi_model="physical",
         spectral_model="no_loss",
-        losses_model=functools.partial(_deduct_system_losses, system_losses=config.system_losses),
+        losses_model=functools.partial(_deduct_dc_losses, kept_fraction=_dc_kept_fraction(config)),
     )
     _require_compatible_dc_and_ac_models(model_chain)
 
@@ -1154,6 +1160,25 @@ def create_model_chain(
 ) -> ModelChain:
     """Create a pvlib ModelChain for AC power simulation, with any CEC inverter picked from candidate_cec_inverters(); create_model_chain_picking_from documents the arguments, result and errors."""
     return create_model_chain_picking_from(config, location, candidate_cec_inverters())
+
+
+def run_model_chain(model_chain: ModelChain, weather_data: pd.DataFrame) -> ModelChain:
+    """Run model_chain over weather_data and return it, run.
+
+    It is the one way the project runs a pvlib ModelChain, which
+    simulate_pv_output, the measurement scripts and the tests share. Every
+    chain create_model_chain_picking_from builds already applies the system
+    losses and ageing to each array's DC power. Building and running stay
+    separate because measure_mppt_window's census reads a chain's inverter
+    pick before it runs the chain.
+    """
+    model_chain.run_model(weather_data)
+    return model_chain
+
+
+def ac_power_kw(model_chain: ModelChain) -> pd.Series:
+    """A run chain's AC power in kW, clipped at 0 so the inverter's night tare never reads as negative generation."""
+    return (model_chain.results.ac / 1000.0).clip(lower=0.0)
 
 
 def simulate_pv_output(
@@ -1169,28 +1194,10 @@ def simulate_pv_output(
         weather_data: DataFrame with ghi, dni, dhi, temp_air, wind_speed columns
 
     Returns:
-        Series of AC power output in kW with same index as weather_data
+        Series of AC power output at config.system_age_years, in kW, with the
+        same index as weather_data
     """
-    model_chain = create_model_chain(config, location)
-
-    # Run the simulation
-    with _quiet_single_diode_solver():
-        model_chain.run_model(weather_data)
-
-    # Get AC power and convert from W to kW
-    ac_power = model_chain.results.ac / 1000.0
-
-    # Ensure no negative values (numerical noise)
-    ac_power = ac_power.clip(lower=0.0)
-
-    # Apply panel degradation based on system age
-    ac_power = apply_degradation(
-        ac_power,
-        config.system_age_years,
-        config.degradation_rate_per_year,
-    )
-
-    return ac_power
+    return ac_power_kw(run_model_chain(create_model_chain(config, location), weather_data))
 
 
 def calculate_degradation_factor(
@@ -1240,6 +1247,10 @@ def apply_degradation(
     degradation_rate_per_year: float = 0.005,
 ) -> pd.Series:
     """Apply degradation factor to PV generation time series.
+
+    simulate_pv_output and create_model_chain already apply a PVConfig's ageing
+    to each array's DC power, so applying this to their output for an aged
+    PVConfig ages the array twice.
 
     Args:
         generation: PV generation time series in kW

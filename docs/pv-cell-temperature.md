@@ -78,8 +78,8 @@
     DC model's `results.dc`. That is expected.
   - The scipy `_chandrupatla` RuntimeWarnings that the single-diode solver raised in dark
     hours no longer occur: 0 per run, against 39 per clear day and 100 per Bristol year
-    for each array under SAPM (§3). The run policy, `simulate_pv_output`'s warning filter
-    included, is task 810's.
+    for each array under SAPM (§3). Task 810 removed `simulate_pv_output`'s warning
+    filter, so every chain now runs through `pv.run_model_chain` with none.
 
 ## 2. Decision and Source
 

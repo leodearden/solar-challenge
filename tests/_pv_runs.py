@@ -7,8 +7,7 @@ Usage::
 
     kwh = clear_day_kwh(PVConfig(capacity_kw=4.0))
 
-    chain = create_model_chain(config, Location.bristol())
-    chain.run_model(clear_day_weather())
+    chain = run_model_chain(create_model_chain(config, Location.bristol()), clear_day_weather())
     for cell_temperature in per_array(chain.results.cell_temperature):
         ...
 """

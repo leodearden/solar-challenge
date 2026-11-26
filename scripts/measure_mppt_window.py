@@ -22,7 +22,6 @@ import functools
 import itertools
 import math
 import sys
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,10 +36,12 @@ from solar_challenge.location import Location
 from solar_challenge.pv import (
     CecInverter,
     PVConfig,
+    ac_power_kw,
     candidate_cec_inverters,
     create_model_chain,
     create_model_chain_picking_from,
     create_pv_system,
+    run_model_chain,
     usable_cec_inverters,
 )
 from solar_challenge.weather import (
@@ -196,7 +197,7 @@ class Year:
 
 @dataclass(frozen=True)
 class _Strings:
-    """One MPPT input's hourly string voltage and array power, with its module's diode parameters and the fraction of DC power the chain's system losses keep."""
+    """One MPPT input's hourly string voltage and array power, with its module's diode parameters and the fraction of DC power the chain's system losses and ageing keep."""
 
     modules_per_string: int
     strings: int
@@ -206,7 +207,7 @@ class _Strings:
     kept: float
 
     def power_at(self, string_v: float) -> pd.Series:
-        """The array's power with its strings held at string_v on their IV curve, less the system losses, as p_mp is."""
+        """The array's power with its strings held at string_v on their IV curve, less the system losses and ageing, as p_mp is."""
         module_v = string_v / self.modules_per_string
         current = pvlib.pvsystem.i_from_v(
             module_v,
@@ -269,11 +270,11 @@ def _excursion(
 
 def measure_year(chain: ModelChain, weather: pd.DataFrame) -> Year:
     """Run the chain over the year and measure both edges of its inverter's MPPT window."""
-    chain.run_model(weather)
+    run_model_chain(chain, weather)
     strings = _strings(chain)
     inverter = chain.system.inverter_parameters
     ac_kwh = _ac_kwh([s.v_mp for s in strings], [s.p_mp for s in strings], inverter)
-    chain_ac_kwh = float(chain.results.ac.clip(lower=0).sum()) / 1000
+    chain_ac_kwh = float(ac_power_kw(chain).sum())
     if not math.isclose(ac_kwh, chain_ac_kwh, rel_tol=1e-12):
         raise RuntimeError(f"sandia_multi gives {ac_kwh} kWh, the chain {chain_ac_kwh} kWh")
     producing = _producing(chain)
@@ -469,8 +470,7 @@ def operating_voltage(
 ) -> tuple[pd.DataFrame, pd.Series]:
     """The default system's hours with module V_mp above COLD_RATIO x V_mp_ref, and its hours above V_mp_ref."""
     config = PVConfig.default_4kw()
-    chain = create_model_chain(config, location)
-    chain.run_model(weather)
+    chain = run_model_chain(create_model_chain(config, location), weather)
     (strings,) = _strings(chain)
     ratio = strings.v_mp / strings.modules_per_string / module["V_mp_ref"]
     producing = _producing(chain)
@@ -494,7 +494,7 @@ def operating_voltage(
             "string STC V_oc": pick.longest_string * module["V_oc_ref"],
             "Mppt_high V": inverter["Mppt_high"],
             "Vdcmax V": inverter["Vdcmax"],
-            "annual AC kWh": float(chain.results.ac.clip(lower=0).sum()) / 1000,
+            "annual AC kWh": float(ac_power_kw(chain).sum()),
             "producing hours": int(producing.sum()),
             "hours above V_mp_ref": int(above.sum()),
             "DC energy share above V_mp_ref": float(
@@ -608,12 +608,6 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _parser().parse_args(argv)
-    warnings.filterwarnings(
-        "ignore",
-        message="invalid value encountered",
-        category=RuntimeWarning,
-        module=r"scipy\.optimize\._chandrupatla",
-    )
     location = Location.bristol()
     weather = PvgisTmy(WeatherCache(args.cache_dir)).get(location)
     module = create_pv_system(PVConfig.default_4kw()).arrays[0].module_parameters

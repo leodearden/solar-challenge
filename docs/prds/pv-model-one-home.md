@@ -19,7 +19,7 @@ What a user sees when this lands:
 - Every run computes cell temperature with SAM's NOCT model, from the module's own catalogue NOCT and efficiency. The default 4 kW array's Bristol year moves from 993.1 to 1012.1 kWh per wired kWp (+1.9%). The PV, finance and benchmark docs carry dated amendments with the re-measured figures.
 - A pvlib release whose CEC library drops the default module's row stops every simulation with an error naming `Canadian_Solar_Inc__CS1U_400MS` and the `CECMod` library. Today the model switches silently to another Canadian Solar 400 W row (`CS3W_400P`, 400.158 W).
 - `PVConfig(4.0, custom_module_params={"pdc0": 300.0, "gamma_pdc": -0.004})` is wired as 13 modules (3.9 kWp), and validation judges it on 3.9 kWp. Today it is 10 modules of 300 W, 3.0 kWp modelled, judged as 4.0 kWp.
-- `pv.run_model_chain` runs any chain under the project's one run policy. The two measurement scripts and the tests call it, so the four copies of its warning filter go. Today a chain run without a copied filter emits 39 `RuntimeWarning`s per simulated day.
+- `pv.run_model_chain` runs any chain and returns it, with no warning filter: it is the project's one way to run a chain. The two measurement scripts and the tests call it, so the four copies of the warning filter go. **[Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]** Since task 823's NOCT-SAM change (84297320) a bare chain run emits no `RuntimeWarning`; the 39 per simulated day were measured before it.
 - The self-consumption checks judge a run against one sourced band each, the band their docstrings state. They compare the run's own generation with its own demand instead of a nameplate × 900 kWh guess.
 - `apply_degradation` leaves the public surface at the program's bump (S29). Ageing has one home: the model chain's DC losses step (task 284).
 
@@ -68,7 +68,7 @@ Also measured for this PRD (pvlib 0.15.1, the tests' `synthetic_june_weather("20
 - **The template.** The row holds STC 400.428 W, A_c 1.99 m² (efficiency 0.2012), T_NOCT 45.1 °C, `gamma_r` −0.3448 %/K and `Adjust` 7.313. Its modelled γ at STC is −0.3473 %/K.
 - **Adjust.** In `calcparams_cec`, `Adjust` scales only the short-circuit current's temperature term, so it leaves the STC point unchanged: P_mp stays 400.4281 W for `Adjust` from −500 to 2000. The modelled γ is linear in it, from −0.035 to −1.57 %/K over that range. Solving `Adjust` for the template's own γ returns 7.312982 and reproduces the day's energy to 1e-11.
 - **Catalogue span.** `gamma_r` spans −0.679 to −0.166 %/K over all 21,535 rows. STC / (A_c × 1000) spans 0.036 to 0.227.
-- **The warning policy is live.** `create_model_chain(PVConfig.default_4kw(), bristol).run_model(day)` emits 39 `RuntimeWarning: invalid value encountered in divide` from `scipy/optimize/_chandrupatla.py`.
+- **The warning policy is live.** `create_model_chain(PVConfig.default_4kw(), bristol).run_model(day)` emits 39 `RuntimeWarning: invalid value encountered in divide` from `scipy/optimize/_chandrupatla.py`. **[Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]** A bare run has emitted 0 `RuntimeWarning`s since task 823 (84297320), measured on main ad4b7537: the default 4 kW, 7.6 kW on two arrays, 8 kW on 3.68 kW and an aged system over this day, and the default over a synthetic TMY.
 - **SAPM → NOCT-SAM, default module.**
 
   | | clear day | Bristol year |
@@ -111,7 +111,7 @@ Also measured for this PRD (pvlib 0.15.1, the tests' `synthetic_june_weather("20
 
 **One rating and one wired DC.** `_module_rating_w` reads `pdc0` for a PVWatts module and `STC` otherwise, and refuses a module with neither. The module count, the DC model and `wired_dc_capacity_kw` all read that number. The wired DC is summed over the arrays of the `PVSystem` that `create_pv_system` builds, so two builders can no longer drift.
 
-**One way to run a chain.** `run_model_chain(model_chain, weather_data)` applies the warning policy and returns the run chain. After task 284, every chain ages and loses its DC before the inverter. `simulate_pv_output` becomes build, run, W→kW and clip. The scripts and tests run chains through it. `apply_degradation`, the second and wrong way to age, leaves the surface at the bump.
+**One way to run a chain.** `run_model_chain(model_chain, weather_data)` runs the chain, with no warning filter, and returns it run. **[Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]** After task 284, every chain ages and loses its DC before the inverter. `simulate_pv_output` becomes build, run, W→kW and clip. The scripts and tests run chains through it. `apply_degradation`, the second and wrong way to age, leaves the surface at the bump.
 
 **Validation states what it applies.**
 
@@ -157,10 +157,10 @@ Heuristics served:
    - The re-baseline is one leaf (ε). The docs get dated amendments, never re-anchored snapshots. A new `docs/pv-cell-temperature.md` records the decision, its source (SAM Photovoltaic Model Technical Reference, §10.6, which pvlib's `noct_sam` cites) and the measurements.
 6. **One rating.** `_module_rating_w(params)` is `pdc0` for a PVWatts module and `STC` otherwise, and raises `ValueError` naming both keys when the module has neither. The 400 W default goes. The module count uses it, so the count, the DC model's own scale and the wired DC agree.
 7. **Wired DC from the built system.** `wired_dc_capacity_kw(config)` sums, over the arrays of `create_pv_system(config)`, modules per string × strings × `_module_rating_w(array.module_parameters)`. The recomputation through `_module_parameters` and `_module_count` goes. The function's frozen absence from `__all__` and its signature are unchanged.
-8. **One run policy.** `run_model_chain(model_chain, weather_data) -> ModelChain` runs the chain inside the one `_chandrupatla` filter and returns it.
+8. **One run policy.** `run_model_chain(model_chain, weather_data) -> ModelChain` runs the chain, with no warning filter, and returns it. **[Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]**
    - Build and run stay separate because `scripts/measure_mppt_window.py`'s `census` reads a chain's pick before deciding whether to run it.
    - It is module-public, not in `__all__` (open question 4).
-   - `simulate_pv_output` is `run_model_chain(create_model_chain(...), weather).results.ac / 1000`, clipped at 0.
+   - `simulate_pv_output` is `ac_power_kw(run_model_chain(create_model_chain(...), weather))`. `ac_power_kw(model_chain)` is the one home of the W-to-kW conversion and the clip at 0, and both measurement scripts read AC through it. **[Amended 2026-11-26, task 810]**
    - The scripts' three copies and the tests' `_QUIET_DIODE_SOLVER` and three marks go.
    - `measure_pv_performance_ratio.measure` reads each configuration's in-plane irradiation and AC from one run, so the script stops mixing the two entry points.
 9. **Ageing has one home** (D26, fk-3ccbba41d836).
@@ -214,10 +214,13 @@ def _temperature_model_parameters(module_params: Mapping[str, float]) -> dict[st
 def wired_dc_capacity_kw(config: PVConfig) -> float: ...
     # Σ over create_pv_system(config).arrays: modules_per_string × strings × _module_rating_w(module_parameters) / 1000
 def run_model_chain(model_chain: ModelChain, weather_data: pd.DataFrame) -> ModelChain: ...
-    # runs model_chain over weather_data under the one warning policy; returns it run.
+    # runs model_chain over weather_data, with no warning filter; returns it run. [Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]
     # Every chain create_model_chain(_picking_from) builds already applies system losses and ageing on DC (task 284).
+def ac_power_kw(model_chain: ModelChain) -> pd.Series: ...
+    # a run chain's results.ac / 1000, clipped at 0; module-public, not in __all__; both measurement scripts read AC through it
+    # [Amended 2026-11-26, task 810]
 def simulate_pv_output(config, location, weather_data) -> pd.Series: ...   # frozen signature unchanged
-    # run_model_chain(create_model_chain(config, location), weather_data).results.ac / 1000, clipped at 0
+    # ac_power_kw(run_model_chain(create_model_chain(config, location), weather_data)) [Amended 2026-11-26, task 810]
 
 # src/solar_challenge/validation.py
 UK_YIELD_BENCHMARK_KWH_PER_KWP: tuple[float, float] = (300.0, 1200.0)   # renamed from _UK_…
@@ -254,7 +257,7 @@ Downstream readers and their seam lines:
 | # | scenario | preconditions | postconditions | lands with |
 |---|---|---|---|---|
 | B1 | Module identity | `PVConfig.default_4kw()`; a subprocess whose `pvlib.pvsystem.retrieve_sam("CECMod")` lacks the `DEFAULT_CEC_MODULE` column | the default system's module parameters equal the library's `DEFAULT_CEC_MODULE` column, key for key; in the subprocess, `simulate_pv_output` raises naming `Canadian_Solar_Inc__CS1U_400MS` and `CECMod` (today it simulates `CS3W_400P`) | α |
-| B2 | One run policy | the default chain; `synthetic_june_weather("2024-06-21")`; `warnings.simplefilter("error")` | `run_model_chain` returns a run chain with no warning raised; the same chain's bare `run_model` raises `RuntimeWarning` from `scipy.optimize._chandrupatla`; `simulate_pv_output` equals the run chain's `results.ac / 1000` clipped at 0; `measure_mppt_window.measure_year` runs warning-free without `main` having run | β |
+| B2 | One run policy | one- and two-array default chains; `synthetic_june_weather("2024-06-21")`; `warnings.simplefilter("error", RuntimeWarning)` | `run_model_chain` returns the run chain with no `RuntimeWarning` raised, for one array and for two; `simulate_pv_output` equals the run chain's `results.ac / 1000` clipped at 0; `measure_mppt_window.measure_year` runs warning-free without `main` having run. **[Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]** | β |
 | B3 | One rating and one wired DC | 4 kW of `{"pdc0": 300, "gamma_pdc": -0.004}`; a module dict with neither `pdc0` nor `STC`; 0.3 kW and 4 kW of the default module | 13 modules and `wired_dc_capacity_kw` 3.9 (today 10 modules and 4.0); the module-less dict raises naming `pdc0` and `STC`; the default sizes return 0.400428 and 4.00428, unchanged; `validate_pv_generation`'s peak message names 3.90 kWp | γ |
 | B4 | Validation states what it applies | `SimulationResults` from the existing `_create_simulation_results` builder at ratios on each band's edges ± 0.1 pp; results whose generation total is twice their demand total | PASS exactly inside each constant; the message range and the docstring both equal the constant; the "PV large relative to consumption" note follows the run's own totals whatever the capacity (today `capacity_kw * 900 / annual`) | δ |
 | B5 | NOCT-SAM from the module | the default chain; 4 kW of `create_simple_module_params(efficiency=0.10)` and of `efficiency=0.22`; the clear day | the chain's temperature model is `noct_sam`; each array's cell temperature equals `pvlib.temperature.noct_sam(..., noct=45.1, module_efficiency=400.428/1990)`; the default's clear-day energy is ×1.031 today's; the 0.10 module yields less than the 0.22 one (today equal) | ε |
@@ -324,7 +327,7 @@ Labels are the sidecar's. Every leaf carries:
     - The scripts' `in_plane_irradiation`, `measure_year`, `operating_voltage` and `main`'s process-wide filter go through it.
     - `measure` reads POA and AC from one run per configuration.
     - `_QUIET_DIODE_SOLVER` and `test_pv`'s three `filterwarnings` marks go.
-  - **Signal:** B2. The default chain run through `run_model_chain` under `simplefilter("error")` completes; the bare run raises; `measure_year` no longer depends on `main` having run.
+  - **Signal:** B2. One- and two-array chains run through `run_model_chain` under `simplefilter("error", RuntimeWarning)` raise no `RuntimeWarning`; `simulate_pv_output` equals the run chain's `results.ac / 1000` clipped at 0; `measure_year` no longer depends on `main` having run. **[Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]**
   - **Prereq:** task 284. **Unlocks:** η.
   - **Keys:** fk-616cc076b7cb, fk-3ccbba41d836. **Priority:** medium.
 - **γ. One rating; wired DC from the built system** (supersedes 699).
@@ -390,7 +393,7 @@ G7 (advisory: this repo has no `docs/legibility/design-invariants.md`). The dark
   - ζ deletes the sentinel and refuses inapplicable settings.
   - ε gives a custom module without `T_NOCT` or `A_c` the default module's values. That is a stated rule in `custom_module_params`' docstring, not a hidden fallback, and it is no weaker than today, when every module gets one generic SAPM set. Recorded, no waiver needed.
 - **`one-fact-one-home`.** Module identity is held by `DEFAULT_CEC_MODULE`, ageing by `calculate_degradation_factor`, and each band by its constant. ζ writes `gamma_r` and `A_c` into the derived module dict from the `PVConfig` field, its one home, so the dict stays self-consistent.
-- **`exceptions-owned-or-ratified`.** The `_chandrupatla` filter is an owned suppression in one place, `run_model_chain`, whose docstring names the solver's dark-hour cause. β removes the unowned copies.
+- **`exceptions-owned-or-ratified`.** `run_model_chain` owns no filter. The one remaining exception is `_modelled_gamma`'s owned suppression: a narrow `_chandrupatla` "invalid value encountered" filter around its direct `pvlib.pvsystem.singlediode` call. A module with no power at STC divides 0 by 0 in the max-power search; the function still returns NaN, which `PVConfig` refuses, and task ζ's `TestACoefficientNoAdjustReachesIsRefused` pins that under `error::RuntimeWarning`. β removes every other copy: the run path, both scripts, `_QUIET_DIODE_SOLVER` and `test_pv`'s three marks. **[Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]**
 - **`guards-exercise-behaviour`.** Every grep delivered check has a behaviour twin in B1–B7.
 
 No waivers.

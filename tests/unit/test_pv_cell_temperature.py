@@ -20,6 +20,7 @@ from solar_challenge.pv import (
     create_model_chain,
     create_pv_system,
     create_simple_module_params,
+    run_model_chain,
     simulate_pv_output,
 )
 from tests._pv_modules import default_module, pvwatts_300_w_module
@@ -55,7 +56,7 @@ class TestCellTemperatureIsNoctSamFromTheModule:
         chain = create_model_chain(PVConfig(capacity_kw=capacity_kw), Location.bristol())
         assert len(chain.system.arrays) == array_count
 
-        chain.run_model(clear_day)
+        run_model_chain(chain, clear_day)
 
         for cell_temperature, total_irrad, effective_irradiance in zip(
             per_array(chain.results.cell_temperature),

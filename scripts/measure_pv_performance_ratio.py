@@ -17,7 +17,6 @@ suite.
 
 import argparse
 import dataclasses
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,12 +24,14 @@ from typing import Optional
 
 import pandas as pd
 from pvlib.iotools import get_pvgis_hourly
+from pvlib.modelchain import ModelChain
 
 from solar_challenge.location import Location
 from solar_challenge.pv import (
     PVConfig,
+    ac_power_kw,
     create_model_chain,
-    simulate_pv_output,
+    run_model_chain,
     wired_dc_capacity_kw,
 )
 from solar_challenge.weather import (
@@ -105,30 +106,27 @@ class PvgisEstimate:
         return self.kwh_per_kwp / self.poa_kwh_per_m2
 
 
-def in_plane_irradiation(location: Location, tmy: pd.DataFrame) -> float:
-    """CONFIG's in-plane irradiation over tmy in kWh/m², from its model chain's first array; every array shares the mount."""
-    chain = create_model_chain(CONFIG, location)
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="invalid value encountered",
-            category=RuntimeWarning,
-            module=r"scipy\.optimize\._chandrupatla",
-        )
-        chain.run_model(tmy)
+def in_plane_irradiation(chain: ModelChain) -> float:
+    """A run chain's in-plane irradiation in kWh/m², from its first array; every array shares the mount."""
     in_plane = chain.results.total_irrad
     first_array = in_plane[0] if isinstance(in_plane, tuple) else in_plane
     return float(first_array["poa_global"].sum()) / 1000.0
 
 
-def annual_ac_kwh(config: PVConfig, location: Location, weather: pd.DataFrame) -> float:
-    """config's AC energy over hourly weather."""
-    return float(simulate_pv_output(config, location, weather).sum())
+def annual_ac_kwh(chain: ModelChain) -> float:
+    """A run chain's AC energy in kWh over its hourly weather."""
+    return float(ac_power_kw(chain).sum())
 
 
 def measure(name: str, location: Location, tmy: pd.DataFrame) -> SiteMeasurement:
-    """Measure CONFIG over one site's TMY, without its system losses and with them."""
-    poa_kwh_per_m2 = in_plane_irradiation(location, tmy)
+    """Measure CONFIG over one site's TMY, without its system losses and with them, from one run of each.
+
+    The in-plane irradiation is CONFIG's run's: the system losses act on the DC
+    power, after the irradiance reaches the plane.
+    """
+    with_losses = run_model_chain(create_model_chain(CONFIG, location), tmy)
+    lossless = run_model_chain(create_model_chain(LOSSLESS, location), tmy)
+    poa_kwh_per_m2 = in_plane_irradiation(with_losses)
     wired_kwp = wired_dc_capacity_kw(CONFIG)
     return SiteMeasurement(
         name=name,
@@ -136,8 +134,8 @@ def measure(name: str, location: Location, tmy: pd.DataFrame) -> SiteMeasurement
         ghi_kwh_per_m2=float(tmy["ghi"].sum()) / 1000.0,
         poa_kwh_per_m2=poa_kwh_per_m2,
         wired_kwp=wired_kwp,
-        lossless=Yield.of(annual_ac_kwh(LOSSLESS, location, tmy), wired_kwp, poa_kwh_per_m2),
-        with_losses=Yield.of(annual_ac_kwh(CONFIG, location, tmy), wired_kwp, poa_kwh_per_m2),
+        lossless=Yield.of(annual_ac_kwh(lossless), wired_kwp, poa_kwh_per_m2),
+        with_losses=Yield.of(annual_ac_kwh(with_losses), wired_kwp, poa_kwh_per_m2),
     )
 
 
