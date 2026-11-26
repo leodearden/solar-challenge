@@ -17,8 +17,9 @@ Covers, after the shared helpers:
   differently from the events model.
 - B5: solve-still-holds + I4 rate-independence.
 - ε: the finance report and the CLI render the Grid Services Income section.
-- α′ (PRD §9 C13): the events table's reliability and displaced-self-use rows,
-  and finance run's mean-over-event-days income beside them.
+- α′ (PRD §9 C13): finance run's mean-over-event-days income beside the events
+  table's reliability and displaced-self-use rows, which
+  tests/unit/test_board_report_grid_services.py renders from given breakdowns.
 - B10, B11 (review-all S25 δ): finance run renders the income each mode's
   projection booked at year 1 and year N beside this window's fleet, with no
   flexibility band; and the flexibility-value block's grid-services row reads
@@ -41,11 +42,12 @@ from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
 from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.flex import FLEX_VALUE_BANDS
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
     GRID_SERVICES_RATE_BANDS,
     EventWindow,
-    GridServicesAtEvents,
+    GridServicesBand,
     GridServicesEventsConfig,
     compute_grid_services_at_events,
 )
@@ -702,76 +704,6 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
 # ---------------------------------------------------------------------------
 
 
-def _events_report(gse: GridServicesAtEvents) -> str:
-    """The finance report of one section, with *gse* booked on one 2.5 kW battery home at the default events pricing."""
-    return generate_finance_report(
-        sections_of(make_assumption_section(bill=_synthetic_bill_distribution())),
-        scenario_name="Alpha-Prime-Events-Test",
-        grid_services=GridServicesIncome(
-            pricing=GridServicesEventsConfig(),
-            annual_income_gbp=gse.annual_income_gbp,
-            battery_homes=1,
-            battery_discharge_kw=2.5,
-            at_events=gse,
-        ),
-    )
-
-
-_PER_WINDOW_NOTE = "is one event window's figure"
-
-
-def test_the_events_table_renders_reliability_and_displacement_rows() -> None:
-    """One event window: its figures, and a note that the income is gross of the displaced self-use, which a home simulated without a tariff values at £0."""
-    report = _events_report(
-        GridServicesAtEvents(
-            annual_income_gbp=14.958,
-            per_window_avail_kw=(1.5,),
-            per_window_income_gbp=(14.958,),
-            per_window_avail_p50_kw=(2.0,),
-            per_window_avail_p90_kw=(1.0,),
-            per_window_displaced_self_use_kwh_per_event=(2.3,),
-            per_window_displaced_import_gbp_per_year=(8.1,),
-        )
-    )
-
-    lines = report.splitlines()
-    for row in (
-        "| Capacity on 50% of event days | 2.0 kW |",
-        "| Capacity on 90% of event days | 1.0 kW |",
-        "| Evening self-use displaced, per event | 2.3 kWh |",
-        "| Evening self-use displaced, value per year | £8 |",
-    ):
-        assert row in lines, report
-    assert "gross of the evening self-use an event displaces" in report, report
-    assert "£0 for a home simulated without one" in report, report
-    assert _PER_WINDOW_NOTE not in report, report
-
-
-def test_several_event_windows_show_no_per_window_figure_summed() -> None:
-    """Two windows: the 50%, 90% and per-event rows show —, since summed over windows they describe no set of event days; the value per year is the windows' total."""
-    report = _events_report(
-        GridServicesAtEvents(
-            annual_income_gbp=19.944,
-            per_window_avail_kw=(1.5, 0.5),
-            per_window_income_gbp=(14.958, 4.986),
-            per_window_avail_p50_kw=(2.0, 0.5),
-            per_window_avail_p90_kw=(1.0, 0.3),
-            per_window_displaced_self_use_kwh_per_event=(2.25, 0.75),
-            per_window_displaced_import_gbp_per_year=(8.1, 1.9),
-        )
-    )
-
-    lines = report.splitlines()
-    for row in (
-        "| Capacity on 50% of event days | — |",
-        "| Capacity on 90% of event days | — |",
-        "| Evening self-use displaced, per event | — |",
-        "| Evening self-use displaced, value per year | £10 |",
-    ):
-        assert row in lines, report
-    assert _PER_WINDOW_NOTE in report, report
-
-
 def test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement() -> None:
     """finance run on the board scenario, every battery home at its floor through 8 January's window and 1.0 kW clear of it on 9 January.
 
@@ -924,5 +856,6 @@ def test_b11_the_flex_blocks_grid_services_row_reads_the_booked_events_income() 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     assert f"| Grid services (booked) | £{income / homes:.0f} | £{income / kw:.1f}/kW |" in lines, result.output
-    assert f"| **Headline total** | **£{250 + income / homes:.0f}** | — |" in lines, result.output
+    time_shift = FLEX_VALUE_BANDS[GridServicesBand.CENTRAL].time_shift_gbp
+    assert f"| **Headline total** | **£{time_shift + income / homes:.0f}** | — |" in lines, result.output
     assert "PRD §6" not in result.output

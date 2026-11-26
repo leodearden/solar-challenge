@@ -17,9 +17,10 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults
 from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results
+from tests._markdown_tables import row_cells
 from tests.integration._helpers import SCENARIO
 
 
@@ -201,6 +202,34 @@ class TestFinanceFlexCLIBehaviour:
         assert "## Grid Services Income" not in result.output
         assert "PRD §6" not in result.output
         assert "docs/flexibility-buildability.md" in result.output
+
+    def test_under_flat_pricing_the_booked_row_divides_the_income_by_the_battery_homes_alone(
+        self, tmp_path: Path
+    ) -> None:
+        """B11 on three 2.5 kW battery homes and two PV-only homes priced flat at £4.0/kW-yr: £30 a year, £10 per battery home, not £6 per home."""
+        load = {"annual_consumption_kwh": 3500}
+        battery_home = {"pv": {"capacity_kw": 4.0}, "battery": {"capacity_kwh": 5.0, "max_discharge_kw": 2.5}, "load": load}
+        pv_only_home = {"pv": {"capacity_kw": 4.0}, "load": load}
+        finance = {
+            "standing_charge_pence_per_day": 28.0,
+            "grid_services_model": "flat",
+            "grid_services_income_per_kw_per_year_gbp": 4.0,
+        }
+        path = tmp_path / "mixed_fleet.yaml"
+        path.write_text(
+            yaml.safe_dump({"name": "Mixed fleet", "homes": [battery_home] * 3 + [pv_only_home] * 2, "finance": finance})
+        )
+
+        def simulate(fleet_config: FleetConfig, _start: object, _end: object) -> FleetResults:
+            return make_fleet_results(homes=fleet_config.homes, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+
+        result = invoke_cli(["finance", "run", str(path), "--flex-band", "central"], answering(simulate))
+
+        assert result.exit_code == 0, result.output
+        assert row_cells(
+            result.output, "### This window's fleet, the same under every assumption", "Annual fleet income"
+        ) == ["£30"]
+        assert "| Grid services (booked) | £10 | £4.0/kW |" in result.output.splitlines(), result.output
 
     def test_invalid_flex_band_exits_nonzero(
         self, tmp_path: Path, flex_fleet_results: FleetResults
