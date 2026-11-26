@@ -548,8 +548,8 @@ class TestReadFormFleet:
         with pytest.raises(ConfigurationError) as refused:
             fleet_config.read_form_fleet(blocks)
         assert str(refused.value) == (
-            "battery.dispatch_strategy must be absent or null: every battery takes the "
-            "fleet's dispatch_strategy, got 'tou_optimized'"
+            "battery.dispatch_strategy must be absent or null: a dashboard form gives every "
+            "battery one dispatch strategy, its own or the default, got 'tou_optimized'"
         )
 
     def test_a_battery_block_whose_dispatch_strategy_is_null_is_read_as_the_grammar_reads_it(self) -> None:

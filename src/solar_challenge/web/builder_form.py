@@ -96,8 +96,10 @@ def builder_form_errors(form: object) -> list[str]:
     A form that is not a JSON object has that one reason.  For any other, the dashboard's
     own limits come first.  Then the form becomes its scenario, and, unless its number of
     homes is out of bounds, read_form_fleet reads its fleet blocks: a refusal, naming the
-    field at the form's own path, is the one fleet reason.  Otherwise config.parse_scenario
-    judges the document in memory.  A refused location or tariff is then the one reason.
+    field at the form's own path, is the one fleet reason.  So is any other ValueError it
+    raises, a probable defect, which refusal_text logs once, as _scenario_reader_errors
+    treats one from the scenario reader.  Otherwise config.parse_scenario judges the document
+    in memory.  A refused location or tariff is then the one reason.
     Otherwise the homes' value_range reasons come first, then the reader's first refusal of
     the period or SEG rate, the period's before the SEG's: one of the two, never both, and
     neither hides a fleet reason.
@@ -115,8 +117,8 @@ def builder_form_errors(form: object) -> list[str]:
     if _home_count_allowed(fleet_distribution.get("n_homes")):
         try:
             read_form_fleet(fleet_distribution)
-        except ConfigurationError as refusal:
-            return [*errors, str(refusal)]
+        except ValueError as refusal:
+            return [*errors, refusal_text(refusal)]
         errors.extend(_scenario_reader_errors(document))
     return errors
 

@@ -208,22 +208,21 @@ def read_form_fleet(blocks: Mapping[str, Any]) -> FleetDistributionConfig:
 
 
 def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
-    """Refuse the fleet form's *battery* block when it sets a dispatch strategy: every battery takes the form's dispatch_strategy.
+    """Refuse a dashboard form's *battery* block when it sets a dispatch strategy: a dashboard form gives every battery one dispatch strategy, its own or the default.
 
-    fleet_distribution.py's grammar reads a battery block's dispatch_strategy, but the fleet form
-    spells the setting once, at its root:
-    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form` gives the form's
-    dispatch_strategy to every battery, over any the block sets.
+    fleet_distribution.py's grammar reads a battery block's dispatch_strategy, but no dashboard
+    form sets one per block: the fleet page spells the setting once, at its form's root, and the
+    scenario builder has none, so every battery takes the default.
 
     Raises:
         ConfigurationError: If the block's dispatch_strategy is present and not null; the error
-            names battery.dispatch_strategy, the form's dispatch_strategy and the value sent.
+            names battery.dispatch_strategy, the rule and the value sent.
     """
     strategy = battery.get("dispatch_strategy")
     if strategy is not None:
         raise ConfigurationError(
-            "battery.dispatch_strategy must be absent or null: every battery takes the "
-            f"fleet's dispatch_strategy, got {strategy!r}"
+            "battery.dispatch_strategy must be absent or null: a dashboard form gives every "
+            f"battery one dispatch strategy, its own or the default, got {strategy!r}"
         )
 
 

@@ -415,6 +415,50 @@ class TestBuilderFormErrors:
         [record] = error_records(caplog)
         assert "ValueError" in record.getMessage()
 
+    def test_a_value_error_from_the_fleet_reader_that_is_not_a_configuration_error_is_the_one_fleet_reason_logged_once_as_a_probable_defect(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """It follows the dashboard's own reasons, as a refusal of the fleet does, and the scenario reader is not asked."""
+        scenario_reads: list[object] = []
+
+        def read_form_fleet_failing(blocks: Any) -> Any:
+            raise ValueError("probe")
+
+        def parse_scenario_counting(document: Any) -> Any:
+            scenario_reads.append(document)
+            return parse_scenario(document)
+
+        monkeypatch.setattr(builder_form, "read_form_fleet", read_form_fleet_failing)
+        monkeypatch.setattr(builder_form, "parse_scenario", parse_scenario_counting)
+        form = {key: value for key, value in _ACCEPTED_FORM.items() if key != "name"}
+
+        assert builder_form_errors(form) == ["Scenario name is required.", "probe"]
+        assert scenario_reads == []
+        [record] = error_records(caplog)
+        assert "ValueError" in record.getMessage()
+
+    def test_a_type_error_from_the_fleet_reader_is_not_a_reason_and_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def read_form_fleet_failing(blocks: Any) -> Any:
+            raise TypeError("probe")
+
+        monkeypatch.setattr(builder_form, "read_form_fleet", read_form_fleet_failing)
+
+        with pytest.raises(TypeError, match="probe"):
+            builder_form_errors(_ACCEPTED_FORM)
+
+    def test_a_battery_block_setting_a_dispatch_strategy_is_the_one_fleet_reason_naming_the_one_strategy_rule(
+        self,
+    ) -> None:
+        """The builder has no dispatch setting, so every battery takes the default; the refusal is read_form_fleet's, worded for both forms."""
+        form = {**_ACCEPTED_FORM, "battery": {"capacity_kwh": 5, "dispatch_strategy": "tou_optimized"}}
+
+        assert builder_form_errors(form) == [
+            "battery.dispatch_strategy must be absent or null: a dashboard form gives every "
+            "battery one dispatch strategy, its own or the default, got 'tou_optimized'"
+        ]
+
     def test_a_type_error_from_the_reader_is_not_a_reason_and_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def parse_scenario_failing(document: Any) -> Any:
             raise TypeError("probe")

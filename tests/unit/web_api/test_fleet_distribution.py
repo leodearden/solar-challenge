@@ -770,10 +770,10 @@ class TestFleetFromDistribution:
             ),
         ],
     )
-    def test_battery_dispatch_strategy_returns_400_naming_the_fleets_and_queues_nothing(
+    def test_battery_dispatch_strategy_returns_400_naming_it_and_the_one_strategy_rule_and_queues_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, fleet_dispatch: dict
     ) -> None:
-        """A battery block's own dispatch_strategy is a 400 naming it and the fleet's dispatch_strategy, which every battery takes, whether or not the fleet's is set; no fleet is queued."""
+        """A battery block's own dispatch_strategy is a 400 naming it and the rule that the form gives every battery one dispatch strategy, whether or not the fleet's is set; no fleet is queued."""
         strategy = {"strategy_type": "self_consumption"}
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
@@ -785,8 +785,8 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
         assert resp.get_json() == {
-            "error": "battery.dispatch_strategy must be absent or null: every battery takes the "
-            f"fleet's dispatch_strategy, got {strategy!r}"
+            "error": "battery.dispatch_strategy must be absent or null: a dashboard form gives every "
+            f"battery one dispatch strategy, its own or the default, got {strategy!r}"
         }
         mock_job_manager.submit_fleet_job.assert_not_called()
 
