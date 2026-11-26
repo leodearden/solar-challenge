@@ -321,14 +321,21 @@ home:
         assert "home.[ghi, dni] [/b]" in rows
         assert "home.panels [3 items]" in rows
 
-    def test_config_show_help_does_not_claim_to_validate_the_scenario_grammar(self) -> None:
-        """show's help says it only reads the file's keys and points at `validate config` for validation."""
-        result = runner.invoke(app, ["config", "show", "--help"], env={"COLUMNS": "200"})
+    def test_config_show_lists_each_placeholder_as_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """show reads the file's keys without substituting ${VAR}, so a placeholder with a default and one with none are both listed verbatim."""
+        monkeypatch.chdir(tmp_path)
+        Path("placeholders.yaml").write_text(
+            "home:\n  pv:\n    capacity_kw: \"${PV_KW:4.0}\"\n    tilt: \"${TILT}\"\n"
+        )
 
-        text = " ".join(result.stdout.replace("│", " ").split())
+        result = runner.invoke(app, ["config", "show", "placeholders.yaml"], catch_exceptions=False)
+
         assert result.exit_code == 0
-        assert "does not check the keys against the scenario grammar" in text
-        assert "validate config" in text
+        rows = table_text(result.stdout)
+        assert "home.pv.capacity_kw ${PV_KW:4.0}" in rows
+        assert "home.pv.tilt ${TILT}" in rows
 
     def test_config_show_displays_a_file_holding_a_retired_key_that_validate_config_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
