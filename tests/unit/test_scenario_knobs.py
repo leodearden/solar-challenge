@@ -16,7 +16,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.heat_pump import HeatPumpConfig
-from solar_challenge.scenario_knobs import ALIASES, KNOBS, Knob, knob_named, names_with_aliases
+from solar_challenge.scenario_knobs import ALIASES, KNOBS, Knob, is_knob_name, knob_named, names_with_aliases
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from tests._finance_builders import make_home_config, make_period, make_scenario_and_finance
 from tests._modules_loaded_by_importing import (
@@ -259,6 +259,18 @@ class TestNames:
         listing = names_with_aliases([KNOBS["pv_capacity_kw"], knob_named("seg")])
 
         assert listing == "pv_capacity_kw, seg_tariff_pence_per_kwh (seg)"
+
+    @pytest.mark.parametrize("name", [*KNOBS, *ALIASES], ids=str)
+    def test_is_knob_name_holds_for_every_canonical_name_and_every_alias(self, name: str) -> None:
+        """Each knob's canonical name and each alias is a knob name."""
+        assert is_knob_name(name) is True
+
+    @pytest.mark.parametrize("name", ["battery_kwh", "CAP", ""], ids=repr)
+    def test_is_knob_name_holds_for_no_other_name(self, name: str) -> None:
+        """A name that is no knob's canonical name and no alias is not a knob name, and knob_named refuses it."""
+        assert is_knob_name(name) is False
+        with pytest.raises(ConfigurationError):
+            knob_named(name)
 
 
 class TestFinanceKnobs:
