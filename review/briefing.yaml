@@ -305,8 +305,9 @@ conventions:
       Each surface-lock failure labels each drifted entry additive or breaking, as
       tests/_surface_forms.py's is_additive_change and is_additive_member_change classify it:
       their _ADDITIVE_PARTS table lists the additive parts, and anything it does not prove
-      additive is breaking. An additive entry lands in its own leaf with its FROZEN_* row and its
-      release note, docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
+      additive is breaking. An additive entry lands in its own leaf with its FROZEN_* row, its
+      UNRELEASED row in tests/unit/test_public_api_surface.py and its release note,
+      docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
       A breaking entry, such as a removed, renamed or retyped name, parameter or member, lands
       only with a deliberate version/tag bump — never a silent edit: under D29
       (plans/review-all-program-solar_challenge-20261014.md), a leaf whose own edit prints

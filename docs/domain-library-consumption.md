@@ -128,10 +128,13 @@ surface names, to which of the dataclass parameters `eq`, `order`,
 `unsafe_hash` and `frozen` either kind of class sets, to whether either kind of
 class's instances match a positional class pattern, hold a `__dict__` or take a
 weakref, to an exported container
-constant's keys or length, or the type of a value or item it holds, or to
-either kind of class's public members, must also edit `FROZEN_SURFACE`,
-`FROZEN_CLOSURE` or `FROZEN_MEMBERS` in `tests/unit/test_public_api_surface.py`,
-which fails until it does.
+constant's keys or length, or the type of a value or item it holds, to
+either kind of class's public members, or to the `__call__` a pinned class's own
+body defines, must also edit `FROZEN_SURFACE`, `FROZEN_CLOSURE`, `FROZEN_MEMBERS`
+or `FROZEN_CALLS` in `tests/unit/test_public_api_surface.py`, which fails until it
+does. Such a change also adds each edited path to that file's `UNRELEASED`, with
+the id of the task, and the file fails until the path is listed and the task's
+note file exists.
 
 **Release windows.** A rename or retirement of a frozen name lands only inside
 an open release window: a `### solar-challenge-vX.Y.Z` subsection at the end of
@@ -141,6 +144,18 @@ says, never a line in the window's section. The window closes with the release
 commit that bumps the version, which folds the notes into the window's section.
 The tag is cut on that commit's merge, pushed, and checked with
 `git ls-remote`, as the push rule above says.
+
+**The released snapshot.** `tests/_released_surface.py` holds the four frozen
+tables as the last release shipped them, each `RELEASED_*` table being the
+`FROZEN_*` table at the release commit, and that release's `RELEASED_VERSION`.
+`UNRELEASED`, in `tests/unit/test_public_api_surface.py`, maps each path whose
+form has changed since that release to the task that last changed it. The release
+commit that bumps the version replaces each `RELEASED_*` table with the
+`FROZEN_*` table it releases, sets `RELEASED_VERSION` to the new version, empties
+`UNRELEASED`, and deletes the notes it folds, keeping `docs/unreleased/README.md`
+and each `docs/unreleased/<doc>/README.md`.
+`tests/unit/test_public_api_surface.py::test_the_released_snapshot_is_of_the_package_version`
+fails a version bump that keeps the old snapshot.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

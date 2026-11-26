@@ -758,7 +758,9 @@ def _drift_message(table: str, drifted: Mapping[str, _Drift]) -> str:
         "additive change needs its release note, docs/unreleased/domain-library-consumption/"
         "<task id>.md ('Changes merged since the last tag', in the 'Tag / release convention' "
         "section of docs/domain-library-consumption.md), landed in the same commit as the "
-        f"{table} edit. A breaking one lands only with a version bump under that section "
+        f"{table} edit, with an UNRELEASED row in tests/unit/test_public_api_surface.py "
+        "naming each changed path and that task. A breaking one lands only with a version "
+        "bump under that section "
         "(review/briefing.yaml's frozen-API convention)."
     )
 
