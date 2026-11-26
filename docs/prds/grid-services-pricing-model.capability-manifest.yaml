@@ -111,11 +111,11 @@ tasks:
           paths: ["src/solar_challenge/gridservices.py"]
           expect: absent
       - name: "model-doc-states-the-events-term"
-        binding: "grep: `capacity_at_events` absent from docs/cost-recovery-finance-model.md on main"
+        binding: "grep: `capacity_at_events` absent from docs/cost-recovery-finance-model.md on main. Task 804 (ε, 199322a6) retired the `capacity_at_events` selector string and reworded the doc to name a GridServicesEventsConfig as grid_services_model, so the check reads the term's name in §8.1"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "capacity_at_events"
+          pattern: "capacity-at-events term"
           paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
           expect: present
       - name: "model-doc-carries-the-worked-figure"
