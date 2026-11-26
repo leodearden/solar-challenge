@@ -167,3 +167,48 @@ def test_an_unclassified_numeric_dataclass_is_reported_by_name_with_the_classifi
     assert len(messages) == 1, messages
     for part in (f"{seeded.__name__}.SeededRate", "INPUT_TYPES", "NOT_INPUT_TYPES", "classify it"):
         assert part in messages[0], messages[0]
+
+
+@pytest.fixture(scope="module")
+def discovered() -> dict[str, type]:
+    """The numeric dataclasses of the modules directly under solar_challenge, keyed by dotted name."""
+    return numeric_dataclasses(top_level_modules())
+
+
+def test_every_numeric_dataclass_under_solar_challenge_is_classified(discovered: dict[str, type]) -> None:
+    messages = unclassified(discovered)
+
+    assert messages == [], "\n".join(messages)
+
+
+def test_no_classified_class_is_stale(discovered: dict[str, type]) -> None:
+    messages = stale(discovered)
+
+    assert messages == [], "\n".join(messages)
+
+
+def test_a_classified_class_no_longer_discovered_is_reported_as_stale(discovered: dict[str, type]) -> None:
+    messages = stale(discovered.keys() - {"solar_challenge.seg.SEGTariff"})
+
+    assert len(messages) == 1, messages
+    for part in ("solar_challenge.seg.SEGTariff", "INPUT_TYPES", "remove or rename the stale entry"):
+        assert part in messages[0], messages[0]
+
+
+def test_no_class_is_both_an_input_type_and_not_one() -> None:
+    assert INPUT_TYPES.keys() & NOT_INPUT_TYPES.keys() == set()
+
+
+def test_every_excluded_field_is_a_numeric_field_of_an_input_type(discovered: dict[str, type]) -> None:
+    for name, field in EXCLUDED_FIELDS:
+        assert name in INPUT_TYPES, f"EXCLUDED_FIELDS' entry ({name!r}, {field!r}) names no class of INPUT_TYPES"
+        assert field in numeric_fields(discovered[name]), (
+            f"EXCLUDED_FIELDS' entry ({name!r}, {field!r}) names no numeric field of {name}"
+        )
+
+
+@pytest.mark.parametrize("name", sorted(INPUT_TYPES))
+def test_each_input_type_factory_builds_a_valid_instance_of_its_class(name: str, discovered: dict[str, type]) -> None:
+    instance = INPUT_TYPES[name]()
+
+    assert type(instance) is discovered[name]
