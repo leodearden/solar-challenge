@@ -207,17 +207,8 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
     so its current form is printed ready to paste; a pinned name __all__ lacks is listed
     last, breaking, its current form reading (not in __all__).
     """
-    current_forms = {
-        name: surface_form(getattr(solar_challenge, name))
-        for name in solar_challenge.__all__
-    }
-    drifted = _drifted(
-        FROZEN_SURFACE,
-        current_forms,
-        absent="(not in __all__)",
-        is_additive=lambda name, row: is_additive_change(row, getattr(solar_challenge, name)),
-    )
-    assert not drifted, _drift_message("FROZEN_SURFACE", FROZEN_SURFACE, drifted)
+    drifted = _export_drift(FROZEN_SURFACE)
+    assert not drifted, _drift_message("FROZEN_SURFACE", drifted)
 
 
 # ---------------------------------------------------------------------------
@@ -279,14 +270,8 @@ def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
     form names any longer is listed last, breaking, its current form reading (not named
     by the frozen surface).
     """
-    current = {path: surface_form(cls) for path, cls in _closure_classes().items()}
-    drifted = _drifted(
-        FROZEN_CLOSURE,
-        current,
-        absent="(not named by the frozen surface)",
-        is_additive=lambda path, row: is_additive_change(row, _closure_classes()[path]),
-    )
-    assert not drifted, _drift_message("FROZEN_CLOSURE", FROZEN_CLOSURE, drifted)
+    drifted = _closure_drift(FROZEN_CLOSURE)
+    assert not drifted, _drift_message("FROZEN_CLOSURE", drifted)
 
 
 # ---------------------------------------------------------------------------
@@ -565,19 +550,8 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
     additive, its current form printed ready to paste; a removed member is breaking, its
     current form reading (removed).
     """
-    pinned = _pinned_classes()
-    forms_by_class = {path: member_forms(cls) for path, cls in pinned.items()}
-    members = _by_member_path(
-        {path: {name: (pinned[path], name) for name in forms} for path, forms in forms_by_class.items()}
-    )
-    frozen = _by_member_path(FROZEN_MEMBERS)
-    drifted = _drifted(
-        frozen,
-        _by_member_path(forms_by_class),
-        absent="(removed)",
-        is_additive=lambda path, row: is_additive_member_change(row, *members[path]),
-    )
-    assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
+    drifted = _member_drift(_by_member_path(FROZEN_MEMBERS))
+    assert not drifted, _drift_message("FROZEN_MEMBERS", drifted)
 
 
 # ---------------------------------------------------------------------------
@@ -601,14 +575,8 @@ def test_every_pinned_class_call_matches_frozen_calls() -> None:
     forms, labelled additive or breaking; a pinned path whose class no longer defines a
     __call__ of its own is listed last, breaking.
     """
-    calls = {path: vars(cls)["__call__"] for path, cls in _pinned_classes().items() if "__call__" in vars(cls)}
-    drifted = _drifted(
-        FROZEN_CALLS,
-        {path: surface_form(call) for path, call in calls.items()},
-        absent="(no __call__ of its own)",
-        is_additive=lambda path, row: is_additive_change(row, calls[path]),
-    )
-    assert not drifted, _drift_message("FROZEN_CALLS", FROZEN_CALLS, drifted)
+    drifted = _call_drift(FROZEN_CALLS)
+    assert not drifted, _drift_message("FROZEN_CALLS", drifted)
 
 
 _STDLIB_BASES: tuple[type, ...] = (
@@ -746,26 +714,33 @@ def test_every_pinned_dataclass_is_frozen() -> None:
 
 @dataclasses.dataclass(frozen=True)
 class _Drift:
-    """A drifted path's current form, and whether its change from the frozen form is additive."""
+    """A drifted path's form in the compared table, None if the table has no row for it, its current form, and whether its change from the table's form is additive."""
 
+    baseline: str | None
     current: str
     additive: bool
 
 
-def _drift_message(
-    table: str, frozen: Mapping[str, str], drifted: Mapping[str, _Drift]
-) -> str:
-    """Name each path of *drifted* with its frozen and current forms and its change, additive or breaking, then say what each kind of change needs.
+def _drift_entries(drifted: Mapping[str, _Drift], *, baseline_label: str, absent_baseline: str) -> str:
+    """Name each path of *drifted*, each on its own line, then its baseline form under *baseline_label*, its current form and its change, additive or breaking; a path with no baseline form reads *absent_baseline*."""
+    labels = (baseline_label, "current", "change")
+    width = max(len(label) for label in labels) + 2
 
-    *frozen* holds the forms of the table named *table*, keyed by the same paths.
-    """
-    symbols = "".join(
+    def line(label: str, value: str) -> str:
+        return f"\n    {f'{label}:':<{width}}{value}"
+
+    return "".join(
         f"\n  solar_challenge.{path}"
-        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
-        f"\n    current: {drift.current}"
-        f"\n    change:  {'additive' if drift.additive else 'breaking'}"
+        + line(baseline_label, absent_baseline if drift.baseline is None else drift.baseline)
+        + line("current", drift.current)
+        + line("change", "additive" if drift.additive else "breaking")
         for path, drift in drifted.items()
     )
+
+
+def _drift_message(table: str, drifted: Mapping[str, _Drift]) -> str:
+    """Name each path of *drifted* with its form in the table named *table*, its current form and its change, additive or breaking, then say what each kind of change needs."""
+    symbols = _drift_entries(drifted, baseline_label="frozen", absent_baseline=f"(absent from {table})")
     return (
         f"Surface forms differ from {table}:{symbols}\n"
         "Each change to the frozen public API (review/briefing.yaml) is labelled above. An "
@@ -778,31 +753,88 @@ def _drift_message(
 
 
 def _drifted(
-    frozen: Mapping[str, str],
+    baseline: Mapping[str, str],
     current: Mapping[str, str],
     *,
     absent: str,
     is_additive: Callable[[str, str], bool],
 ) -> dict[str, _Drift]:
-    """Map each path whose current form is not its frozen one to its _Drift.
+    """Map each path whose current form is not its *baseline* one to its _Drift.
 
-    *current*'s paths come first, in its order, then each frozen path *current* lacks,
+    *current*'s paths come first, in its order, then each baseline path *current* lacks,
     whose current form reads *absent*.  A path only *current* holds is additive and one
-    only *frozen* holds breaking; a changed path is additive only if
-    is_additive(path, its frozen form) holds.
+    only *baseline* holds breaking; a changed path is additive only if
+    is_additive(path, its baseline form) holds.
     """
 
     def additive(path: str) -> bool:
-        if path not in frozen:
+        if path not in baseline:
             return True
-        return path in current and is_additive(path, frozen[path])
+        return path in current and is_additive(path, baseline[path])
 
-    missing = [path for path in frozen if path not in current]
+    missing = [path for path in baseline if path not in current]
     return {
-        path: _Drift(current.get(path, absent), additive(path))
+        path: _Drift(baseline.get(path), current.get(path, absent), additive(path))
         for path in [*current, *missing]
-        if current.get(path) != frozen.get(path)
+        if current.get(path) != baseline.get(path)
     }
+
+
+# ---------------------------------------------------------------------------
+# Each lock's drift from a table: the paths whose live form differs from the
+# table's row, the lock's own table or any other table of the same paths
+# ---------------------------------------------------------------------------
+
+
+def _export_drift(table: Mapping[str, str]) -> dict[str, _Drift]:
+    """Each name of __all__, or of *table*, whose surface form differs from *table*'s, a table keyed as FROZEN_SURFACE is; a name *table* lists and __all__ lacks reads (not in __all__)."""
+    current_forms = {
+        name: surface_form(getattr(solar_challenge, name))
+        for name in solar_challenge.__all__
+    }
+    return _drifted(
+        table,
+        current_forms,
+        absent="(not in __all__)",
+        is_additive=lambda name, row: is_additive_change(row, getattr(solar_challenge, name)),
+    )
+
+
+def _closure_drift(table: Mapping[str, str]) -> dict[str, _Drift]:
+    """Each class outside __all__ that the frozen surface names, or that *table* lists, whose surface form differs from *table*'s, a table keyed as FROZEN_CLOSURE is; a path no form names any longer reads (not named by the frozen surface)."""
+    current = {path: surface_form(cls) for path, cls in _closure_classes().items()}
+    return _drifted(
+        table,
+        current,
+        absent="(not named by the frozen surface)",
+        is_additive=lambda path, row: is_additive_change(row, _closure_classes()[path]),
+    )
+
+
+def _member_drift(table: Mapping[str, str]) -> dict[str, _Drift]:
+    """Each pinned class's public member, or member path *table* lists, whose form differs from *table*'s, a table keyed by member path as _by_member_path spells it; a removed member reads (removed)."""
+    pinned = _pinned_classes()
+    forms_by_class = {path: member_forms(cls) for path, cls in pinned.items()}
+    members = _by_member_path(
+        {path: {name: (pinned[path], name) for name in forms} for path, forms in forms_by_class.items()}
+    )
+    return _drifted(
+        table,
+        _by_member_path(forms_by_class),
+        absent="(removed)",
+        is_additive=lambda path, row: is_additive_member_change(row, *members[path]),
+    )
+
+
+def _call_drift(table: Mapping[str, str]) -> dict[str, _Drift]:
+    """Each pinned class whose own body defines __call__, or class path *table* lists, whose __call__ form differs from *table*'s, a table keyed as FROZEN_CALLS is; a path whose class defines no __call__ of its own reads so."""
+    calls = {path: vars(cls)["__call__"] for path, cls in _pinned_classes().items() if "__call__" in vars(cls)}
+    return _drifted(
+        table,
+        {path: surface_form(call) for path, call in calls.items()},
+        absent="(no __call__ of its own)",
+        is_additive=lambda path, row: is_additive_change(row, calls[path]),
+    )
 
 
 @pytest.fixture
