@@ -4,9 +4,10 @@
 import dataclasses
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import date, timedelta
+from typing import Any
 
 import pytest
 
@@ -17,12 +18,21 @@ from flask.testing import FlaskClient
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
+    DISTRIBUTION_TYPES,
+    DistributionSpec,
+    NormalDistribution,
+    ShuffledPoolDistribution,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
+    editor_types,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
+    write_distribution_spec,
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.number_fields import Interval
+from solar_challenge.scenario_blocks import BATTERY_BLOCK, LOAD_BLOCK, PV_BLOCK, ComponentBlock
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
@@ -30,8 +40,9 @@ from solar_challenge.web.fleet_components import (
     MAX_DAYS,
     MAX_FLEET_HOMES,
     MAX_FLEET_SEED,
+    FLEET_SIZE_DEFAULT,
     ComponentLimits,
-    EditorDistribution,
+    EditorStart,
     PageLimits,
     days_window,
     page_limits,
@@ -149,28 +160,180 @@ class TestFleetComponents:
             f"{value_range}, got {value!r}"
         )
 
-    def test_editor_state_is_the_distribution_editors_dist_at_fixed_value(self) -> None:
-        """The shape templates/components/distribution-editor.html documents, which each component's start writes into #page-limits and the builder's script reads."""
-        distribution = EditorDistribution(
+    @pytest.mark.parametrize(
+        ("component", "block"),
+        [
+            pytest.param(FLEET_COMPONENTS["pv"], PV_BLOCK, id="pv"),
+            pytest.param(FLEET_COMPONENTS["battery"], BATTERY_BLOCK, id="battery"),
+            pytest.param(FLEET_COMPONENTS["load"], LOAD_BLOCK, id="load"),
+        ],
+    )
+    def test_each_components_editor_types_are_those_its_fields_kind_draws_and_its_scalar_form_is_the_tables(
+        self, component: ComponentLimits, block: ComponentBlock[Any]
+    ) -> None:
+        (scalar_form,) = [each for each in DISTRIBUTION_TYPES.values() if each.is_scalar_form]
+        assert component.block is block
+        assert component.field_kind is component.block.fleet[component.grammar_key].kind
+        assert component.editor_types == editor_types(component.field_kind)
+        assert component.scalar_form is scalar_form
+
+    @pytest.mark.parametrize(
+        ("key", "shown", "fixed", "specs"),
+        [
+            pytest.param(
+                "pv",
+                "shuffled_pool",
+                4.0,
+                (
+                    WeightedDiscreteDistribution((3.0, 4.0, 5.0, 6.0), (20, 40, 30, 10)),
+                    NormalDistribution(4.0, 1.0, 2.0, 8.0),
+                    UniformDistribution(2.0, 8.0),
+                    ShuffledPoolDistribution((3.0, 4.0, 5.0, 6.0), (20, 40, 30, 10)),
+                ),
+                id="pv",
+            ),
+            pytest.param(
+                "battery",
+                "shuffled_pool",
+                5.0,
+                (
+                    WeightedDiscreteDistribution((0.0, 5.0, 10.0), (40, 40, 20)),
+                    NormalDistribution(5.0, 2.0, 0.0, 15.0),
+                    UniformDistribution(0.0, 15.0),
+                    ShuffledPoolDistribution((0.0, 5.0, 10.0), (40, 40, 20)),
+                ),
+                id="battery",
+            ),
+            pytest.param(
+                "load",
+                "normal",
+                3500,
+                (
+                    WeightedDiscreteDistribution((2900, 3500, 4500), (30, 40, 30)),
+                    NormalDistribution(3400, 800, 2000, 6000),
+                    UniformDistribution(2000, 6000),
+                    ShuffledPoolDistribution((2900, 3500, 4500), (30, 40, 30)),
+                ),
+                id="load",
+            ),
+        ],
+    )
+    def test_each_components_start_is_the_fleet_pages_distribution_as_the_editor_holds_it(
+        self, key: str, shown: str, fixed: float, specs: tuple[DistributionSpec, ...]
+    ) -> None:
+        """Its editor_state() shows *shown*, holds *fixed* at Fixed Value, and holds each editor type's spec as written, without its type, in editor_types order."""
+        component = FLEET_COMPONENTS[key]
+        written = [write_distribution_spec(spec) for spec in specs]
+        assert all(isinstance(each, dict) for each in written)
+        state = component.start.editor_state()
+        assert state == {
+            "type": shown,
+            "fixed": fixed,
+            "specs": {
+                each["type"]: {name: value for name, value in each.items() if name != "type"}
+                for each in written
+                if isinstance(each, dict)
+            },
+        }
+        assert list(state["specs"]) == [each.name for each in component.editor_types]
+
+    def test_editor_state_is_the_distribution_editors_dist(self) -> None:
+        """The shape templates/components/distribution-editor.html documents, which each component's start writes into #page-limits: the type shown, the fixed value, and each type's spec as written, a null clamp as null."""
+        start = EditorStart(
+            shown="",
             fixed=4.0,
-            mean=4.0,
-            std=1.0,
-            min=2.0,
-            max=8.0,
-            values=((3.0, 20), (5.0, 80)),
-            entries=((3.0, 60), (5.0, 40)),
+            specs=(
+                WeightedDiscreteDistribution((3.0, 5.0), (20, 80)),
+                NormalDistribution(4.0, 1.0),
+                UniformDistribution(2.0, 8.0),
+                ShuffledPoolDistribution((3.0, None), (60, 40)),
+            ),
         )
-        component = replace(FLEET_COMPONENTS["pv"], start=distribution)
+        component = replace(FLEET_COMPONENTS["pv"], start=start)
         assert component.start.editor_state() == {
             "type": "",
             "fixed": 4.0,
-            "mean": 4.0,
-            "std": 1.0,
-            "min": 2.0,
-            "max": 8.0,
-            "values": [{"value": 3.0, "weight": 20}, {"value": 5.0, "weight": 80}],
-            "entries": [{"value": 3.0, "count": 60}, {"value": 5.0, "count": 40}],
+            "specs": {
+                "weighted_discrete": {"values": [3.0, 5.0], "weights": [20.0, 80.0]},
+                "normal": {"mean": 4.0, "std": 1.0, "min": None, "max": None},
+                "uniform": {"min": 2.0, "max": 8.0},
+                "shuffled_pool": {"values": [3.0, None], "counts": [60, 40]},
+            },
         }
+
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_start_whose_shuffled_pool_does_not_total_the_default_fleet_size_is_refused_naming_the_component_and_the_counts(
+        self, component: ComponentLimits
+    ) -> None:
+        specs = tuple(
+            ShuffledPoolDistribution((1.0, 2.0), (FLEET_SIZE_DEFAULT, 1))
+            if isinstance(spec, ShuffledPoolDistribution)
+            else spec
+            for spec in component.start.specs
+        )
+        with pytest.raises(ValueError) as exc_info:
+            replace(component, start=replace(component.start, specs=specs))
+        assert str(exc_info.value) == (
+            f"start.specs of fleet component {component.key!r} must hold shuffled pools whose counts "
+            f"total FLEET_SIZE_DEFAULT, {FLEET_SIZE_DEFAULT}, got {(FLEET_SIZE_DEFAULT, 1)!r}"
+        )
+        assert FLEET_SIZE_DEFAULT == 100
+
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            pytest.param(lambda specs: specs[:-1], id="missing-a-type"),
+            pytest.param(lambda specs: (*specs[:-1], UniformDistribution(1.0, 2.0)), id="another-type"),
+            pytest.param(lambda specs: (specs[1], specs[0], *specs[2:]), id="out-of-order"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_start_not_holding_one_spec_of_each_editor_type_in_order_is_refused_naming_the_component_and_the_specs(
+        self,
+        component: ComponentLimits,
+        edit: Callable[[tuple[DistributionSpec, ...]], tuple[DistributionSpec, ...]],
+    ) -> None:
+        specs = edit(component.start.specs)
+        names = ", ".join(each.name for each in component.editor_types)
+        with pytest.raises(ValueError) as exc_info:
+            replace(component, start=replace(component.start, specs=specs))
+        assert str(exc_info.value) == (
+            f"start.specs of fleet component {component.key!r} must be one spec of each of its "
+            f"editor types, in order ({names}), got {specs!r}"
+        )
+
+    @pytest.mark.parametrize("shown", ["fixed", "proportional_to", "bogus"])
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_start_showing_a_type_that_is_no_editor_type_is_refused_naming_the_component_and_the_type(
+        self, component: ComponentLimits, shown: str
+    ) -> None:
+        names = ", ".join(each.name for each in component.editor_types)
+        with pytest.raises(ValueError) as exc_info:
+            replace(component, start=replace(component.start, shown=shown))
+        assert str(exc_info.value) == (
+            f"start.shown of fleet component {component.key!r} must be '' or one of its editor "
+            f"types ({names}), got {shown!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_grammar_key_outside_its_blocks_fleet_rows_is_refused_naming_the_component_and_the_key(
+        self, component: ComponentLimits
+    ) -> None:
+        rows = ", ".join(component.block.fleet)
+        with pytest.raises(ValueError) as exc_info:
+            replace(component, grammar_key="bogus_key")
+        assert str(exc_info.value) == (
+            f"grammar_key of fleet component {component.key!r} must be one of its block's fleet "
+            f"rows ({rows}), got 'bogus_key'"
+        )
 
 
 class TestPageLimits:
@@ -274,6 +437,27 @@ class TestPageLimits:
                     },
                     "new_row_value": component.new_row_value,
                     "start": component.start.editor_state(),
+                    "editor_types": [
+                        {
+                            "name": each.name,
+                            "title": each.title,
+                            "parameters": [
+                                {"key": parameter.key, "title": parameter.title, "required": parameter.required}
+                                for parameter in each.parameters
+                            ],
+                            "rows": (
+                                None
+                                if each.rows is None
+                                else {"keys": list(each.rows.keys), "paired_title": each.rows.paired_title}
+                            ),
+                        }
+                        for each in component.editor_types
+                    ],
+                    "scalar_form": {
+                        "name": component.scalar_form.name,
+                        "title": component.scalar_form.title,
+                        "key": component.scalar_form.spec_keys[0],
+                    },
                 }
                 for component in FLEET_COMPONENTS.values()
             ],
