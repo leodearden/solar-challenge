@@ -241,3 +241,34 @@ def test_every_api_post_route_answers_a_defect_500_with_a_json_body(
     assert resp.mimetype == "application/json"
     assert resp.get_json() == {"error": "Internal server error"}
     assert job_manager.method_calls == []
+
+
+_FLEET_FORM_WITHOUT_A_SEED = {key: value for key, value in valid_distribution_form().items() if key != "seed"}
+
+
+@pytest.mark.parametrize(
+    ("path", "without", "field", "status"),
+    [
+        pytest.param("/api/simulate/home", {"pv_kw": 4.0, "days": 1}, "location", 201, id="home"),
+        pytest.param("/api/simulate/fleet-from-distribution", _FLEET_FORM_WITHOUT_A_SEED, "seed", 201, id="fleet"),
+        pytest.param("/api/scenarios/preview-yaml", {"n_homes": 2}, "location_preset", 200, id="builder"),
+    ],
+)
+def test_a_recognised_field_sent_as_null_reads_as_not_sent(
+    client: FlaskClient,
+    job_manager: NonCallableMagicMock,
+    path: str,
+    without: Mapping[str, Any],
+    field: str,
+    status: int,
+) -> None:
+    """The presence rule: each form reader answers a body whose *field* is null as it answers the body without it, queueing the same job or giving the same scenario."""
+    answers = []
+    for body in ({**without, field: None}, without):
+        resp = client.post(path, json=body)
+        answers.append((resp.status_code, resp.get_json(), list(job_manager.method_calls)))
+        job_manager.reset_mock()
+
+    null_answer, absent_answer = answers
+    assert null_answer == absent_answer
+    assert null_answer[0] == status
