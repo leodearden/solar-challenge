@@ -89,7 +89,7 @@ Full configuration form exposing all `HomeConfig` parameters, with run execution
 
 | Panel | Fields | Notes |
 |-------|--------|-------|
-| **PV System** | Capacity (0.5-20 kW slider), Azimuth (compass widget or 0-360), Tilt (0-90), Module efficiency (%), Inverter efficiency (%), Inverter capacity (kW, optional) | Azimuth defaults to 180 (south-facing) |
+| **PV System** | Capacity (0.5-20 kW slider), Azimuth (compass widget or 0-360), Tilt (0-90), Module efficiency (%), Inverter efficiency (%), Inverter capacity (kW, optional) | A field the body does not send takes `PVConfig`'s default (a south-facing azimuth), not a web copy; see [Fields not sent](#fields-not-sent) |
 | **Battery** | Enable toggle, Capacity (kWh), Max charge rate (kW), Max discharge rate (kW), Dispatch strategy picker: self-consumption / TOU-optimised / peak-shaving | Strategy-specific sub-forms: TOU -> peak hours, off-peak hours; Peak-shaving -> import limit kW |
 | **Load** | Mode radio: "Annual consumption" (kWh input) OR "By occupants" (1-5+ dropdown), Stochastic toggle, Seed (optional) | Occupant mode shows the simulator's own default for that household size (`OFGEM_TDCV_BY_OCCUPANTS`) |
 | **Heat Pump** | Enable toggle, Type: ASHP / GSHP radio, Thermal capacity (kW), Annual heat demand (kWh) | Only visible when enabled |
@@ -111,6 +111,13 @@ The server enforces two rules on a run's window. Their constants, `MAX_DAYS` and
   - Running past the year's end is intended. The weather is read by UTC time of year and wraps at the year's end, so such a run reads each TMY day at most once, as a start/end window across the new year does.
   - Days stops at 365 so that the full year is the only year-long days window. 366 days from 2024-06-01 would be a second, June-to-June year that reads one TMY day twice.
 - **Span** (`MAX_WINDOW_DAYS`): a run spans at most the full year, 366 days, and must not end before it starts. The weather is one TMY year, so a longer window would repeat it.
+
+#### Fields not sent
+
+- In the home, fleet and builder form bodies, a top-level field sent as null or `""` (a cleared input) reads as not sent, by one rule, `request_boundary.present_fields`. A key the reader does not recognise is still refused, whatever it holds. A nested block's contents follow that block's grammar.
+- A home field not sent takes its engine dataclass's default: `PVConfig`'s, `LoadConfig`'s, `BatteryConfig`'s or `HomeConfig`'s. The home reader holds two web defaults of its own: location Bristol, and stochastic false. The dashboard takes no load seed and compares stored runs, so a web run is repeatable by default, while `LoadConfig`'s `use_stochastic` default serves the library.
+- A `pv_kw` not sent is `scenario_blocks.PV_CAPACITY_KW_WHEN_OMITTED`, as an omitted pv capacity in a scenario file is. A `battery_kwh` not sent is no battery, and a `consumption_kwh` not sent is the TDCV estimate for the occupants.
+- `PATCH /api/history/runs/<id>` is an update, not a form body, and stays outside the rule.
 
 ### 3. Fleet Simulator
 
