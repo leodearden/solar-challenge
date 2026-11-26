@@ -126,6 +126,11 @@ def refuse_unencodable_text(value: object, what: str) -> None:
         require_encodable_text(value, what)
 
 
+#: The location a home or fleet form body that sends none runs at, as read_location reads it:
+#: Bristol, the community energy project's site (location.LOCATION_PRESETS' bristol).
+WEB_DEFAULT_LOCATION = "bristol"
+
+
 def read_location(value: object) -> Location:
     """The Location a request's location *value* names: a string as location.parse_location reads it, a JSON object as scenario_blocks.parse_location_block reads a scenario's location: block.
 

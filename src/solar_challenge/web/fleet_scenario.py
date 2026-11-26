@@ -31,6 +31,7 @@ from solar_challenge.web.fleet_config import (
     refuse_a_fleet_the_dashboard_cannot_run,
 )
 from solar_challenge.web.request_boundary import (
+    WEB_DEFAULT_LOCATION,
     present_fields,
     read_location,
     refuse_unencodable_text,
@@ -157,8 +158,8 @@ def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _fleet_form_location(form: Mapping[str, Any]) -> Location:
-    """The location of the fleet *form* describes: its 'location' as read_location reads it, 'bristol' when not sent."""
-    return read_location(form.get("location", "bristol"))
+    """The location of the fleet *form* describes: its 'location' as read_location reads it, WEB_DEFAULT_LOCATION when not sent."""
+    return read_location(form.get("location", WEB_DEFAULT_LOCATION))
 
 
 def _document_fleet_distribution(

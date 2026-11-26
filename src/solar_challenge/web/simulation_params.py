@@ -30,6 +30,7 @@ from solar_challenge.web.fleet_components import (
     days_window,
 )
 from solar_challenge.web.request_boundary import (
+    WEB_DEFAULT_LOCATION,
     present_fields,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
@@ -69,8 +70,7 @@ HOME_CONFIG_KEYS: frozenset[str] = frozenset({
 
 # The home fields whose value when not sent is the web's own, as the wire value its reader reads.
 _HOME_WEB_DEFAULTS: Mapping[str, Any] = MappingProxyType({
-    # Bristol, the community energy project's site: LOCATION_PRESETS' bristol, Location.bristol().
-    "location": "bristol",
+    "location": WEB_DEFAULT_LOCATION,
     # A web run is repeatable by default: the dashboard takes no load seed and compares stored
     # runs, so a body that does not ask for the stochastic model gets the deterministic profile.
     # LoadConfig's use_stochastic=True is the library's default.

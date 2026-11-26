@@ -115,7 +115,7 @@ The server enforces two rules on a run's window. Their constants, `MAX_DAYS` and
 #### Fields not sent
 
 - In the home, fleet and builder form bodies, a top-level field sent as null or `""` (a cleared input) reads as not sent, by one rule, `request_boundary.present_fields`. A key the reader does not recognise is still refused, whatever it holds. A nested block's contents follow that block's grammar.
-- A home field not sent takes its engine dataclass's default: `PVConfig`'s, `LoadConfig`'s, `BatteryConfig`'s or `HomeConfig`'s. The home reader holds two web defaults of its own: location Bristol, and stochastic false. The dashboard takes no load seed and compares stored runs, so a web run is repeatable by default, while `LoadConfig`'s `use_stochastic` default serves the library.
+- A home field not sent takes its engine dataclass's default: `PVConfig`'s, `LoadConfig`'s, `BatteryConfig`'s or `HomeConfig`'s. The home reader holds two web defaults of its own: location Bristol, `request_boundary.WEB_DEFAULT_LOCATION`, which a fleet form that sends no location runs at too, and stochastic false. The dashboard takes no load seed and compares stored runs, so a web run is repeatable by default, while `LoadConfig`'s `use_stochastic` default serves the library.
 - A `pv_kw` not sent is `scenario_blocks.PV_CAPACITY_KW_WHEN_OMITTED`, as an omitted pv capacity in a scenario file is. A `battery_kwh` not sent is no battery, and a `consumption_kwh` not sent is the TDCV estimate for the occupants.
 - `PATCH /api/history/runs/<id>` is an update, not a form body, and stays outside the rule.
 
