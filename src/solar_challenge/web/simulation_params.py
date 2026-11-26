@@ -10,13 +10,13 @@ import pandas as pd
 
 from solar_challenge.battery import BatteryConfig, has_battery, require_valid_power_limit
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
+    parse_heat_pump_block,
     parse_seg_rate,
     parse_tariff_config,
 )
@@ -269,29 +269,6 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
     return None
 
 
-def _parse_heat_pump_block(data: object) -> HeatPumpConfig | None:
-    """Read a request body's ``heat_pump`` value with the web form's keys, defaulting those it omits.
-
-    The form sends ``type`` where config's YAML heat_pump block requires ``heat_pump_type``.
-    ``None`` means no heat pump; any other value that is not a mapping raises
-    ``ConfigurationError`` naming ``heat_pump`` and the type received. Each number must be
-    finite, refused naming it as ``heat_pump.<key>``.
-    """
-    if data is None:
-        return None
-    if not isinstance(data, Mapping):
-        raise ConfigurationError(f"heat_pump must be a mapping, got {type(data).__name__}")
-    return HeatPumpConfig(
-        heat_pump_type=data.get("type", "ASHP"),
-        thermal_capacity_kw=as_finite_float(
-            data.get("thermal_capacity_kw", 8.0), "heat_pump.thermal_capacity_kw"
-        ),
-        annual_heat_demand_kwh=as_finite_float(
-            data.get("annual_heat_demand_kwh", 8000.0), "heat_pump.annual_heat_demand_kwh"
-        ),
-    )
-
-
 def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
     """Parse JSON request body into HomeConfig and date range.
 
@@ -305,21 +282,21 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     Raises:
         ConfigurationError: If *data* is not a JSON object (the error names the type
             received), if it has a top-level key outside the recognised set
-            (the error names each such key), if a nested block (heat_pump,
-            seg, tariff or dispatch_strategy) is neither null, which reads as
-            absent, nor a mapping (the error names the block and the type
-            received), if a float field is a boolean or not a finite number
-            float() reads, or occupants is not a whole number, a boolean
-            included (the error names the field, as heat_pump.<key> for a
-            heat-pump number, and the value sent), if its days, start or
-            end is one parse_date_range refuses, if location is one
-            read_location refuses (the error is its own refusal), if
-            pv_kw, battery_kwh or a sent consumption_kwh lies outside its
-            fleet component's value_range, PV's, the battery's or the load's
-            (the error names the field, the range and the value sent), or if
-            required fields are missing or invalid; a seg, tariff or
-            dispatch_strategy block its grammar refuses raises that
-            grammar's own refusal. The battery
+            (the error names each such key), if a float field is a boolean
+            or not a finite number float() reads, or occupants is not a
+            whole number, a boolean included (the error names the field and
+            the value sent), if its days, start or end is one
+            parse_date_range refuses, if location is one read_location
+            refuses (the error is its own refusal), if pv_kw, battery_kwh or
+            a sent consumption_kwh lies outside its fleet component's
+            value_range, PV's, the battery's or the load's (the error names
+            the field, the range and the value sent), or if required fields
+            are missing or invalid. A null nested block (heat_pump, seg,
+            tariff or dispatch_strategy) reads as absent; any other value is
+            read by the block's grammar, and a block that grammar refuses,
+            one that is not a mapping or carries an unrecognised key
+            included, raises the grammar's own refusal: parse_heat_pump_block's
+            for heat_pump. The battery
             settings (max_charge_kw, max_discharge_kw, efficiency_pct and
             dispatch_strategy) are read, and refused, whatever battery_kwh
             is; a null setting reads as unset. A null system_losses also
@@ -374,7 +351,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         use_stochastic=stochastic,
     )
 
-    heat_pump_config = _parse_heat_pump_block(params["heat_pump"])
+    heat_pump_config = parse_heat_pump_block(params["heat_pump"])
 
     # Build optional tariff config
     tariff_config = parse_tariff_config(params["tariff"])
