@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app as cli_app
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.web import api
 from solar_challenge.web.builder_form import scenario_from_builder_form
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_scenario import fleet_form_from_yaml, parse_fleet_form, scenario_from_fleet_form
@@ -33,6 +34,7 @@ from tests._cli_stderr_text import stderr_text
 from tests._error_records import error_records
 from tests._fleet_form import valid_distribution_form
 from tests._job_manager_double import autospecced_job_manager
+from tests._raising import raising
 from tests._web_app import app_builder
 
 
@@ -202,4 +204,40 @@ def test_every_api_post_route_answers_its_readers_refusal_400_and_logs_nothing(
 
     assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
     assert error_records(caplog) == []
+    assert job_manager.method_calls == []
+
+
+@pytest.mark.parametrize("route", _POST_ROUTES, ids=lambda route: route.endpoint)
+def test_every_api_post_route_answers_a_value_error_that_is_no_refusal_400_and_logs_it_as_a_probable_defect(
+    client: FlaskClient,
+    job_manager: NonCallableMagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    route: ApiRoute,
+) -> None:
+    """Row R2: a reader's ValueError that is not a ConfigurationError is answered 400 with its text and logged once at ERROR naming its type, so no route answers a ValueError itself."""
+    probe = _probe_of(route)
+    monkeypatch.setattr(api, probe.reader, raising(ValueError("probe")))
+
+    resp = client.post(route.path, **probe.reaching)
+
+    assert (resp.status_code, resp.get_json()) == (400, {"error": "probe"})
+    [record] = error_records(caplog)
+    assert "ValueError" in record.getMessage()
+    assert job_manager.method_calls == []
+
+
+@pytest.mark.parametrize("route", _POST_ROUTES, ids=lambda route: route.endpoint)
+def test_every_api_post_route_answers_a_defect_500_with_a_json_body(
+    client: FlaskClient, job_manager: NonCallableMagicMock, monkeypatch: pytest.MonkeyPatch, route: ApiRoute
+) -> None:
+    """Row R3: a reader's TypeError is a defect, answered 500 with JSON, so no route catches it as a refusal."""
+    probe = _probe_of(route)
+    monkeypatch.setattr(api, probe.reader, raising(TypeError("probe")))
+
+    resp = client.post(route.path, **probe.reaching)
+
+    assert resp.status_code == 500
+    assert resp.mimetype == "application/json"
+    assert resp.get_json() == {"error": "Internal server error"}
     assert job_manager.method_calls == []
