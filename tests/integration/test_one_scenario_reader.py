@@ -354,7 +354,10 @@ def _command_community_rows(command: _Command, document_names: Sequence[str]) ->
 
 @pytest.mark.parametrize(
     ("command", "document", "scenario_path"),
-    _command_community_rows(_VALIDATE_CONFIG, list(_COMMUNITY_REFUSAL_DOCUMENTS)),
+    [
+        *_command_community_rows(_VALIDATE_CONFIG, list(_COMMUNITY_REFUSAL_DOCUMENTS)),
+        *_command_community_rows(_FLEET_RUN, ["bare", "scenario-block"]),
+    ],
 )
 def test_a_community_block_is_refused_at_its_scenarios_path_with_the_community_readers_message(
     tmp_path: Path, command: _Command, document: Mapping[str, Any], scenario_path: str
@@ -371,6 +374,29 @@ def test_a_community_block_is_refused_at_its_scenarios_path_with_the_community_r
     assert result.exit_code == 1, result.output
     assert recorder.fleets == []
     assert f"{command.refusal_prefix}{message}" in command.shown(result)
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        pytest.param({**HOMES, "community": {}}, id="bare-task1739"),
+        pytest.param({"scenario": {**HOMES, "community": {}}}, id="scenario-block-task1739"),
+    ],
+)
+def test_fleet_run_applies_the_community_block_wherever_its_one_scenario_sits(
+    tmp_path: Path, document: Mapping[str, Any]
+) -> None:
+    """fleet run nets the reader's homes as a community, and writes the community report, whether the scenario holding the community: block is bare or a scenario: block."""
+    path = _written(tmp_path, document)
+    report = tmp_path / "community.md"
+    recorder = RecordingSimulate()
+
+    result = invoke_cli(["fleet", "run", str(path), "--community-report", str(report)], answering(recorder))
+
+    assert result.exit_code == 0, result.output
+    assert "Community Sharing Results" in result.stdout
+    assert report.exists()
+    assert [fleet.homes for fleet in recorder.fleets] == [load_scenario(path).simulated_homes()]
 
 
 @pytest.mark.parametrize(

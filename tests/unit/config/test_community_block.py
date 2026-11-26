@@ -12,7 +12,7 @@ import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityConfig
-from solar_challenge.config import load_community_config, load_community_configs
+from solar_challenge.config import load_community_config, load_community_configs, load_scenario
 from solar_challenge.errors import ConfigurationError
 
 
@@ -23,6 +23,16 @@ _SHARING_MODE_RETIRED = (
     "a community with a community_battery block shares through that battery, "
     "and one without nets peer to peer, so delete sharing_mode"
 )
+
+_A_COMMUNITY_BATTERY_BLOCK: dict[str, Any] = {"community_battery": {"capacity_kwh": 20.0}}
+_A_SCENARIO_SETTING_SHARING_MODE: dict[str, Any] = {"homes": [{}], "community": {"sharing_mode": "p2p"}}
+
+
+def _scenario_file(tmp_path: Path, document: dict[str, Any], *, name: str = "scenario.yaml") -> Path:
+    """The path of *document*, written as YAML to *name* under *tmp_path*."""
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump(document))
+    return path
 
 
 @pytest.fixture
@@ -264,16 +274,48 @@ period:
             load_community_config(path)
         assert str(refusal.value) == "the top level: must be a mapping, got list"
 
+    def test_a_scenario_blocks_community_block_reads_as_a_bare_documents_does(self, tmp_path: Path) -> None:
+        bare = load_community_config(
+            _scenario_file(tmp_path, {"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}, name="bare.yaml")
+        )
+        wrapped = load_community_config(
+            _scenario_file(tmp_path, {"scenario": {"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}})
+        )
 
-_A_COMMUNITY_BATTERY_BLOCK: dict[str, Any] = {"community_battery": {"capacity_kwh": 20.0}}
-_A_SCENARIO_SETTING_SHARING_MODE: dict[str, Any] = {"homes": [{}], "community": {"sharing_mode": "p2p"}}
+        assert wrapped is not None
+        assert wrapped == bare
 
+    def test_a_scenario_blocks_community_block_setting_sharing_mode_is_refused_naming_its_path(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_config(_scenario_file(tmp_path, {"scenario": _A_SCENARIO_SETTING_SHARING_MODE}))
 
-def _scenario_file(tmp_path: Path, document: dict[str, Any]) -> Path:
-    """The path of *document*, written as YAML under *tmp_path*."""
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml.safe_dump(document))
-    return path
+        assert str(refusal.value) == f"scenario.community.sharing_mode: {_SHARING_MODE_RETIRED}"
+
+    def test_a_scenarios_document_is_refused_as_load_scenario_refuses_it(self, tmp_path: Path) -> None:
+        path = _scenario_file(tmp_path, {"scenarios": [{"homes": [{}], "community": {}}, {"homes": [{}]}]})
+        with pytest.raises(ConfigurationError) as scenario_refusal:
+            load_scenario(path)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_config(path)
+
+        assert str(refusal.value) == str(scenario_refusal.value)
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}, id="bare"),
+            pytest.param({"scenario": {"homes": [{}], "community": _A_COMMUNITY_BATTERY_BLOCK}}, id="scenario-block"),
+        ],
+    )
+    def test_load_community_configs_reads_a_one_scenario_document_as_load_community_config_does(
+        self, tmp_path: Path, document: dict[str, Any]
+    ) -> None:
+        path = _scenario_file(tmp_path, document)
+
+        assert load_community_configs(path) == [load_community_config(path)]
 
 
 class TestTheCommunityBlockOfEachScenario:
