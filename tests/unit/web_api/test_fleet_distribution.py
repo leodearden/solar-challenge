@@ -32,25 +32,28 @@ from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES
 
 
-UNUSABLE_SHUFFLED_POOL_ENTRIES = [
+#: Shuffled pools, as their values and counts lists, whose counts the preview cannot use, with
+#: its refusal: a count that is not a whole number from 0 to the dashboard's fleet limit, or
+#: counts totalling more than that limit.
+UNUSABLE_SHUFFLED_POOL_COUNTS = [
     pytest.param(
-        [{"value": 4.0, "count": float("inf")}],
-        "entries[0].count must be a finite number, got inf",
+        {"values": [4.0], "counts": [float("inf")]},
+        "params.counts[0] must be a finite number, got inf",
         id="infinity",
     ),
     pytest.param(
-        [{"value": 4.0, "count": 2.5}],
-        "entries[0].count must be a whole number, got 2.5",
+        {"values": [4.0], "counts": [2.5]},
+        "params.counts[0] must be a whole number, got 2.5",
         id="fraction",
     ),
     pytest.param(
-        [{"value": 4.0, "count": 1e300}],
-        f"entries[0].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
+        {"values": [4.0], "counts": [1e300]},
+        f"params.counts[0] must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
         id="huge-float",
     ),
     pytest.param(
-        [{"value": 4.0, "count": MAX_FLEET_HOMES}, {"value": 5.0, "count": 1}],
-        f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+        {"values": [4.0, 5.0], "counts": [MAX_FLEET_HOMES, 1]},
+        f"params.counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
         id="pool-total-one-above-the-fleet-limit",
     ),
 ]
@@ -162,28 +165,33 @@ class TestPreviewDistribution:
         [
             pytest.param(
                 {"type": "normal", "params": "x"},
-                "params must be a mapping, got str",
+                "params: must be a mapping, got str",
                 id="normal-str-params",
             ),
             pytest.param(
-                {"type": "weighted_discrete", "params": {"values": ["x"]}},
-                "values[0] must be a mapping, got str",
-                id="weighted-discrete-str-row",
+                {"type": "weighted_discrete", "params": {"values": ["x"], "weights": [1]}},
+                "params.values[0] must be a finite number, got 'x'",
+                id="weighted-discrete-str-value",
             ),
             pytest.param(
-                {"type": "shuffled_pool", "params": {"entries": [1]}},
-                "entries[0] must be a mapping, got int",
-                id="shuffled-pool-int-row",
+                {"type": "shuffled_pool", "params": {"values": [4.0], "counts": "x"}},
+                "params.counts: must be a list, got str",
+                id="shuffled-pool-str-counts",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "params": {"values": [4.0, 5.0], "counts": [1]}},
+                "params.values and params.counts must have the same length, got 2 and 1",
+                id="shuffled-pool-fewer-counts",
             ),
         ],
     )
     def test_malformed_params_return_400_naming_the_field(
         self, client: FlaskClient, body: dict, message: str
     ) -> None:
-        """Params that are not an object, or a distribution row that is not an object, is a 400 naming it and the type sent."""
+        """Params that are not an object, a list cell that is not a number, a list that is not a list, or parallel lists of unequal length, are a 400 naming the field under params."""
         resp = client.post("/api/fleet/preview-distribution", json=body)
         assert resp.status_code == 400
-        assert message in resp.get_json()["error"]
+        assert resp.get_json() == {"error": message}
 
     @pytest.mark.parametrize(
         ("n_samples", "message"),
@@ -212,17 +220,17 @@ class TestPreviewDistribution:
         assert resp.status_code == 400
         assert message in resp.get_json()["error"]
 
-    @pytest.mark.parametrize(("entries", "message"), UNUSABLE_SHUFFLED_POOL_ENTRIES)
+    @pytest.mark.parametrize(("params", "message"), UNUSABLE_SHUFFLED_POOL_COUNTS)
     def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
-        self, client: FlaskClient, entries: list, message: str
+        self, client: FlaskClient, params: dict, message: str
     ) -> None:
-        """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the row's count and the value sent; so is a count that takes the pool's total above that limit, naming the total."""
+        """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the count under params and the value sent; so are counts that take the pool's total above that limit, naming params.counts and the total."""
         resp = client.post(
             "/api/fleet/preview-distribution",
-            json={"type": "shuffled_pool", "params": {"entries": entries}},
+            json={"type": "shuffled_pool", "params": params},
         )
         assert resp.status_code == 400
-        assert message in resp.get_json()["error"]
+        assert resp.get_json() == {"error": message}
 
     @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
@@ -236,8 +244,8 @@ class TestPreviewDistribution:
             ),
             pytest.param(
                 "weighted_discrete",
-                lambda v: {"values": [{"value": 3.0, "weight": v}]},
-                "params.values[0].weight",
+                lambda v: {"values": [3.0], "weights": [v]},
+                "params.weights[0]",
                 id="weighted-discrete-weight",
             ),
         ],

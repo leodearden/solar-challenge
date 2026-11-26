@@ -14,6 +14,7 @@ from solar_challenge.fleet_distribution import (
     FleetDistributionConfig,
     parse_fleet_distribution_config,
 )
+from solar_challenge.scenario_blocks import require_list, require_mapping
 from solar_challenge.web import fleet_config
 from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_config import sample_distribution
@@ -50,7 +51,7 @@ class TestFleetConfigHelpers:
         """Test weighted discrete distribution sampling."""
         samples = sample_distribution(
             "weighted_discrete",
-            {"values": [{"value": 3.0, "weight": 50}, {"value": 5.0, "weight": 50}]},
+            {"values": [3.0, 5.0], "weights": [50, 50]},
         )
         assert len(samples) == 100
         assert all(s in (3.0, 5.0) for s in samples)
@@ -59,7 +60,7 @@ class TestFleetConfigHelpers:
         """Test shuffled pool distribution sampling."""
         samples = sample_distribution(
             "shuffled_pool",
-            {"entries": [{"value": 3.0, "count": 30}, {"value": 5.0, "count": 70}]},
+            {"values": [3.0, 5.0], "counts": [30, 70]},
         )
         assert len(samples) == 100
         assert all(s in (3.0, 5.0) for s in samples)
@@ -102,15 +103,29 @@ class TestFleetConfigHelpers:
                 "weighted_discrete",
                 {},
                 "params.values must be given: the preview draws a weighted_discrete distribution "
-                "from its values",
-                id="weighted-discrete-without-its-rows",
+                "from its values and weights",
+                id="weighted-discrete-without-its-lists",
+            ),
+            pytest.param(
+                "weighted_discrete",
+                {"values": [3.0]},
+                "params.weights must be given: the preview draws a weighted_discrete distribution "
+                "from its values and weights",
+                id="weighted-discrete-without-its-weights",
             ),
             pytest.param(
                 "shuffled_pool",
-                {"entries": None},
-                "params.entries must be given: the preview draws a shuffled_pool distribution "
-                "from its entries",
-                id="shuffled-pool-with-null-entries",
+                {"values": None, "counts": [1]},
+                "params.values must be given: the preview draws a shuffled_pool distribution "
+                "from its values and counts",
+                id="shuffled-pool-with-null-values",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                {"values": [3.0], "counts": None},
+                "params.counts must be given: the preview draws a shuffled_pool distribution "
+                "from its values and counts",
+                id="shuffled-pool-with-null-counts",
             ),
         ],
     )
@@ -123,52 +138,86 @@ class TestFleetConfigHelpers:
         assert str(exc_info.value) == message
 
     @pytest.mark.parametrize(
-        ("dist_type", "params", "message"),
+        "params",
+        [
+            pytest.param("x", id="str-params"),
+            pytest.param([2.0, 6.0], id="list-params"),
+            pytest.param(None, id="null-params"),
+        ],
+    )
+    def test_sample_distribution_refuses_params_that_are_not_a_mapping_as_require_mapping_refuses_them(
+        self, params: object
+    ) -> None:
+        """Params that are not a mapping are refused by the one 'must be a mapping' rule the scenario grammar's blocks are read by, naming params and the type sent."""
+        with pytest.raises(ConfigurationError) as expected:
+            require_mapping("params", params)
+        with pytest.raises(ConfigurationError) as exc_info:
+            sample_distribution("normal", params)
+        assert str(exc_info.value) == str(expected.value)
+
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "list_key"),
         [
             pytest.param(
-                "normal", "x", "params must be a mapping, got str", id="normal-str-params"
-            ),
-            pytest.param(
-                "uniform",
-                [2.0, 6.0],
-                "params must be a mapping, got list",
-                id="uniform-list-params",
-            ),
-            pytest.param(
-                "normal", None, "params must be a mapping, got NoneType", id="normal-null-params"
-            ),
-            pytest.param(
                 "weighted_discrete",
-                {"values": ["x"]},
-                "values[0] must be a mapping, got str",
-                id="weighted-discrete-str-row",
-            ),
-            pytest.param(
-                "shuffled_pool",
-                {"entries": [{"value": 3.0, "count": 1}, 1]},
-                "entries[1] must be a mapping, got int",
-                id="shuffled-pool-int-row-after-a-valid-one",
-            ),
-            pytest.param(
-                "weighted_discrete",
-                {"values": "ab"},
-                "values must be a list, got str",
+                {"values": "ab", "weights": [1]},
+                "values",
                 id="weighted-discrete-str-values",
             ),
             pytest.param(
+                "weighted_discrete",
+                {"values": [3.0], "weights": {"w": 1}},
+                "weights",
+                id="weighted-discrete-mapping-weights",
+            ),
+            pytest.param(
                 "shuffled_pool",
-                {"entries": {"value": 3.0}},
-                "entries must be a list, got dict",
-                id="shuffled-pool-object-entries",
+                {"values": {"value": 3.0}, "counts": [1]},
+                "values",
+                id="shuffled-pool-mapping-values",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                {"values": [3.0], "counts": 1},
+                "counts",
+                id="shuffled-pool-int-counts",
             ),
         ],
     )
-    def test_sample_distribution_refuses_malformed_params(
-        self, dist_type: str, params: object, message: str
+    def test_sample_distribution_refuses_a_list_that_is_not_a_list_naming_it_under_params(
+        self, dist_type: str, params: dict, list_key: str
     ) -> None:
-        """Params that are not a mapping, a row that is not a mapping, or a row list that is not a list, is refused, naming it and the type sent."""
-        with pytest.raises(ConfigurationError, match=re.escape(message)):
-            sample_distribution(dist_type, params)
+        """A weighted_discrete's or a shuffled_pool's values, or its paired list, sent as something other than a list is refused as require_list refuses it, naming the list under params."""
+        with pytest.raises(ConfigurationError) as expected:
+            require_list(f"params.{list_key}", params[list_key])
+        with pytest.raises(ConfigurationError) as exc_info:
+            sample_distribution(dist_type, params, 3)
+        assert str(exc_info.value) == str(expected.value)
+
+    @pytest.mark.parametrize(
+        ("dist_type", "params", "message"),
+        [
+            pytest.param(
+                "weighted_discrete",
+                {"values": [3.0, 5.0], "weights": [1]},
+                "params.values and params.weights must have the same length, got 2 and 1",
+                id="weighted-discrete-fewer-weights",
+            ),
+            pytest.param(
+                "shuffled_pool",
+                {"values": [3.0], "counts": [1, 1]},
+                "params.values and params.counts must have the same length, got 1 and 2",
+                id="shuffled-pool-more-counts",
+            ),
+        ],
+    )
+    def test_sample_distribution_refuses_parallel_lists_of_unequal_length_naming_both(
+        self, dist_type: str, params: dict, message: str
+    ) -> None:
+        """A weighted_discrete's or a shuffled_pool's values and paired list are parallel lists, so lists of unequal length are refused naming both and their lengths."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            sample_distribution(dist_type, params, 3)
+        assert str(exc_info.value) == message
 
     @pytest.mark.parametrize(
         "n_samples",
@@ -247,22 +296,22 @@ class TestFleetConfigHelpers:
         ("count", "message"),
         [
             pytest.param(
-                float("inf"), "entries[1].count must be a finite number, got inf", id="infinity"
+                float("inf"), "params.counts[1] must be a finite number, got inf", id="infinity"
             ),
-            pytest.param(2.5, "entries[1].count must be a whole number, got 2.5", id="fraction"),
+            pytest.param(2.5, "params.counts[1] must be a whole number, got 2.5", id="fraction"),
             pytest.param(
                 1e300,
-                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
+                f"params.counts[1] must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
                 id="huge-float",
             ),
             pytest.param(
                 -1,
-                f"entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got -1",
+                f"params.counts[1] must be between 0 and {MAX_FLEET_HOMES}, got -1",
                 id="negative",
             ),
             pytest.param(
                 MAX_FLEET_HOMES - 1,
-                f"entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
+                f"params.counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
                 id="pool-total-one-above-the-fleet-limit",
             ),
         ],
@@ -270,60 +319,9 @@ class TestFleetConfigHelpers:
     def test_sample_distribution_refuses_a_shuffled_pool_count_it_cannot_use(
         self, count: float, message: str
     ) -> None:
-        """A preview refuses a shuffled_pool count that is not a whole number, a fraction included, or one outside 0 to the dashboard's fleet limit, naming the row's count and the value sent; it refuses a count that takes the pool's total above that limit, naming the total."""
-        with pytest.raises(ConfigurationError, match=re.escape(message)):
-            sample_distribution(
-                "shuffled_pool",
-                {"entries": [{"value": 3.0, "count": 2}, {"value": 5.0, "count": count}]},
-            )
-
-    @pytest.mark.parametrize(
-        ("dist_type", "params", "message"),
-        [
-            pytest.param(
-                "weighted_discrete",
-                {"values": [1]},
-                "params.values[0] must be a mapping, got int",
-                id="weighted-discrete-int-row",
-            ),
-            pytest.param(
-                "weighted_discrete",
-                {"values": "ab"},
-                "params.values must be a list, got str",
-                id="weighted-discrete-str-values",
-            ),
-            pytest.param(
-                "weighted_discrete",
-                {"values": [{"value": 3.0}]},
-                "params.values[0] must be a mapping with 'value' and 'weight', got {'value': 3.0}",
-                id="weighted-discrete-row-without-its-weight",
-            ),
-            pytest.param(
-                "shuffled_pool",
-                {"entries": [{"value": 3.0, "count": float("inf")}]},
-                "params.entries[0].count must be a finite number, got inf",
-                id="shuffled-pool-infinite-count",
-            ),
-            pytest.param(
-                "shuffled_pool",
-                {
-                    "entries": [
-                        {"value": 3.0, "count": MAX_FLEET_HOMES},
-                        {"value": 5.0, "count": 1},
-                    ]
-                },
-                f"params.entries counts must total at most {MAX_FLEET_HOMES}, "
-                f"got {MAX_FLEET_HOMES + 1}",
-                id="shuffled-pool-total-one-above-the-fleet-limit",
-            ),
-        ],
-    )
-    def test_sample_distribution_names_a_row_or_count_refusal_under_params(
-        self, dist_type: str, params: dict, message: str
-    ) -> None:
-        """A preview's malformed row list, row or count is refused naming its field under params, the distribution the preview reads."""
+        """A preview refuses a shuffled_pool count that is not a whole number, a fraction included, or one outside 0 to the dashboard's fleet limit, naming the count under params and the value sent; it refuses counts that take the pool's total above that limit, naming params.counts and the total."""
         with pytest.raises(ConfigurationError) as exc_info:
-            sample_distribution(dist_type, params, 3)
+            sample_distribution("shuffled_pool", {"values": [3.0, 5.0], "counts": [2, count]})
         assert str(exc_info.value) == message
 
     @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
@@ -356,20 +354,20 @@ class TestFleetConfigHelpers:
             ),
             pytest.param(
                 "weighted_discrete",
-                lambda v: {"values": [{"value": v, "weight": 1}]},
-                "params.values[0].value",
+                lambda v: {"values": [3.0, v], "weights": [1, 1]},
+                "params.values[1]",
                 id="weighted-discrete-value",
             ),
             pytest.param(
                 "weighted_discrete",
-                lambda v: {"values": [{"value": 3.0, "weight": v}]},
-                "params.values[0].weight",
+                lambda v: {"values": [3.0], "weights": [v]},
+                "params.weights[0]",
                 id="weighted-discrete-weight",
             ),
             pytest.param(
                 "shuffled_pool",
-                lambda v: {"entries": [{"value": v, "count": 2}]},
-                "params.entries[0].value",
+                lambda v: {"values": [v], "counts": [2]},
+                "params.values[0]",
                 id="shuffled-pool-value",
             ),
         ],
