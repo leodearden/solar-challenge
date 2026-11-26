@@ -576,6 +576,13 @@ class TestScenarioAPI:
         assert response.status_code == 201
         assert client.get("/api/scenarios/presets/Flat").get_json()["config"] == {"n_homes": 3}
 
+    def test_save_of_an_empty_config_object_saves_that_object(self, client: FlaskClient) -> None:
+        """A sent config is the preset's config even when it is an empty object: whether config was sent, not its truthiness, decides the flat-form fallback."""
+        response = client.post("/api/scenarios/save", json={"name": "Empty", "config": {}})
+
+        assert response.status_code == 201
+        assert client.get("/api/scenarios/presets/Empty").get_json()["config"] == {}
+
     def test_save_of_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_saves_nothing(
         self, app: Flask, client: FlaskClient
     ) -> None:
