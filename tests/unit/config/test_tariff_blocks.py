@@ -177,7 +177,7 @@ class TestScenarioSegBlock:
             return load_scenarios(path)[0].seg_tariff_pence_per_kwh
 
         def through_community_billing(seg: object) -> float | None:
-            community = {"sharing_mode": "p2p", "billing": {"seg": seg}}
+            community = {"billing": {"seg": seg}}
             path.write_text(yaml.safe_dump({"community": community}))
             config = load_community_config(path)
             assert config is not None
@@ -238,7 +238,7 @@ class TestScenarioSegBlock:
     ) -> None:
         """``community.billing.seg_rate_pence_per_kwh`` refuses every rate the ``seg`` block refuses."""
         path = tmp_path / "seg.yaml"
-        community = {"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": rate}}
+        community = {"billing": {"seg_rate_pence_per_kwh": rate}}
         path.write_text(yaml.safe_dump({"community": community}))
         with pytest.raises(ConfigurationError, match="seg_rate_pence_per_kwh"):
             load_community_config(path)

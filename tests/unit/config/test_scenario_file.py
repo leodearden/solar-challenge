@@ -881,7 +881,7 @@ class TestParseScenario:
         assert _parse_refusal({"flex_band": value, "home": _A_HOME}, block_path=block_path) == flex_band_refusal(value, what)
 
     def test_a_community_block_is_recognised_and_reaches_no_home(self) -> None:
-        scenario = parse_scenario({"community": {"sharing_mode": "p2p"}, "home": _A_HOME})
+        scenario = parse_scenario({"community": {}, "home": _A_HOME})
 
         assert scenario.simulated_homes() == parse_scenario({"home": _A_HOME}).simulated_homes()
 

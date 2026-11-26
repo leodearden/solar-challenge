@@ -1,6 +1,7 @@
 """Tests for output and reporting functions."""
 
 import tempfile
+import typing
 from dataclasses import asdict, replace
 from datetime import date
 from pathlib import Path
@@ -9,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.community import CommunityConfig, simulate_community
+from solar_challenge.community import CommunityConfig, SharingMode, simulate_community
 from solar_challenge.demand import LoadKind
 from solar_challenge.home import RunPricing, SimulationResults, calculate_summary, simulate_home
 from solar_challenge.output import (
@@ -442,7 +443,7 @@ class TestCommunityMetrics:
     def test_a_half_hourly_twin_of_a_run_has_the_minute_runs_figures(self) -> None:
         minute, half_hour = (
             compute_community_metrics(
-                simulate_community(make_fleet_results_of([_seasonal_run(freq)]), CommunityConfig(sharing_mode="p2p"))
+                simulate_community(make_fleet_results_of([_seasonal_run(freq)]), CommunityConfig())
             )
             for freq in ("1min", "30min")
         )
@@ -451,6 +452,13 @@ class TestCommunityMetrics:
         assert minute.dt_h == pytest.approx(1 / 60, rel=1e-9)
         assert half_hour.dt_h == pytest.approx(0.5, rel=1e-9)
         assert half_hour.sharing_mode == minute.sharing_mode
+
+
+class TestCommunityMetricsSharingMode:
+    """CommunityMetrics.sharing_mode is typed by community.SharingMode, a type a runtime reader of the report's hints can resolve."""
+
+    def test_the_type_hints_of_community_metrics_resolve_its_sharing_mode_to_sharing_mode(self) -> None:
+        assert typing.get_type_hints(CommunityMetrics)["sharing_mode"] == SharingMode
 
 
 class TestAggregateDaily:
@@ -640,7 +648,7 @@ class TestGridChargeForecastNotice:
             [replace(sample_results, grid_charge_forecast=each) for each in ("trailing_14_days", None, "pv_blind")]
         )
 
-        report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+        report = generate_community_report(simulate_community(fleet, CommunityConfig()))
 
         assert report.startswith(
             "# Community Energy Sharing Report\n\n" + PV_BLIND_AND_TRAILING_NOTICE + "## Sharing Mode"
@@ -651,7 +659,7 @@ class TestGridChargeForecastNotice:
     ) -> None:
         fleet = make_fleet_results_of([sample_results, sample_results])
 
-        report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+        report = generate_community_report(simulate_community(fleet, CommunityConfig()))
 
         assert report.startswith("# Community Energy Sharing Report\n\n## Sharing Mode")
         assert "sized by" not in report

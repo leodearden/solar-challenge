@@ -1171,8 +1171,16 @@ def _parse_community_billing_config(
 
 
 _COMMUNITY_BLOCK_KEYS: frozenset[str] = frozenset({
-    "sharing_mode", "community_battery", "billing",
+    "community_battery", "billing",
 })
+
+_RETIRED_COMMUNITY_KEYS: Mapping[str, str] = MappingProxyType({
+    "sharing_mode": (
+        "the sharing mode follows community_battery; a community with a community_battery block "
+        "shares through that battery, and one without nets peer to peer, so delete sharing_mode"
+    ),
+})
+"""The community block's retired sharing_mode key, with why it is refused and what replaces it."""
 
 
 def parse_community_config(
@@ -1188,19 +1196,19 @@ def parse_community_config(
         ``CommunityConfig`` when *data* is a dict; ``None`` when *data* is ``None``.
 
     Raises:
-        ConfigurationError: For a block that is not a mapping or carries a key it
-            does not read, or a missing ``sharing_mode``; as a nested block's reader
-            refuses that block; or as CommunityConfig refuses the block, such as an
-            unknown ``sharing_mode``, p2p+battery or community_battery-without-battery,
-            prefixed by its path.
+        ConfigurationError: For a block that is not a mapping; for a block that
+            sets the retired ``sharing_mode``, null or not, naming the key's
+            path under *block_path* (``community.sharing_mode`` as
+            :func:`~solar_challenge.config.load_community_config` reads it)
+            and saying the mode follows ``community_battery``; for a block
+            that carries a key it does not
+            read; as a nested block's reader refuses that block; or as
+            CommunityConfig refuses the block, prefixed by its path.
     """
     if data is None:
         return None
+    refuse_retired_keys(block_path, data, _RETIRED_COMMUNITY_KEYS)
     refuse_unrecognised_keys(block_path, data, _COMMUNITY_BLOCK_KEYS)
-
-    sharing_mode = data.get("sharing_mode")
-    if not sharing_mode:
-        raise refusal(block_path, "requires 'sharing_mode': 'p2p' or 'community_battery'")
 
     community_battery = _parse_battery_config(
         data.get("community_battery"), block_path=child_path(block_path, "community_battery")
@@ -1212,7 +1220,6 @@ def parse_community_config(
     return constructed(
         block_path,
         CommunityConfig,
-        sharing_mode=sharing_mode,
         community_battery=community_battery,
         billing=billing,
     )

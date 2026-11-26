@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TypeVar, Uni
 
 import pandas as pd
 
+from solar_challenge.community import SharingMode
 from solar_challenge.demand import LoadKind
 from solar_challenge.home import (
     RunPricing,
@@ -362,7 +363,7 @@ class CommunityMetrics:
     battery_charge_kwh: float
     battery_discharge_kwh: float
     #: Authoritative sharing mode, read directly from CommunityResults.sharing_mode.
-    sharing_mode: str
+    sharing_mode: SharingMode
 
 
 def compute_community_metrics(community_results: "CommunityResults") -> CommunityMetrics:

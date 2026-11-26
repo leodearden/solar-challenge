@@ -521,7 +521,7 @@ home:
         ("document", "refusal"),
         [
             pytest.param(
-                "homes: [{}]\ncommunity: {sharing_mode: p2p, mode: p2p}\n",
+                "homes: [{}]\ncommunity: {mode: p2p}\n",
                 "community: unrecognised keys 'mode'",
                 id="a-community-key-it-does-not-read",
             ),

@@ -17,7 +17,7 @@ Usage::
 
     index = pd.date_range("2024-06-21 12:00", periods=2, freq="min", tz="Europe/London")
     fleet = make_balanced_fleet(index, [([3.0, 0.0], [1.0, 1.0]), ([0.0, 0.0], [2.0, 1.0])])
-    community = simulate_community(fleet, CommunityConfig(sharing_mode="p2p"))
+    community = simulate_community(fleet, CommunityConfig())
 """
 
 from __future__ import annotations

@@ -34,41 +34,41 @@ def load_community_block(tmp_path: Path) -> LoadCommunityBlock:
 class TestCommunityBlockParsing:
     """The community: block, as load_community_config reads it from a file."""
 
-    def test_minimal_p2p(self, load_community_block: LoadCommunityBlock) -> None:
-        """A minimal dict with sharing_mode='p2p' returns a valid CommunityConfig."""
-        cfg = load_community_block({"sharing_mode": "p2p"})
+    def test_an_empty_community_block_is_a_p2p_community(self, load_community_block: LoadCommunityBlock) -> None:
+        cfg = load_community_block({})
         assert isinstance(cfg, CommunityConfig)
-        assert cfg.sharing_mode == "p2p"
         assert cfg.community_battery is None
         assert cfg.billing is None
+        assert cfg.sharing_mode == "p2p"
 
-    # ------------------------------------------------------------------
-    # community_battery mode + invalid combinations
-    # ------------------------------------------------------------------
+    def test_a_block_with_a_community_battery_shares_through_it(self, load_community_block: LoadCommunityBlock) -> None:
+        cfg = load_community_block({"community_battery": {"capacity_kwh": 20.0}})
+        assert cfg is not None
+        assert cfg.sharing_mode == "community_battery"
+        assert cfg.community_battery is not None
+        assert cfg.community_battery.capacity_kwh == 20.0
 
-    def test_community_battery_mode_without_battery_raises(
-        self, load_community_block: LoadCommunityBlock
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param({"sharing_mode": "p2p"}, id="p2p"),
+            pytest.param(
+                {"sharing_mode": "community_battery", "community_battery": {"capacity_kwh": 20.0}},
+                id="community-battery",
+            ),
+            pytest.param({"sharing_mode": None}, id="null"),
+        ],
+    )
+    def test_a_block_setting_sharing_mode_is_refused_naming_it(
+        self, load_community_block: LoadCommunityBlock, block: dict[str, Any]
     ) -> None:
-        """community_battery mode without a community_battery block raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            load_community_block({"sharing_mode": "community_battery"})
-
-    def test_p2p_with_battery_raises(
-        self, load_community_block: LoadCommunityBlock
-    ) -> None:
-        """p2p + community_battery block raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            load_community_block(
-                {
-                    "sharing_mode": "p2p",
-                    "community_battery": {"capacity_kwh": 50.0},
-                }
-            )
-
-    def test_bogus_mode_raises(self, load_community_block: LoadCommunityBlock) -> None:
-        """An unrecognised sharing_mode raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
-            load_community_block({"sharing_mode": "bogus"})
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_block(block)
+        assert str(refusal.value) == (
+            "community.sharing_mode: the sharing mode follows community_battery; "
+            "a community with a community_battery block shares through that battery, "
+            "and one without nets peer to peer, so delete sharing_mode"
+        )
 
     # ------------------------------------------------------------------
     # community_battery: a grid_charging its dispatch would ignore
@@ -86,7 +86,6 @@ class TestCommunityBlockParsing:
     ) -> None:
         """A community_battery block naming no dispatch_strategy dispatches by self-consumption, which never grid-charges."""
         block = {
-            "sharing_mode": "community_battery",
             "community_battery": {"capacity_kwh": 20.0, "grid_charging": {"target_soc_fraction": 0.9}},
             **billing_entry,
         }
@@ -108,7 +107,6 @@ class TestCommunityBlockParsing:
     ) -> None:
         """A peak_shaving community battery grid-charges in a cheap period of the billing tariff, so it needs one."""
         block = {
-            "sharing_mode": "community_battery",
             "community_battery": {
                 "capacity_kwh": 20.0,
                 "dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 3.0},
@@ -133,7 +131,6 @@ class TestCommunityBlockParsing:
         with pytest.raises(ConfigurationError) as refusal:
             load_community_block(
                 {
-                    "sharing_mode": "p2p",
                     "billing": {
                         "seg_rate_pence_per_kwh": 4.1,
                         "seg": {"preset": "Octopus"},
@@ -142,17 +139,6 @@ class TestCommunityBlockParsing:
             )
         assert str(refusal.value) == "community.billing: sets both seg_rate_pence_per_kwh and seg; set one, not both"
 
-    @pytest.mark.parametrize(
-        "sharing_mode",
-        [pytest.param({}, id="absent"), pytest.param({"sharing_mode": None}, id="null"), pytest.param({"sharing_mode": ""}, id="empty")],
-    )
-    def test_a_block_without_a_sharing_mode_is_refused_naming_it(
-        self, load_community_block: LoadCommunityBlock, sharing_mode: dict[str, Any]
-    ) -> None:
-        with pytest.raises(ConfigurationError) as refusal:
-            load_community_block(sharing_mode)
-        assert str(refusal.value) == "community: requires 'sharing_mode': 'p2p' or 'community_battery'"
-
     def test_billing_seg_non_dict_raises(
         self, load_community_block: LoadCommunityBlock
     ) -> None:
@@ -160,7 +146,6 @@ class TestCommunityBlockParsing:
         with pytest.raises(ConfigurationError, match="mapping"):
             load_community_block(
                 {
-                    "sharing_mode": "p2p",
                     "billing": {"seg": 4.1},
                 }
             )
@@ -172,7 +157,6 @@ class TestCommunityBlockParsing:
         with pytest.raises(ConfigurationError, match="mapping"):
             load_community_block(
                 {
-                    "sharing_mode": "p2p",
                     "billing": {"seg": "Octopus"},
                 }
             )
@@ -181,7 +165,7 @@ class TestCommunityBlockParsing:
         self, load_community_block: LoadCommunityBlock
     ) -> None:
         """An empty billing: {} block normalises to billing=None (same as absent key)."""
-        cfg = load_community_block({"sharing_mode": "p2p", "billing": {}})
+        cfg = load_community_block({"billing": {}})
         assert cfg is not None
         assert cfg.billing is None
 
@@ -193,7 +177,7 @@ class TestCommunityBatteryEfficiency:
         self, load_community_block: LoadCommunityBlock
     ) -> None:
         cfg = load_community_block(
-            {"sharing_mode": "community_battery", "community_battery": {"capacity_kwh": 10, "efficiency": 0.95}}
+            {"community_battery": {"capacity_kwh": 10, "efficiency": 0.95}}
         )
         assert cfg is not None
         assert cfg.community_battery == BatteryConfig(capacity_kwh=10).with_round_trip(0.95)
@@ -216,7 +200,6 @@ class TestCommunityBatteryEfficiency:
         with pytest.raises(ConfigurationError) as refusal:
             load_community_block(
                 {
-                    "sharing_mode": "community_battery",
                     "community_battery": {"capacity_kwh": 10, "efficiency": 0.95, **per_direction},
                 }
             )
@@ -234,7 +217,6 @@ class TestLoadCommunityConfig:
         """YAML file with community: block returns a populated CommunityConfig."""
         yaml_content = """\
 community:
-  sharing_mode: community_battery
   community_battery:
     capacity_kwh: 50.0
     max_charge_kw: 20.0
@@ -291,7 +273,6 @@ class TestCommunityConfigFrozenPicklable:
         """Return a CommunityConfig that exercises every nested dataclass."""
         cfg = load_community_block(
             {
-                "sharing_mode": "community_battery",
                 "community_battery": {
                     "capacity_kwh": 50.0,
                     "max_charge_kw": 20.0,
@@ -317,7 +298,7 @@ class TestCommunityConfigFrozenPicklable:
         """Assigning a new attribute on CommunityConfig raises FrozenInstanceError."""
         cfg = full_community_config
         with pytest.raises(dataclasses.FrozenInstanceError):
-            cfg.sharing_mode = "p2p"  # type: ignore[misc]
+            cfg.community_battery = None  # type: ignore[misc]
 
     def test_frozen_nested_battery(self, full_community_config: CommunityConfig) -> None:
         """BatteryConfig inside CommunityConfig is also frozen."""
