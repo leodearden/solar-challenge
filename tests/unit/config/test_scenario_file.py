@@ -15,6 +15,7 @@ import pytest
 from solar_challenge.config import (
     ScenarioConfig,
     load_community_config,
+    load_community_configs,
     load_config,
     load_config_json,
     load_config_yaml,
@@ -1152,6 +1153,7 @@ class TestEveryLoaderRefusesADocumentThatIsNoMapping:
             pytest.param(load_home_config, ".yaml", id="load_home_config"),
             pytest.param(load_fleet_config, ".yaml", id="load_fleet_config"),
             pytest.param(load_community_config, ".yaml", id="load_community_config"),
+            pytest.param(load_community_configs, ".yaml", id="load_community_configs"),
         ],
     )
     @pytest.mark.parametrize(

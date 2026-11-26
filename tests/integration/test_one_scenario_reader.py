@@ -26,7 +26,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import default_runner
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.location import LOCATION_PRESETS, Location
-from solar_challenge.scenario_blocks import parse_tariff_config
+from solar_challenge.scenario_blocks import child_path, parse_community_config, parse_tariff_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 from solar_challenge.weather import WeatherCache, WeatherProvider
@@ -332,6 +332,71 @@ def test_every_command_refuses_a_document_the_reader_refuses_with_the_readers_me
     assert result.exit_code == 1, result.output
     assert recorder.fleets == []
     assert f"{command.refusal_prefix}{message}" in command.shown(result)
+
+
+_BAD_COMMUNITY: dict[str, Any] = {"sharing_mode": "p2p"}
+
+_COMMUNITY_REFUSAL_DOCUMENTS: dict[str, tuple[Mapping[str, Any], str]] = {
+    "bare": ({**HOMES, "community": _BAD_COMMUNITY}, ""),
+    "scenario-block": ({"scenario": {**HOMES, "community": _BAD_COMMUNITY}}, "scenario"),
+    "scenarios-entry": ({"scenarios": [HOMES, {**HOMES, "community": _BAD_COMMUNITY}]}, "scenarios[1]"),
+}
+"""Each document whose one bad community: block sits in a scenario, with the path of that scenario."""
+
+
+def _command_community_rows(command: _Command, document_names: Sequence[str]) -> list[Any]:
+    """One row of (command, document, scenario path) for each named community document, its id '<command>-<document>-community-task1739'."""
+    return [
+        pytest.param(command, *_COMMUNITY_REFUSAL_DOCUMENTS[name], id=f"{command.name}-{name}-community-task1739")
+        for name in document_names
+    ]
+
+
+@pytest.mark.parametrize(
+    ("command", "document", "scenario_path"),
+    [
+        *_command_community_rows(_VALIDATE_CONFIG, list(_COMMUNITY_REFUSAL_DOCUMENTS)),
+        *_command_community_rows(_FLEET_RUN, ["bare", "scenario-block"]),
+    ],
+)
+def test_a_community_block_is_refused_at_its_scenarios_path_with_the_community_readers_message(
+    tmp_path: Path, command: _Command, document: Mapping[str, Any], scenario_path: str
+) -> None:
+    """A community: block is refused by the command with the message the community block reader gives it at its scenario's path, wherever that scenario sits, and nothing is simulated."""
+    path = _written(tmp_path, document)
+    with pytest.raises(ConfigurationError) as refused:
+        parse_community_config(_BAD_COMMUNITY, block_path=child_path(scenario_path, "community"))
+    message = str(refused.value)
+    recorder = RecordingSimulate()
+
+    result = invoke_cli([*command.words, str(path)], answering(recorder))
+
+    assert result.exit_code == 1, result.output
+    assert recorder.fleets == []
+    assert f"{command.refusal_prefix}{message}" in command.shown(result)
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        pytest.param({**HOMES, "community": {}}, id="bare-task1739"),
+        pytest.param({"scenario": {**HOMES, "community": {}}}, id="scenario-block-task1739"),
+    ],
+)
+def test_fleet_run_applies_the_community_block_wherever_its_one_scenario_sits(
+    tmp_path: Path, document: Mapping[str, Any]
+) -> None:
+    """fleet run nets the reader's homes as a community, and writes the community report, whether the scenario holding the community: block is bare or a scenario: block."""
+    path = _written(tmp_path, document)
+    report = tmp_path / "community.md"
+    recorder = RecordingSimulate()
+
+    result = invoke_cli(["fleet", "run", str(path), "--community-report", str(report)], answering(recorder))
+
+    assert result.exit_code == 0, result.output
+    assert "Community Sharing Results" in result.stdout
+    assert report.exists()
+    assert [fleet.homes for fleet in recorder.fleets] == [load_scenario(path).simulated_homes()]
 
 
 @pytest.mark.parametrize(

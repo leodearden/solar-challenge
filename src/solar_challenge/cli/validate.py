@@ -20,7 +20,7 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.config import (
     detect_fleet_sweep_spec,
-    load_community_config,
+    load_community_configs,
     load_config,
     load_scenarios,
     parse_sweep_fleet_configs,
@@ -206,8 +206,8 @@ def _homes_defined_by(config_file: Path) -> _DefinedHomes:
     file through the one scenario reader, load_scenarios. Sweep detection reads a
     fleet_distribution: file's keys and scenario-level blocks before its fleet_distribution:
     block, as both readers do, so either form is refused on the same first block as `fleet
-    run` and `fleet sweep` refuse it. Its community: block is read after its homes. Raises
-    the ConfigurationError or ValueError of the first refusal.
+    run` and `fleet sweep` refuse it. Each scenario's community: block is read after every
+    scenario's homes. Raises the ConfigurationError or ValueError of the first refusal.
     """
     document = load_config(config_file)
     if detect_fleet_sweep_spec(document) is not None:
@@ -220,7 +220,7 @@ def _homes_defined_by(config_file: Path) -> _DefinedHomes:
                 for home in scenario.simulated_homes()
             ]
         )
-    load_community_config(config_file)
+    load_community_configs(config_file)
     return defined
 
 
@@ -340,8 +340,9 @@ def config(
     Every scenario of the file, bare, a scenario: block or each scenarios: entry, is read
     by the one scenario grammar, each block as the commands read it, whether its homes come
     from home:, homes: or fleet_distribution:. A YAML-defined sweep is built at every sweep
-    point, as `fleet sweep` builds it. The community: block is read last. The first value
-    or key refused is an ERROR. Sizes beyond a domestic install are WARNINGs.
+    point, as `fleet sweep` builds it. Each scenario's community: block is read last, after
+    every scenario's homes. The first value or key refused is an ERROR. Sizes beyond a
+    domestic install are WARNINGs.
     """
     errors, warnings = _findings(config_file)
     _print_config_findings(config_file, errors=errors, warnings=warnings)
