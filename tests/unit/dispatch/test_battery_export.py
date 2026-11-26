@@ -40,8 +40,9 @@ from tests._fixed_decision_strategy import FixedDecisionStrategy
 from tests._ten_kwh_battery import ten_kwh_battery
 from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
-# From here to _DIGESTS_BEFORE_BATTERY_EXPORT, the B3 digests' frozen inputs. Those test_decision_bounds.py holds too
-# (_E7, task 1362's pair and the charge windows) are copies on purpose, so that no edit there can move the golden.
+# From here to _DIGESTS_BEFORE_BATTERY_EXPORT, the B3 digests' frozen inputs. Those that
+# tests/unit/dispatch/test_decision_bounds.py holds too (_E7, task 1362's pair and the charge windows) are copies on
+# purpose, so that no edit there can move the golden.
 _E7 = TariffConfig.economy_7()
 _LONDON = ZoneInfo("Europe/London")
 
