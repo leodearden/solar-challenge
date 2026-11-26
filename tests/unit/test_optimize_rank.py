@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from solar_challenge.optimize import (
     cheapest_feasible,
     feasible_split,
@@ -176,31 +178,18 @@ class TestFeasibleSplit:
         assert [r.config.pv_kwp for r in feasible_out] == [1.0, 3.0]
         assert [r.config.pv_kwp for r in infeasible_out] == [2.0, 4.0]
 
-    def test_binding_predicate_not_bool_field(self) -> None:
-        """Contradictory record (feasible=True, binding='infeasible_above_retail') -> infeasible."""
-        contradictory = make_config_result(
-            binding="infeasible_above_retail",
-            feasible=True,  # deliberately contradictory
-        )
-        feasible_out, infeasible_out = feasible_split([contradictory])
-        assert len(infeasible_out) == 1
-        assert len(feasible_out) == 0
-
-    def test_feasible_false_with_non_infeasible_binding_lands_in_feasible(self) -> None:
-        """Complementary coupling pin: feasible=False + non-infeasible binding -> feasible side.
-
-        Proves that the split predicate is SOLELY binding-based, not .feasible-bool-based.
-        Any future binding value that pairs with feasible=False but is not
-        'infeasible_above_retail' will be classified on the feasible side — this
-        test makes that behaviour explicit so it cannot silently diverge.
-        """
-        mismatched = make_config_result(
-            binding="floor",
-            feasible=False,  # deliberately contradictory: False bool, non-infeasible binding
-        )
-        feasible_out, infeasible_out = feasible_split([mismatched])
-        assert len(feasible_out) == 1
-        assert len(infeasible_out) == 0
+    @pytest.mark.parametrize(
+        ("binding", "feasible"),
+        [("infeasible_above_retail", True), ("floor", False)],
+    )
+    def test_a_record_whose_feasible_flag_contradicts_its_binding_cannot_be_built(
+        self, binding: str, feasible: bool
+    ) -> None:
+        """The split never meets a contradiction: building one is refused, naming both values."""
+        with pytest.raises(ValueError) as refused:
+            make_config_result(binding=binding, feasible=feasible)
+        assert f"feasible={feasible!r}" in str(refused.value)
+        assert repr(binding) in str(refused.value)
 
 
 # ---------------------------------------------------------------------------

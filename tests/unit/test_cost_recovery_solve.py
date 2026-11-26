@@ -33,7 +33,7 @@ from solar_challenge.projection import (
     scenario_fleet,
     solve_cost_recovery_rate,
 )
-from tests._factories import make_bill_distribution
+from tests._factories import make_bill_breakdown, make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario
 from tests._fleet_simulate_stand_in import answering_with
 from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
@@ -124,8 +124,8 @@ class TestCostRecoverySolution:
                 outlay=outlay,
                 representative_outlay_gbp=outlay.representative.total_outlay_gbp,
                 net_surplus_per_home_per_year_gbp=100.0,
-                saving_vs_baseline_gbp=100.0,
-                saving_pct=20.0,
+                saving_vs_baseline_gbp=outlay.representative.saving_vs_baseline_gbp,
+                saving_pct=outlay.representative.saving_pct,
                 feasible=True,
                 binding="nope",
             )
@@ -139,8 +139,8 @@ class TestCostRecoverySolution:
                 outlay=outlay,
                 representative_outlay_gbp=outlay.representative.total_outlay_gbp,
                 net_surplus_per_home_per_year_gbp=100.0,
-                saving_vs_baseline_gbp=100.0,
-                saving_pct=20.0,
+                saving_vs_baseline_gbp=outlay.representative.saving_vs_baseline_gbp,
+                saving_pct=outlay.representative.saving_pct,
                 feasible=True,
                 binding="floor",
             )
@@ -155,15 +155,80 @@ class TestCostRecoverySolution:
                 outlay=outlay,
                 representative_outlay_gbp=outlay.representative.total_outlay_gbp,
                 net_surplus_per_home_per_year_gbp=100.0,
-                saving_vs_baseline_gbp=100.0,
-                saving_pct=20.0,
+                saving_vs_baseline_gbp=outlay.representative.saving_vs_baseline_gbp,
+                saving_pct=outlay.representative.saving_pct,
                 feasible=True,
                 binding="floor",
             )
 
+    @pytest.mark.parametrize(
+        ("feasible", "binding"),
+        [
+            (True, "infeasible_above_retail"),
+            (False, "floor"),
+            (False, "rate_clamped_zero"),
+        ],
+    )
+    def test_a_feasible_flag_that_contradicts_the_binding_is_refused_naming_both(
+        self, feasible: bool, binding: str
+    ) -> None:
+        """feasible must be binding != 'infeasible_above_retail'; a contradicting pair is refused."""
+        outlay = make_bill_distribution()
+        with pytest.raises(ValueError) as refused:
+            CostRecoverySolution(
+                own_use_rate_pence_per_kwh=15.0,
+                outlay=outlay,
+                representative_outlay_gbp=outlay.representative.total_outlay_gbp,
+                net_surplus_per_home_per_year_gbp=100.0,
+                saving_vs_baseline_gbp=outlay.representative.saving_vs_baseline_gbp,
+                saving_pct=outlay.representative.saving_pct,
+                feasible=feasible,
+                binding=binding,
+            )
+        assert f"feasible={feasible!r}" in str(refused.value)
+        assert repr(binding) in str(refused.value)
+
+    @pytest.mark.parametrize(
+        ("copy", "copied", "sourced"),
+        [
+            ("representative_outlay_gbp", 999.0, 66.15),
+            ("saving_vs_baseline_gbp", 100.0, 132.5),
+            ("saving_pct", 20.0, 26.5),
+        ],
+    )
+    def test_a_copy_that_disagrees_with_the_outlays_representative_is_refused_naming_both(
+        self, copy: str, copied: float, sourced: float
+    ) -> None:
+        """Each of the three copies must equal its outlay.representative source exactly."""
+        outlay = make_bill_distribution(representative=make_bill_breakdown(total_outlay_gbp=66.15))
+        representative = outlay.representative
+        copies = {
+            "representative_outlay_gbp": representative.total_outlay_gbp,
+            "saving_vs_baseline_gbp": representative.saving_vs_baseline_gbp,
+            "saving_pct": representative.saving_pct,
+        }
+        assert copies[copy] == sourced
+        copies[copy] = copied
+        with pytest.raises(ValueError) as refused:
+            CostRecoverySolution(
+                own_use_rate_pence_per_kwh=15.0,
+                outlay=outlay,
+                net_surplus_per_home_per_year_gbp=100.0,
+                feasible=True,
+                binding="floor",
+                **copies,
+            )
+        assert copy in str(refused.value)
+        assert repr(copied) in str(refused.value)
+        assert repr(sourced) in str(refused.value)
+
     def test_all_fields_read_back(self) -> None:
         """All 8 fields read back correctly after construction."""
-        outlay = make_bill_distribution()
+        outlay = make_bill_distribution(
+            representative=make_bill_breakdown(
+                total_outlay_gbp=999.0, saving_vs_baseline_gbp=75.0, saving_pct=15.0
+            )
+        )
         sol = CostRecoverySolution(
             own_use_rate_pence_per_kwh=12.5,
             outlay=outlay,
