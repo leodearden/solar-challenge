@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 import pickle
 import warnings
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
@@ -68,35 +69,29 @@ def _grid_charging_peak_shaving_battery() -> BatteryConfig:
 # ---------------------------------------------------------------------------
 
 class TestCommunityConfig:
-    """CommunityConfig validates its fields, refuses a community battery whose dispatch would ignore its grid_charging, is frozen and survives pickling.
+    """CommunityConfig derives its sharing mode from its community battery, refuses a community battery whose dispatch would ignore its grid_charging, is frozen and survives pickling.
 
     No refused CommunityConfig is built at import: each test builds its own inside
     pytest.raises, so a refusal fails its own cases and not the module's collection.
     """
 
-    def test_valid_p2p_config(self) -> None:
-        """p2p config with no community_battery constructs OK."""
-        cfg = CommunityConfig(sharing_mode="p2p")
-        assert cfg.sharing_mode == "p2p"
-        assert cfg.community_battery is None
+    def test_a_config_without_a_community_battery_is_p2p(self) -> None:
+        assert CommunityConfig().sharing_mode == "p2p"
 
-    def test_valid_community_battery_config(self) -> None:
-        """community_battery mode with a battery config constructs OK."""
-        batt = BatteryConfig(capacity_kwh=10.0)
-        cfg = CommunityConfig(sharing_mode="community_battery", community_battery=batt)
-        assert cfg.sharing_mode == "community_battery"
-        assert cfg.community_battery is batt
+    def test_a_config_with_a_community_battery_is_community_battery(self) -> None:
+        assert CommunityConfig(community_battery=BatteryConfig(20.0)).sharing_mode == "community_battery"
 
-    def test_p2p_with_battery_raises(self) -> None:
-        """p2p + community_battery set → ConfigurationError."""
-        batt = BatteryConfig(capacity_kwh=5.0)
-        with pytest.raises(ConfigurationError, match="p2p"):
-            CommunityConfig(sharing_mode="p2p", community_battery=batt)
-
-    def test_community_battery_mode_without_battery_raises(self) -> None:
-        """community_battery mode without a battery → ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="community_battery"):
-            CommunityConfig(sharing_mode="community_battery")
+    @pytest.mark.parametrize(
+        "construct",
+        [
+            pytest.param(lambda: CommunityConfig("p2p"), id="positional"),  # type: ignore[call-arg]
+            pytest.param(lambda: CommunityConfig(sharing_mode="p2p"), id="keyword"),  # type: ignore[call-arg]
+        ],
+    )
+    def test_the_constructor_takes_no_sharing_mode(self, construct: Callable[[], object]) -> None:
+        """The mode follows community_battery, so a mode given to the constructor is refused at the call."""
+        with pytest.raises(TypeError):
+            construct()
 
     @pytest.mark.parametrize(
         "billing",
@@ -180,37 +175,22 @@ class TestCommunityConfig:
         )
         assert cfg.community_battery is battery
 
-    @pytest.mark.parametrize(
-        "value",
-        [
-            pytest.param("virtual_net_metering", id="unknown-word"),
-            pytest.param(None, id="none"),
-        ],
-    )
-    def test_unknown_sharing_mode_raises(self, value: object) -> None:
-        """Unknown sharing_mode → ConfigurationError naming the modes and the value's repr."""
-        with pytest.raises(ConfigurationError) as exc_info:
-            CommunityConfig(sharing_mode=value)  # type: ignore[arg-type]
-        assert str(exc_info.value) == (
-            f"sharing_mode must be 'p2p' or 'community_battery', got {value!r}"
-        )
-
     def test_frozen(self) -> None:
         """CommunityConfig is frozen (immutable)."""
-        cfg = CommunityConfig(sharing_mode="p2p")
+        cfg = CommunityConfig()
         with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
-            cfg.sharing_mode = "community_battery"  # type: ignore[misc]
+            cfg.community_battery = BatteryConfig(capacity_kwh=5.0)  # type: ignore[misc]
 
     def test_picklable_without_battery(self) -> None:
-        """CommunityConfig(p2p) round-trips through pickle unchanged."""
-        cfg = CommunityConfig(sharing_mode="p2p")
+        """A p2p CommunityConfig round-trips through pickle unchanged."""
+        cfg = CommunityConfig()
         restored = pickle.loads(pickle.dumps(cfg))
         assert restored == cfg
 
     def test_picklable_with_battery(self) -> None:
-        """CommunityConfig(community_battery) round-trips through pickle unchanged."""
+        """A community_battery CommunityConfig round-trips through pickle unchanged."""
         batt = BatteryConfig(capacity_kwh=5.0)
-        cfg = CommunityConfig(sharing_mode="community_battery", community_battery=batt)
+        cfg = CommunityConfig(community_battery=batt)
         restored = pickle.loads(pickle.dumps(cfg))
         assert restored == cfg
 
@@ -959,13 +939,12 @@ class TestCommunityResultsSharingMode:
 
     def test_p2p_sharing_mode_field(self, small_fleet: FleetResults) -> None:
         """simulate_community with p2p config sets sharing_mode == 'p2p'."""
-        cr = simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
+        cr = simulate_community(small_fleet, CommunityConfig())
         assert cr.sharing_mode == "p2p"
 
     def test_community_battery_sharing_mode_field(self, small_fleet: FleetResults) -> None:
         """simulate_community with community_battery config sets sharing_mode == 'community_battery'."""
         cfg = CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=BatteryConfig(
                 capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0
             ),
@@ -975,7 +954,7 @@ class TestCommunityResultsSharingMode:
 
     def test_sharing_mode_pickle_round_trip(self, small_fleet: FleetResults) -> None:
         """CommunityResults.sharing_mode survives pickle.loads(pickle.dumps(...))."""
-        p2p_result = simulate_community(small_fleet, CommunityConfig(sharing_mode="p2p"))
+        p2p_result = simulate_community(small_fleet, CommunityConfig())
         restored = pickle.loads(pickle.dumps(p2p_result))
         assert restored.sharing_mode == "p2p"
 
