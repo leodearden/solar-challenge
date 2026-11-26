@@ -164,9 +164,9 @@ def show(
     """Display a configuration file and its keys.
 
     Shows the file with syntax highlighting and a summary of its keys as
-    YAML or JSON reads them, with ${VAR} placeholders substituted. It does
-    not check the keys against the scenario grammar: a file shown here may
-    still be refused by the run commands. Use `validate config` for that.
+    YAML or JSON reads them; ${VAR} placeholders are shown as written. It
+    does not check the keys against the scenario grammar: a file shown here
+    may still be refused by the run commands. Use `validate config` for that.
     """
     config_data = load_config(config_file)
 
