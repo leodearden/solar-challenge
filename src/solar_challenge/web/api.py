@@ -47,9 +47,9 @@ from solar_challenge.web.presets import (
 from solar_challenge.web.request_boundary import (
     answer_refusal,
     answer_server_error,
-    refuse_unencodable_text,
+    read_optional_string,
+    read_string,
     request_json_object,
-    require_encodable_text,
     require_json_object,
 )
 from solar_challenge.web.run_names import read_run_name
@@ -126,13 +126,12 @@ def simulate_fleet_api() -> tuple[Response, int]:
         JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
-    name = data.get("name")
+    name = read_optional_string(data.get("name"), "name")
     homes_data = data.get("homes", [])
     if not isinstance(homes_data, list):
         return jsonify({"error": f"homes must be a JSON array, got {type(homes_data).__name__}"}), 400
     if not homes_data:
         return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400
-    refuse_unencodable_text(name, "name")
     configs = []
     # Use first home's date config for the fleet
     first_config, start_date, end_date, _ = parse_home_config(homes_data[0])
@@ -250,16 +249,26 @@ def list_presets() -> tuple[Response, int]:
     """
     return jsonify(home_presets(get_database())), 200
 
+def _read_preset_name(data: Mapping[str, Any], what: str) -> str:
+    """The name a preset save body *data* sends, stripped; *what* names the preset kind in the refusal of a blank name.
+
+    Raises:
+        ConfigurationError: From read_string, naming name, for a name that is not a JSON string
+            or holds a lone surrogate; "<what> name is required" for a name not sent or blank.
+    """
+    name = read_string(data.get("name", ""), "name").strip()
+    if not name:
+        raise ConfigurationError(f"{what} name is required")
+    return name
+
+
 def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str, Any]) -> tuple[Response, int]:
-    """Save *config* as the *preset_type* preset *name*, answering as both preset save endpoints do.
+    """Save *config* as the *preset_type* preset *name*, a name _read_preset_name has read, answering as both preset save endpoints do.
 
     Returns:
-        JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 400, before
-        any database access, for a name holding a lone surrogate, which
-        require_encodable_text refuses; HTTP 409 for a name another preset holds,
-        HTTP 500 for a database fault.
+        JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 409 for a name
+        another preset holds, HTTP 500 for a database fault.
     """
-    require_encodable_text(name, "name")
     try:
         preset_id = save_config_preset(get_database(), name, preset_type, config)
     except PresetNameTaken as taken:
@@ -277,13 +286,12 @@ def save_preset() -> tuple[Response, int]:
 
     Returns:
         JSON confirmation with the preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400 for an empty name, a name holding a lone surrogate or a type other than
-        'home', HTTP 409 for a name a built-in home preset or a saved fleet preset holds.
+        HTTP 400, before any database access, for a name that is not a JSON string, a blank
+        name, a name holding a lone surrogate or a type other than 'home', HTTP 409 for a
+        name a built-in home preset or a saved fleet preset holds.
     """
     data = request_json_object()
-    name = data.get("name", "").strip()
-    if not name:
-        return jsonify({"error": "Preset name is required"}), 400
+    name = _read_preset_name(data, "Preset")
     preset_type = data.get("type", "home")
     if preset_type != "home":
         return jsonify(
@@ -694,15 +702,15 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
 
 
-def _read_labels(data: Mapping[str, Any]) -> dict[RunLabel, Any]:
-    """The run labels the PATCH body *data* sends, each refused before any is written: text require_encodable_text refuses, or a name that cannot name a run.
+def _read_labels(data: Mapping[str, Any]) -> dict[RunLabel, str | None]:
+    """The run labels the PATCH body *data* sends, each refused before any is written: a label that read_optional_string refuses, or a name that cannot name a run.
 
     Raises:
-        ConfigurationError: From refuse_unencodable_text or read_run_name, naming the label.
+        ConfigurationError: From read_optional_string, naming the label, for a label that is
+            neither a JSON string nor null, or holds a lone surrogate; from read_run_name, for
+            a null or blank name.
     """
-    labels = {label: data[label] for label in RUN_LABELS if label in data}
-    for label, value in labels.items():
-        refuse_unencodable_text(value, label)
+    labels = {label: read_optional_string(data[label], label) for label in RUN_LABELS if label in data}
     if "name" in labels:
         read_run_name(labels["name"])
     return labels
@@ -720,8 +728,8 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     Returns:
         JSON response with updated run data, or 404 if not found. 400 with the refusal as
         ``error``, naming ``name``, for a null or blank name, which read_run_name refuses;
-        and naming the label, for a name or notes holding a lone surrogate. Both are refused
-        before any label is written.
+        and naming the label, for a name or notes that is neither a JSON string nor null, or
+        holds a lone surrogate. Each is refused before any label is written.
     """
     data = request_json_object()
     storage = get_storage()
@@ -853,20 +861,20 @@ def scenarios_validate_scenario() -> tuple[Response, int]:
 def scenarios_save_scenario() -> tuple[Response, int]:
     """Save a scenario configuration as a fleet preset.
 
-    Expects a JSON body with at least ``name`` and ``config`` fields.
+    Expects a JSON body with a ``name`` and a ``config``, a JSON object; a body that sends
+    no ``config`` is itself the config, but for its name and type.
 
     Returns:
         JSON confirmation with preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400 for an empty name or a name holding a lone surrogate, HTTP 409 for a name
-        a saved home preset holds.
+        HTTP 400, before any database access, for a name that is not a JSON string, a blank
+        name, a name holding a lone surrogate or a sent config that is not a JSON object,
+        HTTP 409 for a name a saved home preset holds.
     """
     data = request_json_object()
-    name = str(data.get("name", "")).strip()
-    if not name:
-        return jsonify({"error": "Scenario name is required"}), 400
-    config_payload = data.get("config", {})
-    if not config_payload:
-        # Accept flat form data as config
+    name = _read_preset_name(data, "Scenario")
+    if "config" in data:
+        config_payload = require_json_object(data["config"], "config")
+    else:
         config_payload = {k: v for k, v in data.items() if k not in ("name", "type")}
     return _answer_preset_save(name, "fleet", config_payload)
 

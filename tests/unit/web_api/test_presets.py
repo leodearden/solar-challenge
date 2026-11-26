@@ -16,7 +16,8 @@ from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
-from solar_challenge.web.request_boundary import require_encodable_text
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -171,8 +172,7 @@ class TestSavePreset:
             "/api/presets",
             json={"name": "", "pv_kw": 4.0},
         )
-        assert resp.status_code == 400
-        assert "name" in resp.get_json()["error"].lower()
+        assert (resp.status_code, resp.get_json()) == (400, {"error": "Preset name is required"})
 
     def test_save_whitespace_name_returns_400(self, client: FlaskClient) -> None:
         """POST with whitespace-only preset name returns 400."""
@@ -180,7 +180,7 @@ class TestSavePreset:
             "/api/presets",
             json={"name": "   ", "pv_kw": 4.0},
         )
-        assert resp.status_code == 400
+        assert (resp.status_code, resp.get_json()) == (400, {"error": "Preset name is required"})
 
     def test_save_of_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_saves_nothing(
         self, app: Flask, client: FlaskClient
@@ -189,6 +189,26 @@ class TestSavePreset:
         name = chr(0xD800)
         with pytest.raises(ValueError) as refusal:
             require_encodable_text(name, "name")
+
+        resp = client.post("/api/presets", json={"name": name, "pv_kw": 4.0})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        assert saved_preset_names(database_of(app)) == []
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            pytest.param(5, id="integer"),
+            pytest.param(None, id="null"),
+            pytest.param(["a"], id="array"),
+            pytest.param({"x": 1}, id="object"),
+        ],
+    )
+    def test_save_of_a_name_that_is_not_a_json_string_returns_400_naming_name_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, name: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_string(name, "name")
 
         resp = client.post("/api/presets", json={"name": name, "pv_kw": 4.0})
 

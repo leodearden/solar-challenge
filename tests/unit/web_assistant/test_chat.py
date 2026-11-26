@@ -434,6 +434,36 @@ class TestChatDegradation:
         assert client.get("/assistant/history").get_json() == {"messages": []}
         assert error_records(caplog) == []
 
+    @pytest.mark.parametrize(
+        ("body", "field", "type_name"),
+        [
+            pytest.param({"message": 5}, "message", "int", id="message-integer"),
+            pytest.param({"message": None}, "message", "NoneType", id="message-null"),
+            pytest.param({"message": ["hi"]}, "message", "list", id="message-array"),
+            pytest.param({"message": {"text": "hi"}}, "message", "dict", id="message-object"),
+            pytest.param({"message": "hi", "run_id": 5}, "run_id", "int", id="run-id-integer"),
+        ],
+    )
+    def test_a_field_that_is_not_a_json_string_returns_failed_frame_naming_it_and_saves_no_turn(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        caplog: pytest.LogCaptureFixture,
+        body: dict[str, object],
+        field: str,
+        type_name: str,
+    ) -> None:
+        """A message is a JSON string and a run_id a JSON string or null, never the text str() makes of another value: any other value gets a lone failed frame naming the field and its type, the model is not called and no chat turn is saved; the refusal is no defect, so nothing is logged at ERROR."""
+        resp = client.post("/assistant/chat", json=body)
+
+        assert resp.status_code == 200
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame("failed", {"message": f"{field} must be a JSON string, got {type_name}"})
+        ]
+        assert anthropic_api.calls == []
+        assert client.get("/assistant/history").get_json() == {"messages": []}
+        assert error_records(caplog) == []
+
 
 class TestChatResponsePolicy:
     """POST /assistant/chat answers a chat it streams and one it refuses as the same uncached, unbuffered event stream."""
@@ -956,17 +986,25 @@ class TestRunContextInjection:
             f"Unknown run_id should not appear in injected content; got: {last_content!r}"
         )
 
+    @pytest.mark.parametrize(
+        "run_id_field",
+        [
+            pytest.param({}, id="run-id-absent"),
+            pytest.param({"run_id": None}, id="run-id-null"),
+        ],
+    )
     def test_no_run_id_leaves_user_message_unchanged(
         self,
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
+        run_id_field: dict[str, None],
     ) -> None:
-        """POST without run_id: messages[-1]['content'] equals exactly the user message."""
+        """POST without run_id, or with a null one: messages[-1]['content'] equals exactly the user message."""
         anthropic_api.set_chunks(["plain reply"])
 
         resp = client.post(
             "/assistant/chat",
-            json={"message": "plain message no run"},
+            json={"message": "plain message no run", **run_id_field},
         )
         assert resp.status_code == 200
         resp.get_data(as_text=True)

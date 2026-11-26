@@ -34,7 +34,7 @@ from solar_challenge.web.request_boundary import (
     WEB_DEFAULT_LOCATION,
     present_fields,
     read_location,
-    refuse_unencodable_text,
+    read_optional_string,
     refuse_unrecognised_keys,
 )
 from solar_challenge.web.run_names import is_run_name
@@ -58,8 +58,8 @@ class ParsedFleetForm:
     """The fleet a fleet form describes: the run the simulate endpoint submits, and its scenario document.
 
     Attributes:
-        name: The form's name, None when it sends none or one that cannot name a run
-            (is_run_name), so the run submitted takes its kind's default name.
+        name: The form's name, None when it sends none or a blank one, which cannot name a
+            run (is_run_name), so the run submitted takes its kind's default name.
         homes: The fleet's homes, each with the form's tariff and SEG and, given a battery,
             its dispatch strategy: the scenario's homes as parse_scenario reads them.
         start_date: The first day simulated, at the fleet's location.
@@ -105,8 +105,8 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     Raises:
         ConfigurationError: For a top-level key the fleet form does not have, naming each one and
             listing the fleet form's keys.
-        ConfigurationError: For a name sent as text holding a lone surrogate, require_encodable_text's
-            refusal naming name.
+        ConfigurationError: For a name that is not a JSON string, or text holding a lone surrogate,
+            read_string's refusal naming name.
         ConfigurationError: From the readers of the form's distributions, location,
             dispatch strategy and window, read in that order, a date that does not parse
             included.
@@ -123,8 +123,7 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     """
     refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
     fields = present_fields(form)
-    sent_name = fields.get("name")
-    refuse_unencodable_text(sent_name, "name")
+    sent_name = read_optional_string(fields.get("name"), "name")
     name = sent_name if is_run_name(sent_name) else None
     distribution = form_to_fleet_distribution_config(fields)
     location = _fleet_form_location(fields)

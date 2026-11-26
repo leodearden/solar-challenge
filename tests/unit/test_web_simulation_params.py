@@ -27,7 +27,9 @@ from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_WINDOW_DAYS
 from solar_challenge.web.request_boundary import (
+    read_boolean,
     read_location,
+    read_string,
     require_encodable_text,
 )
 from solar_challenge.web.simulation_params import (
@@ -451,7 +453,7 @@ class TestParseHomeConfigKeys:
 
 
 class TestParseHomeConfigName:
-    """The name parse_home_config reads: the body's, and none of its own; refused when it is text that does not encode as UTF-8."""
+    """The name parse_home_config reads: the body's, and none of its own; refused when it is not a JSON string, or is text that does not encode as UTF-8."""
 
     def test_a_body_that_sends_a_name_names_the_home_and_the_run_with_it(self) -> None:
         home_config, _start, _end, name = parse_home_config(VALID_HOME_PAYLOAD)
@@ -471,6 +473,48 @@ class TestParseHomeConfigName:
             require_encodable_text(chr(0xD800), "name")
         with pytest.raises(ConfigurationError) as refusal:
             parse_home_config({**VALID_HOME_PAYLOAD, "name": chr(0xD800)})
+        assert str(refusal.value) == str(expected.value)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(["a"], id="array"),
+            pytest.param(5, id="integer"),
+            pytest.param({"x": 1}, id="object"),
+            pytest.param(True, id="boolean"),
+        ],
+    )
+    def test_a_name_that_is_not_a_json_string_is_refused_as_read_string_refuses_it(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as expected:
+            read_string(value, "name")
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_home_config({**VALID_HOME_PAYLOAD, "name": value})
+        assert str(refusal.value) == str(expected.value)
+
+
+class TestParseHomeConfigStochastic:
+    """The stochastic flag parse_home_config reads: a JSON boolean, reaching LoadConfig.use_stochastic as sent; any other value is refused as read_boolean refuses it, never read by its truthiness."""
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_reaches_use_stochastic_as_sent(self, value: bool) -> None:
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, "stochastic": value})
+
+        assert home_config.load_config.use_stochastic is value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("false", id="string-false"),
+            pytest.param("true", id="string-true"),
+            pytest.param(1, id="one"),
+            pytest.param(0, id="zero"),
+        ],
+    )
+    def test_any_other_value_is_refused_as_read_boolean_refuses_it(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as expected:
+            read_boolean(value, "stochastic")
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_home_config({**VALID_HOME_PAYLOAD, "stochastic": value})
         assert str(refusal.value) == str(expected.value)
 
 

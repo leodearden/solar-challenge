@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys, a top-level field sent as null or "" read as not sent, and text that encodes as UTF-8, its location reader, and its translator of a refusal into an answer."""
+"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys, a top-level field sent as null or "" read as not sent, and text that encodes as UTF-8, its field readers, a JSON string, a JSON string or null, and a JSON boolean, its location reader, and its translator of a refusal into an answer."""
 
 import logging
 from collections.abc import Callable
@@ -12,6 +12,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from werkzeug.exceptions import InternalServerError
 
+from solar_challenge.boolean_fields import as_boolean
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location, parse_location
 from solar_challenge.scenario_blocks import parse_location_block
@@ -19,9 +20,11 @@ from solar_challenge.web.request_boundary import (
     answer_refusal,
     answer_server_error,
     present_fields,
+    read_boolean,
     read_location,
+    read_optional_string,
+    read_string,
     refusal_text,
-    refuse_unencodable_text,
     refuse_unrecognised_keys,
     request_json_object,
     require_encodable_text,
@@ -169,32 +172,99 @@ class TestRequireEncodableText:
         )
 
 
-class TestRefuseUnencodableText:
-    """refuse_unencodable_text refuses text require_encodable_text refuses and leaves any other value to its reader."""
+class TestReadString:
+    """read_string returns a JSON string that encodes as UTF-8 and refuses any other JSON value naming the field and its type."""
 
     @pytest.mark.parametrize(
-        "value",
+        "text",
         [
-            pytest.param(None, id="null"),
-            pytest.param(5, id="integer"),
-            pytest.param(True, id="boolean"),
-            pytest.param([chr(0xD800)], id="array-holding-a-lone-surrogate"),
-            pytest.param({"name": chr(0xD800)}, id="object-holding-a-lone-surrogate"),
+            pytest.param("run-2kw", id="ascii"),
+            pytest.param("", id="empty"),
+            pytest.param("Café ☀ 😀", id="non-ascii-and-astral"),
         ],
     )
-    def test_a_value_that_is_not_text_is_left_to_its_reader(self, value: object) -> None:
-        refuse_unencodable_text(value, "name")
+    def test_a_string_is_returned_as_given(self, text: str) -> None:
+        assert read_string(text, "name") is text
 
-    def test_text_that_encodes_is_not_refused(self) -> None:
-        refuse_unencodable_text("Café ☀ 😀", "name")
+    @pytest.mark.parametrize(
+        ("value", "type_name"),
+        [
+            pytest.param(None, "NoneType", id="null"),
+            pytest.param(5, "int", id="integer"),
+            pytest.param(4.5, "float", id="float"),
+            pytest.param(True, "bool", id="boolean"),
+            pytest.param([], "list", id="empty-array"),
+            pytest.param(["a"], "list", id="array"),
+            pytest.param({"x": 1}, "dict", id="object"),
+        ],
+    )
+    def test_any_other_json_value_is_refused_naming_the_field_and_its_type(
+        self, value: object, type_name: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_string(value, "name")
+        assert str(refusal.value) == f"name must be a JSON string, got {type_name}"
 
     def test_text_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
         text = chr(0xD800)
         with pytest.raises(ConfigurationError) as expected:
             require_encodable_text(text, "name")
         with pytest.raises(ConfigurationError) as refusal:
-            refuse_unencodable_text(text, "name")
+            read_string(text, "name")
         assert str(refusal.value) == str(expected.value)
+
+
+class TestReadOptionalString:
+    """read_optional_string reads null as no value and any other JSON value as read_string reads it."""
+
+    def test_null_is_none(self) -> None:
+        assert read_optional_string(None, "notes") is None
+
+    def test_a_string_is_returned_as_given(self) -> None:
+        text = "Checked"
+        assert read_optional_string(text, "notes") is text
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(5, id="integer"),
+            pytest.param(["a"], id="array"),
+        ],
+    )
+    def test_any_other_json_value_is_refused_as_read_string_refuses_it(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as expected:
+            read_string(value, "notes")
+        with pytest.raises(ConfigurationError) as refusal:
+            read_optional_string(value, "notes")
+        assert str(refusal.value) == str(expected.value)
+
+
+class TestReadBoolean:
+    """read_boolean returns a JSON boolean and refuses any other JSON value as boolean_fields.as_boolean refuses it."""
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_is_returned_as_itself(self, value: bool) -> None:
+        assert read_boolean(value, "stochastic") is value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("false", id="string-false"),
+            pytest.param("true", id="string-true"),
+            pytest.param(0, id="zero"),
+            pytest.param(1, id="one"),
+            pytest.param(None, id="null"),
+            pytest.param([], id="empty-array"),
+            pytest.param({}, id="empty-object"),
+        ],
+    )
+    def test_any_other_json_value_is_refused_as_as_boolean_refuses_it(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as expected:
+            as_boolean(value, "stochastic")
+        with pytest.raises(ConfigurationError) as refusal:
+            read_boolean(value, "stochastic")
+        assert str(refusal.value) == str(expected.value)
+        assert str(refusal.value).startswith("stochastic")
 
 
 class TestReadLocation:

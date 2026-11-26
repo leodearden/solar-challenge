@@ -32,7 +32,7 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.request_boundary import require_encodable_text
+from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from solar_challenge.web.simulation_params import parse_seg_tariff
 from tests._fleet_form import valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
@@ -252,7 +252,7 @@ class TestParseFleetForm:
 
 
 class TestParseFleetFormName:
-    """The name parse_fleet_form reads: refused when it is text that does not encode as UTF-8, before the fleet is read."""
+    """The name parse_fleet_form reads: refused when it is not a JSON string, or is text that does not encode as UTF-8, before the fleet is read; a blank name is no name."""
 
     def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
         with pytest.raises(ConfigurationError) as expected:
@@ -268,6 +268,38 @@ class TestParseFleetFormName:
         with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form({**_without(_FLEET_FORM, "pv"), "name": chr(0xD800)})
         assert str(refusal.value) == str(expected.value)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param({"x": 1}, id="object"),
+            pytest.param(5, id="integer"),
+            pytest.param(True, id="boolean"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "form",
+        [
+            pytest.param(_FLEET_FORM, id="a-fleet-it-reads"),
+            pytest.param(_without(_FLEET_FORM, "pv"), id="before-the-fleet-is-read"),
+        ],
+    )
+    def test_a_name_that_is_not_a_json_string_is_refused_as_read_string_refuses_it(
+        self, form: dict[str, Any], value: object
+    ) -> None:
+        """A form whose pv distribution is refused too gets the name's refusal, so a refused name costs no home generation."""
+        with pytest.raises(ConfigurationError) as expected:
+            read_string(value, "name")
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_form({**form, "name": value})
+        assert str(refusal.value) == str(expected.value)
+
+    def test_a_blank_name_is_no_name(self) -> None:
+        """The run submitted takes its kind's default name, and the document names none."""
+        parsed = parse_fleet_form({**_FLEET_FORM, "name": "   "})
+
+        assert parsed.name is None
+        assert "name" not in parsed.scenario
 
 
 class TestParseFleetFormRefusalOrder:

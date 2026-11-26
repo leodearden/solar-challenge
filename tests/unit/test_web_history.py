@@ -19,6 +19,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import load_fleet_config
 from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.dispatch import (
     GridChargeConfig,
     PeakShavingStrategyConfig,
@@ -33,7 +34,7 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.database import Database
 from solar_challenge.web.field_tree import field_tree
-from solar_challenge.web.request_boundary import require_encodable_text
+from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from solar_challenge.web.schema import migrate_store
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_TYPES
@@ -696,6 +697,45 @@ class TestPatchAPI:
         assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
         run = client.get("/api/history/runs/keep-my-labels").get_json()
         assert (run["name"], run["notes"]) == ("Old Name", None)
+
+    @pytest.mark.parametrize(
+        ("body", "label"),
+        [
+            pytest.param({"name": {"a": 1}}, "name", id="name-object"),
+            pytest.param({"name": 5}, "name", id="name-integer"),
+            pytest.param({"notes": {"a": 1}}, "notes", id="notes-object"),
+            pytest.param({"notes": 5}, "notes", id="notes-integer"),
+            pytest.param({"name": "New Name", "notes": ["x"]}, "notes", id="notes-array-beside-a-name"),
+        ],
+    )
+    def test_api_patch_of_a_label_that_is_not_a_json_string_is_400_naming_it_and_writes_no_label(
+        self,
+        app: Flask,
+        client: FlaskClient,
+        caplog: pytest.LogCaptureFixture,
+        body: dict[str, object],
+        label: str,
+    ) -> None:
+        """A label is a JSON string, or null, so any other value is refused naming the label, the refusal is no defect, and the run keeps its name and notes."""
+        _insert_test_run(app, run_id="keep-my-labels", name="Old Name")
+        with pytest.raises(ConfigurationError) as refusal:
+            read_string(body[label], label)
+
+        response = client.patch("/api/history/runs/keep-my-labels", json=body)
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
+        assert error_records(caplog) == []
+        run = client.get("/api/history/runs/keep-my-labels").get_json()
+        assert (run["name"], run["notes"]) == ("Old Name", None)
+
+    def test_api_patch_of_null_notes_clears_the_notes(self, app: Flask, client: FlaskClient) -> None:
+        _insert_test_run(app, run_id="clear-my-notes", name="Old Name")
+        assert client.patch("/api/history/runs/clear-my-notes", json={"notes": "Checked"}).status_code == 200
+
+        response = client.patch("/api/history/runs/clear-my-notes", json={"notes": None})
+
+        assert response.status_code == 200
+        assert response.get_json()["notes"] is None
 
 
 class TestExportAPI:
