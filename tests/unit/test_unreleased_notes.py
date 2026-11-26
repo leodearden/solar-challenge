@@ -19,12 +19,17 @@ def _notes_root(project_root: Path) -> Path:
     return project_root / NOTES_DIR
 
 
-def _note_files(project_root: Path) -> list[Path]:
-    """Every file under NOTES_DIR except its README, which outlives each release's notes."""
+def _readmes(project_root: Path) -> set[Path]:
+    """NOTES_DIR's README and each note directory's, which outlive each release's notes."""
     notes_root = _notes_root(project_root)
-    return sorted(
-        path for path in notes_root.rglob("*") if path.is_file() and path != notes_root / NOTES_README
-    )
+    return {notes_root / NOTES_README} | {notes_root / doc / NOTES_README for doc in NOTE_DOCS}
+
+
+def _note_files(project_root: Path) -> list[Path]:
+    """Every file under NOTES_DIR except the READMEs, NOTES_DIR's own and each <doc>/README.md."""
+    notes_root = _notes_root(project_root)
+    readmes = _readmes(project_root)
+    return sorted(path for path in notes_root.rglob("*") if path.is_file() and path not in readmes)
 
 
 def _is_note_path(relative: Path) -> bool:
@@ -39,6 +44,16 @@ def test_the_notes_directory_keeps_its_readme(project_root: Path) -> None:
     """The README keeps docs/unreleased on main between releases, so a grep scoped to it stays live."""
     assert (_notes_root(project_root) / NOTES_README).is_file(), (
         f"{NOTES_DIR}/{NOTES_README} is gone; a release deletes the notes, never the README"
+    )
+
+
+@pytest.mark.parametrize("doc", NOTE_DOCS)
+def test_each_note_directory_keeps_its_readme(project_root: Path, doc: str) -> None:
+    """Its README keeps docs/unreleased/<doc> on main when a release deletes its last note,
+    so a pointer or a grep scoped to it stays live."""
+    readme = f"{NOTES_DIR}/{doc}/{NOTES_README}"
+    assert (project_root / readme).is_file(), (
+        f"{readme} is gone; a release deletes the notes, never the README"
     )
 
 
@@ -60,7 +75,8 @@ def test_every_note_is_a_task_file_under_the_doc_it_serves(project_root: Path) -
         f"Files under {NOTES_DIR} that are not a release note: {misplaced}. A note is "
         f"{NOTES_DIR}/<doc>/<task id>.md, <doc> one of {list(NOTE_DOCS)} and <task id> the "
         "id of the task whose change it describes, e.g. "
-        f"{NOTES_DIR}/domain-library-consumption/871.md."
+        f"{NOTES_DIR}/domain-library-consumption/871.md. The only other files are "
+        f"{NOTES_DIR}/{NOTES_README} and each {NOTES_DIR}/<doc>/{NOTES_README}."
     )
 
 
