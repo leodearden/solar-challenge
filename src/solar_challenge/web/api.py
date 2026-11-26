@@ -16,7 +16,9 @@ from typing import Any
 import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, jsonify, request, url_for
+from werkzeug.exceptions import InternalServerError
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import scenario_yaml
@@ -27,7 +29,6 @@ from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
-    FLEET_FORM_REFUSALS,
     ImportedFleetForm,
     fleet_form_from_yaml,
     parse_fleet_form,
@@ -45,11 +46,13 @@ from solar_challenge.web.presets import (
 )
 from solar_challenge.web.request_boundary import (
     answer_refusal,
+    answer_server_error,
     refuse_unencodable_text,
     request_json_object,
     require_encodable_text,
     require_json_object,
 )
+from solar_challenge.web.run_names import read_run_name
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
@@ -62,8 +65,9 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 
-# Every refusal of this blueprint's endpoints is answered HTTP 400 here
+# Every refusal of this blueprint's endpoints is answered HTTP 400 here, and a defect HTTP 500 with a JSON body
 api_bp.register_error_handler(ValueError, answer_refusal)
+api_bp.register_error_handler(InternalServerError, answer_server_error)
 
 
 @api_bp.errorhandler(SavedPresetUnreadable)
@@ -99,10 +103,7 @@ def simulate_home_api() -> tuple[Response, int]:
         JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
-    try:
-        home_config, start_date, end_date, name = parse_home_config(data)
-    except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
+    home_config, start_date, end_date, name = parse_home_config(data)
     job_manager = get_job_manager()
 
     job_id, run_id = job_manager.submit_home_job(
@@ -130,18 +131,15 @@ def simulate_fleet_api() -> tuple[Response, int]:
         return jsonify({"error": f"homes must be a JSON array, got {type(homes_data).__name__}"}), 400
     if not homes_data:
         return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400
-    try:
-        refuse_unencodable_text(name, "name")
-        configs = []
-        # Use first home's date config for the fleet
-        first_config, start_date, end_date, _ = parse_home_config(homes_data[0])
-        configs.append(first_config)
+    refuse_unencodable_text(name, "name")
+    configs = []
+    # Use first home's date config for the fleet
+    first_config, start_date, end_date, _ = parse_home_config(homes_data[0])
+    configs.append(first_config)
 
-        for home_data in homes_data[1:]:
-            config, _, _, _ = parse_home_config(home_data)
-            configs.append(config)
-    except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
+    for home_data in homes_data[1:]:
+        config, _, _, _ = parse_home_config(home_data)
+        configs.append(config)
 
     job_manager = get_job_manager()
 
@@ -260,10 +258,7 @@ def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str,
         require_encodable_text refuses; HTTP 409 for a name another preset holds,
         HTTP 500 for a database fault.
     """
-    try:
-        require_encodable_text(name, "name")
-    except ValueError as refusal:
-        return jsonify({"error": str(refusal)}), 400
+    require_encodable_text(name, "name")
     try:
         preset_id = save_config_preset(get_database(), name, preset_type, config)
     except PresetNameTaken as taken:
@@ -339,10 +334,7 @@ def preview_distribution() -> tuple[Response, int]:
     params = data.get("params", {})
     n_samples = data.get("n_samples", 100)
 
-    try:
-        samples = sample_distribution(dist_type, params, n_samples)
-    except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
+    samples = sample_distribution(dist_type, params, n_samples)
     return jsonify({"samples": samples}), 200
 
 @api_bp.route("/simulate/fleet-from-distribution", methods=["POST"])
@@ -360,10 +352,7 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
 
     job_manager = get_job_manager()
 
-    try:
-        fleet = parse_fleet_form(data)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
+    fleet = parse_fleet_form(data)
 
     job_id, run_id = job_manager.submit_fleet_job(
         configs=list(fleet.homes),
@@ -388,10 +377,7 @@ def export_fleet_yaml() -> Response | tuple[Response, int]:
         form the simulate endpoint refuses, with its message.
     """
     data = request_json_object()
-    try:
-        document = scenario_from_fleet_form(data)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
+    document = scenario_from_fleet_form(data)
     return Response(
         scenario_yaml(document),
         mimetype="text/yaml",
@@ -412,10 +398,7 @@ def import_fleet_yaml() -> tuple[Response, int]:
     yaml_text = request.get_data(as_text=True)
     if not yaml_text:
         return jsonify({"error": "Empty request body"}), 400
-    try:
-        imported = fleet_form_from_yaml(yaml_text)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
+    imported = fleet_form_from_yaml(yaml_text)
     return _loaded_fleet_form_answer(imported)
 
 
@@ -430,10 +413,7 @@ def fleet_preset(name: str) -> tuple[Response, int]:
         (:func:`~solar_challenge.web.fleet_presets.fleet_preset_names`); HTTP 404 when no
         built-in scenario file is named *name*.
     """
-    try:
-        imported = fleet_preset_form(name)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
+    imported = fleet_preset_form(name)
     if imported is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return _loaded_fleet_form_answer(imported)
@@ -505,12 +485,9 @@ def simulate_sweep() -> tuple[Response, int]:
         return jsonify({
             "error": f"Unsupported sweep parameter {parameter!r}; supported parameters: {supported}",
         }), 400
-    try:
-        min_val = as_finite_float(data.get("min", 1.0), "min")
-        max_val = as_finite_float(data.get("max", 10.0), "max")
-        steps = as_whole_number(data.get("steps", 5), "steps", within=Interval(2, SWEEP_MAX_STEPS))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    min_val = as_finite_float(data.get("min", 1.0), "min")
+    max_val = as_finite_float(data.get("max", 10.0), "max")
+    steps = as_whole_number(data.get("steps", 5), "steps", within=Interval(2, SWEEP_MAX_STEPS))
     if min_val >= max_val:
         return jsonify({"error": "Min must be less than max"}), 400
     mode = str(data.get("mode", "linear"))
@@ -541,8 +518,8 @@ def simulate_sweep() -> tuple[Response, int]:
         point_config = {**point_base_config, home_config_key: val}
         try:
             home_config, start_date, end_date, _ = parse_home_config(point_config)
-        except (ValueError, TypeError) as exc:
-            return jsonify({"error": f"Invalid config for {parameter}={val}: {exc}"}), 400
+        except ConfigurationError as refusal:
+            raise ConfigurationError(f"Invalid config for {parameter}={val}: {refusal}") from refusal
         point_homes.append((val, home_config, start_date, end_date))
 
     # Submit one home job per sweep point
@@ -592,10 +569,7 @@ def history_list_runs() -> Response | tuple[Response, int]:
         not a whole number, a sort, order or type that is none of its options, or a date_from
         or date_to that is not a date.
     """
-    try:
-        query = _run_query_from(request.args)
-    except ValueError as refusal:
-        return jsonify({"error": str(refusal)}), 400
+    query = _run_query_from(request.args)
     page = get_storage().page_runs(query)
     return jsonify({
         "runs": [_history_row(record) for record in page.records],
@@ -607,8 +581,8 @@ def _run_query_from(args: Mapping[str, str]) -> RunQuery:
     """The page of the run list the History list's query parameters *args* ask for, as history_list_runs reads them.
 
     Raises:
-        ValueError: A parameter's value is not one the run list answers; the message names the
-            parameter and the value sent.
+        ConfigurationError: A parameter's value is not one the run list answers; the message
+            names the parameter and the value sent.
     """
     run_type = args.get("type")
     return RunQuery(
@@ -627,7 +601,7 @@ def _date_parameter(args: Mapping[str, str], name: str) -> date | None:
     """The date the query parameter *name* of *args* sends as YYYY-MM-DD; None when it is not sent or sent empty.
 
     Raises:
-        ValueError: The value sent is not a date; the message names *name* and the value.
+        ConfigurationError: The value sent is not a date; the message names *name* and the value.
     """
     value = args.get(name)
     if not value:
@@ -635,7 +609,7 @@ def _date_parameter(args: Mapping[str, str], name: str) -> date | None:
     try:
         return date.fromisoformat(value)
     except ValueError as refusal:
-        raise ValueError(f"{name} is {value!r}, not a date in the form YYYY-MM-DD") from refusal
+        raise ConfigurationError(f"{name} is {value!r}, not a date in the form YYYY-MM-DD") from refusal
 
 
 def _history_row(record: RunRecord) -> dict[str, Any]:
@@ -719,14 +693,18 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
 
 
-def _refuse_unencodable_labels(labels: Mapping[RunLabel, object]) -> None:
-    """Refuse *labels*, the run labels a PATCH body sends, when one is text require_encodable_text refuses.
+def _read_labels(data: Mapping[str, Any]) -> dict[RunLabel, Any]:
+    """The run labels the PATCH body *data* sends, each refused before any is written: text require_encodable_text refuses, or a name that cannot name a run.
 
     Raises:
-        ValueError: From refuse_unencodable_text, naming the label.
+        ConfigurationError: From refuse_unencodable_text or read_run_name, naming the label.
     """
+    labels = {label: data[label] for label in RUN_LABELS if label in data}
     for label, value in labels.items():
         refuse_unencodable_text(value, label)
+    if "name" in labels:
+        read_run_name(labels["name"])
+    return labels
 
 
 @api_bp.route("/history/runs/<run_id>", methods=["PATCH"])
@@ -740,9 +718,9 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
 
     Returns:
         JSON response with updated run data, or 404 if not found. 400 with the refusal as
-        ``error``, naming ``name``, for a null or blank name, which update_run_labels refuses;
-        and naming the label, for a name or notes holding a lone surrogate, refused before
-        any label is written.
+        ``error``, naming ``name``, for a null or blank name, which read_run_name refuses;
+        and naming the label, for a name or notes holding a lone surrogate. Both are refused
+        before any label is written.
     """
     data = request_json_object()
     storage = get_storage()
@@ -750,15 +728,11 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     if storage.run_record(run_id) is None:
         return jsonify({"error": "Run not found"}), 404
 
-    labels = {label: data[label] for label in RUN_LABELS if label in data}
+    labels = _read_labels(data)
     if not labels:
         return jsonify({"error": "No fields to update"}), 400
 
-    try:
-        _refuse_unencodable_labels(labels)
-        updated = storage.update_run_labels(run_id, labels)
-    except ValueError as refusal:
-        return jsonify({"error": str(refusal)}), 400
+    updated = storage.update_run_labels(run_id, labels)
     if updated is None:
         return jsonify({"error": "Run not found"}), 404
 
@@ -856,10 +830,7 @@ def scenarios_preview_yaml() -> tuple[Response, int]:
         form the builder does not send.
     """
     data = request_json_object()
-    try:
-        document = scenario_from_builder_form(data)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    document = scenario_from_builder_form(data)
     return jsonify({"yaml": scenario_yaml(document)}), 200
 
 

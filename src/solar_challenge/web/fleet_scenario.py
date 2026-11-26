@@ -50,9 +50,6 @@ _FLEET_FORM_KEYS: frozenset[str] = (
     | {"name", "location", "tariff", "dispatch_strategy", "seg"}
 )
 
-#: The exceptions this module's readers raise for a fleet form or scenario they refuse, each naming why.
-FLEET_FORM_REFUSALS: tuple[type[Exception], ...] = (ValueError, TypeError, ConfigurationError)
-
 
 @dataclass(frozen=True)
 class ParsedFleetForm:
@@ -106,9 +103,9 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
             listing the fleet form's keys.
         ConfigurationError: For a name sent as text holding a lone surrogate, require_encodable_text's
             refusal naming name.
-        ValueError, TypeError, ConfigurationError: From the readers of the form's
-            distributions, location, dispatch strategy and window, read in that order, a
-            date that does not parse included.
+        ConfigurationError: From the readers of the form's distributions, location,
+            dispatch strategy and window, read in that order, a date that does not parse
+            included.
         ConfigurationError: From read_fleet_scenario, for a tariff, SEG or fleet the
             scenario grammar refuses.
         ConfigurationError: From refuse_a_fleet_the_dashboard_cannot_run, for a fleet the
@@ -149,8 +146,8 @@ def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
     """The fleet scenario document the fleet *form* describes, which load_scenario reads back as its homes and dates: :func:`parse_fleet_form`'s.
 
     Raises:
-        ValueError, TypeError, ConfigurationError: As :func:`parse_fleet_form`, for a form
-            whose simulation is refused.
+        ConfigurationError: As :func:`parse_fleet_form`, for a form whose simulation is
+            refused.
     """
     return parse_fleet_form(form).scenario
 
@@ -221,8 +218,8 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
             fleet_distribution block fleet_distribution.py's grammar refuses included; from
             refuse_a_fleet_the_dashboard_cannot_run, for a fleet size or seed the page cannot
             run, naming it.
-        ValueError, TypeError, ConfigurationError: From parse_fleet_form, for a form the page
-            could not run, a refusal found only while generating its homes included.
+        ConfigurationError: From parse_fleet_form, for a form the page could not run, a
+            refusal found only while generating its homes included.
     """
     scenario = _fleet_scenario(document)
     period = _read_period(scenario.get("period"))
@@ -249,7 +246,7 @@ def fleet_form_from_yaml(yaml_text: str) -> ImportedFleetForm:
 
     Raises:
         ConfigurationError: For text that does not parse as YAML, "Invalid YAML: " and the parser's error.
-        ValueError, TypeError, ConfigurationError: As fleet_form_from_scenario.
+        ConfigurationError: As fleet_form_from_scenario.
     """
     try:
         document = yaml.safe_load(yaml_text)

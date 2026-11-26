@@ -11,6 +11,7 @@ from typing import Any, assert_never
 
 from flask import Blueprint, Response, jsonify, render_template
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import LOCATION_PRESETS
@@ -20,6 +21,7 @@ from solar_challenge.web.charts import SweepPoint, sweep_panels
 from solar_challenge.web.dashboard import get_storage
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
+    refusal_text,
     refuse_unrecognised_keys,
     request_json_object,
     require_encodable_text,
@@ -88,7 +90,7 @@ def sweep_chart() -> str | tuple[Response, int]:
     try:
         parameter_label, requested = _sweep_chart_request(request_json_object())
     except ValueError as refusal:
-        return jsonify({"error": str(refusal)}), 400
+        return jsonify({"error": refusal_text(refusal)}), 400
     try:
         points = [_finished_point(value, run_id) for value, run_id in requested]
     except _NotAFinishedHomeRun as refusal:
@@ -103,17 +105,17 @@ def _sweep_chart_request(body: dict[str, Any]) -> tuple[str, list[tuple[float, s
     """The parameter label of the sweep chart request *body*, and each of its points' value and run id, in order.
 
     Raises:
-        ValueError: Naming the field of *body* the sweep chart cannot read.
+        ConfigurationError: Naming the field of *body* the sweep chart cannot read.
     """
     refuse_unrecognised_keys(body, {"parameter_label", "points"}, "Request body")
     parameter_label = body.get("parameter_label")
     if not isinstance(parameter_label, str) or not parameter_label.strip():
-        raise ValueError(f"parameter_label must be the swept parameter's label, not blank; got {parameter_label!r}")
+        raise ConfigurationError(f"parameter_label must be the swept parameter's label, not blank; got {parameter_label!r}")
     points = body.get("points")
     if not isinstance(points, list):
-        raise ValueError(f"points must be a list of the sweep's finished points, got {type(points).__name__}")
+        raise ConfigurationError(f"points must be a list of the sweep's finished points, got {type(points).__name__}")
     if len(points) > SWEEP_MAX_STEPS:
-        raise ValueError(
+        raise ConfigurationError(
             f"points must hold at most {SWEEP_MAX_STEPS} points, the most steps a sweep has; got {len(points)}"
         )
     return parameter_label, [_requested_point(point, f"points[{index}]") for index, point in enumerate(points)]
@@ -123,15 +125,15 @@ def _requested_point(point: object, what: str) -> tuple[float, str]:
     """The value and run id of *point*, the request's *what*.
 
     Raises:
-        ValueError: Naming *what*, or its field, when *point* is not a {"value", "run_id"} object
-            of a finite number and a string that encodes as UTF-8.
+        ConfigurationError: Naming *what*, or its field, when *point* is not a {"value", "run_id"}
+            object of a finite number and a string that encodes as UTF-8.
     """
     fields = require_json_object(point, what)
     refuse_unrecognised_keys(fields, {"value", "run_id"}, what)
     value = as_finite_float(fields.get("value"), f"{what}.value")
     run_id = fields.get("run_id")
     if not isinstance(run_id, str):
-        raise ValueError(f"{what}.run_id must be the id of the point's run, a string; got {run_id!r}")
+        raise ConfigurationError(f"{what}.run_id must be the id of the point's run, a string; got {run_id!r}")
     return value, require_encodable_text(run_id, f"{what}.run_id")
 
 
