@@ -346,6 +346,17 @@ def with_bad_number(value: object, bad: object) -> object:
     raise TypeError(f"with_bad_number cannot find the first number of a {type(value).__name__}: teach it where it is")
 
 
+def names_field_and_value(message: str, field: str, bad: object) -> bool:
+    """Whether a refusal's *message* names *field* and repr(*bad*), each as a whole token.
+
+    Neither may be part of a longer name, word or number, and the value may not be quoted again or follow a minus sign:
+    so nan in finance, inf in -inf or inflation, True in 'True' and min in min_soc_fraction do not count.
+    """
+    names_field = re.search(rf"(?<!\w){re.escape(field)}(?!\w)", message) is not None
+    names_value = re.search(rf"(?<![\w'-]){re.escape(repr(bad))}(?![\w'])", message) is not None
+    return names_field and names_value
+
+
 def refusal_cases(discovered: Mapping[str, type]) -> list[pytest.ParameterSet]:
     """Return a (dotted name, field, bad value) case for each bad value of each numeric field of each *discovered* input type that EXCLUDED_FIELDS does not exclude."""
     return [
@@ -522,6 +533,41 @@ def test_a_value_whose_first_number_cannot_be_found_is_refused_naming_its_type(v
         with_bad_number(value, math.nan)
 
 
+@pytest.mark.parametrize(
+    ("message", "field", "bad", "expected"),
+    [
+        ("vat_rate must be a finite number, got nan", "vat_rate", math.nan, True),
+        ("finance.vat_rate must be a finite number, got nan", "vat_rate", math.nan, True),
+        ("finance: vat_rate must be a finite number, got 'x'", "vat_rate", "x", True),
+        ("peak_hours[0][0] must be a finite number, got -inf", "peak_hours", -math.inf, True),
+        ("days must be weekday numbers, got frozenset({True})", "days", True, True),
+        ("finance.maintenance must be a finite number, got 1.0", "maintenance", math.nan, False),
+        ("inflation must be a finite number, got 1.0", "inflation", math.inf, False),
+        ("rate must be a finite number, got -inf", "rate", math.inf, False),
+        ("rate must be a finite number, got 'True'", "rate", True, False),
+        ("rate must be a finite number, got 12.5", "rate", 2.5, False),
+        ("min_soc_fraction must be a finite number, got nan", "min", math.nan, False),
+    ],
+    ids=[
+        "bare",
+        "dotted block path",
+        "block path and colon",
+        "indexed field",
+        "value in a container",
+        "nan inside a word",
+        "inf inside a word",
+        "inf after a minus sign",
+        "a bool quoted as text",
+        "a fraction inside a longer number",
+        "field inside a longer name",
+    ],
+)
+def test_a_refusal_names_a_field_and_a_value_only_as_whole_tokens(
+    message: str, field: str, bad: object, expected: bool
+) -> None:
+    assert names_field_and_value(message, field, bad) is expected
+
+
 @pytest.mark.parametrize(("name", "field", "bad"), refusal_cases(_DISCOVERED))
 def test_each_input_type_refuses_each_bad_number_in_each_numeric_field_by_name(
     name: str, field: str, bad: object
@@ -535,7 +581,7 @@ def test_each_input_type_refuses_each_bad_number_in_each_numeric_field_by_name(
         dataclasses.replace(valid, **{field: with_bad_number(value, bad)})
 
     message = str(refusal.value)
-    assert field in message and repr(bad) in message, message
+    assert names_field_and_value(message, field, bad), message
 
 
 @pytest.mark.parametrize(
@@ -554,4 +600,4 @@ def test_the_named_library_constructions_are_refused_by_name(
         construct()
 
     message = str(refusal.value)
-    assert field in message and repr(bad) in message, message
+    assert names_field_and_value(message, field, bad), message
