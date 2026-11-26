@@ -1395,6 +1395,100 @@ class TestOptimizeCLIE2EFast:
         assert row["CBS Surplus (£/home/yr)"] == "£60.00", result.stdout
         assert "retained_cash_floor_per_home_per_year_gbp" in _swept_values_by_axis(result.stdout), result.stdout
 
+    # One PV size, with and without a battery, and no sensitivity panel: the --assumptions tests' sweep.
+    _ASSUMPTION_SWEEP: tuple[str, ...] = ("--pv", "4", "--battery", "0,5", "--inverter", "5", "--sensitivity", "")
+
+    def _invoke_on_override(
+        self,
+        tmp_path: Path,
+        run: str,
+        fleet_results: FleetResults,
+        override: Optional[float],
+        *assumptions: str,
+    ) -> tuple[Result, list[FleetConfig]]:
+        """Run _ASSUMPTION_SWEEP with *assumptions* on a one-home scenario whose finance sets *override*, none when None, written in *run*'s own directory under *tmp_path*."""
+        run_dir = tmp_path / run
+        run_dir.mkdir()
+        return self._invoke_configs(
+            run_dir,
+            fleet_results,
+            [*self._ASSUMPTION_SWEEP, *assumptions],
+            n_homes=1,
+            finance_overrides=None if override is None else {"self_consumption_override": override},
+        )
+
+    def test_without_assumptions_a_scenarios_override_is_cleared_and_the_ranking_is_physics(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """A scenario whose finance overrides own-use to 0.7 reports, by default, exactly as the scenario without the override."""
+        overridden, _ = self._invoke_on_override(tmp_path, "overridden", one_home_fleet_results, 0.7)
+        plain, _ = self._invoke_on_override(tmp_path, "plain", one_home_fleet_results, None)
+
+        assert overridden.exit_code == 0, overridden.output
+        assert plain.exit_code == 0, plain.output
+        assert overridden.stdout.startswith("Self-consumption assumption: **Physics**\n"), overridden.stdout
+        assert overridden.stdout == plain.stdout
+
+    def test_spreadsheet_ranks_under_the_scenarios_override(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """Under --assumptions spreadsheet the 0.7 override's own-use, 1,960 of the stand-in's 2,800 kWh generation, prices the trade-off, not the simulated 2,000."""
+        spreadsheet, _ = self._invoke_on_override(
+            tmp_path, "spreadsheet", one_home_fleet_results, 0.7, "--assumptions", "spreadsheet"
+        )
+        physics, _ = self._invoke_on_override(
+            tmp_path, "physics", one_home_fleet_results, 0.7, "--assumptions", "physics"
+        )
+
+        assert spreadsheet.exit_code == 0, spreadsheet.output
+        assert physics.exit_code == 0, physics.output
+        assert spreadsheet.stdout.startswith(
+            "Self-consumption assumption: **Spreadsheet (70% self-consumption)**\n"
+        ), spreadsheet.stdout
+        no_battery = "4.0 kWp / 0.0 kWh / 5.0 kW"
+        spreadsheet_outlay = _config_row(spreadsheet.stdout, _TRADE_OFF, no_battery)["Baseline Outlay (£/yr)"]
+        physics_outlay = _config_row(physics.stdout, _TRADE_OFF, no_battery)["Baseline Outlay (£/yr)"]
+        assert spreadsheet_outlay != physics_outlay, spreadsheet.stdout
+
+    @pytest.mark.parametrize(
+        ("override", "label"),
+        [(0.6, "Spreadsheet (60% self-consumption)"), (None, "Spreadsheet (70% self-consumption)")],
+        ids=["the-scenarios-own", "the-default"],
+    )
+    def test_spreadsheet_keeps_the_scenarios_override_or_sets_the_default(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+        override: Optional[float],
+        label: str,
+    ) -> None:
+        result, _ = self._invoke_on_override(
+            tmp_path, "spreadsheet", one_home_fleet_results, override, "--assumptions", "spreadsheet"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout.startswith(f"Self-consumption assumption: **{label}**\n"), result.stdout
+
+    def test_both_assumptions_are_refused_before_any_simulation(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """A ranking is computed under one assumption: --assumptions both, which names two, is a configuration error naming it."""
+        result, simulated_fleets = self._invoke_on_override(
+            tmp_path, "both", one_home_fleet_results, 0.7, "--assumptions", "both"
+        )
+
+        assert result.exit_code == 1, result.output
+        refusal = stderr_text(result)
+        assert refusal.startswith("Configuration error:"), refusal
+        assert "both" in refusal, refusal
+        assert simulated_fleets == []
+
 
 # ---------------------------------------------------------------------------
 # §H — `optimize configs` ignores no grid-services input under the events model
