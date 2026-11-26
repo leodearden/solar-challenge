@@ -31,14 +31,11 @@ Provides:
   - ``annuity_payment`` — level annual payment on a loan.
   - ``npv`` — net present value of cashflows at a discount rate.
   - ``irr`` — internal rate of return of cashflows, nan when undefined.
-  - ``solve_cost_recovery_rate`` — the frozen form of the own-use rate that
-    meets the retained-cash floor; it delegates to
-    :func:`solar_challenge.projection.solve_cost_recovery_rate`.
 
 All monetary values are in GBP (£); energy in kWh.  The model behind these
 functions is set out in ``docs/cost-recovery-finance-model.md``.  The
-multi-year projection and project economics built on these bills are in
-:mod:`solar_challenge.projection`.
+multi-year projection, project economics and cost-recovery solve built on
+these bills are in :mod:`solar_challenge.projection`.
 """
 from __future__ import annotations
 
@@ -76,8 +73,6 @@ from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
-    from solar_challenge.config import ScenarioConfig
-    from solar_challenge.fleet import FleetSimulate
     from solar_challenge.home import HomeConfig, RunPricing, SummaryStatistics
 
 
@@ -421,10 +416,11 @@ _BINDING_VALUES: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class CostRecoverySolution:
-    """Result of :func:`solve_cost_recovery_rate` — the solved cost-recovery own-use rate.
+    """Result of :func:`solar_challenge.projection.solve_cost_recovery_rate` — the solved cost-recovery own-use rate.
 
     The CBS charges householders ``own_use_rate_pence_per_kwh`` for every kWh of
-    CBS-owned solar consumed on-site.  :func:`solve_cost_recovery_rate` finds the
+    CBS-owned solar consumed on-site.
+    :func:`solar_challenge.projection.solve_cost_recovery_rate` finds the
     minimum rate that keeps project net surplus per home ≥
     ``FinanceConfig.retained_cash_floor_per_home_per_year_gbp``.
 
@@ -1408,40 +1404,3 @@ def irr(cashflows: Sequence[float]) -> float:
             npv_lo = npv_mid
 
     return 0.5 * (lo + hi)
-
-
-# ---------------------------------------------------------------------------
-# solve_cost_recovery_rate — the frozen form
-# ---------------------------------------------------------------------------
-
-
-def solve_cost_recovery_rate(
-    scenario: "ScenarioConfig",
-    finance: "FinanceConfig",
-    *,
-    simulate: FleetSimulate,
-) -> "CostRecoverySolution":
-    """Find the minimum CBS own-use rate that meets the retained-cash floor, in the package's frozen form.
-
-    :func:`solar_challenge.projection.solve_cost_recovery_rate` is the
-    implementation, and this form returns its solution.
-
-    Args:
-        scenario: ScenarioConfig whose homes, as ``simulated_homes()`` gives
-            them, are simulated over ``simulation_bounds()``.
-        finance: FinanceConfig with cost-recovery fields populated.
-        simulate: The fleet simulator the projection and the age-0 outlay
-            run through, such as a :class:`~solar_challenge.fleet.FleetRunner`'s
-            ``simulate``.
-
-    Returns:
-        A :class:`CostRecoverySolution` with the solved rate and outlay.
-
-    Raises:
-        ConfigurationError: Before any simulation, if a home's battery
-            grid-charges by one of ANALYSIS_ONLY_FORECASTS, as
-            :func:`refuse_analysis_only_forecasts` refuses it.
-    """
-    from solar_challenge import projection
-
-    return projection.solve_cost_recovery_rate(scenario, finance, simulate=simulate)

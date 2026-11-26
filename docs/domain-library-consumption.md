@@ -172,15 +172,17 @@ are registered, but no submodule is imported until a public name is accessed.
 
 ### Lazy pvlib dependency
 
-Accessing any name from `config`, `fleet`, `home`, `pv` or `weather` imports
-`pvlib` transitively.  `pv` and `weather` import it directly; `home` imports
-`pv`, `fleet` imports `home`, and `config` imports `home`, `fleet` and `pv`:
+Accessing any name from `config`, `fleet`, `home`, `projection`, `pv` or
+`weather` imports `pvlib` transitively.  `pv` and `weather` import it directly;
+`home` imports `pv`, `fleet` imports `home`, `config` imports `home`, `fleet`
+and `pv`, and `projection` imports `config`, `fleet`, `home` and `pv`:
 
 ```python
 sc = solar_challenge
 mc = sc.create_model_chain(...)    # ← first access imports pv.py + pvlib
 w = sc.PvgisTmy(...)               # ← first access imports weather.py + pvlib
 cfg = sc.ScenarioConfig            # ← first access imports config.py + pvlib
+solve = sc.solve_cost_recovery_rate  # ← first access imports projection.py + pvlib
 ```
 
 Accessing a name from any other public submodule (`battery`, `community`,
@@ -188,9 +190,9 @@ Accessing a name from any other public submodule (`battery`, `community`,
 `seg`, `tariff`) leaves `pvlib` unloaded;
 `tests/unit/test_public_api_surface.py::test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules`
 pins this split.  Consumers that want to avoid the pvlib cost must not touch the
-`config`, `fleet`, `home`, `pv` or `weather` symbols.  Accessing a name does not
-run it, so a function of any other submodule can still load `pvlib` when called,
-by importing one of those submodules at call time.
+`config`, `fleet`, `home`, `projection`, `pv` or `weather` symbols.  Accessing
+a name does not run it, so a function of any other submodule can still load
+`pvlib` when called, by importing one of those submodules at call time.
 
 ### Network I/O
 
