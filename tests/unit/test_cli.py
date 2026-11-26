@@ -321,6 +321,37 @@ home:
         assert "home.[ghi, dni] [/b]" in rows
         assert "home.panels [3 items]" in rows
 
+    def test_config_show_lists_each_placeholder_as_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """show reads the file's keys without substituting ${VAR}, so a placeholder with a default and one with none are both listed verbatim."""
+        monkeypatch.chdir(tmp_path)
+        Path("placeholders.yaml").write_text(
+            "home:\n  pv:\n    capacity_kw: \"${PV_KW:4.0}\"\n    tilt: \"${TILT}\"\n"
+        )
+
+        result = runner.invoke(app, ["config", "show", "placeholders.yaml"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        rows = table_text(result.stdout)
+        assert "home.pv.capacity_kw ${PV_KW:4.0}" in rows
+        assert "home.pv.tilt ${TILT}" in rows
+
+    def test_config_show_displays_a_file_holding_a_retired_key_that_validate_config_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """show only reads the file, so a retired home-level key is displayed with exit 0; validate config refuses the same file."""
+        monkeypatch.chdir(tmp_path)
+        Path("retired.yaml").write_text("home:\n  dispatch_strategy: tou_optimized\n  pv:\n    capacity_kw: 4.0\n")
+
+        shown = runner.invoke(app, ["config", "show", "retired.yaml"], catch_exceptions=False)
+        validated = runner.invoke(app, ["validate", "config", "retired.yaml"], catch_exceptions=False)
+
+        assert shown.exit_code == 0
+        assert "home.dispatch_strategy tou_optimized" in table_text(shown.stdout)
+        assert validated.exit_code == 1
+        assert "ERROR home.dispatch_strategy:" in table_text(validated.stdout)
+
 
 def _simulate_raising_a_plain_value_error(fleet_config: object, start: object, end: object) -> NoReturn:
     """A fleet simulator that raises a ValueError that is not a ConfigurationError, as a defect would."""
