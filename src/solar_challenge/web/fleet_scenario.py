@@ -31,6 +31,8 @@ from solar_challenge.web.fleet_config import (
     refuse_a_fleet_the_dashboard_cannot_run,
 )
 from solar_challenge.web.request_boundary import (
+    WEB_DEFAULT_LOCATION,
+    present_fields,
     read_location,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
@@ -83,10 +85,12 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     without a battery gives it to none.  The document writes the form's name only when it
     can name a run, and the tariff: and seg: blocks as given, null when the form sends none.
 
-    The form's six blocks, the pv, battery and load distributions and the tariff,
-    dispatch_strategy and seg overlays, share one presence rule: absent or null means none,
-    which pv and load refuse as a missing distribution, and any other value must be a
-    mapping its grammar reads.
+    Once the form's keys are checked, a top-level field sent as null or "" (a cleared input)
+    reads as not sent (request_boundary.present_fields): a seed, n_homes or location so sent
+    takes its default.  The form's six blocks, the pv, battery and load distributions and
+    the tariff, dispatch_strategy and seg overlays, so share one presence rule: absent, null
+    or "" means none, which pv and load refuse as a missing distribution, and any other
+    value must be a mapping its grammar reads.
 
     The form's own keys are read first: a top-level key the fleet form does not have is
     refused, naming it, then the name, the distributions, the location, the dispatch
@@ -118,20 +122,21 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
             naming the component's form path, the range, the value and the home's number.
     """
     refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
-    sent_name = form.get("name")
+    fields = present_fields(form)
+    sent_name = fields.get("name")
     refuse_unencodable_text(sent_name, "name")
     name = sent_name if is_run_name(sent_name) else None
-    distribution = form_to_fleet_distribution_config(dict(form))
-    location = _fleet_form_location(form)
-    parse_dispatch_strategy_config(form.get("dispatch_strategy"))
-    start, end = parse_date_range(form)
+    distribution = form_to_fleet_distribution_config(fields)
+    location = _fleet_form_location(fields)
+    parse_dispatch_strategy_config(fields.get("dispatch_strategy"))
+    start, end = parse_date_range(fields)
     document = {
         **({} if name is None else {"name": name}),
         "period": {"start_date": start, "end_date": end},
         "location": location_block(location),
-        "fleet_distribution": _document_fleet_distribution(distribution, form.get("dispatch_strategy")),
-        "tariff": form.get("tariff"),
-        "seg": form.get("seg"),
+        "fleet_distribution": _document_fleet_distribution(distribution, fields.get("dispatch_strategy")),
+        "tariff": fields.get("tariff"),
+        "seg": fields.get("seg"),
     }
     read = read_fleet_scenario(document)
     refuse_a_fleet_the_dashboard_cannot_run(read.fleet, "")
@@ -153,8 +158,8 @@ def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _fleet_form_location(form: Mapping[str, Any]) -> Location:
-    """The location of the fleet *form* describes: its 'location' as read_location reads it, 'bristol' when absent."""
-    return read_location(form.get("location", "bristol"))
+    """The location of the fleet *form* describes: its 'location' as read_location reads it, WEB_DEFAULT_LOCATION when not sent."""
+    return read_location(form.get("location", WEB_DEFAULT_LOCATION))
 
 
 def _document_fleet_distribution(

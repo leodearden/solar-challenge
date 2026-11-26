@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Parse the web dashboard's flat simulation-parameter dicts into engine configuration."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date
+from functools import partial
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -15,6 +16,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
+    PV_CAPACITY_KW_WHEN_OMITTED,
     parse_dispatch_strategy_config,
     parse_heat_pump_block,
     parse_seg_rate,
@@ -29,6 +31,8 @@ from solar_challenge.web.fleet_components import (
     days_window,
 )
 from solar_challenge.web.request_boundary import (
+    WEB_DEFAULT_LOCATION,
+    present_fields,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
     read_location,
@@ -37,40 +41,42 @@ from solar_challenge.web.request_boundary import (
 
 _HOME_CONFIG = "Home config"
 
-# Each parser's recognised top-level keys, and the value each reads as when absent.
-_DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
-    "days": None,
-    "start": "",
-    "end": "",
-})
+# The window fields parse_date_range reads, in the order a refusal of days sent with dates names the dates.
+_DATE_RANGE_FIELDS = ("days", "start", "end")
 
 #: The keys of a request body parse_date_range reads.
-DATE_RANGE_KEYS: frozenset[str] = frozenset(_DATE_RANGE_DEFAULTS)
+DATE_RANGE_KEYS: frozenset[str] = frozenset(_DATE_RANGE_FIELDS)
 
-_HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
-    "pv_kw": 4.0,
-    "azimuth": 180,
-    "tilt": 35,
-    "system_age_years": 0.0,
-    "degradation_rate_per_year": 0.005,
-    "system_losses": None,
-    "battery_kwh": 0.0,
-    "max_charge_kw": None,
-    "max_discharge_kw": None,
-    "efficiency_pct": None,
-    "consumption_kwh": None,
-    "occupants": 3,
-    "stochastic": False,
-    "location": "bristol",
-    "name": None,
-    "dispatch_strategy": None,
-    "heat_pump": None,
-    "tariff": None,
-    "seg": None,
-})
+# The PV settings a home body sends under PVConfig's own field names.
+_PV_SETTING_KEYS = ("azimuth", "tilt", "system_age_years", "degradation_rate_per_year", "system_losses")
 
 #: The top-level keys of a home config: those parse_home_config and parse_date_range read.
-_HOME_CONFIG_KEYS: frozenset[str] = frozenset(_HOME_CONFIG_DEFAULTS) | DATE_RANGE_KEYS
+HOME_CONFIG_KEYS: frozenset[str] = frozenset({
+    "pv_kw",
+    *_PV_SETTING_KEYS,
+    "battery_kwh",
+    "max_charge_kw",
+    "max_discharge_kw",
+    "efficiency_pct",
+    "dispatch_strategy",
+    "consumption_kwh",
+    "occupants",
+    "stochastic",
+    "heat_pump",
+    "tariff",
+    "seg",
+    "location",
+    "name",
+}) | DATE_RANGE_KEYS
+
+# The home fields whose value when not sent is the web's own, as the wire value its reader reads.
+_HOME_WEB_DEFAULTS: Mapping[str, Any] = MappingProxyType({
+    "location": WEB_DEFAULT_LOCATION,
+    # A web run is repeatable by default: the dashboard takes no load seed and compares stored
+    # runs, so a body that does not ask for the stochastic model gets the deterministic profile.
+    # LoadConfig's use_stochastic=True is the library's default.
+    "stochastic": False,
+})
 
 
 def read_iso_date(value: Any, field: str) -> date:
@@ -122,15 +128,9 @@ def refuse_reversed_or_overlong_window(
 
 
 def _window_sent(data: Mapping[str, Any]) -> dict[str, Any]:
-    """The window fields *data*, a request body, sends, keyed by field in _DATE_RANGE_DEFAULTS order.
-
-    A null value, or the value _DATE_RANGE_DEFAULTS gives an absent field, is not sent.
-    """
-    return {
-        field: data[field]
-        for field, absent in _DATE_RANGE_DEFAULTS.items()
-        if data.get(field) not in (None, absent)
-    }
+    """The window fields *data*, a request body, sends as present_fields reads it, keyed by field in _DATE_RANGE_FIELDS order."""
+    fields = present_fields(data)
+    return {field: fields[field] for field in _DATE_RANGE_FIELDS if field in fields}
 
 
 def _refuse_days_with_dates(days: Any, dates: Mapping[str, Any]) -> None:
@@ -157,7 +157,8 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     - ``start`` / ``end``: ISO 8601 dates (``YYYY-MM-DD``); one not sent reads
       as :data:`DEFAULT_FIRST_DAY` / :data:`DEFAULT_LAST_DAY`.
 
-    A null ``days``, and an empty or null ``start`` or ``end``, read as not sent.
+    A ``days``, ``start`` or ``end`` sent as null or ``""`` reads as not sent
+    (:func:`~solar_challenge.web.request_boundary.present_fields`).
 
     Whichever way sets it, the window must end on or after its start and span
     at most :data:`~solar_challenge.web.fleet_components.MAX_WINDOW_DAYS` days.
@@ -212,23 +213,8 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
-def _system_losses_setting(value: Any) -> dict[str, Any]:
-    """The system_losses keyword PVConfig takes for a home body's system_losses *value*; null gives none, leaving PVConfig's default.
-
-    Any other value passes as sent: PVConfig reads it, and refuses one that is not a finite number in its range, naming system_losses.
-    """
-    if value is None:
-        return {}
-    return {"system_losses": value}
-
-
-def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float | None:
-    """Read a home body's maximum ``direction`` power, its ``max_<direction>_kw``: null is unset.
-
-    Any other value must be a finite number, refused naming that field, that a battery accepts.
-    """
-    if value is None:
-        return None
+def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float:
+    """Read a home body's maximum ``direction`` power, its ``max_<direction>_kw``: a finite number, refused naming that field, that a battery accepts."""
     kw = as_finite_float(value, f"max_{direction}_kw")
     require_valid_power_limit(kw, direction)
     return kw
@@ -237,7 +223,7 @@ def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> 
 def _read_efficiency(value: Any) -> float | None:
     """Read a home body's round-trip efficiency percentage as the round-trip fraction BatteryConfig.with_round_trip takes.
 
-    Null is unset; any other value must be a finite number, refused naming efficiency_pct,
+    None, not sent, is unset; any other value must be a finite number, refused naming efficiency_pct,
     and a percentage outside (0, 100] is refused in the units sent.
     """
     if value is None:
@@ -248,29 +234,75 @@ def _read_efficiency(value: Any) -> float | None:
     return efficiency_pct / 100
 
 
-def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryConfig | None:
-    """Read the battery a home body describes, its ``capacity_kwh`` read within the battery component's value_range: none when that is 0.
+# How a home body's sent fields reach a dataclass: each body key's dataclass field and the reader of its value.
+_SettingReaders = Mapping[str, tuple[str, Callable[[Any], Any]]]
+
+
+def _sent_settings(params: Mapping[str, Any], readers: _SettingReaders) -> dict[str, Any]:
+    """The keyword arguments a dataclass receives from *params*, a home body's present fields.
+
+    Each key of *readers* that *params* sends sets its dataclass field to the value its reader
+    reads, in *readers*' order, so a refused value is refused there; a key not sent sets
+    nothing, leaving the dataclass's own default.
+    """
+    return {field: read(params[key]) for key, (field, read) in readers.items() if key in params}
+
+
+# The PV settings, sent under PVConfig's own field names and passed as sent: PVConfig refuses a
+# value it cannot hold, naming it.
+_PV_SETTINGS: _SettingReaders = MappingProxyType({key: (key, lambda value: value) for key in _PV_SETTING_KEYS})
+
+_LOAD_SETTINGS: _SettingReaders = MappingProxyType({
+    "occupants": ("household_occupants", partial(as_whole_number, field="occupants")),
+    "consumption_kwh": (
+        "annual_consumption_kwh",
+        partial(as_finite_float, field="consumption_kwh", within=FLEET_COMPONENTS["load"].value_range),
+    ),
+    "stochastic": ("use_stochastic", bool),
+})
+
+# The battery settings BatteryConfig takes; efficiency_pct, a round trip, is applied by with_round_trip.
+_BATTERY_SETTINGS: _SettingReaders = MappingProxyType({
+    "max_charge_kw": ("max_charge_kw", partial(_read_power_limit, direction="charge")),
+    "max_discharge_kw": ("max_discharge_kw", partial(_read_power_limit, direction="discharge")),
+    "dispatch_strategy": ("dispatch_strategy", parse_dispatch_strategy_config),
+})
+
+
+def _parse_battery(params: Mapping[str, Any], capacity_kwh: float | None) -> BatteryConfig | None:
+    """Read the battery a home body describes, its ``capacity_kwh`` read within the battery component's value_range: none when that is not sent (None) or 0.
 
     Each setting is read whatever ``capacity_kwh`` is, so a value a battery refuses is
-    refused without one too; a null setting is unset, leaving BatteryConfig's default.
+    refused without one too; a setting not sent is unset, leaving BatteryConfig's default.
     """
-    settings: dict[str, Any] = {}
-    if (max_charge_kw := _read_power_limit(params["max_charge_kw"], "charge")) is not None:
-        settings["max_charge_kw"] = max_charge_kw
-    if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "discharge")) is not None:
-        settings["max_discharge_kw"] = max_discharge_kw
-    round_trip = _read_efficiency(params["efficiency_pct"])
-    dispatch_strategy = parse_dispatch_strategy_config(params["dispatch_strategy"])
-    if dispatch_strategy is not None:
-        settings["dispatch_strategy"] = dispatch_strategy
-    if has_battery(capacity_kwh, "battery_kwh"):
+    settings = _sent_settings(params, _BATTERY_SETTINGS)
+    round_trip = _read_efficiency(params.get("efficiency_pct"))
+    if capacity_kwh is not None and has_battery(capacity_kwh, "battery_kwh"):
         battery = BatteryConfig(capacity_kwh=capacity_kwh, **settings)
         return battery if round_trip is None else battery.with_round_trip(round_trip)
     return None
 
 
+def _read_sent_number(params: Mapping[str, Any], field: str, component: str) -> float | None:
+    """Read *params*' *field* as a finite number within the *component* fleet component's value_range; None when it is not sent."""
+    if field not in params:
+        return None
+    return as_finite_float(params[field], field, within=FLEET_COMPONENTS[component].value_range)
+
+
 def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
     """Parse JSON request body into HomeConfig and date range.
+
+    A top-level field sent as null or "" (a cleared input) reads as not sent
+    (:func:`~solar_challenge.web.request_boundary.present_fields`), once the
+    body's keys are checked, so an unrecognised key is refused whatever it holds.
+
+    A field not sent takes its engine dataclass's default, PVConfig's,
+    LoadConfig's, BatteryConfig's or HomeConfig's, but for the web's own two:
+    location, Bristol, and stochastic, off, a web run being repeatable. A pv_kw
+    not sent is :data:`~solar_challenge.scenario_blocks.PV_CAPACITY_KW_WHEN_OMITTED`,
+    as a pv: block's omitted capacity is; a battery_kwh not sent is no battery;
+    and a consumption_kwh not sent is the TDCV estimate for the occupants.
 
     Args:
         data: The home config, a parsed JSON value that must be an object.
@@ -290,17 +322,14 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             refuses (the error is its own refusal), if pv_kw, battery_kwh or
             a sent consumption_kwh lies outside its fleet component's
             value_range, PV's, the battery's or the load's (the error names
-            the field, the range and the value sent), or if required fields
-            are missing or invalid. A null nested block (heat_pump, seg,
-            tariff or dispatch_strategy) reads as absent; any other value is
-            read by the block's grammar, and a block that grammar refuses,
-            one that is not a mapping or carries an unrecognised key
-            included, raises the grammar's own refusal: parse_heat_pump_block's
-            for heat_pump. The battery
+            the field, the range and the value sent). A nested block sent (heat_pump, seg,
+            tariff or dispatch_strategy) is read by the block's grammar, and
+            a block that grammar refuses, one that is not a mapping or
+            carries an unrecognised key included, raises the grammar's own
+            refusal: parse_heat_pump_block's for heat_pump. The battery
             settings (max_charge_kw, max_discharge_kw, efficiency_pct and
             dispatch_strategy) are read, and refused, whatever battery_kwh
-            is; a null setting reads as unset. A null system_losses also
-            reads as unset, leaving PVConfig's default. An azimuth, tilt,
+            is. An azimuth, tilt,
             system_age_years, degradation_rate_per_year or system_losses
             that is not a finite number in PVConfig's range raises
             PVConfig's own refusal, naming it. A name
@@ -309,54 +338,29 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             not text is not checked here.
     """
     data = require_json_object(data, _HOME_CONFIG)
-    refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, _HOME_CONFIG)
-    params = {**_HOME_CONFIG_DEFAULTS, **data}
-    pv_kw = as_finite_float(params["pv_kw"], "pv_kw", within=FLEET_COMPONENTS["pv"].value_range)
-    system_losses_setting = _system_losses_setting(params["system_losses"])
-    battery_kwh_val = as_finite_float(
-        params["battery_kwh"], "battery_kwh", within=FLEET_COMPONENTS["battery"].value_range
+    refuse_unrecognised_keys(data, HOME_CONFIG_KEYS, _HOME_CONFIG)
+    params = {**_HOME_WEB_DEFAULTS, **present_fields(data)}
+    pv_kw = as_finite_float(
+        params.get("pv_kw", PV_CAPACITY_KW_WHEN_OMITTED), "pv_kw", within=FLEET_COMPONENTS["pv"].value_range
     )
-    consumption_kwh_raw = params["consumption_kwh"]
-    occupants = as_whole_number(params["occupants"], "occupants")
-    stochastic = bool(params["stochastic"])
-    name = params["name"]
+    battery_kwh = _read_sent_number(params, "battery_kwh", "battery")
+    load_config = LoadConfig(**_sent_settings(params, _LOAD_SETTINGS))
+    name = params.get("name")
     refuse_unencodable_text(name, "name")
 
-    # Parse date range using shared helper
-    start, end = parse_date_range(data)
+    start, end = parse_date_range(params)
 
     loc = read_location(params["location"])
 
-    # Build component configs
-    pv_config = PVConfig(
-        capacity_kw=pv_kw,
-        azimuth=params["azimuth"],
-        tilt=params["tilt"],
-        system_age_years=params["system_age_years"],
-        degradation_rate_per_year=params["degradation_rate_per_year"],
-        **system_losses_setting,
-    )
+    pv_config = PVConfig(capacity_kw=pv_kw, **_sent_settings(params, _PV_SETTINGS))
 
-    battery_config = _parse_battery(params, battery_kwh_val)
+    battery_config = _parse_battery(params, battery_kwh)
 
-    annual_consumption: float | None = None
-    if consumption_kwh_raw is not None:
-        annual_consumption = as_finite_float(
-            consumption_kwh_raw, "consumption_kwh", within=FLEET_COMPONENTS["load"].value_range
-        )
+    heat_pump_config = parse_heat_pump_block(params.get("heat_pump"))
 
-    load_config = LoadConfig(
-        annual_consumption_kwh=annual_consumption,
-        household_occupants=occupants,
-        use_stochastic=stochastic,
-    )
+    tariff_config = parse_tariff_config(params.get("tariff"))
 
-    heat_pump_config = parse_heat_pump_block(params["heat_pump"])
-
-    # Build optional tariff config
-    tariff_config = parse_tariff_config(params["tariff"])
-
-    seg_tariff = parse_seg_tariff(params["seg"])
+    seg_tariff = parse_seg_tariff(params.get("seg"))
 
     home_config = HomeConfig(
         pv_config=pv_config,

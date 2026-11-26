@@ -29,6 +29,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
+    PV_CAPACITY_KW_WHEN_OMITTED,
     parse_dispatch_strategy_config,
     parse_home_block,
     parse_tariff_config,
@@ -322,8 +323,8 @@ class TestOmittedAndNullKeys:
         )
 
     def test_omitted_pv_keys_take_the_declared_defaults(self) -> None:
-        """PVConfig declares no capacity, so a pv block omitting capacity_kw is a 4 kW array."""
-        assert _parsed_home(pv={}).pv_config == PVConfig(capacity_kw=4.0)
+        """PVConfig declares no capacity, so a pv block omitting capacity_kw is an array of PV_CAPACITY_KW_WHEN_OMITTED, the capacity a web home body that sends no pv_kw reads as too."""
+        assert _parsed_home(pv={}).pv_config == PVConfig(capacity_kw=PV_CAPACITY_KW_WHEN_OMITTED)
 
     def test_omitted_battery_keys_take_the_declared_defaults(self) -> None:
         """BatteryConfig declares no capacity, so a battery block omitting capacity_kwh is 5 kWh."""

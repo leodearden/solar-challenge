@@ -37,7 +37,7 @@ from solar_challenge.web.simulation_params import (
     read_iso_date,
     with_default_days,
 )
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._falsy_json_values import FALSY_SENT_VALUES
 from tests._heat_pump_block_refusals import UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
@@ -253,12 +253,17 @@ class TestParseDateRange:
                 ("2024-06-01", "2024-06-07"),
                 id="days-with-null-start-and-end",
             ),
+            pytest.param(
+                {"days": "", "start": "2024-03-01", "end": "2024-03-05"},
+                ("2024-03-01", "2024-03-05"),
+                id="empty-days-with-start-and-end",
+            ),
         ],
     )
-    def test_null_days_and_empty_or_null_start_and_end_read_as_not_sent(
+    def test_a_window_field_sent_as_null_or_empty_text_reads_as_not_sent(
         self, data: dict, window: tuple[str, str]
     ) -> None:
-        """A null days, and an empty or null start or end, read as not sent, so the body runs the window it does send."""
+        """A days, start or end sent as null or "" reads as not sent, so the body runs the window it does send."""
         assert parse_date_range(data) == window
 
     @pytest.mark.parametrize("days", WHOLE_NUMBER_FORMS)
@@ -363,6 +368,7 @@ class TestWithDefaultDays:
             pytest.param({}, {"days": 7}, id="nothing"),
             pytest.param({"pv_kw": 4.0}, {"pv_kw": 4.0, "days": 7}, id="other-keys-only"),
             pytest.param({"days": None}, {"days": 7}, id="null-days"),
+            pytest.param({"days": ""}, {"days": 7}, id="empty-days"),
             pytest.param({"start": None}, {"start": None, "days": 7}, id="null-start"),
             pytest.param({"end": ""}, {"end": "", "days": 7}, id="empty-end"),
             pytest.param(
@@ -385,7 +391,6 @@ class TestWithDefaultDays:
         "data",
         [
             pytest.param({"days": 30}, id="days"),
-            pytest.param({"days": ""}, id="empty-days"),
             pytest.param({"start": "2024-03-01"}, id="start"),
             pytest.param({"end": "2024-03-05"}, id="end"),
             pytest.param(
@@ -433,16 +438,16 @@ class TestParseHomeConfigKeys:
         assert str(exc_info.value) == f"Home config must be a JSON object, got {type_name}"
 
     @pytest.mark.parametrize(
-        "payload",
+        ("payload", "expected_name"),
         [
-            pytest.param(FORM_PAYLOAD_BATTERY_ON, id="battery-on"),
-            pytest.param(FORM_PAYLOAD_BATTERY_OFF, id="battery-off"),
+            pytest.param(FORM_PAYLOAD_BATTERY_ON, "Every panel", id="battery-on"),
+            pytest.param(FORM_PAYLOAD_BATTERY_OFF, None, id="battery-off"),
         ],
     )
-    def test_payloads_of_recognised_keys_are_accepted(self, payload: dict) -> None:
-        """Bodies shaped like the home form's buildPayload() output parse."""
+    def test_payloads_of_recognised_keys_are_accepted(self, payload: dict, expected_name: str | None) -> None:
+        """Bodies shaped like the home form's buildPayload() output parse; a blank name, a cleared input, is no name."""
         _home_config, _start, _end, name = parse_home_config(payload)
-        assert name == payload["name"]
+        assert name == expected_name
 
 
 class TestParseHomeConfigName:
@@ -631,28 +636,31 @@ NESTED_BLOCKS: dict[str, NestedBlock] = {
 
 
 class TestParseHomeConfigNestedBlockPresence:
-    """One presence rule for the four nested blocks: null means none; any other value must be a mapping its grammar reads.
+    """One presence rule for the four nested blocks: null or "" means none; any other value must be a mapping its grammar reads.
 
     The rule governs all four blocks whatever battery_kwh is.
     """
 
+    @pytest.mark.parametrize("unsent", [pytest.param(None, id="null"), pytest.param("", id="empty-string")])
     @pytest.mark.parametrize(
         ("key", "block"),
         [pytest.param(key, block, id=key) for key, block in NESTED_BLOCKS.items()],
     )
-    def test_null_block_means_none_as_an_absent_one_does(self, key: str, block: NestedBlock) -> None:
-        """A null block, like an absent one, means none: no heat pump, SEG or tariff, and a battery that names no strategy, so dispatches self-consumption."""
+    def test_a_block_sent_as_null_or_empty_text_means_none_as_an_absent_one_does(
+        self, key: str, block: NestedBlock, unsent: object
+    ) -> None:
+        """A block sent as null or "", like an absent one, means none: no heat pump, SEG or tariff, and a battery that names no strategy, so dispatches self-consumption."""
         assert key not in VALID_HOME_PAYLOAD, "premise: the payload leaves the block out"
-        with_null, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
+        with_unsent, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: unsent})
         without, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
-        assert (block.field(with_null), block.field(without)) == (block.when_none, block.when_none)
+        assert (block.field(with_unsent), block.field(without)) == (block.when_none, block.when_none)
 
-    @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
+    @pytest.mark.parametrize(("value", "type_name"), FALSY_SENT_VALUES)
     @pytest.mark.parametrize("key", list(NESTED_BLOCKS))
     def test_falsy_block_is_refused_naming_it_and_its_type(
         self, key: str, value: object, type_name: str
     ) -> None:
-        """A falsy value other than null is not a mapping, so it is refused with a ConfigurationError naming the block and the type sent."""
+        """A falsy value other than null or "" is not a mapping, so it is refused with a ConfigurationError naming the block and the type sent."""
         with pytest.raises(ConfigurationError, match=re.escape(non_mapping_block_refusal(key, type_name))):
             parse_home_config({**VALID_HOME_PAYLOAD, key: value})
 
@@ -705,7 +713,6 @@ class TestParseHomeConfigBatteryEfficiency:
 
 # One value each battery-setting reader refuses; each grammar's full refusal matrix is tested where that grammar lives.
 MALFORMED_BATTERY_SETTINGS = [
-    pytest.param("dispatch_strategy", "", id="dispatch_strategy-empty-string"),
     pytest.param(
         "dispatch_strategy", {"strategy_type": "bogus"}, id="dispatch_strategy-unknown-type"
     ),
@@ -958,7 +965,7 @@ class TestParseHomeConfigSEG:
 
 
 class TestParseHomeConfigLocation:
-    """parse_home_config's location is the value sent as read_location reads it, Bristol when absent; a value read_location refuses is refused with its refusal."""
+    """parse_home_config's location is the value sent as read_location reads it, Bristol when not sent (absent, null or ""); a value read_location refuses is refused with its refusal."""
 
     @pytest.mark.parametrize(
         "value",
@@ -984,10 +991,17 @@ class TestParseHomeConfigLocation:
         home_config, _start, _end, _name = parse_home_config(without_location)
         assert home_config.location == Location.bristol()
 
+    @pytest.mark.parametrize("unsent", [pytest.param(None, id="null"), pytest.param("", id="empty-string")])
+    def test_a_location_sent_as_null_or_empty_text_is_bristol_as_an_absent_one_is(
+        self, unsent: object
+    ) -> None:
+        """A location sent as null or "", a cleared input, is not sent, so the home is at Bristol."""
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, "location": unsent})
+        assert home_config.location == Location.bristol()
+
     @pytest.mark.parametrize(
         "value",
         [
-            pytest.param(None, id="null"),
             pytest.param(5, id="number"),
             pytest.param([51.5, -0.1], id="array"),
             pytest.param("Paris", id="unknown-place"),
@@ -997,7 +1011,7 @@ class TestParseHomeConfigLocation:
     def test_a_location_read_location_refuses_is_refused_with_its_refusal(
         self, value: object
     ) -> None:
-        """A location read_location refuses is refused with read_location's own refusal, null included: it is not read as absent."""
+        """A location read_location refuses is refused with read_location's own refusal."""
         with pytest.raises(ConfigurationError) as refusal:
             parse_home_config({**VALID_HOME_PAYLOAD, "location": value})
         with pytest.raises(ConfigurationError) as reader_refusal:

@@ -95,6 +95,11 @@ def refuse_unrecognised_keys(body: Mapping[str, Any], recognised: Collection[str
         )
 
 
+def present_fields(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The top-level fields form *body* sends: one sent as null, or as '' (a cleared input), is not sent, and a nested block's contents are that block's grammar's to read."""
+    return {key: value for key, value in body.items() if value is not None and value != ""}
+
+
 def require_encodable_text(text: str, what: str) -> str:
     """Return *text*, a request's *what*, which must encode as UTF-8, the encoding sqlite3 binds text in.
 
@@ -119,6 +124,11 @@ def refuse_unencodable_text(value: object, what: str) -> None:
     """
     if isinstance(value, str):
         require_encodable_text(value, what)
+
+
+#: The location a home or fleet form body that sends none runs at, as read_location reads it:
+#: Bristol, the community energy project's site (location.LOCATION_PRESETS' bristol).
+WEB_DEFAULT_LOCATION = "bristol"
 
 
 def read_location(value: object) -> Location:

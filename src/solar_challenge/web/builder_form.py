@@ -29,6 +29,7 @@ from solar_challenge.web.fleet_config import (
     keys_the_editor_holds,
 )
 from solar_challenge.web.request_boundary import (
+    present_fields,
     refusal_text,
     refuse_unrecognised_keys,
     require_json_object,
@@ -92,7 +93,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
     """
     form = require_json_object(form, _BUILDER_FORM)
     refuse_unrecognised_keys(form, _RECOGNISED_KEYS, _BUILDER_FORM)
-    fields = _present_fields(form)
+    fields = present_fields(form)
 
     document: dict[str, Any] = {
         key: str(fields[key]) for key in ("name", "description") if key in fields
@@ -127,7 +128,7 @@ def builder_form_errors(form: object) -> list[str]:
         form = require_json_object(form, _BUILDER_FORM)
     except ValueError as refusal:
         return [refusal_text(refusal)]
-    errors = _dashboard_limit_errors(_present_fields(form))
+    errors = _dashboard_limit_errors(present_fields(form))
     try:
         document = scenario_from_builder_form(form)
     except ValueError as refusal:
@@ -135,11 +136,6 @@ def builder_form_errors(form: object) -> list[str]:
     if _home_count_allowed(document["fleet_distribution"].get("n_homes")):
         errors.extend(_scenario_reader_errors(document))
     return errors
-
-
-def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
-    """The fields *form* gives: each one it neither leaves out nor sends as null or ''."""
-    return {key: value for key, value in form.items() if value is not None and value != ""}
 
 
 def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
