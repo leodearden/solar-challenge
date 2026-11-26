@@ -186,7 +186,7 @@ def show(
     console.print(syntax)
 
     # Show summary
-    console.print(Text.assemble("\n", ("Parsed Summary:", "bold")))
+    console.print(Text.assemble("\n", ("Keys as written:", "bold")))
     table = Table()
     table.add_column("Key", style="cyan")
     table.add_column("Value")

@@ -349,7 +349,8 @@ home:
 
         assert shown.exit_code == 0
         assert "home.dispatch_strategy tou_optimized" in table_text(shown.stdout)
-        assert validated.exit_code != 0
+        assert validated.exit_code == 1
+        assert "ERROR home.dispatch_strategy:" in table_text(validated.stdout)
 
 
 def _simulate_raising_a_plain_value_error(fleet_config: object, start: object, end: object) -> NoReturn:
