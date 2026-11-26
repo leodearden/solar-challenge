@@ -294,7 +294,6 @@ _SEG_AND_COMMUNITY_ROWS = [
         ),
         "community",
         lambda: CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=BatteryConfig(
                 capacity_kwh=20.0,
                 dispatch_strategy=PeakShavingStrategyConfig(3.0),

@@ -84,7 +84,7 @@ class TestCommunityConfig:
     @pytest.mark.parametrize(
         "construct",
         [
-            pytest.param(lambda: CommunityConfig("p2p"), id="positional"),  # type: ignore[call-arg]
+            pytest.param(lambda: CommunityConfig("p2p"), id="positional"),  # type: ignore[misc, arg-type]
             pytest.param(lambda: CommunityConfig(sharing_mode="p2p"), id="keyword"),  # type: ignore[call-arg]
         ],
     )
@@ -106,7 +106,6 @@ class TestCommunityConfig:
         """Self-consumption, the dispatch of a battery that names none, never charges from the grid, whatever the billing tariff."""
         with pytest.raises(ConfigurationError) as exc_info:
             CommunityConfig(
-                sharing_mode="community_battery",
                 community_battery=_community_battery(grid_charging=GridChargeConfig(0.9)),
                 billing=billing,
             )
@@ -127,7 +126,6 @@ class TestCommunityConfig:
         """Peak shaving charges from the grid in a cheap period of the billing tariff, so with no tariff it never would."""
         with pytest.raises(ConfigurationError) as exc_info:
             CommunityConfig(
-                sharing_mode="community_battery",
                 community_battery=_grid_charging_peak_shaving_battery(),
                 billing=billing,
             )
@@ -139,7 +137,6 @@ class TestCommunityConfig:
     def test_a_grid_charging_peak_shaving_community_battery_with_a_billing_tariff_is_accepted(self) -> None:
         battery = _grid_charging_peak_shaving_battery()
         cfg = CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=battery,
             billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
         )
@@ -153,7 +150,6 @@ class TestCommunityConfig:
         )
         with pytest.raises(ConfigurationError) as refused:
             CommunityConfig(
-                sharing_mode="community_battery",
                 community_battery=battery,
                 billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
             )
@@ -169,7 +165,6 @@ class TestCommunityConfig:
             dispatch_strategy=PeakShavingStrategyConfig(3.0), grid_charging=GridChargeConfig(0.9, forecast="pv_blind")
         )
         cfg = CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=battery,
             billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
         )
@@ -250,13 +245,13 @@ class TestSimulateCommunityP2P:
 
     def test_community_results_returned(self, fleet: FleetResults) -> None:
         """simulate_community returns a CommunityResults object."""
-        cfg = CommunityConfig(sharing_mode="p2p")
+        cfg = CommunityConfig()
         result = simulate_community(fleet, cfg)
         assert isinstance(result, CommunityResults)
 
     def test_fleet_results_reference(self, fleet: FleetResults) -> None:
         """CommunityResults.fleet_results references the input FleetResults."""
-        cfg = CommunityConfig(sharing_mode="p2p")
+        cfg = CommunityConfig()
         result = simulate_community(fleet, cfg)
         assert result.fleet_results is fleet
 
@@ -264,7 +259,7 @@ class TestSimulateCommunityP2P:
         self, fleet: FleetResults, index: pd.DatetimeIndex
     ) -> None:
         """Community grid_export = max(0, E-D) at each step."""
-        cfg = CommunityConfig(sharing_mode="p2p")
+        cfg = CommunityConfig()
         result = simulate_community(fleet, cfg)
         # step0: E=4, D=1 → cg_exp=3; step1: E=1, D=3 → cg_exp=0; step2: E=2, D=2 → 0
         expected_exp = [3.0, 0.0, 0.0]
@@ -277,7 +272,7 @@ class TestSimulateCommunityP2P:
         self, fleet: FleetResults, index: pd.DatetimeIndex
     ) -> None:
         """Community grid_import = max(0, D-E) at each step."""
-        cfg = CommunityConfig(sharing_mode="p2p")
+        cfg = CommunityConfig()
         result = simulate_community(fleet, cfg)
         # step0: E=4, D=1 → cg_imp=0; step1: E=1, D=3 → cg_imp=2; step2: →0
         expected_imp = [0.0, 2.0, 0.0]
@@ -288,7 +283,7 @@ class TestSimulateCommunityP2P:
 
     def test_battery_series_all_zero(self, fleet: FleetResults) -> None:
         """Battery series (charge, discharge, soc) are all 0.0 in p2p (no battery)."""
-        result = simulate_community(fleet, CommunityConfig(sharing_mode="p2p"))
+        result = simulate_community(fleet, CommunityConfig())
         assert (result.battery_charge == 0.0).all()
         assert (result.battery_discharge == 0.0).all()
         assert (result.battery_soc == 0.0).all()
@@ -297,7 +292,7 @@ class TestSimulateCommunityP2P:
         self, fleet: FleetResults, index: pd.DatetimeIndex
     ) -> None:
         """All result series share the fleet's time index."""
-        result = simulate_community(fleet, CommunityConfig(sharing_mode="p2p"))
+        result = simulate_community(fleet, CommunityConfig())
         pd.testing.assert_index_equal(result.grid_export.index, index)
         pd.testing.assert_index_equal(result.grid_import.index, index)
         pd.testing.assert_index_equal(result.battery_charge.index, index)
@@ -306,7 +301,7 @@ class TestSimulateCommunityP2P:
         self, fleet: FleetResults
     ) -> None:
         """Community export + import ≤ unshared fleet totals (netting never increases flows)."""
-        result = simulate_community(fleet, CommunityConfig(sharing_mode="p2p"))
+        result = simulate_community(fleet, CommunityConfig())
         # Community export must be ≤ fleet total export at every step
         assert (result.grid_export.values <= fleet.total_grid_export.values + 1e-9).all()
         assert (result.grid_import.values <= fleet.total_grid_import.values + 1e-9).all()
@@ -331,12 +326,12 @@ class TestValidateCommunityBalance:
 
     def test_balance_returns_true(self, fleet: FleetResults) -> None:
         """validate_community_balance returns True for a correctly computed result."""
-        result = simulate_community(fleet, CommunityConfig(sharing_mode="p2p"))
+        result = simulate_community(fleet, CommunityConfig())
         assert validate_community_balance(fleet, result) is True
 
     def test_balance_raises_on_corrupt_import(self, fleet: FleetResults) -> None:
         """validate_community_balance raises ValueError if grid_import is perturbed."""
-        result = simulate_community(fleet, CommunityConfig(sharing_mode="p2p"))
+        result = simulate_community(fleet, CommunityConfig())
         # Corrupt: add +5.0 kW to first grid_import value
         bad_import = result.grid_import.copy()
         bad_import.iloc[0] += 5.0
@@ -346,7 +341,7 @@ class TestValidateCommunityBalance:
 
     def test_balance_accepts_custom_tolerance(self, fleet: FleetResults) -> None:
         """validate_community_balance accepts a non-default tolerance argument."""
-        result = simulate_community(fleet, CommunityConfig(sharing_mode="p2p"))
+        result = simulate_community(fleet, CommunityConfig())
         assert validate_community_balance(fleet, result, tolerance=0.01) is True
 
     @pytest.fixture
@@ -381,7 +376,7 @@ class TestValidateCommunityBalance:
         home battery net is 0 and the balance equation closes correctly.  Any sign
         error or omission of that term would break this fixture's equation.
         """
-        result = simulate_community(battery_fleet, CommunityConfig(sharing_mode="p2p"))
+        result = simulate_community(battery_fleet, CommunityConfig())
         assert validate_community_balance(battery_fleet, result) is True
 
     def test_balance_raises_on_corrupt_community_battery_charge(
@@ -392,7 +387,7 @@ class TestValidateCommunityBalance:
         Setting cb_ch = +1.0 kW adds 1.0 to the RHS while LHS stays the same,
         violating the (cb_ch − cb_dis) term in COMMUNITY-BALANCE.
         """
-        result = simulate_community(battery_fleet, CommunityConfig(sharing_mode="p2p"))
+        result = simulate_community(battery_fleet, CommunityConfig())
         # Inject a non-zero community battery charge; balance must break
         bad_cb_ch = result.battery_charge.copy()
         bad_cb_ch.iloc[0] = 1.0  # cb_ch was 0.0; adding 1.0 increases RHS by 1.0
@@ -417,7 +412,6 @@ class TestSimulateCommunityBattery:
     def cb_cfg(self) -> CommunityConfig:
         """Community battery config with large power limits (no saturation)."""
         return CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=BatteryConfig(
                 capacity_kwh=10.0,
                 max_charge_kw=30.0,
@@ -499,7 +493,7 @@ class TestSimulateCommunityBattery:
         self, fleet5: FleetResults, cb_cfg: CommunityConfig, index5: pd.DatetimeIndex
     ) -> None:
         """Community battery grid_import < p2p grid_import at the deficit step."""
-        p2p_cfg = CommunityConfig(sharing_mode="p2p")
+        p2p_cfg = CommunityConfig()
         cb_result = simulate_community(fleet5, cb_cfg)
         p2p_result = simulate_community(fleet5, p2p_cfg)
         assert cb_result.grid_import.iloc[3] < p2p_result.grid_import.iloc[3], (
@@ -511,7 +505,7 @@ class TestSimulateCommunityBattery:
         self, fleet5: FleetResults, cb_cfg: CommunityConfig
     ) -> None:
         """Community battery total grid_import.sum() < p2p total over all steps."""
-        p2p_cfg = CommunityConfig(sharing_mode="p2p")
+        p2p_cfg = CommunityConfig()
         cb_result = simulate_community(fleet5, cb_cfg)
         p2p_result = simulate_community(fleet5, p2p_cfg)
         assert cb_result.grid_import.sum() < p2p_result.grid_import.sum(), (
@@ -564,7 +558,6 @@ class TestSimulateCommunityBattery:
     def sat_cfg(self) -> CommunityConfig:
         """Community battery config with tight power limits to force saturation."""
         return CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=BatteryConfig(
                 capacity_kwh=50.0,
                 max_charge_kw=20.0,
@@ -654,12 +647,11 @@ class TestSimulateCommunityBattery:
         peak_shaving = simulate_community(
             fleet,
             CommunityConfig(
-                sharing_mode="community_battery",
                 community_battery=_community_battery(dispatch_strategy=PeakShavingStrategyConfig(3.0)),
             ),
         )
         default = simulate_community(
-            fleet, CommunityConfig(sharing_mode="community_battery", community_battery=_community_battery())
+            fleet, CommunityConfig(community_battery=_community_battery())
         )
 
         assert peak_shaving.battery_discharge.tolist() == pytest.approx([2.0] * 3, abs=1e-9)
@@ -682,14 +674,13 @@ class TestSimulateCommunityBattery:
         grid_charging = simulate_community(
             fleet,
             CommunityConfig(
-                sharing_mode="community_battery",
                 community_battery=_grid_charging_peak_shaving_battery(),
                 billing=billing,
             ),
         )
         default = simulate_community(
             fleet,
-            CommunityConfig(sharing_mode="community_battery", community_battery=_community_battery(), billing=billing),
+            CommunityConfig(community_battery=_community_battery(), billing=billing),
         )
 
         assert (grid_charging.battery_charge > 0).all(), grid_charging.battery_charge.tolist()
@@ -716,7 +707,7 @@ class TestCommunityBillingTimeOfUse:
         )
         billing = CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=4.0)
 
-        cr = simulate_community(fleet, CommunityConfig(sharing_mode="p2p", billing=billing))
+        cr = simulate_community(fleet, CommunityConfig(billing=billing))
 
         time_of_use_bill = 4.0 * 0.09 + 6.0 * 0.25
         assert cr.baseline_net_cost_gbp == pytest.approx(time_of_use_bill)
@@ -774,7 +765,7 @@ class TestCommunityBillingSavings:
 
     @pytest.fixture
     def billing_cfg(self) -> CommunityConfig:
-        return CommunityConfig(sharing_mode="p2p", billing=self._COMPLETE_BILLING)
+        return CommunityConfig(billing=self._COMPLETE_BILLING)
 
     def test_baseline_net_cost(
         self, billing_fleet: FleetResults, billing_cfg: CommunityConfig
@@ -829,7 +820,7 @@ class TestCommunityBillingSavings:
     ) -> None:
         """The battery stores the fleet's 1 kW net surplus each hour, so the community's grid flows, and its net cost, are zero."""
         config = CommunityConfig(
-            sharing_mode="community_battery", community_battery=_community_battery(), billing=self._COMPLETE_BILLING
+            community_battery=_community_battery(), billing=self._COMPLETE_BILLING
         )
 
         cr = simulate_community(billing_fleet, config)
@@ -842,7 +833,7 @@ class TestCommunityBillingSavings:
         self, billing_fleet: FleetResults
     ) -> None:
         """All three billing fields are None when no billing config is given."""
-        cfg_no_billing = CommunityConfig(sharing_mode="p2p")
+        cfg_no_billing = CommunityConfig()
         cr = simulate_community(billing_fleet, cfg_no_billing)
         assert cr.baseline_net_cost_gbp is None
         assert cr.community_net_cost_gbp is None
@@ -861,7 +852,7 @@ class TestCommunityBillingSavings:
         billing = dataclasses.replace(self._COMPLETE_BILLING, **{name: None for name in unset_fields})
         unset = [f"billing.{name}" for name in unset_fields]
         set_ = [f"billing.{name}" for name in self._BILLING_INPUTS if name not in unset_fields]
-        cfg = CommunityConfig(sharing_mode="p2p", billing=billing)
+        cfg = CommunityConfig(billing=billing)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             cr = simulate_community(billing_fleet, cfg)
@@ -886,7 +877,7 @@ class TestCommunityBillingSavings:
     def test_complete_or_absent_billing_does_not_warn(
         self, billing_fleet: FleetResults, billing: CommunityBillingConfig | None
     ) -> None:
-        cfg = CommunityConfig(sharing_mode="p2p", billing=billing)
+        cfg = CommunityConfig(billing=billing)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             simulate_community(billing_fleet, cfg)
@@ -898,7 +889,6 @@ class TestCommunityBillingSavings:
     ) -> None:
         """A tariff-only billing is a valid dispatch config: the battery stores the 1 kW the fleet nets to."""
         cfg = CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=_community_battery(),
             billing=CommunityBillingConfig(tariff=FlatRateTariff(0.30)),
         )
@@ -964,17 +954,15 @@ class TestCommunityResultsSharingMode:
 # ---------------------------------------------------------------------------
 
 _CONFIG_FOR_EACH_PATH = (
-    pytest.param(CommunityConfig(sharing_mode="p2p"), id="p2p"),
+    pytest.param(CommunityConfig(), id="p2p"),
     pytest.param(
         CommunityConfig(
-            sharing_mode="p2p",
             billing=CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.0),
         ),
         id="billed-p2p",
     ),
     pytest.param(
         CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=BatteryConfig(capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0),
         ),
         id="community-battery",
@@ -992,7 +980,7 @@ class TestCommunityRowLength:
     @pytest.fixture
     def billed_p2p(self) -> CommunityConfig:
         billing = CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.0)
-        return CommunityConfig(sharing_mode="p2p", billing=billing)
+        return CommunityConfig(billing=billing)
 
     @pytest.mark.parametrize(
         ("freq", "row_hours"),
@@ -1003,7 +991,7 @@ class TestCommunityRowLength:
         row = pd.date_range("2024-06-21 12:00", periods=1, freq=freq, tz="Europe/London")
         fleet = make_balanced_fleet(row, [([3.0], [1.0]), ([0.0], [1.5])])
 
-        m = compute_community_metrics(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+        m = compute_community_metrics(simulate_community(fleet, CommunityConfig()))
 
         assert m.dt_h == pytest.approx(row_hours)
         assert m.unshared_import_kwh == pytest.approx(1.5 * row_hours)
@@ -1050,7 +1038,7 @@ class TestCommunityRowLength:
         battery = BatteryConfig(capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0)
 
         cr = simulate_community(
-            fleet, CommunityConfig(sharing_mode="community_battery", community_battery=battery)
+            fleet, CommunityConfig(community_battery=battery)
         )
 
         assert cr.battery_charge.iloc[0] == pytest.approx(10.0)

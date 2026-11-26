@@ -442,7 +442,7 @@ class TestCommunityMetrics:
     def test_a_half_hourly_twin_of_a_run_has_the_minute_runs_figures(self) -> None:
         minute, half_hour = (
             compute_community_metrics(
-                simulate_community(make_fleet_results_of([_seasonal_run(freq)]), CommunityConfig(sharing_mode="p2p"))
+                simulate_community(make_fleet_results_of([_seasonal_run(freq)]), CommunityConfig())
             )
             for freq in ("1min", "30min")
         )
@@ -640,7 +640,7 @@ class TestGridChargeForecastNotice:
             [replace(sample_results, grid_charge_forecast=each) for each in ("trailing_14_days", None, "pv_blind")]
         )
 
-        report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+        report = generate_community_report(simulate_community(fleet, CommunityConfig()))
 
         assert report.startswith(
             "# Community Energy Sharing Report\n\n" + PV_BLIND_AND_TRAILING_NOTICE + "## Sharing Mode"
@@ -651,7 +651,7 @@ class TestGridChargeForecastNotice:
     ) -> None:
         fleet = make_fleet_results_of([sample_results, sample_results])
 
-        report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+        report = generate_community_report(simulate_community(fleet, CommunityConfig()))
 
         assert report.startswith("# Community Energy Sharing Report\n\n## Sharing Mode")
         assert "sized by" not in report

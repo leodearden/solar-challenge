@@ -1391,7 +1391,6 @@ class TestScenarioFileBlockKeys:
         }
 
         expected = CommunityConfig(
-            sharing_mode="community_battery",
             community_battery=BatteryConfig(**community_battery),
             billing=CommunityBillingConfig(
                 tariff=TariffConfig.flat_rate(rate_per_kwh=0.30, name="Community"),

@@ -23,7 +23,7 @@ from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
-    from solar_challenge.community import CommunityResults
+    from solar_challenge.community import CommunityResults, SharingMode
 
 
 _WINTER_MONTHS = (12, 1, 2)
@@ -362,7 +362,7 @@ class CommunityMetrics:
     battery_charge_kwh: float
     battery_discharge_kwh: float
     #: Authoritative sharing mode, read directly from CommunityResults.sharing_mode.
-    sharing_mode: str
+    sharing_mode: "SharingMode"
 
 
 def compute_community_metrics(community_results: "CommunityResults") -> CommunityMetrics:

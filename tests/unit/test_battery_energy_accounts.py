@@ -244,7 +244,7 @@ class TestBusBalancesStillClose:
         fleet = make_balanced_fleet(minutes, [([10.0, 0.0], [0.0, 0.0]), ([0.0, 0.0], [2.0, 10.0])])
         lossy = BatteryConfig(capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0)
 
-        community = simulate_community(fleet, CommunityConfig(sharing_mode="community_battery", community_battery=lossy))
+        community = simulate_community(fleet, CommunityConfig(community_battery=lossy))
 
         assert community.battery_charge.iloc[0] > 0
         assert community.battery_discharge.iloc[1] > 0

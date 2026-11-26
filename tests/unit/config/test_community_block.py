@@ -298,7 +298,7 @@ class TestCommunityConfigFrozenPicklable:
         """Assigning a new attribute on CommunityConfig raises FrozenInstanceError."""
         cfg = full_community_config
         with pytest.raises(dataclasses.FrozenInstanceError):
-            cfg.sharing_mode = "p2p"  # type: ignore[misc]
+            cfg.community_battery = None  # type: ignore[misc]
 
     def test_frozen_nested_battery(self, full_community_config: CommunityConfig) -> None:
         """BatteryConfig inside CommunityConfig is also frozen."""

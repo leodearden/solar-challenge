@@ -1218,7 +1218,6 @@ def parse_community_config(
     return constructed(
         block_path,
         CommunityConfig,
-        sharing_mode="p2p" if community_battery is None else "community_battery",
         community_battery=community_battery,
         billing=billing,
     )

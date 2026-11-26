@@ -137,7 +137,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "FlatGridServices": "dataclass[eq, frozen, match_args] (income_per_kw_per_year_gbp: float) -> None",
     "DEFAULT_EVENT_WINDOWS": "tuple [EventWindow]",
     # --- community (community.py) ---
-    "CommunityConfig": "dataclass[eq, frozen, match_args] (sharing_mode: Literal['p2p', 'community_battery'], community_battery: BatteryConfig | None = None, billing: CommunityBillingConfig | None = None) -> None",
+    "CommunityConfig": "dataclass[eq, frozen] (*, community_battery: BatteryConfig | None = None, billing: CommunityBillingConfig | None = None) -> None",
     "CommunityBillingConfig": "dataclass[eq, frozen, match_args] (tariff: TariffConfig | None = None, seg_rate_pence_per_kwh: float | None = None) -> None",
     "CommunityResults": "dataclass[eq, frozen, match_args] (grid_import: Series, grid_export: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, fleet_results: FleetResults, sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: float | None = None, community_net_cost_gbp: float | None = None, community_savings_gbp: float | None = None) -> None",
     "simulate_community": "(fleet_results: FleetResults, config: CommunityConfig, *, validate_balance: bool = True) -> CommunityResults",
@@ -428,6 +428,10 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     "FlatGridServices": {
         "annual_income_gbp": "(self, fleet_results: FleetResults) -> float",
+    },
+    # --- community (community.py) ---
+    "CommunityConfig": {
+        "sharing_mode": "property (self) -> Literal['p2p', 'community_battery']",
     },
     # --- pv (pv.py) ---
     "PVConfig": {

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional, TypeAlias
 
 import pandas as pd
 
@@ -112,19 +112,22 @@ def _refuse_a_grid_charge_forecast(battery: BatteryConfig) -> None:
 # CommunityConfig
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
+SharingMode: TypeAlias = Literal["p2p", "community_battery"]
+
+
+@dataclass(frozen=True, kw_only=True)
 class CommunityConfig:
     """Configuration for a community energy sharing simulation.
 
+    Its sharing mode, :attr:`sharing_mode`, is a read-only property that follows
+    community_battery, so the mode and the battery cannot disagree.
+
     Attributes
     ----------
-    sharing_mode:
-        Either ``"p2p"`` (peer-to-peer netting, no community battery) or
-        ``"community_battery"`` (P2P netting + shared community battery dispatch).
     community_battery:
-        Battery configuration for the shared community battery.  *Must* be
-        provided when ``sharing_mode="community_battery"`` and *must not* be
-        provided when ``sharing_mode="p2p"``.
+        Battery configuration for the shared community battery, through which
+        the community shares (``"community_battery"`` mode); ``None`` (default)
+        nets the community's flows peer to peer (``"p2p"`` mode).
     billing:
         The community's import tariff and SEG rate, for pricing its grid
         flows; ``None`` (default) skips billing.
@@ -132,35 +135,24 @@ class CommunityConfig:
     Raises
     ------
     ConfigurationError
-        If sharing_mode is neither ``"p2p"`` nor ``"community_battery"``; if
-        a ``"p2p"`` config has a community_battery, or a
-        ``"community_battery"`` config has none; or if the community
-        battery's dispatch would ignore its grid_charging, as
+        If the community battery's dispatch would ignore its grid_charging, as
         :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses it:
         the strategy its dispatch_strategy names does not charge from the
         grid, or billing names no tariff to find a cheap period in.
     """
 
-    sharing_mode: Literal["p2p", "community_battery"]
     community_battery: Optional[BatteryConfig] = None
     billing: Optional[CommunityBillingConfig] = None
 
     def __post_init__(self) -> None:
-        """Refuse an unknown sharing mode, a community battery the mode does not take, or a community battery whose dispatch would ignore its grid_charging, raising ConfigurationError."""
-        if self.sharing_mode not in ("p2p", "community_battery"):
-            raise ConfigurationError.must_be("sharing_mode", "'p2p' or 'community_battery'", got=self.sharing_mode)
-        if self.sharing_mode == "p2p" and self.community_battery is not None:
-            raise ConfigurationError(
-                "sharing_mode='p2p' must not have a community_battery; "
-                "set sharing_mode='community_battery' to enable battery dispatch."
-            )
-        if self.sharing_mode == "community_battery" and self.community_battery is None:
-            raise ConfigurationError(
-                "sharing_mode='community_battery' requires a community_battery config; "
-                "provide a BatteryConfig or switch to sharing_mode='p2p'."
-            )
+        """Refuse a community battery whose dispatch would ignore its grid_charging, raising ConfigurationError."""
         if self.community_battery is not None:
             _battery_strategy(self.community_battery, self.billing)
+
+    @property
+    def sharing_mode(self) -> SharingMode:
+        """``"community_battery"`` when the community shares through a community_battery, ``"p2p"`` when it has none."""
+        return "p2p" if self.community_battery is None else "community_battery"
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +181,8 @@ class CommunityResults:
     fleet_results:
         Reference to the source :class:`~solar_challenge.fleet.FleetResults`.
     sharing_mode:
-        Authoritative sharing mode copied directly from
-        :attr:`CommunityConfig.sharing_mode` at construction time.
-        Either ``"p2p"`` or ``"community_battery"``.
+        The sharing mode, copied from :attr:`CommunityConfig.sharing_mode`:
+        ``"p2p"`` or ``"community_battery"``.
     """
 
     grid_import: pd.Series
@@ -200,7 +191,7 @@ class CommunityResults:
     battery_discharge: pd.Series
     battery_soc: pd.Series
     fleet_results: "FleetResults"
-    sharing_mode: Literal["p2p", "community_battery"]
+    sharing_mode: SharingMode
     # Priced by simulate_community when config.billing sets every billing input; None otherwise.
     baseline_net_cost_gbp: Optional[float] = None
     community_net_cost_gbp: Optional[float] = None
@@ -315,14 +306,14 @@ def simulate_community(
     :meth:`~solar_challenge.timebase.SimulationWindow.of_index` of
     ``total_grid_export``'s index, in either mode and whether or not it bills.
 
-    Two dispatch branches are selected by *config.sharing_mode*:
+    Two dispatch branches follow *config.community_battery*:
 
-    **p2p** (vectorised):
+    **p2p** (vectorised), when ``community_battery`` is ``None``:
         Instantaneous netting at the community connection point with no battery.
         Grid flows are derived directly from ``(surplus − deficit)`` clips.
         All battery series in the result are zero.
 
-    **community_battery** (sequential):
+    **community_battery** (sequential), when ``community_battery`` is set:
         A shared :class:`~solar_challenge.battery.Battery` is instantiated once
         and each net surplus/deficit step, the fleet window's ``step_minutes``
         long, is dispatched in order via
@@ -339,9 +330,9 @@ def simulate_community(
     fleet_results:
         Aggregate results from :meth:`~solar_challenge.fleet.FleetRunner.simulate`.
     config:
-        Community configuration specifying ``sharing_mode`` and, for
-        ``"community_battery"`` mode, the shared battery's
-        :class:`~solar_challenge.battery.BatteryConfig`.
+        Community configuration, whose ``community_battery``, the shared
+        battery's :class:`~solar_challenge.battery.BatteryConfig` or ``None``,
+        selects the dispatch branch.
     validate_balance:
         When ``True`` (default), check the completed result with
         :func:`validate_community_balance` and, in ``community_battery`` mode,
