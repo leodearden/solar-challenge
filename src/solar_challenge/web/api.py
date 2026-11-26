@@ -65,7 +65,8 @@ logger = logging.getLogger(__name__)
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 
-# Every refusal of this blueprint's endpoints is answered HTTP 400 here, and a defect HTTP 500 with a JSON body
+# answer_refusal answers a ValueError an endpoint of this blueprint raises, and answer_server_error any other
+# exception that no handler below names
 api_bp.register_error_handler(ValueError, answer_refusal)
 api_bp.register_error_handler(InternalServerError, answer_server_error)
 

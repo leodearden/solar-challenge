@@ -80,13 +80,16 @@ def read_iso_date(value: Any, field: str) -> date:
         ConfigurationError: If *value* is not a string date.fromisoformat reads; the
             error names *field* and the value.
     """
-    refusal = ConfigurationError(f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}")
     if not isinstance(value, str):
-        raise refusal
+        raise _not_an_iso_date(value, field)
     try:
         return date.fromisoformat(value)
     except ValueError as exc:
-        raise refusal from exc
+        raise _not_an_iso_date(value, field) from exc
+
+
+def _not_an_iso_date(value: object, field: str) -> ConfigurationError:
+    return ConfigurationError.must_be(field, "an ISO 8601 date (YYYY-MM-DD)", got=value)
 
 
 def _read_date(value: Any, field: str, default: date) -> date:

@@ -137,8 +137,8 @@ def _requested_point(point: object, what: str) -> tuple[float, str]:
     return value, require_encodable_text(run_id, f"{what}.run_id")
 
 
-class _NotAFinishedHomeRun(ValueError):
-    """The run a sweep point names is not a finished home run: no run has its id, or it is a fleet run or has no summary yet; the message names the run id."""
+class _NotAFinishedHomeRun(ConfigurationError):
+    """The request's refusal of a sweep point whose run is not a finished home run: no run has its id, or it is a fleet run or has no summary yet; the message names the run id."""
 
 
 def _finished_point(value: float, run_id: str) -> SweepPoint:
