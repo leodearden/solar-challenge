@@ -74,7 +74,7 @@ def sample_distribution(
             that is not a finite number, or a count the preview cannot pool; lists of
             unequal length; params the sampler cannot draw from; or a sample that is not a
             finite number, as finite params whose draws overflow a float can. Each names
-            its field under params, or the sample.
+            its field, n_samples, type or one under params, or the sample.
     """
     n_samples = as_whole_number(n_samples, "n_samples", within=FLEET_SIZE)
     spec = _preview_spec(dist_type, require_mapping("params", params))
