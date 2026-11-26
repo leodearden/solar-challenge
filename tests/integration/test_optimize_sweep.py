@@ -118,7 +118,7 @@ class TestConfigResult:
     """ConfigResult frozen dataclass construction and validation."""
 
     def test_all_fields_read_back(self) -> None:
-        """All fields read back correctly after construction."""
+        """The stored fields read back, and the five solved fields read through the solution."""
         config = ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6)
         solution = make_cost_recovery_solution(
             own_use_rate_pence_per_kwh=15.0,
@@ -130,11 +130,6 @@ class TestConfigResult:
         cr = ConfigResult(
             config=config,
             solution=solution,
-            representative_outlay_gbp=400.0,
-            solved_own_use_rate_pence_per_kwh=15.0,
-            surplus_at_solved_gbp=100.0,
-            feasible=True,
-            binding="floor",
             total_capex_gbp=10000.0,
             min_dscr=1.5,
             equity_irr=0.08,
@@ -146,11 +141,11 @@ class TestConfigResult:
 
         assert cr.config is config
         assert cr.solution is solution
-        assert cr.representative_outlay_gbp == pytest.approx(400.0)
-        assert cr.solved_own_use_rate_pence_per_kwh == pytest.approx(15.0)
-        assert cr.surplus_at_solved_gbp == pytest.approx(100.0)
-        assert cr.feasible is True
-        assert cr.binding == "floor"
+        assert cr.representative_outlay_gbp == solution.representative_outlay_gbp
+        assert cr.solved_own_use_rate_pence_per_kwh == solution.own_use_rate_pence_per_kwh
+        assert cr.surplus_at_solved_gbp == solution.net_surplus_per_home_per_year_gbp
+        assert cr.feasible is solution.feasible
+        assert cr.binding == solution.binding
         assert cr.total_capex_gbp == pytest.approx(10000.0)
         assert cr.min_dscr == pytest.approx(1.5)
         assert cr.equity_irr == pytest.approx(0.08)
@@ -158,6 +153,22 @@ class TestConfigResult:
         assert cr.baseline_own_use_rate_pence_per_kwh == pytest.approx(15.0)
         assert cr.baseline_outlay_gbp == pytest.approx(450.0)
         assert cr.baseline_surplus_per_home_gbp == pytest.approx(80.0)
+
+    def test_an_infeasible_solution_is_read_through(self) -> None:
+        """Over an infeasible solution, feasible and binding are the solution's own."""
+        cr = ConfigResult(
+            config=ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6),
+            solution=make_cost_recovery_solution(feasible=False, binding="infeasible_above_retail"),
+            total_capex_gbp=10000.0,
+            min_dscr=1.5,
+            equity_irr=0.08,
+            payback_years=12.0,
+            baseline_own_use_rate_pence_per_kwh=15.0,
+            baseline_outlay_gbp=450.0,
+            baseline_surplus_per_home_gbp=80.0,
+        )
+        assert cr.feasible is cr.solution.feasible is False
+        assert cr.binding == "infeasible_above_retail"
 
     def test_payback_years_none_allowed(self) -> None:
         """payback_years=None is a valid sentinel (never pays back within asset life)."""
@@ -175,10 +186,10 @@ class TestConfigResult:
         assert math.isnan(cr.equity_irr)
 
     def test_frozen_raises_on_assignment(self) -> None:
-        """Assigning any field raises dataclasses.FrozenInstanceError."""
+        """Assigning a stored field raises dataclasses.FrozenInstanceError."""
         cr = make_config_result()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            cr.representative_outlay_gbp = 999.0  # type: ignore[misc]
+            cr.total_capex_gbp = 1.0  # type: ignore[misc]
 
     def test_config_point_accessible(self) -> None:
         """config.pv_kwp / battery_kwh / inverter_kw match the constructed values."""
@@ -188,7 +199,7 @@ class TestConfigResult:
         assert cr.config.inverter_kw == pytest.approx(4.6)
 
     def test_solution_field_accessible(self) -> None:
-        """solution.own_use_rate_pence_per_kwh is readable through the ConfigResult."""
+        """The solution's solved fields are readable through the ConfigResult."""
         sol = make_cost_recovery_solution(
             own_use_rate_pence_per_kwh=18.5, feasible=True, binding="floor", representative_outlay_gbp=400.0
         )
@@ -196,11 +207,6 @@ class TestConfigResult:
         cr = ConfigResult(
             config=ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6),
             solution=sol,
-            representative_outlay_gbp=400.0,
-            solved_own_use_rate_pence_per_kwh=18.5,
-            surplus_at_solved_gbp=100.0,
-            feasible=True,
-            binding="floor",
             total_capex_gbp=10000.0,
             min_dscr=1.5,
             equity_irr=0.08,
@@ -210,6 +216,11 @@ class TestConfigResult:
             baseline_surplus_per_home_gbp=80.0,
         )
         assert cr.solution.own_use_rate_pence_per_kwh == pytest.approx(18.5)
+        assert cr.feasible is sol.feasible
+        assert cr.binding == sol.binding
+        assert cr.representative_outlay_gbp == sol.representative_outlay_gbp
+        assert cr.solved_own_use_rate_pence_per_kwh == sol.own_use_rate_pence_per_kwh
+        assert cr.surplus_at_solved_gbp == sol.net_surplus_per_home_per_year_gbp
 
 
 # ---------------------------------------------------------------------------
