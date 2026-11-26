@@ -1157,7 +1157,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_reads_a_fixed_value_as_the_number_the_form_sends(
         self, spec: object, number: float
     ) -> None:
-        """A fixed value, which fleet_distribution.py's grammar spells as a number or a fixed distribution, reads as the float the editor's Fixed Value sends, as the form's conversion reads it."""
+        """A fixed value, which fleet_distribution.py's grammar spells as a number or a fixed distribution, reads as the float the editor's Fixed Value sends: the form's conversion passes numbers as sent, so distribution_form_spec reads the numbers of a spec the grammar accepted."""
         got = distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
         assert (type(got), got) == (float, number)
 
@@ -1178,7 +1178,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_refuses_a_distribution_the_editor_cannot_hold(
         self, spec: object
     ) -> None:
-        """A boolean, which fleet_distribution.py's grammar reads as 1 or 0 but the form's conversion refuses, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
+        """A boolean, which fleet_distribution.py's grammar reads as 1 or 0 but the editor never sends as a number, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
         with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 
@@ -1194,7 +1194,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_refuses_a_type_that_is_not_a_string_as_one_the_editor_has_no_form_for(
         self, dist_type: object
     ) -> None:
-        """A type that is not a string, one that cannot be hashed included, is refused as a type the editor has no form for, naming its path and the spec sent, as distribution_grammar_spec refuses it."""
+        """A type that is not a string, one that cannot be hashed included, is refused as a type the editor has no form for, naming its path and the spec sent; distribution_grammar_spec passes such a type as sent, for the grammar to refuse."""
         spec = {"type": dist_type, "mean": 5.0, "std": 2.0, "min": 0.0, "max": 8.0}
         with pytest.raises(ValueError) as exc_info:
             distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
@@ -1244,7 +1244,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_reads_a_numeric_string_as_its_number(
         self, spec: dict, form_spec: dict
     ) -> None:
-        """A scenario's numeric string, which the loaders read as its number, reads into the fleet form as that number, as the form's conversion reads it."""
+        """A scenario's numeric string, which the loaders read as its number, reads into the fleet form as that number: distribution_form_spec reads the numbers of a spec the grammar accepted, which the form's conversion passes as sent."""
         assert distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw") == form_spec
 
     def test_distribution_form_spec_refuses_a_number_too_large_for_a_float_naming_it(self) -> None:
@@ -1447,6 +1447,42 @@ class TestDistributionGrammarSpec:
         self, distribution: dict, message: str
     ) -> None:
         """A row's value and its weight or count each go in one of the grammar's parallel lists, so a row without one is refused naming the row and the row sent."""
+        with pytest.raises(ValueError) as exc_info:
+            distribution_grammar_spec(distribution, _FIELDS)
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize(
+        ("distribution", "message"),
+        [
+            pytest.param(
+                {"type": "weighted_discrete", "values": [{"value": 4, "weight": 1}], "weights": [9]},
+                "x.values gives the weighted_discrete's values and weights, "
+                "so its distribution must not also send 'weights'",
+                id="weighted-discrete-weights",
+            ),
+            pytest.param(
+                {"type": "shuffled_pool", "entries": [{"value": 4, "count": 2}], "counts": [5]},
+                "x.entries gives the shuffled_pool's values and counts, "
+                "so its distribution must not also send 'counts'",
+                id="shuffled-pool-counts",
+            ),
+            pytest.param(
+                {
+                    "type": "shuffled_pool",
+                    "entries": [{"value": 4, "count": 2}],
+                    "counts": [5],
+                    "values": [9],
+                },
+                "x.entries gives the shuffled_pool's values and counts, "
+                "so its distribution must not also send 'values' and 'counts'",
+                id="shuffled-pool-values-and-counts",
+            ),
+        ],
+    )
+    def test_rows_sent_beside_a_list_they_become_are_refused_naming_the_rows_and_the_list(
+        self, distribution: dict, message: str
+    ) -> None:
+        """The rows become the grammar's values list and their column's list, so a distribution that also sends either list is refused naming the rows' field and the list, rather than the rows overwriting it."""
         with pytest.raises(ValueError) as exc_info:
             distribution_grammar_spec(distribution, _FIELDS)
         assert str(exc_info.value) == message

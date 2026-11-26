@@ -445,20 +445,30 @@ def distribution_grammar_spec(
     """fleet_distribution.py's grammar spec of *distribution*, a distribution as the distribution editor holds it, translated in shape only; :func:`distribution_form_spec` reads such a spec back.
 
     A weighted_discrete's values rows become its values and weights lists, and a
-    shuffled_pool's entries rows its values and counts lists, each cell as sent.  A key the
-    distribution sends as null is left out, for fleet_distribution.py's grammar to name.
-    Every other key, a key its type does not read included, passes as sent, and so does
-    every type and every number, for the grammar to read or refuse naming them.  *fields*
-    maps each editor key to the field a form sends it in, which every refusal names.
+    shuffled_pool's entries rows its values and counts lists, each cell as sent; a
+    distribution that sends either list beside its rows is refused, since the rows would
+    overwrite it.  A key the distribution sends as null is left out, for
+    fleet_distribution.py's grammar to name.  Every other key, a key its type does not read
+    included, passes as sent, and so does every type and every number, for the grammar to
+    read or refuse naming them.  *fields* maps each editor key to the field a form sends it
+    in, which every refusal names.
 
     Raises:
-        ValueError: For rows :func:`_rows_spec` refuses, naming the rows' field.
+        ValueError: For rows sent beside a list they become, naming the rows' field and the
+            list; or for rows :func:`_rows_spec` refuses, naming the rows' field.
     """
     spec = {key: value for key, value in distribution.items() if value is not None}
     editor_type = _editor_type(spec.get("type"))
     rows = None if editor_type is None else editor_type.rows
     if rows is not None and rows.key in spec:
-        spec.update(_rows_spec(spec.pop(rows.key), fields[rows.key], rows))
+        sent_rows = spec.pop(rows.key)
+        lists_beside = [key for key in ("values", rows.grammar_key) if key in spec]
+        if lists_beside:
+            raise ValueError(
+                f"{fields[rows.key]} gives the {spec['type']}'s values and {rows.grammar_key}, "
+                f"so its distribution must not also send {' and '.join(map(repr, lists_beside))}"
+            )
+        spec.update(_rows_spec(sent_rows, fields[rows.key], rows))
     return spec
 
 
@@ -528,14 +538,16 @@ def _preview_spec(distribution: Mapping[str, Any], fields: Mapping[str, str]) ->
 
 
 def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
-    """The fleet form's distribution for the fleet_distribution.py grammar *spec* at *path*: the inverse of the form's conversion of a block's distribution (see :func:`_parse_component_distribution`).
+    """The fleet form's distribution for the fleet_distribution.py grammar *spec* at *path*: the inverse, in shape, of the form's conversion of a block's distribution (see :func:`_parse_component_distribution`).
 
     *spec* is one the grammar accepts.  The form's distribution is the editor's: a fixed
     value, which the grammar spells as a number or as a fixed distribution, and which the
     form holds as its number; a normal with both clamps; a uniform; or weighted_discrete
-    or shuffled_pool rows.  A shuffled_pool's counts are read by :func:`read_pool_counts`,
-    and any other number by :func:`~solar_challenge.number_fields.as_finite_float`, as
-    the form's conversion reads them.
+    or shuffled_pool rows.  The form's conversion translates shape only and the grammar
+    reads the numbers, so this reads the numbers of the spec the grammar accepted: a
+    shuffled_pool's counts by :func:`read_pool_counts`, and any other number by
+    :func:`~solar_challenge.number_fields.as_finite_float`, a boolean refused though the
+    grammar reads it as 1 or 0.
 
     Raises:
         ValueError: For a *spec* the editor cannot hold, naming *path*: an absent
