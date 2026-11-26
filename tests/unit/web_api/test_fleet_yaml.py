@@ -24,7 +24,7 @@ from tests._default_pv_pool_fleet import (
     DEFAULT_PV_POOL_FLEET_YAML,
 )
 from tests._error_records import error_records
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._falsy_json_values import FALSY_SENT_VALUES
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._html_page import element_attributes
@@ -219,7 +219,7 @@ class TestExportFleetYAML:
         assert (export.status_code, export.get_json()) == (simulate.status_code, simulate.get_json())
         mock_job_manager.submit_fleet_job.assert_not_called()
 
-    @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
+    @pytest.mark.parametrize(("value", "type_name"), FALSY_SENT_VALUES)
     @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
     def test_export_refuses_a_falsy_block_other_than_null_with_the_simulate_endpoints_answer(
         self,
@@ -229,7 +229,7 @@ class TestExportFleetYAML:
         value: object,
         type_name: str,
     ) -> None:
-        """A falsy block other than null, any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent: only null reads as absent. No YAML is written and no job is queued."""
+        """A falsy block other than null or "", any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent: only null and "" read as absent. No YAML is written and no job is queued."""
         body = {**_FLEET_FORM_BODY, key: value}
 
         export = client.post("/api/fleet/export-yaml", json=body)

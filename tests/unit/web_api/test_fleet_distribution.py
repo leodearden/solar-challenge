@@ -17,6 +17,7 @@ from solar_challenge.fleet_distribution import (
     parse_fleet_distribution_config,
 )
 from solar_challenge.home import HomeConfig
+from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
 from solar_challenge.web.fleet_config import (
@@ -26,7 +27,7 @@ from solar_challenge.web.fleet_config import (
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from tests._default_pv_pool_fleet import DEFAULT_PV_POOL_FLEET_FORM, DEFAULT_PV_POOL_FLEET_HOMES
 from tests._error_records import error_records
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._falsy_json_values import FALSY_SENT_VALUES
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._home_payload import VALID_HOME_PAYLOAD
@@ -498,7 +499,6 @@ class TestFleetFromDistribution:
             pytest.param("Paris", id="unknown-place"),
             pytest.param("95,0", id="latitude-out-of-range"),
             pytest.param(5, id="number"),
-            pytest.param(None, id="null"),
             pytest.param({"latitude": 50}, id="block-without-longitude"),
         ],
     )
@@ -563,6 +563,43 @@ class TestFleetFromDistribution:
         assert resp.status_code == 400
         assert f"Unrecognised fleet form keys: {key!r};" in resp.get_json()["error"]
         mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize("unsent", [pytest.param(None, id="null"), pytest.param("", id="empty-string")])
+    def test_an_unrecognised_key_sent_as_null_or_empty_text_returns_400_naming_it_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, unsent: object
+    ) -> None:
+        """The presence rule applies to recognised keys only: an unrecognised key is refused by name whatever it holds."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution", json={**self._VALID_BODY, "tarif": unsent}
+        )
+        assert resp.status_code == 400
+        assert "Unrecognised fleet form keys: 'tarif';" in resp.get_json()["error"]
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize("field", ["seed", "n_homes", "location"])
+    def test_a_field_sent_as_null_or_empty_text_queues_the_fleet_a_form_without_it_queues(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, field: str
+    ) -> None:
+        """A seed, n_homes or location sent as null or "" reads as not sent: each queues the fleet the form without it queues, its default seed, size or Bristol."""
+        without = {key: value for key, value in self._VALID_BODY.items() if key != field}
+        answers = [
+            client.post("/api/simulate/fleet-from-distribution", json=body).status_code
+            for body in ({**without, field: None}, {**without, field: ""}, without)
+        ]
+
+        assert answers == [201, 201, 201]
+        null, empty, left_out = (call.kwargs for call in mock_job_manager.submit_fleet_job.call_args_list)
+        assert null == empty == left_out
+
+    def test_a_form_that_sends_no_location_queues_every_home_at_bristol(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A fleet form whose location is not sent is a fleet at Bristol."""
+        without = {key: value for key, value in self._VALID_BODY.items() if key != "location"}
+        resp = client.post("/api/simulate/fleet-from-distribution", json=without)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
+        assert [config.location for config in configs] == [Location.bristol()] * self._VALID_BODY["n_homes"]
 
     def test_fleet_wide_tariff_dispatch_seg_applied_to_all_homes(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
@@ -651,7 +688,7 @@ class TestFleetFromDistribution:
 
     @pytest.mark.parametrize(
         ("value", "type_name"),
-        [pytest.param("x", "str", id="str"), *FALSY_NON_NULL_VALUES],
+        [pytest.param("x", "str", id="str"), *FALSY_SENT_VALUES],
     )
     @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
     def test_non_mapping_block_returns_400_naming_it(
@@ -662,7 +699,7 @@ class TestFleetFromDistribution:
         value: object,
         type_name: str,
     ) -> None:
-        """Any of the six blocks, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays, sent as a non-object, a falsy one other than null included, is a 400 naming the block and the type sent; no fleet is queued."""
+        """Any of the six blocks, the pv/battery/load distributions and the tariff/dispatch_strategy/seg overlays, sent as a non-object, a falsy one other than null or "" included, is a 400 naming the block and the type sent; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, key: value},
@@ -681,7 +718,6 @@ class TestFleetFromDistribution:
     @pytest.mark.parametrize(
         "dispatch_strategy",
         [
-            pytest.param("", id="empty-string"),
             pytest.param(False, id="false"),
             pytest.param({}, id="empty-object"),
         ],
