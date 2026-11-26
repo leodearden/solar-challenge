@@ -17,6 +17,7 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES, PVConfig
+from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_seg_rate, parse_tariff_config
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_WINDOW_DAYS
@@ -28,6 +29,7 @@ from solar_challenge.web.simulation_params import (
     parse_date_range,
     parse_home_config,
     parse_seg_tariff,
+    read_iso_date,
     with_default_days,
 )
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
@@ -193,8 +195,8 @@ class TestParseDateRange:
     def test_window_it_cannot_run_is_refused_naming_start_and_end(
         self, data: dict, message: str
     ) -> None:
-        """A window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is refused with a ValueError naming start and end as read."""
-        with pytest.raises(ValueError) as exc_info:
+        """A window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is refused with a ConfigurationError naming start and end as read."""
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_date_range(data)
         assert str(exc_info.value) == message
 
@@ -222,8 +224,8 @@ class TestParseDateRange:
     def test_days_sent_with_start_or_end_is_refused_naming_each_value_sent(
         self, data: dict, message: str
     ) -> None:
-        """A body that sets its window by days and by a start or end is refused with a ValueError naming days and each date as sent."""
-        with pytest.raises(ValueError) as exc_info:
+        """A body that sets its window by days and by a start or end is refused with a ConfigurationError naming days and each date as sent."""
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_date_range(data)
         assert str(exc_info.value) == message
 
@@ -264,8 +266,8 @@ class TestParseDateRange:
         "days", [*UNUSABLE_NUMBERS, pytest.param("seven", id="non-numeric-string")]
     )
     def test_days_that_is_not_a_finite_number_is_refused_naming_it(self, days: object) -> None:
-        """A days that is not a finite number, a boolean included, is refused with a ValueError naming days and the value as sent."""
-        with pytest.raises(ValueError) as exc_info:
+        """A days that is not a finite number, a boolean included, is refused with a ConfigurationError naming days and the value as sent."""
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_date_range({"days": days})
         assert str(exc_info.value) == f"days must be a finite number, got {days!r}"
 
@@ -277,8 +279,8 @@ class TestParseDateRange:
         ],
     )
     def test_days_with_a_fractional_part_is_refused_naming_it(self, days: float) -> None:
-        """A days with a fractional part is refused, not truncated, with a ValueError naming days and the value as sent."""
-        with pytest.raises(ValueError) as exc_info:
+        """A days with a fractional part is refused, not truncated, with a ConfigurationError naming days and the value as sent."""
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_date_range({"days": days})
         assert str(exc_info.value) == f"days must be a whole number, got {days!r}"
 
@@ -305,8 +307,8 @@ class TestParseDateRange:
     def test_days_it_cannot_use_is_refused_naming_days_and_the_value_sent(
         self, days: object, message: str
     ) -> None:
-        """A days outside 1 to MAX_DAYS is refused with a ValueError naming days, the range and the value as sent."""
-        with pytest.raises(ValueError) as exc_info:
+        """A days outside 1 to MAX_DAYS is refused with a ConfigurationError naming days, the range and the value as sent."""
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_date_range({"days": days})
         assert str(exc_info.value) == message
 
@@ -327,10 +329,23 @@ class TestParseDateRange:
     def test_date_it_cannot_read_is_refused_naming_the_field_and_the_value_sent(
         self, field: str, value: object
     ) -> None:
-        """A start or end that is not an ISO 8601 date is refused with a ValueError naming the field and the value as sent."""
-        with pytest.raises(ValueError) as exc_info:
+        """A start or end that is not an ISO 8601 date is refused with a ConfigurationError naming the field and the value as sent."""
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_date_range({field: value})
         assert str(exc_info.value) == f"{field} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
+
+
+class TestReadIsoDate:
+    """read_iso_date reads an ISO 8601 date string, and refuses any other value naming its field and the value."""
+
+    def test_an_iso_8601_date_string_is_its_date(self) -> None:
+        assert read_iso_date("2024-06-01", "start") == date(2024, 6, 1)
+
+    @pytest.mark.parametrize("value", [pytest.param(5, id="number"), pytest.param(None, id="null")])
+    def test_a_value_that_is_not_a_string_is_refused_naming_the_field_and_the_value(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_iso_date(value, "start")
+        assert str(refusal.value) == f"start must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
 
 
 class TestWithDefaultDays:
@@ -385,7 +400,7 @@ class TestParseHomeConfigKeys:
 
     def test_unrecognised_keys_are_refused_by_name(self) -> None:
         """The home form's Alpine field names are refused by name, and the error lists the recognised keys."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, "period_days": 1, "battery_enabled": False})
         message = str(exc_info.value)
         assert "period_days" in message
@@ -441,9 +456,9 @@ class TestParseHomeConfigName:
         assert (home_config.name, name) == ("", None)
 
     def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
-        with pytest.raises(ValueError) as expected:
+        with pytest.raises(ConfigurationError) as expected:
             require_encodable_text(chr(0xD800), "name")
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_home_config({**VALID_HOME_PAYLOAD, "name": chr(0xD800)})
         assert str(refusal.value) == str(expected.value)
 
@@ -474,13 +489,13 @@ class TestParseSegTariff:
             pytest.param({"rate_pence_per_kwh": float("nan")}, id="nan-rate"),
         ],
     )
-    def test_refused_seg_raises_value_error_from_the_grammar_error(self, seg: object) -> None:
-        """A value the grammar refuses raises ValueError chained from its ConfigurationError, carrying that message."""
-        with pytest.raises(ValueError) as exc_info:
+    def test_refused_seg_is_refused_with_the_grammars_own_configuration_error(self, seg: object) -> None:
+        """A value the grammar refuses is refused with parse_seg_rate's own ConfigurationError, not a ValueError wrapping it."""
+        with pytest.raises(ConfigurationError) as expected:
+            parse_seg_rate(seg)
+        with pytest.raises(ConfigurationError) as refusal:
             parse_seg_tariff(seg)
-        grammar_error = exc_info.value.__cause__
-        assert isinstance(grammar_error, ConfigurationError)
-        assert str(exc_info.value) == str(grammar_error)
+        assert str(refusal.value) == str(expected.value)
 
 
 class TestParseHomeConfigCapabilities:
@@ -574,9 +589,9 @@ class TestParseHomeConfigHeatPumpBlock:
     def test_heat_pump_that_is_not_a_mapping_is_refused_naming_its_type(
         self, value: object, type_name: str
     ) -> None:
-        """A heat_pump that is not an object is refused with a ValueError naming heat_pump and the type sent."""
+        """A heat_pump that is not an object is refused with a ConfigurationError naming heat_pump and the type sent."""
         with pytest.raises(
-            ValueError, match=re.escape(f"heat_pump must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"heat_pump must be a mapping, got {type_name}")
         ):
             parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": value})
 
@@ -631,18 +646,25 @@ class TestParseHomeConfigNestedBlockPresence:
     def test_falsy_block_is_refused_naming_it_and_its_type(
         self, key: str, value: object, type_name: str
     ) -> None:
-        """A falsy value other than null is not a mapping, so it is refused with a ValueError naming the block and the type sent."""
-        with pytest.raises(ValueError, match=re.escape(non_mapping_block_refusal(key, type_name))):
+        """A falsy value other than null is not a mapping, so it is refused with a ConfigurationError naming the block and the type sent."""
+        with pytest.raises(ConfigurationError, match=re.escape(non_mapping_block_refusal(key, type_name))):
             parse_home_config({**VALID_HOME_PAYLOAD, key: value})
 
-    @pytest.mark.parametrize("key", ["seg", "tariff", "dispatch_strategy"])
-    def test_empty_block_is_refused_by_its_grammar(self, key: str) -> None:
-        """An empty block is a mapping its grammar reads; a grammar that requires a key refuses it, and the ValueError carries that grammar's ConfigurationError message."""
-        with pytest.raises(ValueError) as exc_info:
+    @pytest.mark.parametrize(
+        ("key", "grammar"),
+        [
+            pytest.param("seg", parse_seg_rate, id="seg"),
+            pytest.param("tariff", parse_tariff_config, id="tariff"),
+            pytest.param("dispatch_strategy", parse_dispatch_strategy_config, id="dispatch_strategy"),
+        ],
+    )
+    def test_empty_block_is_refused_by_its_grammar(self, key: str, grammar: Callable[[object], object]) -> None:
+        """An empty block is a mapping its grammar reads; a grammar that requires a key refuses it, and that grammar's own ConfigurationError is the refusal."""
+        with pytest.raises(ConfigurationError) as expected:
+            grammar({})
+        with pytest.raises(ConfigurationError) as refusal:
             parse_home_config({**VALID_HOME_PAYLOAD, key: {}})
-        grammar_error = exc_info.value.__cause__
-        assert isinstance(grammar_error, ConfigurationError)
-        assert str(exc_info.value) == str(grammar_error)
+        assert str(refusal.value) == str(expected.value)
 
 
 class TestParseHomeConfigBatteryEfficiency:
@@ -670,7 +692,7 @@ class TestParseHomeConfigBatteryEfficiency:
 
     def test_out_of_range_efficiency_pct_is_refused_in_the_units_sent(self) -> None:
         """An out-of-range percentage is reported as sent (150), not as BatteryConfig's 1.5."""
-        with pytest.raises(ValueError, match="got 150"):
+        with pytest.raises(ConfigurationError, match="got 150"):
             parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 5.0, "efficiency_pct": 150})
 
 
@@ -695,9 +717,9 @@ class TestParseHomeConfigBatterySettings:
         self, key: str, value: object
     ) -> None:
         """A battery setting refused with a battery is refused, with the same message, without one."""
-        with pytest.raises(ValueError) as with_battery:
+        with pytest.raises(ConfigurationError) as with_battery:
             parse_home_config({**VALID_HOME_PAYLOAD, key: value})
-        with pytest.raises(ValueError) as without_battery:
+        with pytest.raises(ConfigurationError) as without_battery:
             parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 0, key: value})
         assert str(without_battery.value) == str(with_battery.value)
 
@@ -758,7 +780,7 @@ class TestParseHomeConfigNumberFields:
         self, field: str, value: object
     ) -> None:
         """A top-level number field holding a number too large for a float, an infinity, NaN or a boolean is refused naming the field."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, field: value})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
@@ -768,13 +790,13 @@ class TestParseHomeConfigNumberFields:
         self, key: str, value: object
     ) -> None:
         """A heat_pump number too large for a float, an infinity, NaN or a boolean is refused naming it as heat_pump.<key>."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, "heat_pump": {key: value}})
         assert str(exc_info.value) == f"heat_pump.{key} must be a finite number, got {value!r}"
 
     def test_occupants_with_a_fractional_part_is_refused_naming_it(self) -> None:
         """An occupants value with a fractional part is refused, not truncated, naming occupants and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, "occupants": 2.5})
         assert str(exc_info.value) == "occupants must be a whole number, got 2.5"
 
@@ -897,9 +919,9 @@ class TestParseHomeConfigSystemLosses:
         self, value: float
     ) -> None:
         """A system_losses PVConfig refuses is refused with PVConfig's own message for the value as sent, the only read and range check."""
-        with pytest.raises(ValueError) as pv_refusal:
+        with pytest.raises(ConfigurationError) as pv_refusal:
             PVConfig(capacity_kw=VALID_HOME_PAYLOAD["pv_kw"], system_losses=value)
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_home_config({**VALID_HOME_PAYLOAD, "system_losses": value})
         assert str(refusal.value) == str(pv_refusal.value)
 
@@ -932,9 +954,9 @@ class TestParseHomeConfigSEG:
         home_config, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
         assert home_config.seg_tariff is None
 
-    def test_malformed_seg_is_refused_with_value_error(self) -> None:
-        """A malformed seg is refused with the ValueError every web caller answers with HTTP 400."""
-        with pytest.raises(ValueError, match="seg"):
+    def test_malformed_seg_is_refused_with_a_configuration_error(self) -> None:
+        """A malformed seg is refused with the ConfigurationError every web caller answers with HTTP 400."""
+        with pytest.raises(ConfigurationError, match="seg"):
             parse_home_config({**VALID_HOME_PAYLOAD, "seg": [1, 2]})
 
 
@@ -979,7 +1001,7 @@ class TestParseHomeConfigLocation:
         self, value: object
     ) -> None:
         """A location read_location refuses is refused with read_location's own refusal, null included: it is not read as absent."""
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             parse_home_config({**VALID_HOME_PAYLOAD, "location": value})
         with pytest.raises(ConfigurationError) as reader_refusal:
             read_location(value)

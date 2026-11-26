@@ -39,6 +39,7 @@ import pytest
 pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import calculate_summary
 from solar_challenge.web.field_tree import field_tree
@@ -386,7 +387,7 @@ class TestRunQuery:
     def test_a_query_no_page_answers_is_refused_naming_its_field_its_value_and_the_options(
         self, field: str, value: object, options: tuple[str, ...]
     ) -> None:
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             RunQuery(**{field: value})
 
         message = str(refusal.value)

@@ -5,6 +5,7 @@ from typing import Literal, get_args
 
 import pytest
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.web.text_options import one_of
 
 _Shade = Literal["light", "dark"]
@@ -25,7 +26,7 @@ def test_a_value_equal_to_an_option_is_that_option() -> None:
     ],
 )
 def test_a_value_equal_to_no_option_is_refused_naming_the_field_the_value_and_each_option(value: object) -> None:
-    with pytest.raises(ValueError) as refusal:
+    with pytest.raises(ConfigurationError) as refusal:
         one_of(value, _SHADES, "shade")
 
     assert str(refusal.value) == f"shade is {value!r}, not one of ['light', 'dark']"

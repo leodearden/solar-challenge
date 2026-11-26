@@ -86,7 +86,7 @@ class TestScenarioFromBuilderForm:
 
         *arm* is the rest of the form that makes the builder read *field*.
         """
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             scenario_from_builder_form({**_ACCEPTED_FORM, **arm, field: value})
         assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
@@ -187,15 +187,21 @@ class TestScenarioFromBuilderForm:
         self, changes: dict[str, object], message: str
     ) -> None:
         """Each refusal of a distribution's shape is the fleet form's refusal of the same distribution, under the builder's field names: both forms' distributions are translated by one translator."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             scenario_from_builder_form({**_ACCEPTED_FORM, **changes})
         assert str(exc_info.value) == message
 
     def test_a_number_of_homes_with_a_fractional_part_is_refused_naming_it(self) -> None:
         """The number of homes with a fractional part is refused, not truncated."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             scenario_from_builder_form({**_ACCEPTED_FORM, "n_homes": 2.5})
         assert str(exc_info.value) == "n_homes must be a whole number, got 2.5"
+
+    def test_a_location_preset_that_is_neither_custom_nor_a_preset_is_refused_naming_it(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            scenario_from_builder_form({**_ACCEPTED_FORM, "location_preset": "atlantis"})
+        assert str(exc_info.value).startswith("location_preset must be 'custom' or one of ")
+        assert str(exc_info.value).endswith("got 'atlantis'")
 
     @pytest.mark.parametrize("value", WHOLE_NUMBER_FORMS)
     def test_a_number_of_homes_that_is_a_whole_number_in_another_form_is_the_int_it_equals(
