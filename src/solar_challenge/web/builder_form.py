@@ -130,8 +130,8 @@ def builder_form_errors(form: object) -> list[str]:
     errors = _dashboard_limit_errors(_present_fields(form))
     try:
         document = scenario_from_builder_form(form)
-    except ValueError as exc:
-        return [*errors, str(exc)]
+    except ValueError as refusal:
+        return [*errors, refusal_text(refusal)]
     if _home_count_allowed(document["fleet_distribution"].get("n_homes")):
         errors.extend(_scenario_reader_errors(document))
     return errors
@@ -171,7 +171,7 @@ def _readable(
         return None
     try:
         return as_number(fields[key], key)
-    except ValueError:
+    except ConfigurationError:
         return None
 
 
@@ -179,14 +179,15 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     """Why config.parse_scenario refuses *document*, judged in memory, as builder_form_errors lists the reader's reasons.
 
     An accepted document has its homes' value_range reasons alone.  A refused one has the
-    reasons _fleet_reasons_beside gives beside its refusal.  The reader refuses a scenario
-    with ConfigurationError, or with ValueError from a config it builds; anything else it
-    raises is a defect in it, not a refusal, so it propagates.
+    reasons _fleet_reasons_beside gives beside its refusal.  A ConfigurationError is the
+    reader's refusal; any other ValueError is a reason too, but refusal_text logs it as a
+    probable defect; anything else the reader raises is a defect, not a refusal, so it
+    propagates.
     """
     try:
         scenario = parse_scenario(document)
-    except (ConfigurationError, ValueError) as refusal:
-        return _fleet_reasons_beside(document, str(refusal))
+    except ValueError as refusal:
+        return _fleet_reasons_beside(document, refusal_text(refusal))
     return _range_errors(scenario)
 
 
@@ -201,8 +202,8 @@ def _fleet_reasons_beside(document: Mapping[str, Any], refusal: str) -> list[str
     """
     try:
         fleet = parse_scenario({**document, "period": None, "seg": None})
-    except (ConfigurationError, ValueError) as exc:
-        return [str(exc)]
+    except ValueError as refusal:
+        return [refusal_text(refusal)]
     return [*_range_errors(fleet), refusal]
 
 
