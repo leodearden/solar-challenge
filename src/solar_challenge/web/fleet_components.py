@@ -16,7 +16,7 @@ with refuse_homes_outside_ranges.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from datetime import date, timedelta
 from types import MappingProxyType
 from typing import Any
@@ -108,6 +108,27 @@ def days_window(days: int) -> tuple[date, date]:
     return SHORT_WINDOW_START, SHORT_WINDOW_START + timedelta(days=days - 1)
 
 
+def _the_scalar_form() -> DistributionType:
+    """The one DISTRIBUTION_TYPES record whose spec is the bare value every home is given.
+
+    Raises:
+        ValueError: Unless the table holds exactly one, naming the scalar forms it holds.
+    """
+    scalar_forms = [each for each in DISTRIBUTION_TYPES.values() if each.is_scalar_form]
+    _require(
+        len(scalar_forms) == 1,
+        "DISTRIBUTION_TYPES",
+        "hold exactly one scalar form, which every distribution editor offers as Fixed Value",
+        [each.name for each in scalar_forms],
+    )
+    return scalar_forms[0]
+
+
+#: The record of the bare value every home is given, which every component's distribution
+#: editor offers as its Fixed Value option.
+SCALAR_FORM: DistributionType = _the_scalar_form()
+
+
 @dataclass(frozen=True)
 class EditorStart:
     """What a component's distribution editor starts at: the type it shows, its Fixed Value, and the spec each of its editor types starts at.
@@ -116,19 +137,36 @@ class EditorStart:
         shown: The name of the editor type the card shows, '' for Fixed Value.
         fixed: The value Fixed Value starts at.
         specs: One spec of each of the component's editor types, in editor_types order.
+
+    Raises:
+        ValueError: For a spec that is not a distribution, such as a null or a number, which
+            no editor type holds, naming the specs.
     """
 
     shown: str
     fixed: float
     specs: tuple[DistributionSpec, ...]
 
+    def __post_init__(self) -> None:
+        _require(
+            all(is_dataclass(spec) for spec in self.specs),
+            "specs of EditorStart",
+            "each be a distribution, which its editor type holds as a mapping",
+            self.specs,
+        )
+
     def editor_state(self) -> dict[str, Any]:
-        """The distribution editor's dist object: the type shown, the fixed value, and each spec as written, without its type, under its type's name."""
+        """The distribution editor's dist object: the type shown, the fixed value, and each spec as written, without its type, under its type's name.
+
+        Raises:
+            ValueError: For a spec written as no mapping, which no editor type holds, naming it.
+        """
         specs: dict[str, Any] = {}
         for spec in self.specs:
             written = write_distribution_spec(spec)
-            if isinstance(written, dict):
-                specs[written["type"]] = {key: value for key, value in written.items() if key != "type"}
+            if not isinstance(written, dict):
+                raise ValueError(f"EditorStart cannot hold {spec!r} under an editor type: it is written as no mapping")
+            specs[written["type"]] = {key: value for key, value in written.items() if key != "type"}
         return {"type": self.shown, "fixed": self.fixed, "specs": specs}
 
 
@@ -222,9 +260,13 @@ class ComponentLimits:
 
     @property
     def scalar_form(self) -> DistributionType:
-        """The record of the bare value every home is given, which its editor offers as Fixed Value."""
-        (scalar_form,) = [each for each in DISTRIBUTION_TYPES.values() if each.is_scalar_form]
-        return scalar_form
+        """The record of the bare value every home is given, which its editor offers as Fixed Value: SCALAR_FORM."""
+        return SCALAR_FORM
+
+    @staticmethod
+    def counts_homes(editor_type: DistributionType) -> bool:
+        """Whether *editor_type*'s rows pair each value with a count of homes, as a shuffled pool's do: its paired list is of FieldKind.COUNT."""
+        return editor_type.rows is not None and editor_type.rows.paired_kind is FieldKind.COUNT
 
     @property
     def heading(self) -> str:
@@ -249,7 +291,7 @@ class ComponentLimits:
 
     def as_json(self) -> dict[str, Any]:
         """This component as #page-limits writes it: its names, step, value_range as its bounds, new_row_value, start as the editor holds it, and the editor types and scalar form its editor offers."""
-        (scalar_key,) = self.scalar_form.spec_keys
+        (scalar_key,) = SCALAR_FORM.spec_keys
         return {
             "key": self.key,
             "grammar_key": self.grammar_key,
@@ -260,7 +302,7 @@ class ComponentLimits:
             "new_row_value": self.new_row_value,
             "start": self.start.editor_state(),
             "editor_types": [_editor_type_json(each) for each in self.editor_types],
-            "scalar_form": {"name": self.scalar_form.name, "title": self.scalar_form.title, "key": scalar_key},
+            "scalar_form": {"name": SCALAR_FORM.name, "title": SCALAR_FORM.title, "key": scalar_key},
         }
 
 

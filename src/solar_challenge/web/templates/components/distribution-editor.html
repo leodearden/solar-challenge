@@ -38,12 +38,12 @@
     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
 {% endmacro %}
 
-{# The row list of the spec the Alpine expression spec holds, whose two parallel lists rows (a SpecRows) keys #}
-{% macro _row_list(subject, spec, rows, step) %}
+{# The row list of the spec the Alpine expression spec holds, whose two parallel lists rows (a SpecRows) keys; counted
+   when its paired list counts homes (ComponentLimits.counts_homes), which shows their total #}
+{% macro _row_list(subject, spec, rows, step, counted) %}
 {% set values_key, paired_key = rows.keys %}
 {% set values = spec ~ '.' ~ values_key %}
 {% set paired = spec ~ '.' ~ paired_key %}
-{% set counted = rows.paired_kind.name == 'COUNT' %}
 <template x-for="(value, idx) in {{ values }}" :key="idx">
     <div class="flex items-end gap-3">
         <label class="flex-1 min-w-0 space-y-1">
@@ -117,8 +117,9 @@
         </div>
         {% endif %}
         {% if editor_type.rows %}
-        <div class="text-sm text-slate-500 dark:text-slate-400">{% if editor_type.rows.paired_kind.name == 'COUNT' %}Define exact value-count pairs. Counts should sum to the fleet size.{% else %}Define value-{{ editor_type.rows.paired_title|lower }} pairs. {{ editor_type.rows.paired_title }}s are auto-normalised.{% endif %}</div>
-        {{ _row_list(subject, spec, editor_type.rows, step) }}
+        {% set counted = component.counts_homes(editor_type) %}
+        <div class="text-sm text-slate-500 dark:text-slate-400">{% if counted %}Define exact value-count pairs. Counts should sum to the fleet size.{% else %}Define value-{{ editor_type.rows.paired_title|lower }} pairs. {{ editor_type.rows.paired_title }}s are auto-normalised.{% endif %}</div>
+        {{ _row_list(subject, spec, editor_type.rows, step, counted) }}
         {% endif %}
     {% endcall %}
     {% endfor %}

@@ -43,6 +43,7 @@ from solar_challenge.web.fleet_components import (
     MAX_FLEET_HOMES,
     MAX_FLEET_SEED,
     FLEET_SIZE_DEFAULT,
+    SCALAR_FORM,
     ComponentLimits,
     EditorStart,
     PageLimits,
@@ -60,6 +61,7 @@ from tests._html_page import (
     element_count,
     headings,
     script_text_by_id,
+    texts,
     texts_after,
 )
 from tests._html_select_options import options_of_each
@@ -156,21 +158,48 @@ class TestFleetComponents:
         )
 
     @pytest.mark.parametrize(
-        ("component", "block"),
+        ("component", "block", "kind"),
         [
-            pytest.param(FLEET_COMPONENTS["pv"], PV_BLOCK, id="pv"),
-            pytest.param(FLEET_COMPONENTS["battery"], BATTERY_BLOCK, id="battery"),
-            pytest.param(FLEET_COMPONENTS["load"], LOAD_BLOCK, id="load"),
+            pytest.param(FLEET_COMPONENTS["pv"], PV_BLOCK, FieldKind.NUMBER, id="pv"),
+            pytest.param(FLEET_COMPONENTS["battery"], BATTERY_BLOCK, FieldKind.NUMBER, id="battery"),
+            pytest.param(FLEET_COMPONENTS["load"], LOAD_BLOCK, FieldKind.NUMBER, id="load"),
         ],
     )
-    def test_each_components_editor_types_are_those_its_fields_kind_draws_and_its_scalar_form_is_the_tables(
-        self, component: ComponentLimits, block: ComponentBlock[Any]
+    def test_each_component_edits_a_number_field_of_its_block_offering_the_number_kinds_editor_types_and_fixed_value(
+        self, component: ComponentLimits, block: ComponentBlock[Any], kind: FieldKind
     ) -> None:
-        (scalar_form,) = [each for each in DISTRIBUTION_TYPES.values() if each.is_scalar_form]
         assert component.block is block
-        assert component.field_kind is component.block.fleet[component.grammar_key].kind
-        assert component.editor_types == editor_types(component.field_kind)
-        assert component.scalar_form is scalar_form
+        assert component.field_kind is kind
+        assert component.editor_types == editor_types(kind)
+        assert component.scalar_form is SCALAR_FORM
+
+    def test_the_scalar_form_is_the_tables_fixed_value_record(self) -> None:
+        assert SCALAR_FORM is DISTRIBUTION_TYPES["fixed"]
+        assert SCALAR_FORM.title == "Fixed Value"
+
+    @pytest.mark.parametrize(
+        ("name", "counts_homes"),
+        [
+            pytest.param("shuffled_pool", True, id="shuffled-pool-counts-homes"),
+            pytest.param("weighted_discrete", False, id="weighted-discrete-weighs-values"),
+            pytest.param("normal", False, id="normal-has-no-rows"),
+            pytest.param("uniform", False, id="uniform-has-no-rows"),
+        ],
+    )
+    def test_only_an_editor_type_whose_rows_pair_each_value_with_a_count_counts_homes(
+        self, name: str, counts_homes: bool
+    ) -> None:
+        assert ComponentLimits.counts_homes(DISTRIBUTION_TYPES[name]) is counts_homes
+
+    @pytest.mark.parametrize("spec", [pytest.param(4.0, id="a-number"), pytest.param(None, id="null")])
+    def test_a_start_spec_that_is_not_a_distribution_is_refused_naming_the_specs(self, spec: DistributionSpec) -> None:
+        """No editor type holds a null or a number, so the start would lose that type's slot."""
+        specs = (NormalDistribution(4.0, 1.0), spec)
+        with pytest.raises(ValueError) as exc_info:
+            EditorStart(shown="", fixed=4.0, specs=specs)
+        assert str(exc_info.value) == (
+            f"specs of EditorStart must each be a distribution, which its editor type holds as a mapping, got {specs!r}"
+        )
 
     @pytest.mark.parametrize(
         ("key", "shown", "fixed", "specs"),
@@ -697,6 +726,18 @@ class TestPagesRenderEachComponentFromTheTable:
             )
             for component in FLEET_COMPONENTS.values()
         ]
+
+    def test_each_editor_type_whose_rows_count_homes_shows_their_total_and_asks_for_counts_and_no_other_does(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...], captioned_with_subject: bool
+    ) -> None:
+        page = client.get(path).get_data(as_text=True)
+        rows_types = [each for component in FLEET_COMPONENTS.values() for each in component.editor_types if each.rows]
+        counted = [each for each in rows_types if ComponentLimits.counts_homes(each)]
+        weighted = [each for each in rows_types if not ComponentLimits.counts_homes(each)]
+        assert counted and weighted
+        hints = ("Total:", "Define exact value-count pairs. Counts should sum to the fleet size.")
+        assert counts_of(texts(page), hints) == dict.fromkeys(hints, len(counted))
+        assert len([text for text in texts(page) if text.endswith("s are auto-normalised.")]) == len(weighted)
 
     def test_each_editor_types_inputs_are_captioned_by_the_table_and_bound_to_its_spec_in_the_editor(
         self, client: FlaskClient, path: str, dists: tuple[str, ...], captioned_with_subject: bool
