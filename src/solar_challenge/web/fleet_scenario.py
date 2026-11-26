@@ -14,10 +14,10 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from solar_challenge.config import parse_scenario, read_fleet_scenario
+from solar_challenge.config import read_fleet_scenario
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import FleetDistributionConfig, parse_fleet_distribution_config
+from solar_challenge.fleet_distribution import FleetDistributionConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import child_path, parse_dispatch_strategy_config
@@ -187,12 +187,15 @@ class ImportedFleetForm:
 def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     """The fleet form the fleet scenario *document* describes, naming the settings of it the form has no control for.
 
-    The document must be a fleet_distribution scenario config.parse_scenario accepts: its
-    refusal, of a top-level key no scenario reads included, is the refusal.  Its
-    fleet_distribution block is read first, by fleet_distribution.py's grammar, and the
-    dashboard's bounds on the fleet it reads, so no home is generated for a fleet the page
-    cannot run; then the period, with the page's own rules, which are stricter than the
-    reader's, so its refusals name the scenario's setting.  The form loads exactly what it
+    The document must be a fleet_distribution scenario config.read_fleet_scenario reads: its
+    refusal, of a top-level key no scenario reads included, is the refusal.  The period is
+    read first, with the page's own rules, which are stricter than the reader's, so its
+    refusals name the scenario's setting; then the document, as read_fleet_scenario reads it
+    in parse_scenario's order, and the dashboard's bounds on the fleet it reads.  The
+    scenario's own homes are never generated: the import's one generation is
+    parse_fleet_form's, of the form loaded, so a refusal found only while generating homes,
+    such as a battery dispatch reaching its tariff's cheap period, comes from
+    parse_fleet_form, and a setting named in not_loaded is never generated.  The form loads exactly what it
     holds: the name, the period's dates, the fleet size and seed, the pv, battery and load
     distributions, the battery's dispatch strategy, the tariff and the SEG.  A name, period
     or seed the scenario leaves out is left out of the form too, and the fleet page runs its
@@ -214,27 +217,25 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     Raises:
         ValueError: For a document that is not a fleet_distribution scenario, a period the
             page cannot run, or a setting the form needs but cannot hold exactly, naming it.
-        ConfigurationError: From fleet_distribution.py's grammar, for a fleet_distribution
-            block it refuses; from refuse_a_fleet_the_dashboard_cannot_run, for a fleet size
-            or seed the page cannot run, naming it; from parse_scenario, for a scenario it
-            refuses.
+        ConfigurationError: From read_fleet_scenario, for a scenario it refuses, a
+            fleet_distribution block fleet_distribution.py's grammar refuses included; from
+            refuse_a_fleet_the_dashboard_cannot_run, for a fleet size or seed the page cannot
+            run, naming it.
         ValueError, TypeError, ConfigurationError: From parse_fleet_form, for a form the page
-            could not run.
+            could not run, a refusal found only while generating its homes included.
     """
     scenario = _fleet_scenario(document)
-    fleet = scenario["fleet_distribution"]
-    parsed = parse_fleet_distribution_config(fleet)
-    refuse_a_fleet_the_dashboard_cannot_run(parsed, "fleet_distribution")
     period = _read_period(scenario.get("period"))
-    accepted = parse_scenario(scenario)
+    read = read_fleet_scenario(scenario)
+    refuse_a_fleet_the_dashboard_cannot_run(read.fleet, "fleet_distribution")
     form, not_loaded = _read_blocks(
         scenario,
         "",
         {
             "name": _read_name(scenario.get("name")),
             "period": period,
-            "location": _read_location(accepted.get_location()),
-            "fleet_distribution": _read_fleet_distribution(fleet, parsed),
+            "location": _read_location(read.location),
+            "fleet_distribution": _read_fleet_distribution(scenario["fleet_distribution"], read.fleet),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),
         },
@@ -307,7 +308,7 @@ def _read_blocks(block: Mapping[str, Any], path: str, reads: Mapping[str, _Block
 
 
 def _read_name(name: str | None) -> _BlockRead:
-    """The fleet form's name: the scenario's, which parse_scenario accepted as a string, none when it is absent or null."""
+    """The fleet form's name: the scenario's, which read_fleet_scenario accepted as a string, none when it is absent or null."""
     if name is None:
         return {}, ()
     return {"name": name}, ()
@@ -356,7 +357,7 @@ def _read_day(value: Any, path: str) -> date:
 
 
 def _read_location(location: Location) -> _BlockRead:
-    """Nothing of the fleet form, which has no location control: a scenario *location*, as parse_scenario reads it, other than the one the form runs at is not loaded."""
+    """Nothing of the fleet form, which has no location control: a scenario *location*, as read_fleet_scenario reads it, other than the one the form runs at is not loaded."""
     if location == _fleet_form_location({}):
         return {}, ()
     return {}, ("location",)
@@ -513,7 +514,7 @@ def _read_dispatch(dispatch: Any, path: str) -> _BlockRead:
 
 
 def _on_its_tariffs_clock(dispatch: dict[str, Any], path: str) -> bool:
-    """Whether the *path* dispatch block, one parse_scenario accepted, is tou_optimized on its tariff's clock: it sets no peak_hours."""
+    """Whether the *path* dispatch block, one read_fleet_scenario accepted, is tou_optimized on its tariff's clock: it sets no peak_hours."""
     strategy = parse_dispatch_strategy_config(dispatch, block_path=path)
     return isinstance(strategy, TOUOptimizedStrategyConfig) and strategy.peak_hours is None
 
@@ -547,7 +548,7 @@ def _read_typed_block(
 def _read_seg(seg: Any) -> _BlockRead:
     """The fleet form's SEG: the scenario's seg block as given, none when it is absent or null.
 
-    parse_scenario accepted it, so it names exactly one preset or rate, both of which the form holds.
+    read_fleet_scenario accepted it, so it names exactly one preset or rate, both of which the form holds.
     """
     if seg is None:
         return {}, ()
