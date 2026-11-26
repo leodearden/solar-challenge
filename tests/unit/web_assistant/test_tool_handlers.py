@@ -17,6 +17,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.number_fields import Interval, as_whole_number
 from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
 from solar_challenge.web.assistant import (
     METRIC_TABLE,
@@ -930,18 +931,26 @@ class TestRunFleetSimulation:
                 f"configs[{i}].pv_config.capacity_kw expected 4.0; got {cfg.pv_config.capacity_kw}"
             )
 
-    def test_n_homes_clamped_to_max_100(self) -> None:
-        """n_homes=9999 results in configs list clamped to <= 100."""
+    @pytest.mark.parametrize("n_homes", [0, -1, 101, 9999])
+    def test_an_n_homes_outside_1_to_100_is_refused_naming_it_its_value_and_the_bound(self, n_homes: int) -> None:
+        """A fleet size outside the tool's 1 to 100 homes is refused, not clamped to another fleet than the one asked for, and nothing is submitted."""
         jm = self._make_jm()
-        params = {"pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(9999, params, jm, _results_url_for_test)
+        with pytest.raises(ValueError) as refusal:
+            as_whole_number(n_homes, "n_homes", Interval(1, 100))
+
+        result = run_fleet_simulation(n_homes, {"pv_kw": 4, "location": "bristol", "days": 7}, jm, _results_url_for_test)
+
+        assert result == {"error": str(refusal.value)}
+        jm.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize("n_homes", [1, 100])
+    def test_an_n_homes_at_either_end_of_1_to_100_submits_a_fleet_of_that_many_homes(self, n_homes: int) -> None:
+        jm = self._make_jm()
+
+        run_fleet_simulation(n_homes, {"pv_kw": 4, "location": "bristol", "days": 7}, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
-        call_kwargs = jm.submit_fleet_job.call_args
-        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
-        assert len(configs) <= 100, (
-            f"Expected n_homes clamped to <= 100; got {len(configs)}"
-        )
+        assert len(jm.submit_fleet_job.call_args.kwargs["configs"]) == n_homes
 
     def test_submits_no_name_of_its_own(self) -> None:
         """The tool gives the run no name: the JobManager names it (RunKind.default_name)."""
@@ -950,19 +959,6 @@ class TestRunFleetSimulation:
         run_fleet_simulation(2, {"pv_kw": 4.0}, jm, _results_url_for_test)
 
         assert jm.submit_fleet_job.call_args.kwargs["name"] is None
-
-    def test_n_homes_zero_clamped_to_at_least_1(self) -> None:
-        """n_homes=0 is clamped to at least 1 (no empty fleet)."""
-        jm = self._make_jm()
-        params = {"pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(0, params, jm, _results_url_for_test)
-
-        jm.submit_fleet_job.assert_called_once()
-        call_kwargs = jm.submit_fleet_job.call_args
-        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
-        assert len(configs) >= 1, (
-            f"Expected n_homes=0 clamped to >= 1; got {len(configs)}"
-        )
 
     def test_invalid_pv_kw_returns_graceful_error(self) -> None:
         """Invalid pv_kw returns error dict; submit_fleet_job NOT called; no raise."""

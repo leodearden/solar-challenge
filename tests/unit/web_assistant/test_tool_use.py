@@ -24,7 +24,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
 from solar_challenge.location import LOCATION_PRESETS
-from solar_challenge.number_fields import as_finite_float, as_whole_number
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
     UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
@@ -834,23 +834,27 @@ class TestSimulationToolSurface:
             f"Expected dispatch result to match handler result; got {via_dispatch!r} vs {direct!r}"
         )
 
-    @pytest.mark.parametrize(("n_homes", "fleet_size"), [(0, 1), (10**6, 100)])
-    def test_dispatch_run_fleet_simulation_clamps_n_homes_as_the_handler_does(
-        self, tmp_path: Path, n_homes: int, fleet_size: int
+    @pytest.mark.parametrize("n_homes", [0, 10**6])
+    def test_dispatch_run_fleet_simulation_refuses_an_n_homes_outside_1_to_100_as_the_handler_does(
+        self, tmp_path: Path, n_homes: int
     ) -> None:
-        """An n_homes outside 1–100 is a whole number, so it is not refused: run_fleet_simulation
-        clamps it, and submits a fleet of the nearest size it allows."""
-        jm = autospecced_job_manager()
-        jm.submit_fleet_job.return_value = ("job-f", "run-f")
+        """An n_homes outside 1–100 is refused, naming n_homes, its value and the bound, rather
+        than clamped to another fleet than the one asked for; neither path submits."""
+        with pytest.raises(ValueError) as refusal:
+            as_whole_number(n_homes, "n_homes", Interval(1, 100))
+        direct_jm = autospecced_job_manager()
+        dispatch_jm = autospecced_job_manager()
 
-        result = dispatch_tool(
+        direct = run_fleet_simulation(n_homes, {"pv_kw": 4, "days": 7}, direct_jm, _results_url_for_test)
+        via_dispatch = dispatch_tool(
             "run_fleet_simulation",
             {"n_homes": n_homes, "pv_kw": 4, "days": 7},
-            tool_context(tmp_path, job_manager=jm),
+            tool_context(tmp_path, job_manager=dispatch_jm),
         )
 
-        assert result == {"run_id": "run-f", "results_url": _results_url_for_test("run-f")}
-        assert len(jm.submit_fleet_job.call_args.kwargs["configs"]) == fleet_size
+        assert via_dispatch == direct == {"error": str(refusal.value)}
+        direct_jm.submit_fleet_job.assert_not_called()
+        dispatch_jm.submit_fleet_job.assert_not_called()
 
 
 class TestSimulationToolUseSignal:
@@ -1084,6 +1088,9 @@ class TestMalformedToolInput:
                 "run_fleet_simulation", {"n_homes": math.inf, "pv_kw": 4}, "n_homes", id="n_homes-infinite"
             ),
             pytest.param(
+                "run_fleet_simulation", {"n_homes": 101, "pv_kw": 4}, "n_homes", id="n_homes-above-the-tools-limit"
+            ),
+            pytest.param(
                 "suggest_config", {"goal": "bill_savings"}, "annual_consumption_kwh", id="consumption-absent"
             ),
             pytest.param(
@@ -1183,6 +1190,18 @@ class TestMalformedToolInput:
                 {"n_homes": True, "pv_kw": 4},
                 partial(as_whole_number, True, "n_homes"),
                 id="n_homes-boolean",
+            ),
+            pytest.param(
+                "run_fleet_simulation",
+                {"n_homes": 0, "pv_kw": 4},
+                partial(as_whole_number, 0, "n_homes", Interval(1, 100)),
+                id="n_homes-zero",
+            ),
+            pytest.param(
+                "run_fleet_simulation",
+                {"n_homes": 101, "pv_kw": 4},
+                partial(as_whole_number, 101, "n_homes", Interval(1, 100)),
+                id="n_homes-above-the-tools-limit",
             ),
             pytest.param(
                 "suggest_config",
