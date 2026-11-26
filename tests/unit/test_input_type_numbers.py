@@ -16,6 +16,7 @@ import math
 import re
 import sys
 import typing
+from collections import deque
 from collections.abc import Callable, Collection, Iterable, Mapping
 from datetime import date, time, timedelta
 from pathlib import Path
@@ -78,7 +79,7 @@ def _scenario() -> ScenarioConfig:
 
 
 #: Each input type's dotted name, to a factory of a valid instance of it that gives every numeric field a value and
-#: every tuple field one element.
+#: every tuple field one element at least.
 INPUT_TYPES: Mapping[str, Callable[[], object]] = {
     "solar_challenge.battery.BatteryConfig": lambda: BatteryConfig(capacity_kwh=5.0, soh=0.9),
     "solar_challenge.community.CommunityBillingConfig": lambda: CommunityBillingConfig(seg_rate_pence_per_kwh=15.0),
@@ -322,12 +323,27 @@ def bad_numbers(field_types: frozenset[type]) -> tuple[object, ...]:
 
 
 def with_bad_number(value: object, bad: object) -> object:
-    """Return *value* with *bad* in place of its first number: a tuple's first element, recursively, or a frozenset's one member."""
+    """Return *value* with *bad* in place of its first number.
+
+    A value that is not a collection, text included, is replaced whole. A tuple's or list's first item, a mapping's
+    first value and one member of a frozenset are replaced recursively. Any other collection, or an empty one, raises
+    TypeError naming its type, so a factory that gives one makes this function probe it on purpose.
+    """
+    if isinstance(value, str) or not isinstance(value, Collection):
+        return bad
+    if not value:
+        raise TypeError(f"an empty {type(value).__name__} holds no number for a bad number to take the place of")
     if isinstance(value, tuple):
         return (with_bad_number(value[0], bad), *value[1:])
+    if isinstance(value, list):
+        return [with_bad_number(value[0], bad), *value[1:]]
+    if isinstance(value, Mapping):
+        first, *rest = value
+        return {first: with_bad_number(value[first], bad), **{key: value[key] for key in rest}}
     if isinstance(value, frozenset):
-        return frozenset({bad})
-    return bad
+        member, *rest = value
+        return frozenset({with_bad_number(member, bad), *rest})
+    raise TypeError(f"with_bad_number cannot find the first number of a {type(value).__name__}: teach it where it is")
 
 
 def refusal_cases(discovered: Mapping[str, type]) -> list[pytest.ParameterSet]:
@@ -479,16 +495,31 @@ def test_each_input_type_factory_builds_a_valid_instance_of_its_class(name: str,
     ("value", "bad", "expected"),
     [
         (4.0, math.nan, math.nan),
+        ("7kW", math.inf, math.inf),
         ((1,), True, (True,)),
         (((16, 19),), 2.5, ((2.5, 19),)),
+        ([1.0, 2.0], -math.inf, [-math.inf, 2.0]),
+        ({"a_ref": 1.0, "b_ref": 2.0}, math.nan, {"a_ref": math.nan, "b_ref": 2.0}),
+        ({"a_ref": (1.0, 2.0)}, "x", {"a_ref": ("x", 2.0)}),
         (frozenset({0}), "x", frozenset({"x"})),
+        (frozenset({(1, 2)}), True, frozenset({(True, 2)})),
     ],
-    ids=["scalar", "tuple", "pairs", "frozenset"],
+    ids=["scalar", "text", "tuple", "pairs", "list", "mapping", "mapping of tuples", "frozenset", "frozenset of pairs"],
 )
 def test_a_bad_number_takes_the_place_of_the_first_number_of_a_field_s_value(
     value: object, bad: object, expected: object
 ) -> None:
     assert repr(with_bad_number(value, bad)) == repr(expected)
+
+
+@pytest.mark.parametrize(
+    ("value", "type_name"),
+    [((), "tuple"), ([], "list"), ({}, "dict"), (frozenset(), "frozenset"), (deque([1.0]), "deque"), (((),), "tuple")],
+    ids=["empty tuple", "empty list", "empty mapping", "empty frozenset", "unknown container", "nested empty tuple"],
+)
+def test_a_value_whose_first_number_cannot_be_found_is_refused_naming_its_type(value: object, type_name: str) -> None:
+    with pytest.raises(TypeError, match=rf"\b{type_name}\b"):
+        with_bad_number(value, math.nan)
 
 
 @pytest.mark.parametrize(("name", "field", "bad"), refusal_cases(_DISCOVERED))
@@ -498,6 +529,7 @@ def test_each_input_type_refuses_each_bad_number_in_each_numeric_field_by_name(
     valid = INPUT_TYPES[name]()
     value = getattr(valid, field)
     assert value is not None, f"INPUT_TYPES' factory for {name} leaves {field} None, so its read is not tried: give it a value"
+    assert value != (), f"INPUT_TYPES' factory for {name} leaves {field} empty, so no number of it is tried: give it one element"
 
     with pytest.raises(ConfigurationError) as refusal:
         dataclasses.replace(valid, **{field: with_bad_number(value, bad)})
