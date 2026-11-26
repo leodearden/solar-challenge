@@ -47,34 +47,59 @@ class DispatchDecision:
             the grid (e.g. during cheap-rate periods). May co-exist with
             charge_kw > 0 (both are charging), but is mutually exclusive with
             discharge_kw > 0.
+        export_kw: Requested battery power in kW beyond the home's shortfall, sent to
+            the grid, finite and at least 0 (default 0.0). May co-exist with
+            discharge_kw > 0 (both are discharging), but, as discharge_kw is, is
+            mutually exclusive with charge_kw > 0 and grid_charge_kw > 0.
 
     Raises:
         ValueError: If a power is negative, NaN or infinite, naming it and its value; or if
-            discharge_kw > 0 alongside charge_kw > 0 or grid_charge_kw > 0.
+            discharge_kw > 0 or export_kw > 0 alongside charge_kw > 0 or grid_charge_kw > 0.
     """
 
     charge_kw: float
     discharge_kw: float
     grid_charge_kw: float = 0.0
+    export_kw: float = 0.0
 
     def __post_init__(self) -> None:
-        """Refuse a power NON_NEGATIVE does not admit, then a discharge alongside either charge."""
+        """Refuse a power NON_NEGATIVE does not admit, then a discharging power alongside a charging one."""
         for name in _DECISION_POWERS:
             if not NON_NEGATIVE.admits(value := getattr(self, name)):
                 raise ValueError(f"{name} must be non-negative and finite, got {value!r} kW")
-        if self.charge_kw > 0 and self.discharge_kw > 0:
-            raise ValueError(
-                "Cannot charge and discharge simultaneously: "
-                f"charge={self.charge_kw} kW, discharge={self.discharge_kw} kW"
-            )
-        if self.grid_charge_kw > 0 and self.discharge_kw > 0:
-            raise ValueError(
-                "Cannot grid-charge and discharge simultaneously: "
-                f"grid_charge={self.grid_charge_kw} kW, discharge={self.discharge_kw} kW"
-            )
+        for charging, discharging in _EXCLUSIVE_POWERS:
+            charging_kw, discharging_kw = getattr(self, charging.field), getattr(self, discharging.field)
+            if charging_kw > 0 and discharging_kw > 0:
+                raise ValueError(
+                    f"Cannot {charging.verb} and {discharging.verb} simultaneously: "
+                    f"{charging.label}={charging_kw} kW, {discharging.label}={discharging_kw} kW"
+                )
 
 
 _DECISION_POWERS: Final = tuple(power.name for power in fields(DispatchDecision))
+
+
+@dataclass(frozen=True)
+class _DecisionPower:
+    """A DispatchDecision power as its exclusivity refusal names it: its field, the verb for what it asks, and its label."""
+
+    field: str
+    verb: str
+    label: str
+
+
+_CHARGE: Final = _DecisionPower("charge_kw", "charge", "charge")
+_GRID_CHARGE: Final = _DecisionPower("grid_charge_kw", "grid-charge", "grid_charge")
+_DISCHARGE: Final = _DecisionPower("discharge_kw", "discharge", "discharge")
+_EXPORT: Final = _DecisionPower("export_kw", "export", "export")
+
+_EXCLUSIVE_POWERS: Final = (
+    (_CHARGE, _DISCHARGE),
+    (_GRID_CHARGE, _DISCHARGE),
+    (_CHARGE, _EXPORT),
+    (_GRID_CHARGE, _EXPORT),
+)
+"""The (charging, discharging) pairs of DispatchDecision powers that may not both be above 0, in the order it refuses them."""
 
 
 @dataclass(frozen=True)

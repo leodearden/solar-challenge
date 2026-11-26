@@ -94,7 +94,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "HomesDone": "_CallableGenericAlias",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": "()",
-    "DispatchDecision": "dataclass[eq, frozen, match_args] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0) -> None",
+    "DispatchDecision": "dataclass[eq, frozen, match_args] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0, export_kw: float = 0.0) -> None",
     "GridChargeContext": "dataclass[eq, frozen, match_args] (current_rate: float, peak_rate: float, is_cheap_period: bool, target_soc_kwh: float, max_charge_kw: float, round_trip_efficiency: float, charge_efficiency: float, useful_charge_ceiling_kwh: float | None = None) -> None",
     "compute_grid_charge_power_kw": "(ctx: GridChargeContext, *, battery_soc_kwh: float, pv_charge_power_kw: float, timestep_minutes: float) -> float",
     "SelfConsumptionStrategy": "()",
