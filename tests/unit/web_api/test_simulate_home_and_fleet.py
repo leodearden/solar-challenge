@@ -21,7 +21,7 @@ from solar_challenge.scenario_blocks import (
     parse_heat_pump_block,
     parse_location_block,
 )
-from solar_challenge.web.request_boundary import read_location, require_encodable_text
+from solar_challenge.web.request_boundary import read_boolean, read_location, require_encodable_text
 from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
 from solar_challenge.web.simulation_params import HOME_CONFIG_KEYS
 from tests._heat_pump_block_refusals import UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS
@@ -338,6 +338,26 @@ class TestSimulateHomeAPI:
             require_encodable_text(chr(0xD800), "name")
 
         resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "name": chr(0xD800)})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_home_job.assert_not_called()
+
+    def test_a_name_that_is_not_a_json_string_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "name": ["a"]})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": "name must be a JSON string, got list"})
+        mock_job_manager.submit_home_job.assert_not_called()
+
+    def test_a_stochastic_that_is_not_a_json_boolean_returns_400_naming_stochastic_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """The text "false" is refused, never read by its truthiness as the stochastic model switched on."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read_boolean("false", "stochastic")
+
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "stochastic": "false"})
 
         assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
         mock_job_manager.submit_home_job.assert_not_called()
