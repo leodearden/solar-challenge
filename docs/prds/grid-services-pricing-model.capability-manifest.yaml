@@ -264,13 +264,13 @@ tasks:
           paths: ["src/solar_challenge/"]
           expect: absent
       - name: "constructor-applies-the-one-rule"
-        binding: "producer: α (grid_services_model_of) upstream; β calls it from __post_init__"
+        binding: "producer: α (grid_services_model_of) upstream; β calls it from __post_init__. Retired on purpose by successor task 804 (ε, 040ad1a4), which deleted grid_services_model_of: FinanceConfig.grid_services_model holds one GridServicesModel value, so no inconsistent triple can be built; per Leo's 2026-11-24 ruling (sitting item 14) the check now asserts the transitional rule is gone everywhere in src"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "grid_services_model_of\\(self\\)"
-          paths: ["src/solar_challenge/finance.py"]
-          expect: present
+          pattern: "grid_services_model_of"
+          paths: ["src/solar_challenge"]
+          expect: absent
       - name: "projection-guard-block-deleted"
         binding: "grep: 'Fail-fast: validate grid_services_model prerequisites' in project_multi_year on main"
         verdict: PASS
