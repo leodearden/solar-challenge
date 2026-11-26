@@ -93,7 +93,6 @@ __all__: list[str] = [
     "simulate_pv_output",
     "create_model_chain",
     "create_pv_system",
-    "apply_degradation",
     "calculate_degradation_factor",
     "interpolate_to_minute_resolution",
     # --- weather (weather.py) ---
@@ -192,7 +191,6 @@ _SYMBOL_MODULE: dict[str, str] = {
     "simulate_pv_output": "pv",
     "create_model_chain": "pv",
     "create_pv_system": "pv",
-    "apply_degradation": "pv",
     "calculate_degradation_factor": "pv",
     "interpolate_to_minute_resolution": "pv",
     # weather
@@ -357,7 +355,6 @@ if TYPE_CHECKING:
     from solar_challenge.pv import simulate_pv_output as simulate_pv_output
     from solar_challenge.pv import create_model_chain as create_model_chain
     from solar_challenge.pv import create_pv_system as create_pv_system
-    from solar_challenge.pv import apply_degradation as apply_degradation
     from solar_challenge.pv import calculate_degradation_factor as calculate_degradation_factor
     from solar_challenge.pv import interpolate_to_minute_resolution as interpolate_to_minute_resolution
     # weather
