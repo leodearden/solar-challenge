@@ -16,7 +16,15 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.heat_pump import HeatPumpConfig
-from solar_challenge.scenario_knobs import ALIASES, KNOBS, Knob, is_knob_name, knob_named, names_with_aliases
+from solar_challenge.scenario_knobs import (
+    ALIASES,
+    KNOBS,
+    Knob,
+    is_knob_name,
+    knob_listing,
+    knob_named,
+    names_with_aliases,
+)
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from tests._finance_builders import make_home_config, make_period, make_scenario_and_finance
 from tests._modules_loaded_by_importing import (
@@ -259,6 +267,13 @@ class TestNames:
         listing = names_with_aliases([KNOBS["pv_capacity_kw"], knob_named("seg")])
 
         assert listing == "pv_capacity_kw, seg_tariff_pence_per_kwh (seg)"
+
+    def test_the_knob_listing_names_every_knob_with_its_aliases_after_its_framing(self) -> None:
+        """knob_listing frames the registry's every canonical name and alias, in registry order, as a clause a sentence can end with."""
+        listing = knob_listing()
+
+        assert listing.startswith("the knobs, each with its aliases: pv_capacity_kw, inverter_capacity_kw")
+        assert [name for name in (*KNOBS, *ALIASES) if name not in listing] == []
 
     @pytest.mark.parametrize("name", [*KNOBS, *ALIASES], ids=str)
     def test_is_knob_name_holds_for_every_canonical_name_and_every_alias(self, name: str) -> None:

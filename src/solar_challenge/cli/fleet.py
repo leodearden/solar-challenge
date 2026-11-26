@@ -51,7 +51,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec, swept_parameter_path
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.scenario_knobs import KNOBS, Knob, is_knob_name, knob_named, names_with_aliases
+from solar_challenge.scenario_knobs import Knob, is_knob_name, knob_listing, knob_named
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -210,8 +210,7 @@ def sweep(
             "--param",
             help=(
                 "What the sweep varies: a knob, by its name or an alias, else NAME, the ${NAME} "
-                "placeholders of the document; a name with both readings is refused.  "
-                "The knobs, each with its aliases: " + names_with_aliases(KNOBS.values())
+                "placeholders of the document; a name with both readings is refused; " + knob_listing()
             ),
         ),
     ] = None,
@@ -438,8 +437,7 @@ def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
         return _VariableAxis(name)
     held = f"its variables: {', '.join(repr(each) for each in variables)}" if variables else "it holds no variables"
     raise ConfigurationError(
-        f"--param {name!r} names no knob and no variable of the document; {held}; "
-        f"the knobs, each with its aliases: {names_with_aliases(KNOBS.values())}"
+        f"--param {name!r} names no knob and no variable of the document; {held}; {knob_listing()}"
     )
 
 
