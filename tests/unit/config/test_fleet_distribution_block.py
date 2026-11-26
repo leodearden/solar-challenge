@@ -9,14 +9,17 @@ from typing import Any
 
 import numpy as np
 import pytest
+import yaml
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
+    SWEEP_PLACEMENTS,
     ComponentDistribution,
     FleetDistributionConfig,
     NormalDistribution,
     ProportionalDistribution,
     ShuffledPoolDistribution,
+    SweepSpec,
     UniformDistribution,
     WeightedDiscreteDistribution,
     editor_types,
@@ -26,6 +29,13 @@ from solar_challenge.fleet_distribution import (
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import FieldKind
+from tests._misplaced_sweeps import (
+    MISPLACED_SWEEP_FIELDS,
+    SHIPPED_SWEEP,
+    misplaced_sweep_refusal,
+    sweep_moved_to,
+    two_sweeps_refusal,
+)
 from tests._non_booleans import NON_BOOLEANS
 from tests._proportional_source_refusals import proportional_source_refusal
 
@@ -1151,6 +1161,122 @@ class TestAFleetReadAtABlockPathNamesEachKeyItRefusesUnderIt:
             parse_fleet_distribution_config({"n_homes": 2, **sections}, block_path=_SCENARIO_FLEET_PATH)
 
         assert str(refused.value) == refusal
+
+
+#: A sweep multiplier as a fleet file gives it: three points from 0.5 to 2.0.
+_SWEEP_MULTIPLIER: dict[str, Any] = {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}
+
+
+def _swept_proportional_to(source: str) -> dict[str, Any]:
+    """A proportional_to spec scaling *source* by _SWEEP_MULTIPLIER."""
+    return {"type": "proportional_to", "source": source, "multiplier": _SWEEP_MULTIPLIER}
+
+
+def _code_built_sweep(source: str) -> ProportionalDistribution:
+    """The proportional_to _swept_proportional_to gives, as code builds it."""
+    return ProportionalDistribution(source, SweepSpec(0.5, 2.0, 3))
+
+
+def _refusal_text(build: Callable[[], object]) -> str:
+    """The text of the ConfigurationError *build* raises."""
+    with pytest.raises(ConfigurationError) as refused:
+        build()
+    return str(refused.value)
+
+
+class TestASweepMultiplierSitsAtOneSweepPlacement:
+    """A fleet holds at most one sweep multiplier, and only at a field of SWEEP_PLACEMENTS (F7); a misplaced or second one is refused as the fleet is read or built, naming each sweep's path."""
+
+    def test_the_sweep_placements_are_the_battery_capacity_alone(self) -> None:
+        assert SWEEP_PLACEMENTS == {("battery", "capacity_kwh")}
+        parse_fleet_distribution_config(yaml.safe_load(SHIPPED_SWEEP.read_text())["fleet_distribution"])
+
+    @pytest.mark.parametrize(("component", "key", "block"), MISPLACED_SWEEP_FIELDS)
+    def test_a_sweep_moved_to_another_number_or_count_field_is_refused_at_read_naming_its_path_and_the_placement(
+        self, component: str, key: str, block: dict[str, object]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            parse_fleet_distribution_config(sweep_moved_to(component, key, **block)["fleet_distribution"])
+
+        assert str(refused.value) == misplaced_sweep_refusal(f"fleet_distribution.{component}.{key}")
+
+    def test_a_code_built_fleet_with_two_sweep_multipliers_is_refused_naming_both_paths(self) -> None:
+        expected = two_sweeps_refusal(
+            "fleet_distribution",
+            ["fleet_distribution.battery.capacity_kwh", "fleet_distribution.battery.max_charge_kw"],
+        )
+
+        construction_refusal = _refusal_text(
+            lambda: FleetDistributionConfig(
+                n_homes=2,
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
+                battery=ComponentDistribution(
+                    {
+                        "capacity_kwh": _code_built_sweep("pv.capacity_kw"),
+                        "max_charge_kw": _code_built_sweep("pv.capacity_kw"),
+                    }
+                ),
+            )
+        )
+        parser_refusal = _refusal_text(
+            lambda: _parsed_fleet_distribution(
+                2,
+                pv={"capacity_kw": 4.0},
+                battery={
+                    "capacity_kwh": _swept_proportional_to("pv.capacity_kw"),
+                    "max_charge_kw": _swept_proportional_to("pv.capacity_kw"),
+                },
+            )
+        )
+
+        assert (construction_refusal, parser_refusal) == (expected, expected)
+
+    def test_a_code_built_fleet_sweeping_outside_the_placements_is_refused_as_a_parsed_one_is(self) -> None:
+        construction_refusal = _refusal_text(
+            lambda: FleetDistributionConfig(
+                n_homes=2,
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
+                battery=ComponentDistribution(
+                    {"capacity_kwh": 5.0, "max_charge_kw": _code_built_sweep("pv.capacity_kw")}
+                ),
+            )
+        )
+        parser_refusal = _refusal_text(
+            lambda: _parsed_fleet_distribution(
+                2,
+                pv={"capacity_kw": 4.0},
+                battery={"capacity_kwh": 5.0, "max_charge_kw": _swept_proportional_to("pv.capacity_kw")},
+            )
+        )
+
+        expected = misplaced_sweep_refusal("fleet_distribution.battery.max_charge_kw")
+        assert (construction_refusal, parser_refusal) == (expected, expected)
+
+    def test_a_fleet_changed_through_replace_to_sweep_elsewhere_is_refused(self) -> None:
+        fleet = _parsed_fleet_distribution(2, pv={"capacity_kw": 4.0}, battery={"capacity_kwh": 5.0})
+
+        refused = _refusal_text(
+            lambda: dataclasses.replace(
+                fleet,
+                battery=ComponentDistribution(
+                    {"capacity_kwh": 5.0, "max_charge_kw": _code_built_sweep("pv.capacity_kw")}
+                ),
+            )
+        )
+
+        assert refused == misplaced_sweep_refusal("fleet_distribution.battery.max_charge_kw")
+
+    def test_a_misplaced_sweep_read_at_a_block_path_is_named_under_it(self) -> None:
+        refused = _refusal_text(
+            lambda: parse_fleet_distribution_config(
+                sweep_moved_to("battery", "max_charge_kw")["fleet_distribution"], block_path=_SCENARIO_FLEET_PATH
+            )
+        )
+
+        assert refused == misplaced_sweep_refusal(
+            f"{_SCENARIO_FLEET_PATH}.battery.max_charge_kw",
+            placement=f"{_SCENARIO_FLEET_PATH}.battery.capacity_kwh",
+        )
 
 
 class TestANullSettingReadsAsAbsent:

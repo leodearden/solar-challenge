@@ -12,11 +12,12 @@ import pytest
 import yaml
 
 from solar_challenge.config import (
-    YAML_SWEEP_PARAMETER,
     detect_fleet_sweep_spec,
     load_fleet_config,
     load_scenario,
+    load_scenarios,
     parse_fleet_config,
+    parse_scenario,
     parse_sweep_fleet_configs,
     parse_sweep_scenarios,
     sweep_point_fleet,
@@ -24,10 +25,11 @@ from solar_challenge.config import (
 from solar_challenge.dispatch import GridChargeConfig, SelfConsumptionStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig
-from solar_challenge.fleet_distribution import SweepSpec
+from solar_challenge.fleet_distribution import FleetFieldPath, SweepSpec, swept_parameter_path
 from solar_challenge.pv import calculate_degradation_factor
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+from tests._misplaced_sweeps import misplaced_sweep_refusal, sweep_moved_to
 from tests._repository_paths import SCENARIOS_DIR
 from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
@@ -819,11 +821,15 @@ class TestParseSweepFleetConfigs:
 
         fleets = parse_sweep_fleet_configs(document)
 
+        swept_parameter = swept_parameter_path(FleetFieldPath("battery", "capacity_kwh"))
         assert fleets == [
-            (value, sweep_point_fleet(YAML_SWEEP_PARAMETER, value, scenario))
+            (value, sweep_point_fleet(swept_parameter, value, scenario))
             for value, scenario in parse_sweep_scenarios(document)
         ]
-        assert [fleet.name for _, fleet in fleets] == ["multiplier=1.2500", "multiplier=2.5000"]
+        assert [fleet.name for _, fleet in fleets] == [
+            "battery.capacity_kwh.multiplier=1.2500",
+            "battery.capacity_kwh.multiplier=2.5000",
+        ]
 
     @pytest.mark.parametrize(
         ("document", "refusal"),
@@ -886,8 +892,11 @@ class TestParseSweepFleetConfigs:
             tariff=_ECONOMY_7,
         )
 
-        sweep_spec = detect_fleet_sweep_spec(document)
+        found = detect_fleet_sweep_spec(document)
 
+        assert found is not None
+        placement, sweep_spec = found
+        assert placement == ("battery", "capacity_kwh")
         assert sweep_spec == SweepSpec(min=0.5, max=2.0, steps=3)
         assert tuple(value for value, _ in parse_sweep_fleet_configs(document)) == sweep_spec.get_values()
 
@@ -904,6 +913,96 @@ class TestParseSweepFleetConfigs:
         assert detect_fleet_sweep_spec(document) is None
         with pytest.raises(ConfigurationError):
             parse_sweep_fleet_configs(document)
+
+
+def _written_to(tmp_path: Path, document: Mapping[str, Any]) -> Path:
+    """*document* written as a YAML file under *tmp_path*."""
+    path = tmp_path / "fleet.yaml"
+    path.write_text(yaml.safe_dump(dict(document)))
+    return path
+
+
+# Each reader of one fleet, given the document and a directory to write it to as a file.
+_ONE_FLEET_READERS = (
+    pytest.param(lambda document, tmp_path: parse_fleet_config(document), id="parse_fleet_config"),
+    pytest.param(lambda document, tmp_path: parse_scenario(document), id="parse_scenario"),
+    pytest.param(lambda document, tmp_path: load_fleet_config(_written_to(tmp_path, document)), id="load_fleet_config"),
+    pytest.param(lambda document, tmp_path: load_scenario(_written_to(tmp_path, document)), id="load_scenario"),
+)
+
+
+class TestASweepDocumentIsReadOnlyAsASweep:
+    """A document whose fleet sweeps is read only by the sweep readers: a one-fleet reader refuses it, naming the sweep's placement and `fleet sweep`, and every reader refuses a sweep off battery.capacity_kwh."""
+
+    @pytest.mark.parametrize("read", _ONE_FLEET_READERS)
+    def test_a_one_fleet_reader_refuses_a_sweep_document_naming_its_placement_and_fleet_sweep(
+        self, tmp_path: Path, read: Callable[[Mapping[str, Any], Path], object]
+    ) -> None:
+        document = _fleet_file(
+            _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}), tariff=_ECONOMY_7
+        )
+
+        with pytest.raises(ConfigurationError) as refused:
+            read(document, tmp_path)
+
+        assert str(refused.value) == (
+            "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points, "
+            "so the file defines one fleet per point; run it with 'fleet sweep'"
+        )
+
+    @pytest.mark.parametrize(
+        ("read", "scenario_path"),
+        [
+            pytest.param(
+                lambda scenario, tmp_path: parse_fleet_config({"scenario": scenario}),
+                "scenario",
+                id="parse_fleet_config-scenario-block",
+            ),
+            pytest.param(
+                lambda scenario, tmp_path: load_scenario(_written_to(tmp_path, {"scenario": scenario})),
+                "scenario",
+                id="load_scenario-scenario-block",
+            ),
+            pytest.param(
+                lambda scenario, tmp_path: load_scenarios(_written_to(tmp_path, {"scenarios": [scenario]})),
+                "scenarios[0]",
+                id="load_scenarios-scenarios-entry",
+            ),
+        ],
+    )
+    def test_a_nested_sweep_is_refused_saying_fleet_sweep_reads_the_scenario_as_a_file_of_its_own(
+        self, tmp_path: Path, read: Callable[[Mapping[str, Any], Path], object], scenario_path: str
+    ) -> None:
+        scenario = _fleet_file(
+            _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}), tariff=_ECONOMY_7
+        )
+
+        with pytest.raises(ConfigurationError) as refused:
+            read(scenario, tmp_path)
+
+        assert str(refused.value) == (
+            f"{scenario_path}.fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points, "
+            "but only a bare scenario document's top-level fleet_distribution sweeps: "
+            "give the scenario a file of its own, unwrapped, and run that with 'fleet sweep'"
+        )
+        assert len(parse_sweep_fleet_configs(scenario)) == 3
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(parse_fleet_config, id="parse_fleet_config"),
+            pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
+            pytest.param(parse_sweep_scenarios, id="parse_sweep_scenarios"),
+            pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+        ],
+    )
+    def test_each_document_reader_refuses_a_misplaced_sweep_naming_its_path_and_the_placement(
+        self, read: Callable[[object], object]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            read(sweep_moved_to("battery", "max_charge_kw"))
+
+        assert str(refused.value) == misplaced_sweep_refusal("fleet_distribution.battery.max_charge_kw")
 
 
 # Each document-level reader of a fleet_distribution file, with the battery capacity_kwh of

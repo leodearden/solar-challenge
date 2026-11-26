@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """SweepSpec, the one sweep value generator, and its SweepMode, how a sweep spaces its points from min to max."""
 
+import dataclasses
 import math
 import sys
 from typing import Any
@@ -10,10 +11,14 @@ import yaml
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
+    FleetFieldPath,
+    ProportionalDistribution,
     SweepMode,
     SweepSpec,
     detect_sweep_spec,
+    expand_sweep_configs,
     parse_fleet_distribution_config,
+    swept_parameter_path,
 )
 from tests._names_as_a_word import names_as_a_word
 from tests._repository_paths import SCENARIOS_DIR
@@ -90,23 +95,73 @@ class TestTheYamlReader:
     """A ``type: sweep`` multiplier is built as a SweepSpec from the keys it gives, so a sweep naming no mode takes the field's default."""
 
     def test_a_sweep_naming_no_mode_is_geometric(self) -> None:
-        sweep = detect_sweep_spec(parse_fleet_distribution_config(_swept_fleet(min=0.5, max=2.0, steps=3)))
+        found = detect_sweep_spec(parse_fleet_distribution_config(_swept_fleet(min=0.5, max=2.0, steps=3)))
 
+        assert found is not None
+        placement, sweep = found
+        assert placement == ("battery", "capacity_kwh")
         assert sweep == SweepSpec(min=0.5, max=2.0, steps=3)
-        assert sweep is not None and sweep.mode is SweepMode.GEOMETRIC
+        assert sweep.mode is SweepMode.GEOMETRIC
 
     def test_a_sweep_naming_linear_is_linear(self) -> None:
-        sweep = detect_sweep_spec(
+        found = detect_sweep_spec(
             parse_fleet_distribution_config(_swept_fleet(min=0.5, max=2.0, steps=3, mode="linear"))
         )
 
-        assert sweep is not None and sweep.mode is SweepMode.LINEAR
+        assert found is not None
+        placement, sweep = found
+        assert placement == ("battery", "capacity_kwh")
+        assert sweep.mode is SweepMode.LINEAR
 
     def test_a_sweep_naming_no_mode_it_knows_is_refused_naming_the_multiplier_and_the_value(self) -> None:
         with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_distribution_config(_swept_fleet(min=0.5, max=2.0, steps=3, mode="log"))
 
         assert _words_not_named(str(refusal.value), _MULTIPLIER_PATH, "mode", "'log'") == []
+
+
+#: A two-home fleet_distribution: block holding no sweep.
+_FLEET_WITHOUT_A_SWEEP: dict[str, Any] = {"n_homes": 2, "pv": {"capacity_kw": 4.0}}
+
+
+class TestTheSweepPlacement:
+    """A fleet's one sweep is found with its placement, and each point of its expansion replaces that sweep's multiplier alone."""
+
+    def test_detect_finds_the_one_sweep_with_its_placement(self) -> None:
+        swept = parse_fleet_distribution_config(_swept_fleet(min=0.5, max=2.0, steps=3))
+
+        assert detect_sweep_spec(swept) == (("battery", "capacity_kwh"), SweepSpec(0.5, 2.0, 3))
+        assert detect_sweep_spec(parse_fleet_distribution_config(_FLEET_WITHOUT_A_SWEEP)) is None
+
+    def test_each_point_of_the_expansion_replaces_only_the_sweeps_multiplier(self) -> None:
+        block = _swept_fleet(min=0.5, max=2.0, steps=3)
+        block["battery"]["max_charge_kw"] = {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 0.5}
+        swept = parse_fleet_distribution_config(block)
+        assert swept.battery is not None
+        sweep_spec = swept.battery.draws["capacity_kwh"]
+
+        points = list(expand_sweep_configs(swept))
+
+        assert [value for value, _ in points] == list(SweepSpec(0.5, 2.0, 3).get_values())
+        for value, point in points:
+            assert point.battery is not None
+            assert point.battery.draws["capacity_kwh"] == ProportionalDistribution("pv.capacity_kw", value)
+            sweep_restored = dataclasses.replace(
+                point.battery, draws={**point.battery.draws, "capacity_kwh": sweep_spec}
+            )
+            assert dataclasses.replace(point, battery=sweep_restored) == swept
+            assert detect_sweep_spec(point) is None
+
+    def test_the_swept_parameter_of_a_placement_is_its_proportional_tos_multiplier(self) -> None:
+        assert swept_parameter_path(FleetFieldPath("battery", "capacity_kwh")) == "battery.capacity_kwh.multiplier"
+
+    def test_a_fleet_with_no_sweep_is_refused_by_the_expansion_naming_the_placements(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            list(expand_sweep_configs(parse_fleet_distribution_config(_FLEET_WITHOUT_A_SWEEP)))
+
+        assert str(refusal.value) == (
+            "fleet_distribution: holds no sweep: give battery.capacity_kwh a proportional_to whose multiplier has type: sweep"
+        )
 
 
 class TestThePoints:

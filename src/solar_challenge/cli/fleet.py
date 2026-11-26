@@ -30,7 +30,6 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
-    YAML_SWEEP_PARAMETER,
     ScenarioConfig,
     detect_fleet_sweep_spec,
     fleet_of,
@@ -48,7 +47,7 @@ from solar_challenge.fleet import (
     HomesDone,
     calculate_fleet_summary,
 )
-from solar_challenge.fleet_distribution import SweepMode, SweepSpec
+from solar_challenge.fleet_distribution import SweepMode, SweepSpec, swept_parameter_path
 from solar_challenge.output import compute_community_metrics, generate_community_report
 
 app = typer.Typer(help="Fleet simulation commands")
@@ -365,14 +364,15 @@ def _param_sweep(
 def _yaml_sweep(
     raw_config: Mapping[str, Any],
 ) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
-    """The name of the sweep, YAML_SWEEP_PARAMETER, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the scenario that sweep builds for it."""
-    sweep_spec = detect_fleet_sweep_spec(raw_config)
-    if sweep_spec is None:
+    """The name of the sweep, the swept_parameter_path of its field, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the scenario that sweep builds for it."""
+    found = detect_fleet_sweep_spec(raw_config)
+    if found is None:
         raise ConfigurationError(
             "No sweep spec found in config. "
             "Use --param for CLI sweep or add type: sweep to multiplier."
         )
-    return YAML_SWEEP_PARAMETER, sweep_spec, parse_sweep_scenarios(raw_config)
+    placement, sweep_spec = found
+    return swept_parameter_path(placement), sweep_spec, parse_sweep_scenarios(raw_config)
 
 
 def _sweep_bounds(

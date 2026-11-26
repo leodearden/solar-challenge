@@ -34,11 +34,13 @@ from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.fleet_distribution import (
     FleetDistributionConfig,
+    FleetFieldPath,
     SweepSpec,
     detect_sweep_spec,
     expand_sweep_configs,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
+    swept_parameter_path,
 )
 from solar_challenge.gridservices import GridServicesBand
 from solar_challenge.home import HomeConfig
@@ -335,9 +337,27 @@ def _listed_homes(blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -
     )
 
 
+#: The path of the one fleet_distribution: block a sweep is read from, a bare scenario document's,
+#: which the sweep readers and so 'fleet sweep' read.
+_SWEEP_BLOCK_PATH = "fleet_distribution"
+
+
 def _generated_homes(blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -> ScenarioConfig:
-    """The fleet scenario of the homes the fleet_distribution: block at *block_path* generates."""
-    return blocks.scenario(homes=blocks.homes_generated_by(parse_fleet_distribution_config(data, block_path=block_path)))
+    """The fleet scenario of the homes the fleet_distribution: block at *block_path* generates, refusing a block that sweeps, which defines one fleet per point, naming the sweep's field and 'fleet sweep', which reads only the block at _SWEEP_BLOCK_PATH."""
+    distribution = parse_fleet_distribution_config(data, block_path=block_path)
+    found = detect_sweep_spec(distribution)
+    if found is not None:
+        placement, sweep = found
+        where_it_runs = (
+            "so the file defines one fleet per point; run it with 'fleet sweep'"
+            if block_path == _SWEEP_BLOCK_PATH
+            else "but only a bare scenario document's top-level fleet_distribution sweeps: "
+            "give the scenario a file of its own, unwrapped, and run that with 'fleet sweep'"
+        )
+        raise refusal(
+            child_path(block_path, placement.dotted), f"a sweep multiplier of {sweep.steps} points, {where_it_runs}"
+        )
+    return blocks.scenario(homes=blocks.homes_generated_by(distribution))
 
 
 class _HomesSourceReader(Protocol):
@@ -453,7 +473,11 @@ def parse_scenario(document: object, *, block_path: str = "") -> ScenarioConfig:
     Raises:
         ConfigurationError: naming the block's path: for a retired key, naming what replaces it,
             then a key no scenario reads; then for the first block, in that order, its reader
-            refuses; then for a scenario setting no homes source or more than one.
+            refuses; then for a scenario setting no homes source or more than one; and for a
+            fleet_distribution: block that sweeps, naming the sweep's field and 'fleet sweep',
+            which runs one fleet per sweep point of a bare scenario document's
+            fleet_distribution: block, and so, for a block at any other path, saying to give
+            the scenario a file of its own.
     """
     scenario, blocks = _read_scenario_level_blocks(document, block_path=block_path)
     source = _homes_source(scenario, block_path=block_path)
@@ -776,7 +800,8 @@ def parse_fleet_config(document: object) -> FleetConfig:
     """The fleet of the one scenario *document*, already loaded or variable-substituted, holds: its simulated homes, of any homes source, named by its name.
 
     Raises:
-        ConfigurationError: as load_scenario refuses the same document.
+        ConfigurationError: as load_scenario refuses the same document, a fleet_distribution:
+            block that sweeps included, naming the sweep's field and 'fleet sweep'.
     """
     return fleet_of(_one_scenario(document))
 
@@ -802,15 +827,11 @@ def _read_fleet_distribution_scenario(document: object) -> tuple[_ScenarioLevelB
     scenario, blocks = _read_scenario_level_blocks(document, block_path="")
     require_held_keys("", scenario, ["fleet_distribution"])
     _refuse_unless_one_homes_source(scenario, block_path="")
-    return blocks, parse_fleet_distribution_config(scenario["fleet_distribution"])
+    return blocks, parse_fleet_distribution_config(scenario["fleet_distribution"], block_path=_SWEEP_BLOCK_PATH)
 
 
-YAML_SWEEP_PARAMETER = "multiplier"
-"""The name of the parameter a YAML-defined sweep sweeps: the battery.capacity_kwh multiplier its points are named after."""
-
-
-def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
-    """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds.
+def detect_fleet_sweep_spec(document: object) -> Optional[tuple[FleetFieldPath, SweepSpec]]:
+    """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds, with the field it sits at.
 
     A document holding a fleet_distribution: block is read as parse_sweep_fleet_configs reads
     it up to its sweep, its keys and scenario-level blocks before the block, so a file is
@@ -820,8 +841,8 @@ def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
         document: The fleet file's document, refused unless it is a mapping
 
     Returns:
-        The SweepSpec detect_sweep_spec finds in its fleet_distribution: block, None when
-        it has no such block or the block no sweep
+        The (placement, SweepSpec) detect_sweep_spec finds in its fleet_distribution: block,
+        None when it has no such block or the block no sweep
 
     Raises:
         ConfigurationError: If the document is not a mapping, or as parse_sweep_fleet_configs
@@ -834,13 +855,29 @@ def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
     return detect_sweep_spec(distribution)
 
 
+def _swept_scenarios(document: object) -> tuple[FleetFieldPath, list[tuple[float, ScenarioConfig]]]:
+    """The field the document's YAML-defined sweep sits at, and the scenario each of its points builds, with its sweep value, the document read once.
+
+    Raises:
+        ConfigurationError: as parse_sweep_scenarios refuses the document
+    """
+    blocks, distribution = _read_fleet_distribution_scenario(document)
+    points = [
+        (value, blocks.scenario(homes=blocks.homes_generated_by(point)))
+        for value, point in expand_sweep_configs(distribution)
+    ]
+    found = detect_sweep_spec(distribution)
+    assert found is not None, "expand_sweep_configs refuses a fleet holding no sweep"
+    return found[0], points
+
+
 def parse_sweep_scenarios(document: object) -> list[tuple[float, ScenarioConfig]]:
     """The scenario each point of the document's YAML-defined sweep builds, with its sweep value.
 
-    The document is a bare scenario whose homes source is a fleet_distribution: block whose
-    battery.capacity_kwh multiplier sweeps. Its scenario-level blocks (its name, location,
-    period, tariff, seg, finance and flex_band) are read once, as parse_scenario reads them, and
-    hold that point's generated homes.
+    The document is a bare scenario whose homes source is a fleet_distribution: block holding a
+    sweep multiplier. Its scenario-level blocks (its name, location, period, tariff, seg,
+    finance and flex_band) are read once, as parse_scenario reads them, and hold that point's
+    generated homes.
 
     Returns:
         (sweep value, the scenario holding that point's homes) for each sweep point, in sweep order
@@ -851,28 +888,24 @@ def parse_sweep_scenarios(document: object) -> list[tuple[float, ScenarioConfig]
             or another homes source beside it; if the block is not a mapping or holds no sweep,
             naming the block; or if configuration is invalid
     """
-    blocks, distribution = _read_fleet_distribution_scenario(document)
-    return [
-        (value, blocks.scenario(homes=blocks.homes_generated_by(point)))
-        for value, point in expand_sweep_configs(distribution)
-    ]
+    return _swept_scenarios(document)[1]
 
 
 def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig]]:
     """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
 
-    Each fleet is the sweep_point_fleet of the point's scenario, as parse_sweep_scenarios builds it.
+    Each fleet is the sweep_point_fleet of the point's scenario, as parse_sweep_scenarios builds
+    it, named '<placement>.multiplier=<value>' after the swept_parameter_path of the sweep's
+    field, e.g. 'battery.capacity_kwh.multiplier=0.1000'.
 
     Returns:
-        (sweep value, FleetConfig named after YAML_SWEEP_PARAMETER and it) for each sweep point, in sweep order
+        (sweep value, the point's FleetConfig) for each sweep point, in sweep order
 
     Raises:
         ConfigurationError: as parse_sweep_scenarios refuses the document
     """
-    return [
-        (value, sweep_point_fleet(YAML_SWEEP_PARAMETER, value, scenario))
-        for value, scenario in parse_sweep_scenarios(document)
-    ]
+    placement, points = _swept_scenarios(document)
+    return [(value, sweep_point_fleet(swept_parameter_path(placement), value, scenario)) for value, scenario in points]
 
 
 def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
