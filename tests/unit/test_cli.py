@@ -321,6 +321,29 @@ home:
         assert "home.[ghi, dni] [/b]" in rows
         assert "home.panels [3 items]" in rows
 
+    def test_config_show_help_does_not_claim_to_validate_the_scenario_grammar(self) -> None:
+        """show's help says it only reads the file's keys and points at `validate config` for validation."""
+        result = runner.invoke(app, ["config", "show", "--help"], env={"COLUMNS": "200"})
+
+        text = " ".join(result.stdout.replace("│", " ").split())
+        assert result.exit_code == 0
+        assert "does not check the keys against the scenario grammar" in text
+        assert "validate config" in text
+
+    def test_config_show_displays_a_file_holding_a_retired_key_that_validate_config_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """show only reads the file, so a retired home-level key is displayed with exit 0; validate config refuses the same file."""
+        monkeypatch.chdir(tmp_path)
+        Path("retired.yaml").write_text("home:\n  dispatch_strategy: tou_optimized\n  pv:\n    capacity_kw: 4.0\n")
+
+        shown = runner.invoke(app, ["config", "show", "retired.yaml"], catch_exceptions=False)
+        validated = runner.invoke(app, ["validate", "config", "retired.yaml"], catch_exceptions=False)
+
+        assert shown.exit_code == 0
+        assert "home.dispatch_strategy tou_optimized" in table_text(shown.stdout)
+        assert validated.exit_code != 0
+
 
 def _simulate_raising_a_plain_value_error(fleet_config: object, start: object, end: object) -> NoReturn:
     """A fleet simulator that raises a ValueError that is not a ConfigurationError, as a defect would."""

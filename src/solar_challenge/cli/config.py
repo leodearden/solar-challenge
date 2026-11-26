@@ -161,12 +161,13 @@ def show(
         ),
     ],
 ) -> None:
-    """Display a parsed configuration file.
+    """Display a configuration file and its keys.
 
-    Shows the configuration with syntax highlighting and validates
-    that it can be parsed correctly.
+    Shows the file with syntax highlighting and a summary of its keys as
+    YAML or JSON reads them, with ${VAR} placeholders substituted. It does
+    not check the keys against the scenario grammar: a file shown here may
+    still be refused by the run commands. Use `validate config` for that.
     """
-    # Load to validate
     config_data = load_config(config_file)
 
     # Read raw content for display
