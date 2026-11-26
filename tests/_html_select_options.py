@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The options a select element of a rendered HTML page offers: the text each one shows, keyed by the value it submits.
+"""The options the select elements of a rendered HTML page offer: the value each one submits and the text it shows.
 
 tests/_html_page.py lists a page's option values (element_attributes) and its texts
 (texts) apart, with nothing tying a value to its text; this reader pairs them, so a page
@@ -8,13 +8,14 @@ reads a text: character references decoded and whitespace collapsed.
 
 Usage::
 
-    from tests._html_select_options import option_texts
+    from tests._html_select_options import option_texts, options_of_each
 
     page = response.get_data(as_text=True)
     assert option_texts(page, {"x-model": "formData.location"}) == {
         "bristol": "Bristol, UK (51.45°N, 2.58°W)",
         "custom": "Custom coordinates...",
     }
+    assert options_of_each(page, {"x-model": "dist.type"})[0] == [("", "Fixed Value"), ("normal", "Normal")]
 """
 
 from collections.abc import Mapping
@@ -32,22 +33,14 @@ def option_texts(page: str, select: Mapping[str, str]) -> dict[str, str]:
     select carries the attributes, whose names are read in lower case; and, rather than
     keep only one text, when two of its options carry the same value.
     """
-    reader = _SelectReader()
-    reader.feed(page)
-    reader.close()
-    matching = [
-        options
-        for carried, options in reader.selects
-        if all(carried.get(name) == value for name, value in select.items())
-    ]
+    matching = options_of_each(page, select)
     if len(matching) != 1:
         raise ValueError(
             f"Expected exactly one select carrying {dict(select)!r}, its attribute names in"
             f" lower case; found {len(matching)}"
         )
     texts: dict[str, str] = {}
-    for attributes, data in matching[0]:
-        value, text = _value_and_text(attributes, data)
+    for value, text in matching[0]:
         if value in texts:
             raise ValueError(
                 f"Expected each option of the select to carry its own value; {value!r} is on"
@@ -55,6 +48,22 @@ def option_texts(page: str, select: Mapping[str, str]) -> dict[str, str]:
             )
         texts[value] = text
     return texts
+
+
+def options_of_each(page: str, select: Mapping[str, str]) -> list[list[tuple[str, str]]]:
+    """The options of each select element of *page* that carries every one of *select*'s attributes, each with exactly that value, in document order: each option as the value it submits and the text it shows, in document order.
+
+    An option with no value attribute submits its text. The attribute names are read in
+    lower case; a page with no such select reads [].
+    """
+    reader = _SelectReader()
+    reader.feed(page)
+    reader.close()
+    return [
+        [_value_and_text(attributes, data) for attributes, data in options]
+        for carried, options in reader.selects
+        if all(carried.get(name) == value for name, value in select.items())
+    ]
 
 
 def _value_and_text(attributes: Mapping[str, str | None], data: list[str]) -> tuple[str, str]:
