@@ -227,10 +227,6 @@ class TestDemoScenario:
         # Sanity: a clearly high-load importer exists
         assert max(loads) >= 4000.0, f"Expected importer with load ≥ 4000 kWh/yr, max={max(loads)}"
 
-    def test_community_config_present(self) -> None:
-        cfg = load_community_config(SCENARIO)
-        assert cfg is not None, "Expected a community: block in scenario YAML"
-
     def test_the_migrated_scenario_sets_no_sharing_mode_and_keeps_its_community(self) -> None:
         """The scenario's community holds the values it held while it set sharing_mode, so its community table is unchanged."""
         assert "sharing_mode" not in yaml.safe_load(SCENARIO.read_text())["community"]
@@ -243,12 +239,6 @@ class TestDemoScenario:
         assert cfg.billing == CommunityBillingConfig(
             tariff=TariffConfig.flat_rate(rate_per_kwh=0.30), seg_rate_pence_per_kwh=4.1
         )
-
-    def test_community_battery_spec_present(self) -> None:
-        cfg = load_community_config(SCENARIO)
-        assert cfg is not None
-        assert cfg.community_battery is not None
-        assert cfg.community_battery.capacity_kwh > 0
 
 
 @pytest.mark.usefixtures("bristol_june_tmy", "in_tmp_path")
