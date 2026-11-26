@@ -16,9 +16,14 @@ Covers, after the shared helpers:
 - B4: the flat model refuses an events configuration and prices the fleet
   differently from the events model.
 - B5: solve-still-holds + I4 rate-independence.
-- ε: the finance report and the CLI render the capacity-at-events line.
-- α′ (PRD §9 C13): the events table's reliability and displaced-self-use rows,
-  and finance run's mean-over-event-days income beside them.
+- ε: the finance report and the CLI render the Grid Services Income section.
+- α′ (PRD §9 C13): finance run's mean-over-event-days income beside the events
+  table's reliability and displaced-self-use rows, which
+  tests/unit/test_board_report_grid_services.py renders from given breakdowns.
+- B10, B11 (review-all S25 δ): finance run renders the income each mode's
+  projection booked at year 1 and year N beside this window's fleet, with no
+  flexibility band; and the flexibility-value block's grid-services row reads
+  the booked income.
 """
 from __future__ import annotations
 
@@ -32,17 +37,17 @@ import pytest
 import yaml
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.board_report import generate_finance_report
+from solar_challenge.board_report import GridServicesIncome, generate_finance_report
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.flex import resolve_flex_band
+from solar_challenge.flex import FLEX_VALUE_BANDS
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
     GRID_SERVICES_RATE_BANDS,
     EventWindow,
-    GridServicesAtEvents,
+    GridServicesBand,
     GridServicesEventsConfig,
     compute_grid_services_at_events,
 )
@@ -57,6 +62,7 @@ from solar_challenge.projection import (
 from tests._assumption_sections import make_assumption_section, sections_of
 from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
+from tests._markdown_tables import row_cells
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
 
@@ -587,16 +593,15 @@ def _synthetic_bill_distribution() -> BillDistribution:
 
 
 def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
-    """generate_finance_report with grid_services_at_events renders the event-derived line.
+    """generate_finance_report with an events GridServicesIncome renders the event-derived section.
 
     Builds a synthetic BillDistribution + a positive-spare FleetResults,
     computes the event figure, then asserts the rendered report contains:
-      - "Grid services (capacity-at-events)" label
+      - the "## Grid Services Income" section
       - the formatted annual £ (event-derived)
       - the per-window avail_kW value
 
-    The Optional[GridServicesAtEvents] param renders the line inside the existing
-    flex-value block.
+    The section renders without a flexibility band.
     """
     dist = _synthetic_bill_distribution()
 
@@ -612,18 +617,21 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
         "Synthetic in-window fleet must yield positive annual event income"
     )
 
-    # Call generate_finance_report with the grid_services_at_events param
+    batteries = [home.battery_config for home in homes if home.battery_config is not None]
     report = generate_finance_report(
         sections_of(make_assumption_section(bill=dist)),
         scenario_name="Epsilon-Events-Test",
-        flex_band=resolve_flex_band("central"),
-        flex_band_name="central",
-        grid_services_at_events=gse,
+        grid_services=GridServicesIncome(
+            pricing=events_cfg,
+            annual_income_gbp=gse.annual_income_gbp,
+            battery_homes=len(batteries),
+            battery_discharge_kw=sum(battery.max_discharge_kw for battery in batteries),
+            at_events=gse,
+        ),
     )
 
-    # The line must appear in the flex-value block
-    assert "Grid services (capacity-at-events)" in report, (
-        "Report must contain the 'Grid services (capacity-at-events)' label"
+    assert "## Grid Services Income" in report.splitlines(), (
+        "Report must contain the '## Grid Services Income' section"
     )
     # Formatted annual £ must appear (comma-separated, no decimals)
     expected_gbp_str = f"£{gse.annual_income_gbp:,.0f}"
@@ -649,12 +657,12 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     Invokes the CLI against the board scenario, answering every fleet simulation
     with an in-window synthetic FleetResults, and asserts:
       - exit_code == 0
-      - "Grid services (capacity-at-events)" line in output
+      - the "## Grid Services Income" section and its model line in output
       - a positive event-derived £ figure in output
       - the supersede inequality: event income ≠ flat_rate × Σ kW
 
-    The board YAML selects capacity_at_events and the CLI passes the computed
-    grid_services_at_events to generate_finance_report.
+    The board YAML selects capacity_at_events and the CLI passes the income its
+    pricing books to generate_finance_report.
     """
     # In-window FleetResults from the board homes
     scenario, finance = board_econ_scenario()
@@ -667,10 +675,9 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
         f"CLI exited {result.exit_code}. Output:\n{result.output}"
     )
 
-    # Main assertion: the capacity-at-events line must appear
-    assert "Grid services (capacity-at-events)" in result.output, (
-        f"Expected 'Grid services (capacity-at-events)' line in output.\n{result.output}"
-    )
+    lines = result.output.splitlines()
+    assert "## Grid Services Income" in lines, result.output
+    assert "Model: **capacity at events, central band, operational delivery baseline**" in lines, result.output
 
     # The rendered event-derived £ must be present (positive)
     assert "£" in result.output, "Output must contain a £ figure"
@@ -695,71 +702,6 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
 # ---------------------------------------------------------------------------
 # α′ — the events table's reliability and displaced-self-use rows (PRD §9 C13)
 # ---------------------------------------------------------------------------
-
-
-def _events_report(gse: GridServicesAtEvents) -> str:
-    return generate_finance_report(
-        sections_of(make_assumption_section(bill=_synthetic_bill_distribution())),
-        scenario_name="Alpha-Prime-Events-Test",
-        flex_band=resolve_flex_band("central"),
-        flex_band_name="central",
-        grid_services_at_events=gse,
-    )
-
-
-_PER_WINDOW_NOTE = "is one event window's figure"
-
-
-def test_the_events_table_renders_reliability_and_displacement_rows() -> None:
-    """One event window: its figures, and a note that the income is gross of the displaced self-use, which a home simulated without a tariff values at £0."""
-    report = _events_report(
-        GridServicesAtEvents(
-            annual_income_gbp=14.958,
-            per_window_avail_kw=(1.5,),
-            per_window_income_gbp=(14.958,),
-            per_window_avail_p50_kw=(2.0,),
-            per_window_avail_p90_kw=(1.0,),
-            per_window_displaced_self_use_kwh_per_event=(2.3,),
-            per_window_displaced_import_gbp_per_year=(8.1,),
-        )
-    )
-
-    lines = report.splitlines()
-    for row in (
-        "| Capacity on 50% of event days | 2.0 kW |",
-        "| Capacity on 90% of event days | 1.0 kW |",
-        "| Evening self-use displaced, per event | 2.3 kWh |",
-        "| Evening self-use displaced, value per year | £8 |",
-    ):
-        assert row in lines, report
-    assert "gross of the evening self-use an event displaces" in report, report
-    assert "£0 for a home simulated without one" in report, report
-    assert _PER_WINDOW_NOTE not in report, report
-
-
-def test_several_event_windows_show_no_per_window_figure_summed() -> None:
-    """Two windows: the 50%, 90% and per-event rows show —, since summed over windows they describe no set of event days; the value per year is the windows' total."""
-    report = _events_report(
-        GridServicesAtEvents(
-            annual_income_gbp=19.944,
-            per_window_avail_kw=(1.5, 0.5),
-            per_window_income_gbp=(14.958, 4.986),
-            per_window_avail_p50_kw=(2.0, 0.5),
-            per_window_avail_p90_kw=(1.0, 0.3),
-            per_window_displaced_self_use_kwh_per_event=(2.25, 0.75),
-            per_window_displaced_import_gbp_per_year=(8.1, 1.9),
-        )
-    )
-
-    lines = report.splitlines()
-    for row in (
-        "| Capacity on 50% of event days | — |",
-        "| Capacity on 90% of event days | — |",
-        "| Evening self-use displaced, per event | — |",
-        "| Evening self-use displaced, value per year | £10 |",
-    ):
-        assert row in lines, report
-    assert _PER_WINDOW_NOTE in report, report
 
 
 def test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement() -> None:
@@ -806,3 +748,114 @@ def test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_a
         f"| Evening self-use displaced, value per year | £{3 * n:,.0f} |",
     ):
         assert row in lines, result.output
+
+
+# ---------------------------------------------------------------------------
+# B10, B11 — the booked income renders with the economics; the flex row reads it
+# ---------------------------------------------------------------------------
+
+
+_TWO_JANUARY_WEEKDAYS = pd.date_range("2024-01-08", periods=2 * 24 * 60, freq="1min", tz="Europe/London")
+"""Monday 8 and Tuesday 9 January 2024, two winter-weekday event days, at one minute: the window simulate_home runs, so
+finance run's projection answers its age-0 fleet from the bill run's results (fleet.reusing refuses any other)."""
+
+_WINDOW_HEADING = "### This window's fleet, the same under every assumption"
+_BOOKED_HEADING = "### Booked by the projection (£ a year)"
+
+
+def _board_scenario_without_its_flex_band(tmp_path: Path) -> Path:
+    """A copy of the board scenario under *tmp_path* with its top-level flex_band deleted."""
+    document = yaml.safe_load(SCENARIO.read_text(encoding="utf-8"))
+    del document["flex_band"]
+    path = tmp_path / SCENARIO.name
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    return path
+
+
+def _soh_tracking_january_simulate(
+    answered: list[FleetResults], by_age: dict[int, FleetResults]
+) -> Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]:
+    """A simulate answering each home over _TWO_JANUARY_WEEKDAYS with its battery at 0.8 × capacity × its SOH.
+
+    It appends each answer to *answered*, in the order asked, and keys it in
+    *by_age* by the age of the fleet's PV.
+    """
+
+    def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        per_home = []
+        for home in fleet_config.homes:
+            battery = home.battery_config
+            assert battery is not None, home
+            soc_kwh = 0.8 * battery.capacity_kwh * battery.resolved_soh
+            per_home.append(_make_spare_battery_sim_results(hours=_TWO_JANUARY_WEEKDAYS, battery_soc_kwh=soc_kwh))
+        results = make_fleet_results_of(per_home, homes=fleet_config.homes)
+        answered.append(results)
+        by_age[int(fleet_config.homes[0].pv_config.system_age_years)] = results
+        return results
+
+    return simulate
+
+
+def test_b10_finance_run_renders_the_booked_grid_services_income_with_the_economics(tmp_path: Path) -> None:
+    """finance run --project --assumptions both on the board scenario without a flex band renders the Grid Services Income section.
+
+    Its model line names the pricing; each mode's booked year-1 and year-N
+    income is the pricing of the fleet that mode's projection simulated at
+    ages 0 and N − 1; this window's table is the bill run's breakdown.
+    """
+    path = _board_scenario_without_its_flex_band(tmp_path)
+    _scenario, finance = board_econ_scenario()
+    pricing = finance.grid_services_events
+    assert pricing is not None
+    answered: list[FleetResults] = []
+    by_age: dict[int, FleetResults] = {}
+
+    result = invoke_cli(
+        ["finance", "run", str(path), "--project", "--assumptions", "both", "--start", "2024-01-08", "--end", "2024-01-09"],
+        answering(_soh_tracking_january_simulate(answered, by_age)),
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "## Grid Services Income" in lines, result.output
+    assert "Model: **capacity at events, central band, operational delivery baseline**" in lines, result.output
+
+    breakdown = compute_grid_services_at_events(answered[0], pricing)
+    assert len(breakdown.per_window_avail_kw) == 1
+    for label, cell in (
+        ("Annual fleet income", f"£{breakdown.annual_income_gbp:,.0f}"),
+        ("Capacity on 50% of event days", f"{breakdown.per_window_avail_p50_kw[0]:.1f} kW"),
+        ("Capacity on 90% of event days", f"{breakdown.per_window_avail_p90_kw[0]:.1f} kW"),
+        ("Evening self-use displaced, per event", f"{breakdown.per_window_displaced_self_use_kwh_per_event[0]:.1f} kWh"),
+        ("Evening self-use displaced, value per year", f"£{sum(breakdown.per_window_displaced_import_gbp_per_year):,.0f}"),
+    ):
+        assert row_cells(result.output, _WINDOW_HEADING, label) == [cell], label
+    assert "gross of the evening self-use an event displaces" in result.output
+
+    last_year = finance.asset_life_years
+    year_1, year_n = pricing.annual_income_gbp(by_age[0]), pricing.annual_income_gbp(by_age[last_year - 1])
+    assert year_n < year_1
+    assert f"£{year_n:,.0f}" != f"£{year_1:,.0f}"
+    assert row_cells(result.output, _BOOKED_HEADING, "Year 1") == [f"£{year_1:,.0f}"] * 2
+    assert row_cells(result.output, _BOOKED_HEADING, f"Year {last_year}") == [f"£{year_n:,.0f}"] * 2
+    assert "Flexibility Value" not in result.output
+
+
+def test_b11_the_flex_blocks_grid_services_row_reads_the_booked_events_income() -> None:
+    """finance run --flex-band central on the board scenario: the grid-services row is the events income per battery home and per kW."""
+    scenario, finance = board_econ_scenario()
+    assert finance.grid_services_events is not None
+    fr = _synthetic_fleet_results_in_window(list(scenario.homes))
+    batteries = [home.battery_config for home in scenario.homes if home.battery_config is not None]
+    income = compute_grid_services_at_events(fr, finance.grid_services_events).annual_income_gbp
+    homes, kw = len(batteries), sum(battery.max_discharge_kw for battery in batteries)
+    assert income > 0.0
+
+    result = invoke_finance_run([str(SCENARIO), "--flex-band", "central"], fr)
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert f"| Grid services (booked) | £{income / homes:.0f} | £{income / kw:.1f}/kW |" in lines, result.output
+    time_shift = FLEX_VALUE_BANDS[GridServicesBand.CENTRAL].time_shift_gbp
+    assert f"| **Headline total** | **£{time_shift + income / homes:.0f}** | — |" in lines, result.output
+    assert "PRD §6" not in result.output

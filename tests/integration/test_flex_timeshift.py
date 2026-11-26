@@ -6,8 +6,10 @@ Proves:
     Economy-7 tariff at the Economy 7 preset's rates and window + grid_charging + dispatch tou_optimized.
 (b) G6 signal: zero-PV winter-day A/B (grid_charging ON vs OFF) → import_cost_gbp(ON) <
     import_cost_gbp(OFF) AND annualised delta ∈ [£100, £330].
-(c) Finance report: generate_finance_report gains optional flex_band block; default None
-    reproduces bit-identical output.
+(c) Finance report: generate_finance_report renders the flexibility-value block for
+    flex=FlexBlock(band); with no grid-services pricing its grid-services row is the
+    band's consulting figure, labelled not booked; with flex=None (the default) the
+    output is bit-identical and has no block.
 
 Every simulation is given a sunless winter day as its weather, so these tests run offline.
 """
@@ -19,11 +21,11 @@ import warnings
 
 import pandas as pd
 
-from solar_challenge.board_report import generate_finance_report
+from solar_challenge.board_report import FlexBlock, generate_finance_report
 from solar_challenge.config import load_config, load_fleet_config
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
-from solar_challenge.flex import resolve_flex_band
+from solar_challenge.gridservices import GridServicesBand
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.tariff import PRESET_RATES
 from tests._assumption_sections import make_assumption_section, sections_of
@@ -186,9 +188,10 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
 
 
 def test_finance_report_renders_flex_value_block() -> None:
-    """generate_finance_report with flex_band appends a Flexibility Value block.
+    """generate_finance_report with flex appends a Flexibility Value block.
 
-    Additive: default None → output bit-identical (no flex block).
+    Additive: default None → output bit-identical (no flex block).  With no
+    grid_services the grid-services row is the band's consulting figure.
     """
     # Build a minimal synthetic summary (mirrors tests/integration/test_finance_bill.py::_make_summary)
     sc_ratio = 2200.0 / 4000.0
@@ -219,22 +222,20 @@ def test_finance_report_renders_flex_value_block() -> None:
     )
     dist = bill_distribution([summary], finance)
 
-    # ---- Baseline: no flex_band → bit-identical output -----------------------
+    # ---- Baseline: no flex → bit-identical output ----------------------------
     baseline = generate_finance_report(sections_of(make_assumption_section(bill=dist)), scenario_name="Flex")
     assert "Flexibility Value" not in baseline, (
-        "Default (no flex_band) must NOT render the Flexibility Value block"
+        "Default (no flex) must NOT render the Flexibility Value block"
     )
 
-    # ---- With central flex_band: block must appear with expected figures ------
-    central = resolve_flex_band("central")
+    # ---- With the central band: block must appear with expected figures ------
     report = generate_finance_report(
         sections_of(make_assumption_section(bill=dist)),
         scenario_name="Flex",
-        flex_band=central,
-        flex_band_name="central",
+        flex=FlexBlock(GridServicesBand.CENTRAL),
     )
     assert "Flexibility Value" in report, (
-        "With flex_band=central, '## Flexibility Value' block must appear"
+        "With flex=FlexBlock(central), '## Flexibility Value' block must appear"
     )
     # Use exact rendered cell strings to catch value regressions precisely.
     # time_shift_gbp=250 → "£250" in Time-shift row; "250" alone would match "1250" etc.
@@ -253,21 +254,7 @@ def test_finance_report_renders_flex_value_block() -> None:
         "'central' band name must appear in the report"
     )
 
-    # ---- Empty flex_band_name must fall back to '—' placeholder --------------
-    report_no_name = generate_finance_report(
-        sections_of(make_assumption_section(bill=dist)),
-        scenario_name="Flex",
-        flex_band=central,
-        flex_band_name="",
-    )
-    assert "Flexibility Value" in report_no_name, (
-        "flex_band set but flex_band_name='' must still render the Flexibility Value block"
-    )
-    assert "—" in report_no_name, (
-        "Empty flex_band_name must render the '—' fallback placeholder"
-    )
-
     # ---- Additive: default still returns baseline exactly --------------------
     assert generate_finance_report(sections_of(make_assumption_section(bill=dist)), scenario_name="Flex") == baseline, (
-        "generate_finance_report without flex_band must return bit-identical output"
+        "generate_finance_report without flex must return bit-identical output"
     )

@@ -8,7 +8,7 @@ from typing import Annotated, Mapping, Optional, Sequence
 
 import typer
 
-from solar_challenge.board_report import AssumptionSection, generate_finance_report
+from solar_challenge.board_report import AssumptionSection, FlexBlock, GridServicesIncome, generate_finance_report
 from solar_challenge.cli.utils import (
     EndOption,
     StartOption,
@@ -27,13 +27,12 @@ from solar_challenge.finance import (
     grid_services_model_of,
     with_own_use_basis,
 )
-from solar_challenge.flex import resolve_flex_band
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate, reusing
 from solar_challenge.gridservices import (
-    GridServicesAtEvents,
     GridServicesBand,
     GridServicesEventsConfig,
     GridServicesModel,
+    NoGridServices,
     compute_grid_services_at_events,
 )
 from solar_challenge.home import SummaryStatistics, calculate_summary
@@ -56,13 +55,27 @@ class AssumptionMode(str, enum.Enum):
     both = "both"
 
 
-def _grid_services_at_events(
-    fleet_results: FleetResults, pricing: GridServicesModel
-) -> Optional[GridServicesAtEvents]:
-    """The capacity-at-events grid-services income of *fleet_results* when *pricing* prices grid services that way, else None."""
-    if not isinstance(pricing, GridServicesEventsConfig):
+def _grid_services_income(fleet_results: FleetResults, pricing: GridServicesModel) -> Optional[GridServicesIncome]:
+    """What *pricing* books on *fleet_results*, the bill run's fleet, or None when it prices no grid services.
+
+    Under events pricing the income is the capacity-at-events breakdown's,
+    priced once, on the path ``pricing.annual_income_gbp`` prices.
+    """
+    if isinstance(pricing, NoGridServices):
         return None
-    return compute_grid_services_at_events(fleet_results, pricing)
+    batteries = [home.battery_config for home in fleet_results.home_configs if home.battery_config is not None]
+    at_events = (
+        compute_grid_services_at_events(fleet_results, pricing)
+        if isinstance(pricing, GridServicesEventsConfig)
+        else None
+    )
+    return GridServicesIncome(
+        pricing=pricing,
+        annual_income_gbp=pricing.annual_income_gbp(fleet_results) if at_events is None else at_events.annual_income_gbp,
+        battery_homes=len(batteries),
+        battery_discharge_kw=sum(battery.max_discharge_kw for battery in batteries),
+        at_events=at_events,
+    )
 
 
 _BASES: Mapping[AssumptionMode, tuple[OwnUseBasis, ...]] = {
@@ -191,7 +204,7 @@ def run(
     fleet_results = cli.runner.simulate(
         FleetConfig(homes=fleet.homes, name=scenario_config.name), fleet.start, fleet.end
     )
-    grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
+    grid_services = _grid_services_income(fleet_results, pricing)
 
     summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
 
@@ -215,8 +228,7 @@ def run(
     report = generate_finance_report(
         sections,
         scenario_name=scenario_config.name or str(scenario),
-        flex_band=resolve_flex_band(band) if band is not None else None,
-        flex_band_name=band.value if band is not None else "",
-        grid_services_at_events=grid_services_at_events,
+        grid_services=grid_services,
+        flex=FlexBlock(band) if band is not None else None,
     )
     print_report(report)

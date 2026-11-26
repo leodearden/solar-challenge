@@ -10,8 +10,8 @@ Provides:
   - ``YearPoint`` — frozen dataclass for one year in a multi-year projection.
   - ``MultiYearCurve`` — frozen dataclass for a full multi-year projection curve.
   - ``ProjectEconomics`` — frozen dataclass of project-level economics.
-  - ``FleetProjection`` — frozen dataclass of a fleet's projection curve and
-    its age-0 per-home summaries.
+  - ``FleetProjection`` — frozen dataclass of a fleet's projection curve, its
+    age-0 per-home summaries and its grid-services income at each simulated age.
   - ``MAX_NODES`` — cap on the number of ages a projection interpolates through.
   - ``fewest_simulated_ages`` — the fewest ages a projection over an asset life
     simulates.
@@ -237,13 +237,46 @@ class MultiYearCurve:
 
 @dataclass(frozen=True)
 class FleetProjection:
-    """A fleet's multi-year projection, and each home's summary of the fleet simulated at age 0."""
+    """A fleet's multi-year projection, each home's summary of the fleet simulated at age 0, and the grid-services income priced at every simulated age."""
 
     curve: MultiYearCurve
     """The projection over the asset life."""
 
     age0_summaries: tuple[SummaryStatistics, ...]
     """Each home's summary of its simulated window at age 0, in fleet order."""
+
+    grid_services_income_gbp: tuple[tuple[int, float], ...]
+    """(age, £/yr) for every simulated age, seeds and bisection trials alike, ascending by age.
+
+    Each income is the grid-services part of the age's rate-independent income,
+    as the pricing priced that age's own simulated fleet.  The first entry is
+    age 0 (year 1) and the last is the curve's last year, both seed ages.
+    """
+
+    def __post_init__(self) -> None:
+        """Refuse an income series the curve's years cannot label, naming the rule and the series."""
+        series = self.grid_services_income_gbp
+        ages = [age for age, _ in series]
+        last_year = len(self.curve.points) - 1
+        if not series:
+            raise ValueError(f"grid_services_income_gbp must be non-empty, got {series!r}")
+        if any(older <= younger for younger, older in itertools.pairwise(ages)):
+            raise ValueError(f"grid_services_income_gbp's ages must be strictly ascending, got {series!r}")
+        if ages[0] != 0:
+            raise ValueError(f"grid_services_income_gbp's first age must be 0, got {series!r}")
+        if ages[-1] != last_year:
+            raise ValueError(
+                f"grid_services_income_gbp's last age must be {last_year}, the last of the curve's "
+                f"years 0..{last_year}, got {series!r}"
+            )
+        missing = sorted(set(self.curve.sampled_ages) - set(ages))
+        if missing:
+            raise ValueError(
+                f"grid_services_income_gbp must hold every sampled age {self.curve.sampled_ages!r}, "
+                f"missing {missing!r}, got {series!r}"
+            )
+        if not all(0.0 <= income < math.inf for _, income in series):
+            raise ValueError(f"every grid_services_income_gbp income must be finite and >= 0, got {series!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -455,8 +488,11 @@ class _NodeData:
     mean_battery_soh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Mean battery state-of-health across the fleet (fraction, 0–1)."""
 
+    grid_services_income_gbp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    """The fleet's grid-services income, as the pricing priced this age's own simulated fleet (£/yr)."""
+
     fleet_income_gbp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
-    """Fleet income, Σ each home's ledger SEG income + the fleet's grid-services income (£/yr); it reads no own-use rate."""
+    """Fleet income, Σ each home's ledger SEG income + grid_services_income_gbp (£/yr); it reads no own-use rate."""
 
     annualised_from: SimulationWindow
     """The fleet's one simulated window, the energy totals were annualised from."""
@@ -679,6 +715,7 @@ def _simulate_node(
         per_home_discharge=tuple(physics.battery_discharge_kwh for physics in physics_of_homes),
         mean_pv_soh=sum(pv_sohs) / len(pv_sohs),
         mean_battery_soh=sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0,
+        grid_services_income_gbp=grid_services_income,
         fleet_income_gbp=seg_revenue + grid_services_income,
         annualised_from=one_window(summaries),
         per_home_throughput=tuple(throughput),
@@ -898,7 +935,15 @@ def _project(
         fleet_pv_dc_kw,
     )
     notices = (*_cap_notices(selection, error_target_pct), *_distinct_grid_services_warnings(selection.simulated))
-    return FleetProjection(curve=curve, age0_summaries=selection.simulated[0].summaries), notices
+    grid_services_income = tuple(
+        (age, selection.simulated[age].node.grid_services_income_gbp) for age in sorted(selection.simulated)
+    )
+    projection = FleetProjection(
+        curve=curve,
+        age0_summaries=selection.simulated[0].summaries,
+        grid_services_income_gbp=grid_services_income,
+    )
+    return projection, notices
 
 
 def _warn_the_caller(notices: Sequence[Warning]) -> None:
@@ -961,8 +1006,9 @@ def project_fleet(
     Returns:
         :class:`FleetProjection` whose ``curve`` has one :class:`YearPoint`
         per year and metadata about the sampled ages and interpolation error,
-        and whose ``age0_summaries`` are each home's summary of the fleet
-        simulated at age 0.
+        whose ``age0_summaries`` are each home's summary of the fleet
+        simulated at age 0, and whose ``grid_services_income_gbp`` is the
+        grid-services income priced at every simulated age, ascending.
 
     Raises:
         ValueError: If ``simulate`` returns, for a sampled age, a FleetResults
