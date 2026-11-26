@@ -843,6 +843,11 @@ def _swept_values_by_axis(report: str) -> dict[str, list[float]]:
     return swept
 
 
+def _pounds(cell: str) -> float:
+    """The figure of a report's '£1,234.56' cell."""
+    return float(cell.removeprefix("£").replace(",", ""))
+
+
 class TestOptimizeCLIE2EFast:
     """Fast injected-simulator end-to-end tests for `optimize configs` wiring (G2/W-H6 signal).
 
@@ -1436,7 +1441,13 @@ class TestOptimizeCLIE2EFast:
         tmp_path: Path,
         one_home_fleet_results: FleetResults,
     ) -> None:
-        """Under --assumptions spreadsheet the 0.7 override's own-use, 1,960 of the stand-in's 2,800 kWh generation, prices the trade-off, not the simulated 2,000."""
+        """Under --assumptions spreadsheet the 0.7 override's own-use, 1,960 of the stand-in's 2,800 kWh generation, prices the trade-off, not the simulated 2,000.
+
+        The 40 kWh below the simulated own-use is imported at the scenario's 30 p
+        retail baseline rather than paid for as own-use at its 15 p configured
+        rate, so the spreadsheet's baseline outlay is that 40 kWh × 15 p, with
+        5% VAT, above physics'.
+        """
         spreadsheet, _ = self._invoke_on_override(
             tmp_path, "spreadsheet", one_home_fleet_results, 0.7, "--assumptions", "spreadsheet"
         )
@@ -1452,7 +1463,13 @@ class TestOptimizeCLIE2EFast:
         no_battery = "4.0 kWp / 0.0 kWh / 5.0 kW"
         spreadsheet_outlay = _config_row(spreadsheet.stdout, _TRADE_OFF, no_battery)["Baseline Outlay (£/yr)"]
         physics_outlay = _config_row(physics.stdout, _TRADE_OFF, no_battery)["Baseline Outlay (£/yr)"]
-        assert spreadsheet_outlay != physics_outlay, spreadsheet.stdout
+        simulated_own_use_kwh, generation_kwh = 2000.0, 2000.0 + 800.0
+        own_use_moved_to_import_kwh = simulated_own_use_kwh - 0.7 * generation_kwh
+        retail_pence, configured_own_use_pence, vat_rate = 30.0, 15.0, 0.05
+        assert _pounds(spreadsheet_outlay) - _pounds(physics_outlay) == pytest.approx(
+            own_use_moved_to_import_kwh * (retail_pence - configured_own_use_pence) / 100.0 * (1.0 + vat_rate),
+            abs=0.011,
+        ), spreadsheet.stdout
 
     @pytest.mark.parametrize(
         ("override", "label"),
@@ -1472,6 +1489,31 @@ class TestOptimizeCLIE2EFast:
 
         assert result.exit_code == 0, result.output
         assert result.stdout.startswith(f"Self-consumption assumption: **{label}**\n"), result.stdout
+
+    def test_spreadsheet_runs_the_sensitivity_panel_under_the_scenarios_override(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """The panel sweeps configs on the ranking's assumption: given configs on another than its baseline's, it would refuse them before reaching the report."""
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5", "--assumptions", "spreadsheet",
+             "--sensitivity", "retained_floor"],
+            n_homes=1,
+            finance_overrides={"self_consumption_override": 0.7},
+        )
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout.startswith(
+            "Self-consumption assumption: **Spreadsheet (70% self-consumption)**\n"
+        ), result.stdout
+        assert _swept_values_by_axis(result.stdout) == {
+            "retained_cash_floor_per_home_per_year_gbp": list(
+                SENSITIVITY_BANDS[KNOBS["retained_cash_floor_per_home_per_year_gbp"]]
+            )
+        }, result.stdout
 
     def test_both_assumptions_are_refused_before_any_simulation(
         self,
