@@ -1312,7 +1312,7 @@ class TestFleetRunNamesTheHomeWhoseSimulationFailed:
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestFleetSweepGivesEachPointTheFleetFilesBlocks:
-    """Tests that `fleet sweep`, on either sweep path, gives every point's homes the fleet file's top-level blocks as `fleet run` gives them."""
+    """Tests that `fleet sweep`, on every sweep path, gives every point's homes the fleet file's top-level blocks as `fleet run` gives them."""
 
     @pytest.mark.parametrize(("capacity_kwh", "options", "point_file"), _SWEEP_PATHS)
     def test_a_sweep_point_simulates_the_fleet_fleet_run_simulates(

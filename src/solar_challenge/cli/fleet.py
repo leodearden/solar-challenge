@@ -224,7 +224,11 @@ def sweep(
         Optional[str],
         typer.Option(
             "--param",
-            help="Name of the ${NAME} placeholder the CLI sweep sets (e.g., BATTERY_RATIO)",
+            help=(
+                "What the sweep varies: a knob, by its name or an alias, else NAME, the ${NAME} "
+                "placeholders of the document; a name with both readings is refused.  "
+                "The knobs, each with its aliases: " + names_with_aliases(KNOBS.values())
+            ),
         ),
     ] = None,
     min_val: Annotated[
@@ -270,13 +274,20 @@ def sweep(
     1. YAML-defined sweep: When the config contains a sweep spec in the
        battery.capacity_kwh.multiplier field, runs all sweep points.
 
-    2. CLI-driven sweep: When --param is provided, it is the NAME of the
-       ${NAME} or ${NAME:default} placeholders to sweep, each the whole
-       value of a key in the config. Each sweep point replaces every such
-       placeholder with the point's value, from --min to --max; a
-       placeholder --param does not name takes its default. The sweep
-       refuses a --param that no placeholder names, a placeholder inside a
-       longer string, and a default that is not a finite number.
+    2. CLI-driven sweep: When --param is provided, it resolves through the
+       knob registry first, by a knob's name or an alias, and then as the
+       NAME of the ${NAME} or ${NAME:default} placeholders of the config,
+       each the whole value of a key; the sweep refuses a --param with both
+       readings or neither. A knob sweep reads the config once, each
+       placeholder at its default, and sets the knob to each point's value,
+       from --min to --max. A variable sweep replaces every placeholder of
+       NAME with the point's value; a placeholder --param does not name
+       takes its default. The sweep refuses a placeholder inside a longer
+       string, and a default that is not a finite number.
+
+    Each point is labelled <axis label>=<value> and written to
+    <axis label>_<value>.csv: the axis label is the knob's canonical name,
+    the variable's NAME, or the path of the YAML sweep's field.
 
     Example YAML-defined sweep:
 
@@ -300,6 +311,11 @@ def sweep(
 
         solar-challenge fleet sweep config.yaml \\
             --param BATTERY_RATIO --min 0.1 --max 4.0 --steps 10
+
+    Example knob sweep:
+
+        solar-challenge fleet sweep config.yaml \\
+            --param battery_capacity_kwh --min 5 --max 10 --steps 2
     """
     cli = invocation(ctx)
     raw_config = load_config(config)
