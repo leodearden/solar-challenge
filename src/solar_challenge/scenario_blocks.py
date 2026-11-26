@@ -28,7 +28,13 @@ from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyCo
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import CHARGER_TYPES, EVConfig
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
+from solar_challenge.gridservices import (
+    EventWindow,
+    FlatGridServices,
+    GridServicesEventsConfig,
+    GridServicesModel,
+    NoGridServices,
+)
 from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
@@ -132,6 +138,32 @@ class BlockType(Generic[_Built]):
 
     recognised_keys: frozenset[str]
     build: Callable[[dict[str, Any], str], _Built]
+
+
+def _read_typed_block(
+    types: Mapping[str, BlockType[_Built]], data: object, *, block_path: str, kind: str
+) -> _Built:
+    """Build the block at *block_path* by the type of *types* its ``type:`` key names.
+
+    Refuses a block that is not a mapping or sets no type, a type *types* does not hold, naming
+    it a *kind* type and listing the supported ones, and a key the type does not recognise.
+    """
+    block = require_mapping(block_path, data)
+    require_keys(block_path, block, ["type"])
+    type_name = block["type"]
+    block_type = types.get(type_name) if isinstance(type_name, str) else None
+    if block_type is None:
+        raise refusal(
+            child_path(block_path, "type"),
+            f"unknown {kind} type {type_name!r}; supported types: {', '.join(types)}",
+        )
+    refuse_unrecognised_keys(block_path, block, block_type.recognised_keys)
+    return block_type.build(block, block_path)
+
+
+def _without_type_key(block: Mapping[str, Any]) -> dict[str, Any]:
+    """The keys of a typed block other than its ``type:``, which name its type's fields."""
+    return {key: value for key, value in block.items() if key != "type"}
 
 
 class _SubBlockReader(Protocol):
@@ -806,18 +838,7 @@ def parse_tariff_config(
     """
     if data is None:
         return None
-    require_mapping(block_path, data)
-
-    require_keys(block_path, data, ["type"])
-    tariff_type = data["type"]
-    block_type = _TARIFF_TYPES.get(tariff_type) if isinstance(tariff_type, str) else None
-    if block_type is None:
-        raise refusal(
-            child_path(block_path, "type"),
-            f"unknown tariff type {tariff_type!r}; supported types: {', '.join(_TARIFF_TYPES)}",
-        )
-    refuse_unrecognised_keys(block_path, data, block_type.recognised_keys)
-    return block_type.build(data, block_path)
+    return _read_typed_block(_TARIFF_TYPES, data, block_path=block_path, kind="tariff")
 
 
 def _parse_heat_pump_config(
@@ -940,10 +961,6 @@ def _parse_seg_rate_scalar(value: Any, *, block_path: str) -> float:
 
 _FINANCE_BLOCK_KEYS: frozenset[str] = frozenset(each.name for each in fields(FinanceConfig) if each.init)
 
-_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset(
-    each.name for each in fields(GridServicesEventsConfig) if each.init
-)
-
 _EVENT_WINDOW_KEYS: frozenset[str] = frozenset(each.name for each in fields(EventWindow) if each.init)
 """The keys an event window recognises: EventWindow's init fields."""
 
@@ -959,29 +976,76 @@ def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow,
     return tuple(parsed_windows)
 
 
-def _parse_grid_services_events_config(
-    data: object, *, block_path: str
-) -> Optional[GridServicesEventsConfig]:
-    """Parse a finance block's grid_services_events block; absent or null is no events config.
+def _build_flat_grid_services(data: dict[str, Any], block_path: str) -> FlatGridServices:
+    """Build the flat pricing a grid_services_model block of type flat names, refusing it unless it sets its rate, and as FlatGridServices refuses the rate, prefixed by the block's path."""
+    require_keys(block_path, data, _required_keys(FlatGridServices))
+    return constructed(block_path, FlatGridServices, **_without_type_key(data))
+
+
+def _build_grid_services_at_events(data: dict[str, Any], block_path: str) -> GridServicesEventsConfig:
+    """Build the events pricing a grid_services_model block of type capacity_at_events names.
 
     A key the block omits takes GridServicesEventsConfig's declared default, so an omitted
     event_windows is the default schedule, DEFAULT_EVENT_WINDOWS. Its event windows are read
     first, then a value GridServicesEventsConfig refuses is refused as it refuses it, prefixed
     by the block's path.
     """
-    if data is None:
-        return None
-    gs_data = refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
+    values = _without_type_key(data)
     event_windows = (
         {
             "event_windows": _parse_event_windows(
-                gs_data["event_windows"], block_path=child_path(block_path, "event_windows")
+                values["event_windows"], block_path=child_path(block_path, "event_windows")
             )
         }
-        if "event_windows" in gs_data
+        if "event_windows" in values
         else {}
     )
-    return constructed(block_path, GridServicesEventsConfig, **{**gs_data, **event_windows})
+    return constructed(block_path, GridServicesEventsConfig, **{**values, **event_windows})
+
+
+_GRID_SERVICES_MODEL_TYPES: Mapping[str, BlockType[FlatGridServices | GridServicesEventsConfig]] = MappingProxyType({
+    "flat": BlockType(
+        frozenset({"type", *(each.name for each in fields(FlatGridServices) if each.init)}),
+        _build_flat_grid_services,
+    ),
+    "capacity_at_events": BlockType(
+        frozenset({"type", *(each.name for each in fields(GridServicesEventsConfig) if each.init)}),
+        _build_grid_services_at_events,
+    ),
+})
+"""The types a grid_services_model block names; no grid services is written by omitting the block."""
+
+
+def _parse_grid_services_model(data: object, *, block_path: str) -> GridServicesModel:
+    """Read a finance block's grid_services_model block, at *block_path*, as the pricing its type names; absent or null is NoGridServices.
+
+    A string, the retired selector, is refused naming the forms to write.
+    """
+    if data is None:
+        return NoGridServices()
+    if isinstance(data, str):
+        raise refusal(
+            block_path,
+            f"the pricing is a block naming its type, not the string {data!r}; write it as "
+            "{type: flat, income_per_kw_per_year_gbp: <rate>} or as "
+            "{type: capacity_at_events, <the events keys>}, or omit it for no grid services",
+        )
+    return _read_typed_block(_GRID_SERVICES_MODEL_TYPES, data, block_path=block_path, kind="grid_services_model")
+
+
+def _retired_grid_services_keys(block_path: str) -> Mapping[str, str]:
+    """The retired grid-services keys of the finance block at *block_path*, each with why it is refused and the form of its grid_services_model block to write."""
+    model_path = child_path(block_path, "grid_services_model")
+    return {
+        "grid_services_income_per_kw_per_year_gbp": (
+            f"the flat grid-services rate is the pricing's own setting; write it in {model_path}, as "
+            f"{{type: flat, income_per_kw_per_year_gbp: <rate>}}, or omit {model_path} for no grid services"
+        ),
+        "grid_services_events": (
+            f"the events configuration is the pricing itself; write its keys in {model_path}, as "
+            "{type: capacity_at_events, band: ..., event_windows: ...}"
+        ),
+    }
 
 
 def parse_finance_config(
@@ -999,22 +1063,26 @@ def parse_finance_config(
         FinanceConfig object or None if data is None
 
     Raises:
-        ConfigurationError: If the block, its grid_services_events block or an
-            event window is not a mapping or carries a key it does not read, or
-            leaves out a key it requires; or for a value FinanceConfig,
+        ConfigurationError: If the block holds a retired grid-services key,
+            naming the grid_services_model form to write; if the block, its
+            grid_services_model block or an event window is not a mapping or
+            carries a key it does not read, or leaves out a key it requires; if
+            grid_services_model is a string or names no type of flat and
+            capacity_at_events; or for a value FinanceConfig, FlatGridServices,
             GridServicesEventsConfig or an EventWindow refuses, as it refuses
             it, prefixed by its block's path
     """
     if data is None:
         return None
+    refuse_retired_keys(block_path, data, _retired_grid_services_keys(block_path))
     refuse_unrecognised_keys(block_path, data, _FINANCE_BLOCK_KEYS)
     require_held_keys(block_path, data, ["standing_charge_pence_per_day"])
 
-    grid_services_events = _parse_grid_services_events_config(
-        data.get("grid_services_events"),
-        block_path=child_path(block_path, "grid_services_events"),
+    grid_services_model = _parse_grid_services_model(
+        data.get("grid_services_model"),
+        block_path=child_path(block_path, "grid_services_model"),
     )
-    return constructed(block_path, FinanceConfig, **{**data, "grid_services_events": grid_services_events})
+    return constructed(block_path, FinanceConfig, **{**data, "grid_services_model": grid_services_model})
 
 
 # ---------------------------------------------------------------------------

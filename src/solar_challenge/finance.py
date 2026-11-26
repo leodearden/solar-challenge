@@ -43,7 +43,7 @@ import math
 import warnings
 from dataclasses import dataclass, replace
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence, get_args
 
 import pandas as pd
 
@@ -54,12 +54,7 @@ from solar_challenge.dispatch import (
     distinct_grid_charge_forecasts,
 )
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.gridservices import (
-    FlatGridServices,
-    GridServicesEventsConfig,
-    GridServicesModel,
-    NoGridServices,
-)
+from solar_challenge.gridservices import GridServicesModel, NoGridServices
 from solar_challenge.number_fields import (
     FRACTION,
     NON_NEGATIVE,
@@ -120,20 +115,15 @@ class FinanceConfig:
             (default 15.0 p/kWh; 0 permitted).
         retained_cash_floor_per_home_per_year_gbp: Board-set minimum retained CBS
             surplus per home per year in GBP (default 27.0; 0 permitted).
-        grid_services_income_per_kw_per_year_gbp: Exogenous DFS/DNO grid-services income
-            per kW of installed battery discharge power per year, net of aggregator share
-            (default 0.0; see docs/cost-recovery-finance-model.md §8.1).
-        grid_services_model: Grid-services pricing model selector, ``"flat"`` or
-            ``"capacity_at_events"``; any other value is refused.  ``"flat"`` uses
-            the legacy flat per-kW rate (``grid_services_income_per_kw_per_year_gbp``)
-            and refuses a ``grid_services_events`` configuration;
-            ``"capacity_at_events"`` uses the structured events-based model configured
-            via ``grid_services_events`` and refuses a nonzero flat rate.  Default
-            ``"flat"`` leaves all existing behaviour bit-unchanged.
-        grid_services_events: Optional :class:`~solar_challenge.gridservices.GridServicesEventsConfig`
-            read by ``grid_services_model == "capacity_at_events"``, which refuses
-            ``None``; under ``"flat"`` it must be ``None``.  The rule is
-            :func:`grid_services_model_of`'s.
+        grid_services_model: The grid-services pricing, one of the
+            :data:`~solar_challenge.gridservices.GridServicesModel` types:
+            :class:`~solar_challenge.gridservices.NoGridServices` (the default,
+            no grid-services income),
+            :class:`~solar_challenge.gridservices.FlatGridServices` at a rate per
+            kW of installed battery discharge power per year (see
+            docs/cost-recovery-finance-model.md §8.1), or a
+            :class:`~solar_challenge.gridservices.GridServicesEventsConfig`
+            pricing capacity at events.  Any other value is refused.
     """
 
     standing_charge_pence_per_day: float
@@ -152,12 +142,10 @@ class FinanceConfig:
     asset_life_years: int = 25
     own_use_rate_pence_per_kwh: float = 15.0
     retained_cash_floor_per_home_per_year_gbp: float = 27.0
-    grid_services_income_per_kw_per_year_gbp: float = 0.0
-    grid_services_model: str = "flat"
-    grid_services_events: Optional["GridServicesEventsConfig"] = None
+    grid_services_model: GridServicesModel = NoGridServices()
 
     def __post_init__(self) -> None:
-        """Read every number through number_fields, then refuse an inconsistent grid-services choice or an asset life shorter than the loan term, raising ConfigurationError."""
+        """Read every number through number_fields, then refuse a grid-services pricing of none of the GridServicesModel types or an asset life shorter than the loan term, raising ConfigurationError."""
         read_field(self, "standing_charge_pence_per_day", as_finite_float, POSITIVE)
         read_field(self, "vat_rate", as_finite_float, UNIT_INTERVAL)
         read_field(self, "retail_baseline_rate_pence_per_kwh", as_finite_float, POSITIVE)
@@ -174,64 +162,17 @@ class FinanceConfig:
         read_field(self, "asset_life_years", as_whole_number)
         read_field(self, "own_use_rate_pence_per_kwh", as_finite_float, NON_NEGATIVE)
         read_field(self, "retained_cash_floor_per_home_per_year_gbp", as_finite_float, NON_NEGATIVE)
-        read_field(self, "grid_services_income_per_kw_per_year_gbp", as_finite_float, NON_NEGATIVE)
-        grid_services_model_of(self)
+        if not isinstance(self.grid_services_model, GridServicesModel):
+            raise ConfigurationError.must_be(
+                "grid_services_model",
+                f"one of {', '.join(pricing.__name__ for pricing in get_args(GridServicesModel))}",
+                got=self.grid_services_model,
+            )
         if self.asset_life_years < self.loan_term_years:
             raise ConfigurationError(
                 f"asset_life_years ({self.asset_life_years}) must be >= "
                 f"loan_term_years ({self.loan_term_years})"
             )
-
-
-def grid_services_model_of(finance: FinanceConfig) -> GridServicesModel:
-    """Return the pricing value that *finance*'s three grid-services fields name, refusing a choice that leaves one of them unread.
-
-    The rule is the β column of docs/prds/grid-services-pricing-model.md §5.2,
-    which FinanceConfig.__post_init__ runs at construction:
-
-    - ``grid_services_model="flat"`` with ``grid_services_events=None``:
-      :class:`~solar_challenge.gridservices.NoGridServices` for a zero
-      ``grid_services_income_per_kw_per_year_gbp``, else
-      :class:`~solar_challenge.gridservices.FlatGridServices` at that rate.
-    - ``"capacity_at_events"`` with ``grid_services_events`` set and a zero
-      flat rate: that events configuration.
-
-    Raises:
-        ConfigurationError: If the model is ``"flat"`` and
-            ``grid_services_events`` is set, if it is ``"capacity_at_events"``
-            and ``grid_services_events`` is None or the flat rate is nonzero,
-            or if it is neither model.  The message names the fields involved
-            and their values.
-    """
-    model = finance.grid_services_model
-    rate = finance.grid_services_income_per_kw_per_year_gbp
-    events = finance.grid_services_events
-    if model == "flat":
-        if events is not None:
-            raise ConfigurationError(
-                "grid_services_model='flat' does not read grid_services_events, "
-                f"got grid_services_events={events!r}; select "
-                "grid_services_model='capacity_at_events' or drop grid_services_events"
-            )
-        if rate == 0.0:
-            return NoGridServices()
-        return FlatGridServices(rate)
-    if model == "capacity_at_events":
-        if events is None:
-            raise ConfigurationError(
-                "grid_services_model='capacity_at_events' requires "
-                "grid_services_events to be configured, got grid_services_events=None"
-            )
-        if rate != 0.0:
-            raise ConfigurationError(
-                "grid_services_model='capacity_at_events' does not read "
-                f"grid_services_income_per_kw_per_year_gbp, got {rate!r}; drop the "
-                "rate or select grid_services_model='flat'"
-            )
-        return events
-    raise ConfigurationError(
-        f"grid_services_model must be one of flat, capacity_at_events, got {model!r}"
-    )
 
 
 # ---------------------------------------------------------------------------

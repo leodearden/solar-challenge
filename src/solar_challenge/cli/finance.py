@@ -24,7 +24,6 @@ from solar_challenge.finance import (
     FinanceConfig,
     OwnUseBasis,
     bill_distribution,
-    grid_services_model_of,
     with_own_use_basis,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate, reusing
@@ -194,7 +193,7 @@ def run(
     """
     scenario_config = with_window_options(load_scenario(scenario), start=start, end=end)
     finance = required_finance(scenario_config)
-    pricing = grid_services_model_of(finance)
+    pricing = finance.grid_services_model
     band = flex_band if flex_band is not None else scenario_config.flex_band
 
     fleet = scenario_fleet(scenario_config)

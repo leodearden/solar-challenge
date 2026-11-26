@@ -25,7 +25,6 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.config import ScenarioConfig, load_scenario
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import grid_services_model_of
 from solar_challenge.gridservices import GridServicesEventsConfig, GridServicesModel
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
@@ -50,7 +49,7 @@ _DEFAULT_SENSITIVITY_NAMES: tuple[str, ...] = ("retained_floor", "grid_services"
 # Why --grid-services-kw and the grid_services axis have nothing to set under the events model.
 _FLAT_RATE_UNREAD_UNDER_EVENTS = (
     f"the flat grid-services rate, {_FLAT_RATE_KNOB.name}, "
-    "which grid_services_model='capacity_at_events' does not read"
+    "which the scenario's capacity_at_events grid_services_model does not read"
 )
 
 # A sensitivity axis as --sensitivity names it: the name as written, and the knob it names.
@@ -171,7 +170,7 @@ def _with_grid_services_kw(
     if isinstance(pricing, GridServicesEventsConfig):
         raise ConfigurationError(
             f"--grid-services-kw sets {_FLAT_RATE_UNREAD_UNDER_EVENTS}; drop the flag or "
-            "select grid_services_model: flat in the scenario's finance block"
+            "set the scenario's finance.grid_services_model to type: flat"
         )
     return _FLAT_RATE_KNOB.apply(scenario, grid_services_kw)
 
@@ -235,8 +234,8 @@ def configs(
             "--grid-services-kw",
             help=(
                 "Override the flat grid-services income (£/kW/yr) baked into the base "
-                "finance config before enumeration.  Refused under grid_services_model: "
-                "capacity_at_events, which reads no flat rate."
+                "finance config before enumeration.  Refused under a grid_services_model of "
+                "type: capacity_at_events, which reads no flat rate."
             ),
         ),
     ] = None,
@@ -247,8 +246,8 @@ def configs(
             help=(
                 "Comma-separated knob names or aliases of OAT sensitivity axes to sweep "
                 "(e.g. 'retained_floor,grid_services').  Defaults to "
-                "retained_floor,grid_services, or to retained_floor alone under "
-                "grid_services_model: capacity_at_events, which refuses grid_services.  "
+                "retained_floor,grid_services, or to retained_floor alone under a "
+                "grid_services_model of type: capacity_at_events, which refuses grid_services.  "
                 "Use '' to skip sensitivity.  "
                 "Knobs with a sensitivity band, each with its aliases: "
                 + names_with_aliases(SENSITIVITY_BANDS)
@@ -268,8 +267,8 @@ def configs(
     When the sensitivity axes are non-empty, a one-at-a-time (OAT) sensitivity
     panel is appended showing which cost assumptions most affect the top-ranked
     config.  --sensitivity defaults to retained_floor,grid_services, or to
-    retained_floor alone, with a note on stderr, when the finance block selects
-    grid_services_model: capacity_at_events, which reads no flat rate for the
+    retained_floor alone, with a note on stderr, when the finance block's
+    grid_services_model is of type: capacity_at_events, which reads no flat rate for the
     grid_services axis to sweep; there an explicit grid_services axis is
     refused, as is --grid-services-kw, before any simulation.  The panel is
     skipped, with a note on stderr, when the sweep yields no feasible config.
@@ -293,7 +292,7 @@ def configs(
 
     # ---- Load the scenario and its finance block -----------------------------
     scenario_config = with_window_options(load_scenario(scenario), start=start, end=end)
-    pricing = grid_services_model_of(required_finance(scenario_config))
+    pricing = required_finance(scenario_config).grid_services_model
     base = _with_retained_floor(
         _with_grid_services_kw(scenario_config, grid_services_kw, pricing), retained_floor
     )

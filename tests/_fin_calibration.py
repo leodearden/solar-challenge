@@ -52,6 +52,7 @@ import pandas as pd
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, default_runner
+from solar_challenge.gridservices import NoGridServices
 from solar_challenge.load import LoadConfig
 from solar_challenge.projection import MultiYearCurve, spreadsheet_revenue_curve
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
@@ -126,7 +127,7 @@ def make_fin_finance(*, self_consumption_override: float | None) -> FinanceConfi
         asset_life_years=25,
         own_use_rate_pence_per_kwh=FIN_GOLDEN["own_use_rate_pence_per_kwh"],
         retained_cash_floor_per_home_per_year_gbp=27.0,
-        grid_services_income_per_kw_per_year_gbp=0.0,
+        grid_services_model=NoGridServices(),
     )
 
 

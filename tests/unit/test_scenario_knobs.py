@@ -110,6 +110,7 @@ _HOME_TARGETS = {
     "degradation_rate_per_year": "pv_config.degradation_rate_per_year",
 }
 _SCENARIO_TARGETS = {"seg_tariff_pence_per_kwh": "seg_tariff_pence_per_kwh"}
+_PRICING_TARGETS = {"grid_services_income_per_kw_per_year_gbp": "finance.grid_services_model"}
 _FINANCE_FIELD_NAMES = frozenset(field.name for field in dataclasses.fields(FinanceConfig))
 
 
@@ -119,6 +120,8 @@ def _target(knob: Knob) -> re.Pattern[str]:
         return re.compile(rf"(home|homes\[\d+\])\.{re.escape(_HOME_TARGETS[knob.name])}([.\[].*)?")
     if knob.name in _SCENARIO_TARGETS:
         return re.compile(re.escape(_SCENARIO_TARGETS[knob.name]))
+    if knob.name in _PRICING_TARGETS:
+        return re.compile(rf"{re.escape(_PRICING_TARGETS[knob.name])}(\..*)?")
     if knob.name in _FINANCE_FIELD_NAMES:
         return re.compile(rf"finance\.{re.escape(knob.name)}")
     pytest.fail(f"knob {knob.name!r} has no target in this test's table")
