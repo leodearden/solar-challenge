@@ -8,6 +8,7 @@ engine before battery export existed (B3, invariant 1). B2, an export beyond its
 other bounds, in tests/unit/dispatch/test_decision_bounds.py.
 """
 
+import dataclasses
 import functools
 import hashlib
 import itertools
@@ -18,6 +19,7 @@ from datetime import datetime, time, timedelta
 from typing import NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import pytest
 
 from solar_challenge.battery import Battery, BatteryConfig
@@ -26,14 +28,19 @@ from solar_challenge.dispatch import (
     DispatchDecision,
     DispatchStrategy,
     GridChargeConfig,
+    GridChargeContext,
     PeakShavingStrategy,
     ScheduledChargeStrategy,
     SelfConsumptionStrategy,
+    StepLimits,
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
+from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.tariff import TariffConfig
+from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._fixed_decision_strategy import FixedDecisionStrategy
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 _E7 = TariffConfig.economy_7()
@@ -272,3 +279,173 @@ class TestAStepThatAsksForNoExportBooksNone:
         assert result.battery_discharge > result.demand - result.generation
         assert result.battery_export == 0.0
         assert result.grid_export == 0.0
+
+
+class _ExportingStrategy(DispatchStrategy):
+    """Test double: inside its hours it covers each step's shortfall and exports all the headroom its battery's discharge limit leaves; outside them its base decides."""
+
+    def __init__(self, base: DispatchStrategy, hours: range, battery: BatteryConfig) -> None:
+        self._base = base
+        self._hours = hours
+        self._battery = battery
+
+    @property
+    def name(self) -> str:
+        """Return its base's name, exporting."""
+        return f"exporting({self._base.name})"
+
+    @property
+    def charges_from_the_grid(self) -> bool:
+        """Whether its base charges from the grid: it only adds export."""
+        return self._base.charges_from_the_grid
+
+    def decide_action(
+        self,
+        timestamp: datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
+    ) -> DispatchDecision:
+        """Inside its hours, the step's shortfall and its whole export limit; else its base's decision."""
+        if timestamp.hour in self._hours:
+            limits = StepLimits.for_step(
+                generation_kw,
+                demand_kw,
+                max_charge_kw=self._battery.max_charge_kw,
+                max_discharge_kw=self._battery.max_discharge_kw,
+            )
+            return DispatchDecision(0.0, limits.shortfall_kw, 0.0, limits.max_export_kw)
+        return self._base.decide_action(
+            timestamp=timestamp,
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery_soc_kwh=battery_soc_kwh,
+            battery_capacity_kwh=battery_capacity_kwh,
+            timestep_minutes=timestep_minutes,
+            grid_charge_ctx=grid_charge_ctx,
+        )
+
+
+_EXPORT_HOURS = range(17, 19)
+
+
+def _with_grid_charging(home: HomeConfig, grid_charging: Optional[GridChargeConfig]) -> HomeConfig:
+    """*home* with its battery's grid_charging replaced by *grid_charging*."""
+    assert home.battery_config is not None
+    return dataclasses.replace(
+        home, battery_config=dataclasses.replace(home.battery_config, grid_charging=grid_charging)
+    )
+
+
+_HOME = _with_grid_charging(bristol_arbitrage_home(), None)
+
+# Each day's weather, first day and last day.
+_HOME_DAYS: dict[str, tuple[pd.DataFrame, str, str]] = {
+    "2024-01-15-sunless": (sunless_weather("2024-01-15", temp_air=5.0), "2024-01-15", "2024-01-15"),
+    "2024-06-20_to_21-clear": (synthetic_june_weather("2024-06-20", (1.0, 1.0)), "2024-06-20", "2024-06-21"),
+}
+
+
+def _simulated(home: HomeConfig, day_id: str, strategy: DispatchStrategy) -> SimulationResults:
+    """*home* on _HOME_DAYS[day_id] under *strategy*, its balance checked every minute."""
+    weather, start, end = _HOME_DAYS[day_id]
+    return simulate_home(
+        home,
+        pd.Timestamp(start),
+        pd.Timestamp(end),
+        validate_balance=True,
+        weather=weather_for(home, weather),
+        strategy=strategy,
+    )
+
+
+@functools.cache
+def _exporting_run(day_id: str) -> SimulationResults:
+    """_HOME on _HOME_DAYS[day_id] under self-consumption, exporting all it may from 17:00 to 19:00, simulated once for every test that reads it."""
+    assert _HOME.battery_config is not None
+    return _simulated(_HOME, day_id, _ExportingStrategy(SelfConsumptionStrategy(), _EXPORT_HOURS, _HOME.battery_config))
+
+
+def _battery_export_kw(results: SimulationResults) -> pd.Series:
+    """The power *results*' battery sent to the grid each minute, which an exporting run sets."""
+    assert results.battery_export is not None
+    return results.battery_export
+
+
+class TestAnExportingRun:
+    """B1 and invariants 2 and 3 over a run: a home whose strategy exports from 17:00 to 19:00, on a sunless winter day and on two clear June days, its balance checked every minute."""
+
+    @pytest.mark.parametrize("day_id", list(_HOME_DAYS))
+    def test_the_battery_exports_only_inside_its_hours(self, day_id: str) -> None:
+        battery_export = _battery_export_kw(_exporting_run(day_id))
+        assert battery_export.index.equals(_exporting_run(day_id).demand.index)
+        inside = battery_export.index.hour.isin(_EXPORT_HOURS)
+        assert battery_export[inside].gt(0).any()
+        assert battery_export[~inside].eq(0).all()
+
+    @pytest.mark.parametrize("day_id", list(_HOME_DAYS))
+    def test_the_battery_s_export_is_a_part_of_its_discharge_and_of_the_grid_export_on_every_row(
+        self, day_id: str
+    ) -> None:
+        results = _exporting_run(day_id)
+        battery_export = _battery_export_kw(results)
+        assert battery_export.le(results.battery_discharge).all()
+        assert battery_export.le(results.grid_export).all()
+
+    @pytest.mark.parametrize("day_id", list(_HOME_DAYS))
+    def test_the_bus_identity_closes_on_every_row(self, day_id: str) -> None:
+        results = _exporting_run(day_id)
+        energy_in = results.generation + results.grid_import
+        energy_out = results.demand + results.grid_export + results.battery_charge - results.battery_discharge
+        assert (energy_in - energy_out).abs().max() <= 1e-9
+
+    @pytest.mark.parametrize("day_id", list(_HOME_DAYS))
+    def test_self_consumption_is_at_most_the_demand_on_every_row(self, day_id: str) -> None:
+        results = _exporting_run(day_id)
+        assert results.self_consumption.le(results.demand).all()
+
+    @pytest.mark.parametrize("day_id", list(_HOME_DAYS))
+    def test_the_frame_carries_the_export_and_restores_it(self, day_id: str) -> None:
+        results = _exporting_run(day_id)
+        frame = results.to_dataframe()
+        assert "battery_export_kw" in frame.columns
+        restored = SimulationResults.from_dataframe(frame, strategy_name=results.strategy_name)
+        pd.testing.assert_series_equal(_battery_export_kw(restored), _battery_export_kw(results))
+
+    @pytest.mark.parametrize("day_id", list(_HOME_DAYS))
+    def test_the_totals_carry_the_export(self, day_id: str) -> None:
+        assert "battery_export_kwh" in _exporting_run(day_id).total_amounts()
+
+
+@functools.cache
+def _no_export_run(dispatch_id: str, day_id: str) -> SimulationResults:
+    """_HOME on _HOME_DAYS[day_id] under BUILT_IN_DISPATCHES[dispatch_id]'s strategy, its battery grid-charging as that dispatch's does, simulated once for every test that reads it."""
+    dispatch = BUILT_IN_DISPATCHES[dispatch_id]
+    return _simulated(_with_grid_charging(_HOME, dispatch.grid_charging), day_id, dispatch.strategy)
+
+
+NO_EXPORT_RUNS = [
+    pytest.param(dispatch_id, day_id, id=f"{dispatch_id}-{day_id}")
+    for dispatch_id in BUILT_IN_DISPATCHES
+    for day_id in _HOME_DAYS
+]
+
+
+class TestARunThatAsksForNoExportHasNoExportSeries:
+    """B3, invariant 1, over a run: a built-in strategy asks for no export, so its results have no export series, and no export column or total."""
+
+    @pytest.mark.parametrize(("dispatch_id", "day_id"), NO_EXPORT_RUNS)
+    def test_the_results_have_no_export_series(self, dispatch_id: str, day_id: str) -> None:
+        assert _no_export_run(dispatch_id, day_id).battery_export is None
+
+    @pytest.mark.parametrize(("dispatch_id", "day_id"), NO_EXPORT_RUNS)
+    def test_the_frame_has_no_export_column(self, dispatch_id: str, day_id: str) -> None:
+        assert "battery_export_kw" not in _no_export_run(dispatch_id, day_id).to_dataframe().columns
+
+    @pytest.mark.parametrize(("dispatch_id", "day_id"), NO_EXPORT_RUNS)
+    def test_the_totals_have_no_export(self, dispatch_id: str, day_id: str) -> None:
+        assert "battery_export_kwh" not in _no_export_run(dispatch_id, day_id).total_amounts()
