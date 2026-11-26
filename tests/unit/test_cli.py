@@ -1071,7 +1071,7 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
         result = _run_optimize_configs()
 
         assert result.exit_code == 0
-        assert result.stdout.startswith("## Cost-Recovery Rank\n")
+        assert result.stdout.startswith("Self-consumption assumption: **Physics**\n\n## Cost-Recovery Rank\n")
         assert "Sweep complete: 1 feasible config(s), 0 infeasible config(s)." in " ".join(result.stderr.split())
 
 
