@@ -186,6 +186,11 @@ def _probe_of(route: ApiRoute) -> _RouteProbe:
     return probe
 
 
+def _saved_presets(client: FlaskClient) -> object:
+    """The home presets and the scenario presets the dashboard lists, so a test can show that a request saved none."""
+    return client.get("/api/presets").get_json(), client.get("/api/scenarios/presets").get_json()
+
+
 def test_no_probe_names_a_route_api_bp_lacks() -> None:
     """Every row of _ROUTE_PROBES is still a POST route of the api blueprint."""
     assert set(_ROUTE_PROBES) - {route.endpoint for route in _POST_ROUTES} == set()
@@ -195,16 +200,18 @@ def test_no_probe_names_a_route_api_bp_lacks() -> None:
 def test_every_api_post_route_answers_its_readers_refusal_400_and_logs_nothing(
     client: FlaskClient, job_manager: NonCallableMagicMock, caplog: pytest.LogCaptureFixture, route: ApiRoute
 ) -> None:
-    """Row R1: a request the route's reader refuses is answered 400 with the reader's ConfigurationError text, logs no ERROR and submits no job."""
+    """Row R1: a request the route's reader refuses is answered 400 with the reader's ConfigurationError text, logs no ERROR, submits no job and saves no preset."""
     probe = _probe_of(route)
     with pytest.raises(ConfigurationError) as refusal:
         probe.refusal()
+    saved = _saved_presets(client)
 
     resp = client.post(route.path, **probe.refused)
 
     assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
     assert error_records(caplog) == []
     assert job_manager.method_calls == []
+    assert _saved_presets(client) == saved
 
 
 @pytest.mark.parametrize("route", _POST_ROUTES, ids=lambda route: route.endpoint)
@@ -215,8 +222,9 @@ def test_every_api_post_route_answers_a_value_error_that_is_no_refusal_400_and_l
     caplog: pytest.LogCaptureFixture,
     route: ApiRoute,
 ) -> None:
-    """Row R2: a reader's ValueError that is not a ConfigurationError is answered 400 with its text and logged once at ERROR naming its type, so no route answers a ValueError itself."""
+    """Row R2: a reader's ValueError that is not a ConfigurationError is answered 400 with its text and logged once at ERROR naming its type, so no route answers a ValueError itself; no job is submitted and no preset saved."""
     probe = _probe_of(route)
+    saved = _saved_presets(client)
     monkeypatch.setattr(api, probe.reader, raising(ValueError("probe")))
 
     resp = client.post(route.path, **probe.reaching)
@@ -225,14 +233,16 @@ def test_every_api_post_route_answers_a_value_error_that_is_no_refusal_400_and_l
     [record] = error_records(caplog)
     assert "ValueError" in record.getMessage()
     assert job_manager.method_calls == []
+    assert _saved_presets(client) == saved
 
 
 @pytest.mark.parametrize("route", _POST_ROUTES, ids=lambda route: route.endpoint)
 def test_every_api_post_route_answers_a_defect_500_with_a_json_body(
     client: FlaskClient, job_manager: NonCallableMagicMock, monkeypatch: pytest.MonkeyPatch, route: ApiRoute
 ) -> None:
-    """Row R3: a reader's TypeError is a defect, answered 500 with JSON, so no route catches it as a refusal."""
+    """Row R3: a reader's TypeError is a defect, answered 500 with JSON, so no route catches it as a refusal; no job is submitted and no preset saved."""
     probe = _probe_of(route)
+    saved = _saved_presets(client)
     monkeypatch.setattr(api, probe.reader, raising(TypeError("probe")))
 
     resp = client.post(route.path, **probe.reaching)
@@ -241,6 +251,7 @@ def test_every_api_post_route_answers_a_defect_500_with_a_json_body(
     assert resp.mimetype == "application/json"
     assert resp.get_json() == {"error": "Internal server error"}
     assert job_manager.method_calls == []
+    assert _saved_presets(client) == saved
 
 
 _FLEET_FORM_WITHOUT_A_SEED = {key: value for key, value in valid_distribution_form().items() if key != "seed"}
