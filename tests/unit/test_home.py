@@ -171,9 +171,12 @@ def _results_with_every_series_set(*, with_heat_pump: bool = True) -> Simulation
 
 
 def _results_with_no_optional_series() -> SimulationResults:
-    """_results_with_every_series_set's results with no heat pump and neither optional series set."""
+    """_results_with_every_series_set's results with no heat pump and none of its optional series set."""
     return dataclasses.replace(
-        _results_with_every_series_set(with_heat_pump=False), grid_charge_cost=None, grid_charge=None
+        _results_with_every_series_set(with_heat_pump=False),
+        grid_charge_cost=None,
+        grid_charge=None,
+        battery_export=None,
     )
 
 
@@ -488,6 +491,7 @@ class TestPerStepAmounts:
                 "grid_export_kwh": results.grid_export / 60,
                 "heat_pump_load_kwh": results.additional_loads[LoadKind.HEAT_PUMP] / 60,
                 "grid_charge_kwh": results.grid_charge / 60,
+                "battery_export_kwh": results.battery_export / 60,
                 "import_cost_gbp": results.import_cost,
                 "export_revenue_gbp": results.export_revenue,
                 "grid_charge_cost_gbp": results.grid_charge_cost,
