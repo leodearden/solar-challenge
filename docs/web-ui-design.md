@@ -140,7 +140,7 @@ Fleet configuration with distribution editors and live preview.
 **Wire shape:** Both fleet pages post a component as the grammar's own spec: `{pv: {capacity_kw: <spec>}, battery: {capacity_kwh: <spec>} | absent, load: {annual_consumption_kwh: <spec>}}`. A spec is a number, null, or `{type, ...}` with its type's keys, a type's rows as parallel lists, `values` with `weights` or `counts`. static/js/distribution-editor.js's `DistributionEditor.wire` writes it from the editor's state.
 
 - The server reads the blocks with `fleet_config.read_form_fleet`, as a `fleet_distribution:` block's are, at the form's own paths and with nothing invented, so a refusal names the field the page posted, e.g. `pv.capacity_kw`. It then holds the fleet to the dashboard's bounds. A shuffled pool's counts must total the fleet's n_homes, the grammar's rule.
-- A blank optional input posts null, so a normal needs no clamps, and a blank pool value is a home without the component.
+- A blank optional input posts null, so a normal needs no clamps. A blank battery pool value is a home without a battery, and a blank load value takes the load's default. Every home needs a PV capacity, so a blank PV value, fixed or one a home would draw, is refused naming `pv.capacity_kw` before any home is generated.
 
 **Import:** Import YAML and Load Preset load each component's spec as the grammar reads it, written back in canonical form (`ComponentLimits.editor_spec`), through `DistributionEditor.load`. A fixed spec loads as Fixed Value, a normal without clamps with blank clamps, and a pool's null value as a blank value. Any other type, such as `proportional_to`, is refused, naming its path and the editor's types.
 

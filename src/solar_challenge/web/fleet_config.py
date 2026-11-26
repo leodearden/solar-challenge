@@ -17,7 +17,14 @@ from typing import Any
 
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import FleetDistributionConfig, parse_fleet_distribution_config
+from solar_challenge.fleet_distribution import (
+    ComponentDistribution,
+    DistributionSpec,
+    FleetDistributionConfig,
+    ShuffledPoolDistribution,
+    WeightedDiscreteDistribution,
+    parse_fleet_distribution_config,
+)
 from solar_challenge.number_fields import (
     Interval,
     as_finite_float,
@@ -25,8 +32,9 @@ from solar_challenge.number_fields import (
     as_whole_number,
     as_whole_numbers,
 )
-from solar_challenge.scenario_blocks import child_path, require_mapping
+from solar_challenge.scenario_blocks import child_path, refusal, require_mapping
 from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
     FLEET_SIZE,
     MAX_FLEET_HOMES,
     read_fleet_seed,
@@ -35,18 +43,58 @@ from solar_challenge.web.fleet_components import (
 
 
 def refuse_a_fleet_the_dashboard_cannot_run(fleet: FleetDistributionConfig, path: str) -> None:
-    """Refuse *fleet*, a fleet fleet_distribution.py's grammar has read from the block at *path*, when the dashboard cannot run it: more than :data:`MAX_FLEET_HOMES` homes, or a seed beyond :data:`MAX_FLEET_SEED`.
+    """Refuse *fleet*, a fleet fleet_distribution.py's grammar has read from the block at *path*, when the dashboard cannot run it: more than :data:`MAX_FLEET_HOMES` homes, a seed beyond :data:`MAX_FLEET_SEED`, or a field every home needs that some home may draw null.
 
     A shuffled pool needs no bound of its own: the grammar's F6 holds every pool's counts
     to the fleet's n_homes, so a fleet within MAX_FLEET_HOMES holds no larger pool.
 
     Raises:
         ConfigurationError: From :func:`read_fleet_size` or :func:`read_fleet_seed`, naming
-            n_homes or seed under *path* and the value read.
+            n_homes or seed under *path* and the value read; or naming the field under *path*
+            and the null a home may draw.
     """
     read_fleet_size(fleet.n_homes, child_path(path, "n_homes"))
     if fleet.seed is not None:
         read_fleet_seed(fleet.seed, child_path(path, "seed"))
+    _refuse_a_required_field_a_home_may_draw_null(fleet, path)
+
+
+def _refuse_a_required_field_a_home_may_draw_null(fleet: FleetDistributionConfig, path: str) -> None:
+    """Refuse *fleet*, read from the block at *path*, when a component gives a field its fleet row requires, other than its presence field, a spec some home may draw null from.
+
+    The grammar refuses such a draw only as it generates the homes, naming the field under
+    fleet_distribution, and a form's cleared input posts null; so it is refused before any home
+    is generated, under *path*. A presence field's null is a home without the component.
+
+    Raises:
+        ConfigurationError: Naming the field under *path* and the null a home may draw.
+    """
+    for component in FLEET_COMPONENTS.values():
+        distribution: ComponentDistribution | None = getattr(fleet, component.key)
+        if distribution is None:
+            continue
+        for key, spec in distribution.draws.items():
+            row = component.block.fleet[key]
+            null = _null_a_home_may_draw(spec)
+            if row.required and key != component.block.presence and null is not None:
+                field = child_path(child_path(path, component.key), key)
+                raise refusal(field, f"required, so no home may draw null, got {null}")
+
+
+def _null_a_home_may_draw(spec: DistributionSpec) -> str | None:
+    """The null in *spec* some home may draw: 'null' for the null spec, or 'a null at values[<index>]' for the first value left null with a count or weight above 0; None when no home may draw null."""
+    if spec is None:
+        return "null"
+    if isinstance(spec, ShuffledPoolDistribution):
+        shares: tuple[float, ...] = spec.counts
+    elif isinstance(spec, WeightedDiscreteDistribution):
+        shares = spec.weights
+    else:
+        return None
+    for index, (value, share) in enumerate(zip(spec.values, shares, strict=True)):
+        if value is None and share > 0:
+            return f"a null at values[{index}]"
+    return None
 
 
 def sample_distribution(
@@ -148,7 +196,8 @@ def read_form_fleet(blocks: Mapping[str, Any]) -> FleetDistributionConfig:
 
     Raises:
         ConfigurationError: For a battery block setting a dispatch strategy, a block the grammar
-            refuses, or a fleet the dashboard cannot run, naming the field as the form posts it.
+            refuses, or a fleet the dashboard cannot run, a cleared PV capacity among them,
+            naming the field as the form posts it.
     """
     battery = blocks.get("battery")
     if isinstance(battery, dict):

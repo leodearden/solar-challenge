@@ -241,6 +241,7 @@ class TestScenarioFromBuilderForm:
                 id="values-without-their-weights",
             ),
             pytest.param({**_ACCEPTED_FORM, "pv": "4"}, ("pv",), id="a-block-that-is-not-a-mapping"),
+            pytest.param(_with_pv(None), ("pv.capacity_kw", "required"), id="a-cleared-pv-capacity"),
             pytest.param({**_ACCEPTED_FORM, "battery": {"capacity_kwh": -1}}, ("battery.capacity_kwh",), id="a-negative-battery"),
         ],
     )

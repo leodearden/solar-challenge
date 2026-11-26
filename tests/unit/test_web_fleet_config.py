@@ -498,6 +498,51 @@ class TestReadFormFleet:
         assert str(refused.value) == _grammar_refusal(blocks)
         assert all(each in str(refused.value) for each in ("pv.capacity_kw", str(10**12), "n_homes (10)"))
 
+    @pytest.mark.parametrize(
+        ("spec", "got"),
+        [
+            pytest.param(None, "null", id="a-cleared-fixed-value"),
+            pytest.param(
+                {"type": "shuffled_pool", "values": [3.0, None], "counts": [3, 1]},
+                "a null at values[1]",
+                id="a-blank-pool-value",
+            ),
+            pytest.param(
+                {"type": "weighted_discrete", "values": [None, 5.0], "weights": [1, 3]},
+                "a null at values[0]",
+                id="a-blank-weighted-value",
+            ),
+        ],
+    )
+    def test_pvs_capacity_that_a_home_may_draw_null_is_refused_naming_the_forms_field(
+        self, spec: object, got: str
+    ) -> None:
+        """Every home needs a PV capacity, so a spec some home may draw null from is refused before any home is generated, under pv.capacity_kw, the field the page posted."""
+        blocks = {**_FORM_FLEET_BLOCKS, "pv": {"capacity_kw": spec}}
+        with pytest.raises(ConfigurationError) as refused:
+            fleet_config.read_form_fleet(blocks)
+        assert str(refused.value) == f"pv.capacity_kw: required, so no home may draw null, got {got}"
+
+    @pytest.mark.parametrize(
+        "component",
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "shuffled_pool", "values": [3.0, None], "counts": [4, 0]}}},
+                id="a-pv-pool-value-no-home-draws",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "shuffled_pool", "values": [None, 5.0], "counts": [3, 1]}}},
+                id="a-battery-pool-value-a-home-without-a-battery",
+            ),
+            pytest.param({"battery": {"capacity_kwh": None}}, id="a-battery-every-home-is-without"),
+            pytest.param({"load": {"annual_consumption_kwh": None}}, id="a-load-left-to-its-default"),
+        ],
+    )
+    def test_a_null_no_home_needs_a_value_for_is_read_as_the_grammar_reads_it(self, component: dict[str, Any]) -> None:
+        """A null no home draws, a battery capacity's null, a home without a battery, and a load consumption's null, its default, are the grammar's."""
+        blocks = {**_FORM_FLEET_BLOCKS, **component}
+        assert fleet_config.read_form_fleet(blocks) == parse_fleet_distribution_config(blocks, block_path="")
+
     def test_a_battery_block_setting_a_dispatch_strategy_is_refused_naming_it(self) -> None:
         blocks = {**_FORM_FLEET_BLOCKS, "battery": {"capacity_kwh": 5.0, "dispatch_strategy": "tou_optimized"}}
         with pytest.raises(ConfigurationError) as refused:
@@ -605,3 +650,19 @@ class TestRefuseAFleetTheDashboardCannotRun:
         assert str(exc_info.value) == (
             f"{field} must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, got {seed}"
         )
+
+    @pytest.mark.parametrize(
+        ("path", "field"),
+        [
+            pytest.param("fleet_distribution", "fleet_distribution.pv.capacity_kw", id="import"),
+            pytest.param("", "pv.capacity_kw", id="fleet-form"),
+        ],
+    )
+    def test_a_pv_capacity_a_home_may_draw_null_is_refused_naming_it_under_the_path(
+        self, path: str, field: str
+    ) -> None:
+        """Every home needs a PV capacity, so a pool value left null that a home draws is refused before any home is generated, under *path*."""
+        fleet = self._fleet(pv={"capacity_kw": {"type": "shuffled_pool", "values": [4.0, None], "counts": [1, 1]}})
+        with pytest.raises(ConfigurationError) as exc_info:
+            fleet_config.refuse_a_fleet_the_dashboard_cannot_run(fleet, path)
+        assert str(exc_info.value) == f"{field}: required, so no home may draw null, got a null at values[1]"

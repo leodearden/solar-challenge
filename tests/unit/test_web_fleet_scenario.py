@@ -28,7 +28,7 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
-from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS
+from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS, read_form_fleet
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
     ParsedFleetForm,
@@ -396,6 +396,26 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
             parse_fleet_form({**_FLEET_FORM, "pv": {"capacity_kw": {"type": "normal"}}})
         assert str(refusal.value).startswith("pv.capacity_kw")
         assert "fleet_distribution." not in str(refusal.value)
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(None, id="a-cleared-fixed-value"),
+            pytest.param({"type": "shuffled_pool", "values": [4.0, None], "counts": [2, 1]}, id="a-blank-pool-value"),
+        ],
+    )
+    def test_a_pv_capacity_a_home_would_draw_null_is_refused_as_read_form_fleet_refuses_it_naming_the_forms_field(
+        self, spec: object
+    ) -> None:
+        """A cleared PV input posts null, refused at pv.capacity_kw before any home is generated, not as a home's null draw under fleet_distribution."""
+        form = {**_FLEET_FORM, "pv": {"capacity_kw": spec}}
+        blocks = {name: form[name] for name in FLEET_DISTRIBUTION_FORM_KEYS if name in form}
+        with pytest.raises(ConfigurationError) as expected:
+            read_form_fleet(blocks)
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_form(form)
+        assert str(refusal.value) == str(expected.value)
+        assert str(refusal.value).startswith("pv.capacity_kw: required")
 
     def test_a_fleet_that_sweeps_is_refused_as_parse_scenario_refuses_its_document(self) -> None:
         """A sweep defines one fleet per point, which 'fleet sweep' runs, so the form's one fleet is refused with parse_scenario's refusal of the document the form describes, naming the swept field."""
@@ -1214,16 +1234,19 @@ class TestFleetFormFromScenario:
 
         assert str(refusal.value) == str(expected.value)
 
-    def test_a_null_in_a_pv_pool_is_refused_as_the_form_it_loads_is_refused_while_generating(self) -> None:
-        """A pool's null is held as written, so the pv pool loads with it, and the form loaded is refused while its homes are generated, as parse_fleet_form refuses it: every home has PV."""
+    def test_a_null_a_home_draws_from_a_pv_pool_is_refused_at_its_scenario_path_as_the_form_refuses_it_at_its_own(
+        self,
+    ) -> None:
+        """A pool's null is held as written, but every home has PV, so a null a home draws is refused before any form is loaded or home generated, naming fleet_distribution.pv.capacity_kw, as parse_fleet_form refuses it naming pv.capacity_kw."""
         pool = {"type": "shuffled_pool", "values": [None, 4.0], "counts": [1, 2]}
-        with pytest.raises(ConfigurationError) as expected:
+        with pytest.raises(ConfigurationError) as form_refusal:
             parse_fleet_form({**_FLEET_FORM, "pv": {"capacity_kw": pool}})
 
         with pytest.raises(ConfigurationError) as refusal:
             fleet_form_from_scenario(_with_fleet_distribution(pv={"capacity_kw": pool}))
 
-        assert str(refusal.value) == str(expected.value)
+        assert str(form_refusal.value).startswith("pv.capacity_kw: required")
+        assert str(refusal.value) == f"fleet_distribution.{form_refusal.value}"
 
     @pytest.mark.parametrize(
         ("blocks", "form", "not_loaded"),
