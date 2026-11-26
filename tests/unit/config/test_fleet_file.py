@@ -861,7 +861,7 @@ class TestParseSweepFleetConfigs:
         """Three points 5e-5 apart would share the name ...=1.0000 at four decimals, so each is named at five."""
         sweep = {"type": "sweep", "min": 1.0, "max": 1.0001, "steps": 3, "mode": "linear"}
 
-        fleets = parse_sweep_fleet_configs(_fleet_file(_proportional_to_pv(sweep)))
+        fleets = parse_sweep_fleet_configs(_fleet_file(_proportional_to_pv(sweep), tariff=_ECONOMY_7))
 
         assert [fleet.name for _, fleet in fleets] == [
             "battery.capacity_kwh.multiplier=1.00000",

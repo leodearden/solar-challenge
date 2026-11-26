@@ -42,6 +42,7 @@ from solar_challenge.config import (
     parse_sweep_scenarios,
     substitute_config_variables,
     sweep_point_fleet,
+    sweep_value_labels,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
@@ -278,7 +279,9 @@ def sweep(
 
     Each point is labelled <axis label>=<value> and written to
     <axis label>_<value>.csv: the axis label is the knob's canonical name,
-    the variable's NAME, or the path of the YAML sweep's field.
+    the variable's NAME, or the path of the YAML sweep's field, and the
+    value is at four decimals, or more where two points would otherwise
+    share a label.
 
     Example YAML-defined sweep:
 
@@ -328,7 +331,11 @@ def sweep(
         f"{source} sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
         f"({sweep_spec.steps} steps, {sweep_spec.mode})"
     )
-    fleets = [sweep_point_fleet(param_name, value, scenario) for value, scenario in sweep_points]
+    labels = sweep_value_labels([value for value, _ in sweep_points])
+    fleets = [
+        sweep_point_fleet(param_name, label, scenario)
+        for label, (_, scenario) in zip(labels, sweep_points, strict=True)
+    ]
 
     # Create output directory if needed
     if output_dir is not None:
@@ -351,7 +358,7 @@ def sweep(
         ):
             sweep_results[index] = fleet_results
             if output_dir is not None:
-                _export_sweep_point(output_dir, param_name, sweep_points[index][0], fleet_results)
+                _export_sweep_point(output_dir, param_name, labels[index], fleet_results)
 
     results_summary = [
         _sweep_summary_row(param_name, sweep_value, sweep_results[index])
@@ -359,7 +366,7 @@ def sweep(
     ]
 
     # Print summary table
-    _print_sweep_summary(results_summary)
+    _print_sweep_summary(labels, results_summary)
 
     # Save summary CSV
     if output_dir is not None:
@@ -503,9 +510,9 @@ def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:
     return homes_done
 
 
-def _export_sweep_point(output_dir: Path, param_name: str, sweep_value: float, fleet_results: FleetResults) -> None:
-    """Export a completed sweep point to its CSV under output_dir."""
-    _export_fleet_results(fleet_results, output_dir / f"{param_name}_{sweep_value:.4f}.csv")
+def _export_sweep_point(output_dir: Path, param_name: str, value_label: str, fleet_results: FleetResults) -> None:
+    """Export a completed sweep point, labelled value_label, to its CSV under output_dir."""
+    _export_fleet_results(fleet_results, output_dir / f"{param_name}_{value_label}.csv")
 
 
 def _sweep_summary_row(
@@ -524,8 +531,8 @@ def _sweep_summary_row(
     }
 
 
-def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
-    """Print sweep summary table."""
+def _print_sweep_summary(labels: Iterable[str], results: list[dict[str, Any]]) -> None:
+    """Print sweep summary table: each point's row of results under its label."""
     table = Table(title="Sweep Results Summary")
     table.add_column("Value", justify="right")
     table.add_column("Self-Consumption", justify="right")
@@ -533,9 +540,9 @@ def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
     table.add_column("Import (kWh)", justify="right")
     table.add_column("Export (kWh)", justify="right")
 
-    for r in results:
+    for label, r in zip(labels, results, strict=True):
         table.add_row(
-            f"{r['sweep_value']:.4f}",
+            label,
             f"{r['self_consumption_ratio']:.1%}",
             f"{r['total_generation_kwh']:.1f}",
             f"{r['grid_import_kwh']:.1f}",

@@ -21,6 +21,7 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
+    Sequence,
     TypeVar,
     Union,
 )
@@ -844,9 +845,17 @@ def fleet_of(scenario: ScenarioConfig, *, name: Optional[str] = None) -> FleetCo
     return FleetConfig(homes=scenario.simulated_homes(), name=scenario.name if name is None else name)
 
 
-def sweep_point_fleet(param_name: str, value: float, scenario: ScenarioConfig) -> FleetConfig:
-    """The fleet of the sweep point at *value*: the fleet *scenario* simulates, named after the swept parameter *param_name* and the value."""
-    return fleet_of(scenario, name=f"{param_name}={value:.4f}")
+def sweep_value_labels(values: Sequence[float]) -> tuple[str, ...]:
+    """Each of a sweep's *values* as the text naming its point: at four decimals, or at the fewest more at which no two distinct values share a text."""
+    decimals = 4
+    while len({f"{value:.{decimals}f}" for value in values}) < len(set(values)):
+        decimals += 1
+    return tuple(f"{value:.{decimals}f}" for value in values)
+
+
+def sweep_point_fleet(param_name: str, value_label: str, scenario: ScenarioConfig) -> FleetConfig:
+    """The fleet of a sweep point: the fleet *scenario* simulates, named after the swept parameter *param_name* and *value_label*, sweep_value_labels' text for the point."""
+    return fleet_of(scenario, name=f"{param_name}={value_label}")
 
 
 def parse_fleet_config(document: object) -> FleetConfig:
@@ -949,7 +958,8 @@ def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig
 
     Each fleet is the sweep_point_fleet of the point's scenario, as parse_sweep_scenarios builds
     it, named '<placement>.multiplier=<value>' after the swept_parameter_path of the sweep's
-    field, e.g. 'battery.capacity_kwh.multiplier=0.1000'.
+    field, the value at four decimals or as many more as sweep_value_labels needs to tell the
+    points apart, e.g. 'battery.capacity_kwh.multiplier=0.1000'.
 
     Returns:
         (sweep value, the point's FleetConfig) for each sweep point, in sweep order
@@ -958,7 +968,11 @@ def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig
         ConfigurationError: as parse_sweep_scenarios refuses the document
     """
     placement, points = _swept_scenarios(document)
-    return [(value, sweep_point_fleet(swept_parameter_path(placement), value, scenario)) for value, scenario in points]
+    labels = sweep_value_labels([value for value, _ in points])
+    return [
+        (value, sweep_point_fleet(swept_parameter_path(placement), label, scenario))
+        for label, (value, scenario) in zip(labels, points, strict=True)
+    ]
 
 
 def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
