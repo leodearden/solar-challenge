@@ -34,7 +34,7 @@ from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.builder_form import scenario_from_builder_form
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES
-from solar_challenge.web.request_boundary import require_encodable_text
+from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_names
@@ -513,13 +513,68 @@ class TestScenarioAPI:
         data = response.get_json()
         assert data["name"] == "test-preset"
 
-    def test_save_preset_no_name_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/scenarios/save with no name returns 400."""
-        response = client.post(
-            "/api/scenarios/save",
-            json={"config": {"n_homes": 10}},
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"config": {"n_homes": 10}}, id="no-name"),
+            pytest.param({"name": "   ", "config": {"n_homes": 9}}, id="blank-name"),
+        ],
+    )
+    def test_save_preset_without_a_name_returns_400_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, body: dict[str, Any]
+    ) -> None:
+        """Test POST /api/scenarios/save with no name, or a blank one, returns 400."""
+        response = client.post("/api/scenarios/save", json=body)
+
+        assert (response.status_code, response.get_json()) == (400, {"error": "Scenario name is required"})
+        assert saved_preset_names(database_of(app)) == []
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            pytest.param(5, id="integer"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_save_of_a_name_that_is_not_a_json_string_returns_400_naming_name_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, name: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_string(name, "name")
+
+        response = client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}})
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
+        assert saved_preset_names(database_of(app)) == []
+
+    @pytest.mark.parametrize(
+        ("config", "type_name"),
+        [
+            pytest.param([1, 2], "list", id="array"),
+            pytest.param([], "list", id="empty-array"),
+            pytest.param("", "str", id="empty-string"),
+            pytest.param(0, "int", id="zero"),
+            pytest.param(None, "NoneType", id="null"),
+        ],
+    )
+    def test_save_of_a_config_that_is_not_a_json_object_returns_400_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, config: object, type_name: str
+    ) -> None:
+        """A sent config, falsy or not, must be a JSON object: it is never the cue to save the rest of the body as the preset."""
+        response = client.post("/api/scenarios/save", json={"name": "s", "config": config})
+
+        assert (response.status_code, response.get_json()) == (
+            400,
+            {"error": f"config must be a JSON object, got {type_name}"},
         )
-        assert response.status_code == 400
+        assert saved_preset_names(database_of(app)) == []
+
+    def test_save_of_a_body_that_sends_no_config_saves_its_flat_form(self, client: FlaskClient) -> None:
+        """Every key of the body but name and type is the preset's config."""
+        response = client.post("/api/scenarios/save", json={"name": "Flat", "n_homes": 3})
+
+        assert response.status_code == 201
+        assert client.get("/api/scenarios/presets/Flat").get_json()["config"] == {"n_homes": 3}
 
     def test_save_of_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_saves_nothing(
         self, app: Flask, client: FlaskClient
