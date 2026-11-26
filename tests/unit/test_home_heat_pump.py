@@ -4,6 +4,7 @@
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.heat_pump import HeatPumpConfig, calculate_cop
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
@@ -89,9 +90,8 @@ class TestSimulateHomeAddsHeatPumpLoad:
             household_only_home, day, day, weather=weather_for(household_only_home, cold_january15_tmy_weather)
         )
 
-        assert household_only.heat_pump_load is None
-        heat_pump_load = with_heat_pump.heat_pump_load
-        assert heat_pump_load is not None
+        assert LoadKind.HEAT_PUMP not in household_only.additional_loads
+        heat_pump_load = with_heat_pump.additional_loads[LoadKind.HEAT_PUMP]
         assert (heat_pump_load > 0).all()
         pd.testing.assert_index_equal(heat_pump_load.index, with_heat_pump.demand.index)
         pd.testing.assert_series_equal(with_heat_pump.demand, household_only.demand + heat_pump_load, check_names=False)
@@ -101,7 +101,7 @@ class TestSimulateHomeAddsHeatPumpLoad:
 
 
 class TestSimulateHomeNamesTheHeatPumpLoad:
-    """simulate_home names its heat_pump_load heat_pump_load_kw, the column to_dataframe gives it.
+    """simulate_home names its heat pump's additional load heat_pump_load_kw, the column to_dataframe gives it.
 
     That holds whether or not the TMY year has any heating, so on both of generate_heat_pump_load's return paths.
     Synthetic weather, no network.
@@ -125,8 +125,7 @@ class TestSimulateHomeNamesTheHeatPumpLoad:
 
         results = simulate_home(home, day, day, weather=weather_for(home, sunless_tmy(temp_air=temp_air_c, wind_speed=_TMY_WIND_SPEED)))
 
-        assert results.heat_pump_load is not None
-        assert results.heat_pump_load.name == "heat_pump_load_kw"
+        assert results.additional_loads[LoadKind.HEAT_PUMP].name == LoadKind.HEAT_PUMP.column == "heat_pump_load_kw"
 
 
 @pytest.fixture
@@ -167,8 +166,7 @@ class TestSimulateHomeSharesTheAnnualHeatDemandOverTheTMYYear:
             weather=weather_for(home, constant_10c_tmy_weather),
         )
 
-        assert results.heat_pump_load is not None
-        heat_delivered_kwh = (results.heat_pump_load * calculate_cop("ASHP", 10.0)).sum() / 60
+        heat_delivered_kwh = (results.additional_loads[LoadKind.HEAT_PUMP] * calculate_cop("ASHP", 10.0)).sum() / 60
         assert heat_delivered_kwh == pytest.approx(days * heat_pump.annual_heat_demand_kwh / 365)
 
 
@@ -233,10 +231,10 @@ class TestHeatPumpIntegration:
         )
 
         # Verify GSHP heat pump load is generated
-        assert results.heat_pump_load is not None
-        assert len(results.heat_pump_load) == 1440
-        assert results.heat_pump_load.min() >= 0.0
-        assert results.heat_pump_load.sum() > 0.0
+        heat_pump_load = results.additional_loads[LoadKind.HEAT_PUMP]
+        assert len(heat_pump_load) == 1440
+        assert heat_pump_load.min() >= 0.0
+        assert heat_pump_load.sum() > 0.0
 
     def test_results_to_dataframe_includes_heat_pump(self, daylit_cold_january15_tmy_weather):
         """SimulationResults.to_dataframe includes heat pump load column."""
@@ -307,22 +305,14 @@ class TestHeatPumpIntegration:
 
         summary = calculate_summary(results)
 
-        # Heat pump metrics should be present
-        assert summary.total_heat_pump_load_kwh is not None
-        assert summary.peak_heat_pump_load_kw is not None
-        assert summary.heat_pump_load_ratio is not None
-
-        # Values should be reasonable
-        assert summary.total_heat_pump_load_kwh > 0.0
-        assert summary.peak_heat_pump_load_kw > 0.0
-        assert 0.0 <= summary.heat_pump_load_ratio <= 1.0
-
-        # Heat pump ratio = heat_pump_load / total_demand
-        expected_ratio = summary.total_heat_pump_load_kwh / summary.total_demand_kwh
-        assert summary.heat_pump_load_ratio == pytest.approx(expected_ratio, rel=0.01)
+        heat_pump_kwh = summary.load_energy_kwh[LoadKind.HEAT_PUMP]
+        assert heat_pump_kwh > 0.0
+        assert results.additional_loads[LoadKind.HEAT_PUMP].max() > 0.0
+        assert 0.0 <= summary.load_share(LoadKind.HEAT_PUMP) <= 1.0
+        assert summary.load_share(LoadKind.HEAT_PUMP) == pytest.approx(heat_pump_kwh / summary.total_demand_kwh, rel=0.01)
 
     def test_calculate_summary_without_heat_pump(self, daylit_cold_january15_tmy_weather):
-        """calculate_summary works without heat pump (None values)."""
+        """calculate_summary works without heat pump: its load energy has no heat pump's."""
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3000.0),
@@ -338,10 +328,7 @@ class TestHeatPumpIntegration:
 
         summary = calculate_summary(results)
 
-        # Heat pump metrics should be None
-        assert summary.total_heat_pump_load_kwh is None
-        assert summary.peak_heat_pump_load_kw is None
-        assert summary.heat_pump_load_ratio is None
+        assert LoadKind.HEAT_PUMP not in summary.load_energy_kwh
 
     def test_heat_pump_draws_power_on_a_winter_day_and_none_on_a_summer_day(self, daylit_cold_january15_tmy_weather):
         """The run's date picks the TMY day that drives the load: 15 January is below the heat pump's base temperature, 15 July above it."""
@@ -372,8 +359,8 @@ class TestHeatPumpIntegration:
             weather=weather_for(config, daylit_cold_january15_tmy_weather),
         )
 
-        assert winter_results.heat_pump_load.sum() > 0.0
-        assert summer_results.heat_pump_load.sum() == 0.0
+        assert winter_results.additional_loads[LoadKind.HEAT_PUMP].sum() > 0.0
+        assert summer_results.additional_loads[LoadKind.HEAT_PUMP].sum() == 0.0
 
     def test_heat_pump_with_battery(self, daylit_cold_january15_tmy_weather):
         """Heat pump works correctly with battery storage."""
@@ -399,8 +386,7 @@ class TestHeatPumpIntegration:
         # Verify all components are working together
         assert results.generation.sum() > 0.0  # PV generation
         assert results.demand.sum() > 0.0  # Total demand (household + heat pump)
-        assert results.heat_pump_load is not None
-        assert results.heat_pump_load.sum() > 0.0  # Heat pump load
+        assert results.additional_loads[LoadKind.HEAT_PUMP].sum() > 0.0  # Heat pump load
         # Battery may charge or discharge depending on generation/demand
         assert results.battery_soc.max() >= 0.0
 
@@ -425,6 +411,6 @@ class TestHeatPumpIntegration:
         )
 
         coldest_hour_c = daylit_cold_january15_tmy_weather["temp_air"].min()
-        assert results.heat_pump_load.max() == pytest.approx(
+        assert results.additional_loads[LoadKind.HEAT_PUMP].max() == pytest.approx(
             config.heat_pump_config.thermal_capacity_kw / calculate_cop("ASHP", coldest_hour_c)
         )

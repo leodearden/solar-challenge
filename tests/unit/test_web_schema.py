@@ -324,6 +324,15 @@ def test_schema_version_9_is_the_home_summary_seg_revenue_step_and_reports_its_d
     assert version_9.description == RUN_DOCUMENT_STEPS[7].description
 
 
+def test_schema_version_10_is_the_load_energy_step_and_reports_its_description() -> None:
+    """Version 10 changes no table: it brings every stored run to the stored-run format of version 10."""
+    version_10 = MIGRATIONS[9]
+
+    assert version_10.version == 10
+    assert version_10.run_documents is RUN_DOCUMENT_STEPS[8]
+    assert version_10.description == RUN_DOCUMENT_STEPS[8].description
+
+
 @pytest.fixture
 def legacy_store(tmp_path: Path) -> Path:
     """The pre-548 store, as an older solar-challenge left it: at version 0, with the jobs table and runs with no name."""

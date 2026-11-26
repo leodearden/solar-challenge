@@ -55,7 +55,11 @@ and every other battery that names no strategy names self_consumption, the dispa
 unreported; then it drops every home's key, unreported. v2 keeps a home's dispatch_strategy for
 v3 and v8 the same way. v9 drops each stored home summary's seg_revenue_gbp, a home run's summary
 and each fleet home summary, reporting each value that is not null; v2 keeps it for v9 the same
-way.
+way. v10 gives each stored home summary lacking a load_energy_kwh its household's energy, its
+demand less its heat pump's, and its heat pump's when it holds one, keeps a load_energy_kwh a
+summary holds, and drops each summary's total_heat_pump_load_kwh, peak_heat_pump_load_kw and
+heat_pump_load_ratio, reporting only a heat-pump total its load_energy_kwh does not hold; v2
+keeps the three for v10 the same way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -92,6 +96,7 @@ from typing import Any, Literal, TypeVar, get_args
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SeriesRefused, SimulationResults, SummaryStatistics
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
@@ -100,6 +105,7 @@ from solar_challenge.web.field_tree import (
     DropsUnknownKey,
     FieldTreeRefused,
     field_tree,
+    is_json_number,
     read_field_tree,
     without_unknown_keys,
 )
@@ -898,15 +904,22 @@ _HOME_DISPATCH = "dispatch_strategy"
 _SUMMARY_SEG_REVENUE = "seg_revenue_gbp"
 """The key of the SEG revenue a SummaryStatistics stored before format 9 may hold, a second copy of its total_export_revenue_gbp; v9 drops it."""
 
+_SUMMARY_HEAT_PUMP_TOTAL = "total_heat_pump_load_kwh"
+
+_SUMMARY_HEAT_PUMP_KEYS = (_SUMMARY_HEAT_PUMP_TOTAL, "peak_heat_pump_load_kw", "heat_pump_load_ratio")
+"""The heat pump's figures a SummaryStatistics stored before format 10 holds, its total, its peak and its share of the demand; v10 carries the total into the summary's load_energy_kwh and drops the three."""
+
+_LOAD_ENERGY = "load_energy_kwh"
+
 _RETIRED_KEYS_A_LATER_STEP_READS: Mapping[type, frozenset[str]] = MappingProxyType(
     {
-        SummaryStatistics: frozenset({_SIMULATION_DAYS, _SUMMARY_SEG_REVENUE}),
+        SummaryStatistics: frozenset({_SIMULATION_DAYS, _SUMMARY_SEG_REVENUE, *_SUMMARY_HEAT_PUMP_KEYS}),
         FleetSummary: frozenset(_FLEET_SEG_REVENUE_KEYS),
         BatteryConfig: frozenset({_BATTERY_ROUND_TRIP}),
         HomeConfig: frozenset({_HOME_DISPATCH}),
     }
 )
-"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair, v7 a battery's efficiency and v9 a home summary's seg_revenue_gbp, each reporting each value that is not null; v3 reads a home's dispatch_strategy as its run ran, and v8 moves it into the home's battery."""
+"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair, v7 a battery's efficiency and v9 a home summary's seg_revenue_gbp, each reporting each value that is not null; v3 reads a home's dispatch_strategy as its run ran, and v8 moves it into the home's battery; v10 carries a home summary's heat-pump total into its load_energy_kwh, then drops its three heat-pump figures."""
 
 
 def _not_read_by_a_later_step(owner: type, key: str) -> bool:
@@ -1074,8 +1087,7 @@ def _periods_charge_one_rate(tariff: Any) -> bool:
     if not isinstance(periods, list) or not periods or not all(isinstance(period, dict) for period in periods):
         return False
     rates = [period.get("rate_per_kwh") for period in periods]
-    is_number = [isinstance(rate, (int, float)) and not isinstance(rate, bool) for rate in rates]
-    return all(is_number) and all(rate == rates[0] for rate in rates)
+    return all(is_json_number(rate) for rate in rates) and all(rate == rates[0] for rate in rates)
 
 
 def _summaries_at_format_5(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
@@ -1228,6 +1240,61 @@ def _summary_seg_revenues_dropped(run_type: RunType, documents: StoredRunDocumen
     return _unknown_keys_dropped(run_type, documents, _is_a_summary_seg_revenue)
 
 
+def _summaries_given_load_energy(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v10's step: *documents* with each SummaryStatistics document brought forward as _summary_given_load_energy brings it, and each heat-pump total it dropped that its load_energy_kwh does not hold.
+
+    Those are a home run's summary and each of a fleet run's home summaries; a fleet's
+    FleetSummary and every config are left as they are.
+    """
+    dropped: list[DroppedValue] = []
+
+    def given_load_energy(document: StoredDocument, cls: type) -> StoredDocument:
+        if cls is not SummaryStatistics:
+            return document
+        content, dropped_total = _summary_given_load_energy(document.content)
+        if dropped_total is not None:
+            dropped.append(DroppedValue(document.run_id, document.name, _SUMMARY_HEAT_PUMP_TOTAL, dropped_total))
+        return replace(document, content=content)
+
+    return StepResult(documents=_each_document(run_type, documents, given_load_energy), dropped=tuple(dropped))
+
+
+def _summary_given_load_energy(summary: Any) -> tuple[Any, Any]:
+    """*summary*, a stored SummaryStatistics object, given a load_energy_kwh and rid of _SUMMARY_HEAT_PUMP_KEYS; and its dropped heat-pump total, None unless its load_energy_kwh does not hold it.
+
+    A summary holding a load_energy_kwh keeps it. Otherwise it is given the one
+    _load_energy_of its demand and its heat-pump total, or none when they make none, for the
+    strict reader to refuse by its path: its demand, or its missing load_energy_kwh. Either way
+    the three figures are dropped. A summary that is not an object is left as it is, for the
+    strict reader to refuse.
+    """
+    if not isinstance(summary, dict):
+        return summary, None
+    heat_pump_kwh = summary.get(_SUMMARY_HEAT_PUMP_TOTAL)
+    load_energy = summary.get(_LOAD_ENERGY)
+    if load_energy is None:
+        load_energy = _load_energy_of(summary.get("total_demand_kwh"), heat_pump_kwh)
+    held = load_energy.get(LoadKind.HEAT_PUMP.value) if isinstance(load_energy, dict) else None
+    dropped_total = heat_pump_kwh if heat_pump_kwh is not None and held != heat_pump_kwh else None
+    without_the_figures = {key: value for key, value in summary.items() if key not in _SUMMARY_HEAT_PUMP_KEYS}
+    given = {} if load_energy is None else {_LOAD_ENERGY: load_energy}
+    return {**without_the_figures, **given}, dropped_total
+
+
+def _load_energy_of(demand_kwh: Any, heat_pump_kwh: Any) -> dict[str, Any] | None:
+    """The load_energy_kwh of a stored summary whose total_demand_kwh is *demand_kwh* and whose heat-pump total is *heat_pump_kwh*, or None when the demand is not a number or the total is neither null nor a number.
+
+    It holds the household's energy, the demand less the heat pump's total, and that total when
+    it is not null. A household's energy below 0 is kept, for the strict reader to refuse by its
+    path.
+    """
+    if not is_json_number(demand_kwh) or not (heat_pump_kwh is None or is_json_number(heat_pump_kwh)):
+        return None
+    if heat_pump_kwh is None:
+        return {LoadKind.HOUSEHOLD.value: demand_kwh}
+    return {LoadKind.HOUSEHOLD.value: demand_kwh - heat_pump_kwh, LoadKind.HEAT_PUMP.value: heat_pump_kwh}
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
@@ -1278,6 +1345,14 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         "Drop each stored home summary's seg_revenue_gbp, a second copy of its total_export_revenue_gbp, "
         "which SummaryStatistics no longer has",
         _summary_seg_revenues_dropped,
+    ),
+    RunDocumentStep(
+        10,
+        "Give each stored summary saved before summaries held each load's energy a load_energy_kwh, its "
+        "household's energy, its demand less its heat pump's, and its heat pump's, and drop each summary's "
+        "total_heat_pump_load_kwh, peak_heat_pump_load_kw and heat_pump_load_ratio, which SummaryStatistics "
+        "no longer has",
+        _summaries_given_load_energy,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""

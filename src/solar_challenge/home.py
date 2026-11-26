@@ -242,8 +242,6 @@ class SimulationResults:
         export_revenue: Revenue from grid export in £
         tariff_rate: Tariff rate in £/kWh
         strategy_name: Name of the dispatch strategy used
-        heat_pump_load: The heat pump's electrical load in kW, None without a heat pump;
-            transitional, it is one series with additional_loads[LoadKind.HEAT_PUMP]
         grid_charge: Optional power the battery drew from the grid in kW, a part of
             both battery_charge and grid_import (None when tariff_config is None)
         pricing: How the run's grid flows were priced (None for results simulate_home did
@@ -254,9 +252,8 @@ class SimulationResults:
         additional_loads: The loads within demand besides the household's, in kW, by
             LoadKind, each on demand's rows and written under its kind's column; held as a
             PerLoad, its keys read by LoadKind.parse. Construction refuses, with
-            SeriesRefused, a household entry, a heat_pump_load that differs from its heat
-            pump entry, an entry off demand's rows, and additional loads that exceed demand
-            by more than 1e-9 kW in a row, naming that row. loads holds the household's
+            SeriesRefused, a household entry, an entry off demand's rows, and additional
+            loads that exceed demand by more than 1e-9 kW in a row, naming that row. loads holds the household's
             load, demand less these, beside them.
     """
 
@@ -272,7 +269,6 @@ class SimulationResults:
     export_revenue: pd.Series = field(metadata=_money("export_revenue_gbp"))
     tariff_rate: pd.Series = field(metadata=_level("tariff_rate_per_kwh"))
     strategy_name: str = "self_consumption"
-    heat_pump_load: Optional[pd.Series] = None
     # Per-timestep slice of import_cost spent charging the battery from the grid, in £
     # (None when tariff_config is None).
     grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
@@ -302,10 +298,10 @@ class SimulationResults:
         self._refuse_additional_loads_above_demand()
 
     def _settle_additional_loads(self) -> None:
-        """Hold additional_loads as a PerLoad holding heat_pump_load, each on demand's index and named its kind's column, and heat_pump_load as its heat pump entry.
+        """Hold additional_loads as a PerLoad, each load on demand's index and named its kind's column.
 
         Each load is refused on its own (its dtype, then a row holding no number) before it is
-        compared with heat_pump_load or demand's rows.
+        compared with demand's rows.
         """
         loads = dict(PerLoad(self.additional_loads))
         if LoadKind.HOUSEHOLD in loads:
@@ -314,24 +310,13 @@ class SimulationResults:
             )
         for kind, load in loads.items():
             _refuse_unless_an_amount(kind.column, load)
-        heat_pump = self.heat_pump_load
-        if heat_pump is not None:
-            _refuse_unless_an_amount(LoadKind.HEAT_PUMP.column, heat_pump)
-            if not loads.setdefault(LoadKind.HEAT_PUMP, heat_pump).equals(heat_pump):
-                raise SeriesRefused(
-                    LoadKind.HEAT_PUMP.column,
-                    "differs from heat_pump_load, which is additional_loads' heat pump load: give one of them, "
-                    "or both as one series",
-                )
         rows = self.demand.index
         for kind, load in loads.items():
             difference = describe_first_differing_row(load.index, rows, "demand")
             if difference is not None:
                 raise SeriesRefused(kind.column, f"is not on demand's rows: {difference}")
             loads[kind] = load.set_axis(rows).rename(kind.column)
-        settled = PerLoad(loads)
-        object.__setattr__(self, "additional_loads", settled)
-        object.__setattr__(self, "heat_pump_load", settled.get(LoadKind.HEAT_PUMP))
+        object.__setattr__(self, "additional_loads", PerLoad(loads))
 
     def _household_kw(self) -> pd.Series:
         """Demand less the additional loads, on demand's rows, named the household's column."""
@@ -519,9 +504,6 @@ class SummaryStatistics:
     total_export_revenue_gbp: float  # total revenue from grid exports in £
     net_cost_gbp: float  # net cost (import - export) in £
     strategy_name: str = "self_consumption"
-    total_heat_pump_load_kwh: Optional[float] = None  # total heat pump consumption
-    peak_heat_pump_load_kw: Optional[float] = None  # peak heat pump load
-    heat_pump_load_ratio: Optional[float] = None  # heat_pump_load / total_demand
     # Slice of total_import_cost_gbp spent charging the battery from the grid: householder
     # import, informational, in no CBS equation (docs/cost-recovery-finance-model.md §4).
     total_grid_charge_cost_gbp: float = 0.0
@@ -533,12 +515,11 @@ class SummaryStatistics:
     # The forecast that sized the run's grid charge in cheap periods; None when the run did
     # not grid-charge, or its stored summary predates the field.
     grid_charge_forecast: Optional[GridChargeForecast] = None
-    # Each load's energy in kWh by LoadKind, summing to total_demand_kwh; {} only for a
-    # summary built before task 897.
-    load_energy_kwh: Mapping[LoadKind, float] = field(default_factory=lambda: PerLoad({}))
+    # Each load's energy in kWh by LoadKind, summing to total_demand_kwh.
+    load_energy_kwh: Mapping[LoadKind, float] = field(kw_only=True)
 
     def __post_init__(self) -> None:
-        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, a load energy keyed by no load kind or that is not a real number of at least 0 (a boolean is not one), and a total_heat_pump_load_kwh that differs from the heat pump's load energy; hold load_energy_kwh as a PerLoad of the floats read."""
+        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, and a load energy keyed by no load kind or that is not a real number of at least 0 (a boolean is not one); hold load_energy_kwh as a PerLoad of the floats read."""
         if not isinstance(self.window, SimulationWindow):
             raise ValueError(
                 "SummaryStatistics' window is the SimulationWindow its totals were computed over, which "
@@ -565,15 +546,6 @@ class SummaryStatistics:
             kind: _load_energy(kind, energy) for kind, energy in PerLoad(self.load_energy_kwh).items()
         })
         object.__setattr__(self, "load_energy_kwh", load_energy_kwh)
-        heat_pump_kwh = load_energy_kwh.get(LoadKind.HEAT_PUMP)
-        total_heat_pump_kwh = self.total_heat_pump_load_kwh
-        if heat_pump_kwh is not None and total_heat_pump_kwh is not None and heat_pump_kwh != total_heat_pump_kwh:
-            raise ValueError(
-                "SummaryStatistics' total_heat_pump_load_kwh is the heat pump's load energy, "
-                f"load_energy_kwh[{LoadKind.HEAT_PUMP.value!r}], so it equals it when both are set: "
-                f"got total_heat_pump_load_kwh={total_heat_pump_kwh!r}, "
-                f"load_energy_kwh[{LoadKind.HEAT_PUMP.value!r}]={heat_pump_kwh!r}"
-            )
 
     @property
     def simulation_days(self) -> int:
@@ -1018,7 +990,6 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
 
     window = results.window
     load_energy_kwh = {kind: window.energy_kwh(load) for kind, load in results.loads.items()}
-    heat_pump_kwh = load_energy_kwh.get(LoadKind.HEAT_PUMP)
 
     return SummaryStatistics(
         total_generation_kwh=total_gen,
@@ -1038,11 +1009,6 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
         total_export_revenue_gbp=total_export_revenue,
         net_cost_gbp=net_cost,
         strategy_name=results.strategy_name,
-        total_heat_pump_load_kwh=heat_pump_kwh,
-        peak_heat_pump_load_kw=(
-            None if heat_pump_kwh is None else float(results.additional_loads[LoadKind.HEAT_PUMP].max())
-        ),
-        heat_pump_load_ratio=None if heat_pump_kwh is None else _share(heat_pump_kwh, total_demand),
         total_grid_charge_cost_gbp=total_grid_charge_cost,
         total_grid_charge_kwh=total_grid_charge,
         pricing=results.pricing,

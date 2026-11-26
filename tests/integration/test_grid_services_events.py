@@ -40,6 +40,7 @@ import solar_challenge
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.board_report import GridServicesIncome, generate_finance_report
 from solar_challenge.config import ScenarioConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.flex import FLEX_VALUE_BANDS
@@ -564,6 +565,7 @@ def _synthetic_bill_distribution() -> BillDistribution:
         net_cost_gbp=202.2,
         window=make_window(days=365),
         pricing=RunPricing(0.23, 4.1),
+        load_energy_kwh={LoadKind.HOUSEHOLD: 3400.0},
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,

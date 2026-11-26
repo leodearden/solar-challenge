@@ -21,6 +21,7 @@ Usage::
 
 import pandas as pd
 
+from solar_challenge.demand import LoadKind
 from solar_challenge.home import SimulationResults
 
 
@@ -55,5 +56,5 @@ def steady_run(
         import_cost=steady(import_cost_gbp),
         export_revenue=steady(export_revenue_gbp),
         tariff_rate=steady(0.0),
-        heat_pump_load=None if heat_pump_kw is None else steady(heat_pump_kw),
+        additional_loads={} if heat_pump_kw is None else {LoadKind.HEAT_PUMP: steady(heat_pump_kw)},
     )

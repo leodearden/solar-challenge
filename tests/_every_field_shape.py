@@ -12,7 +12,7 @@ own, not fields).
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
-from solar_challenge.ev import EVConfig
+from solar_challenge.ev import EVChargerType, EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
@@ -35,7 +35,7 @@ def home_of_every_field_shape(name: str = "Every Shape") -> HomeConfig:
             dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))),
             grid_charging=GridChargeConfig(target_soc_fraction=0.8, forecast="trailing_14_days"),
         ),
-        ev_config=EVConfig(charger_type="7kW", arrival_hour=18),
+        ev_config=EVConfig(charger_type=EVChargerType.FAST, arrival_hour=18),
         heat_pump_config=HeatPumpConfig(heat_pump_type="ASHP"),
         location=Location.bristol(),
         name=name,

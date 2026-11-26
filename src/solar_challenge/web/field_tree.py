@@ -3,24 +3,26 @@
 
 A field tree is a dataclass's fields as a JSON object, each value in its JSON form: a dataclass
 as an object, a list or tuple as an array, a dict or other Mapping as an object of its keys, a pd.Timestamp or a
-date as its ISO 8601 text, a timedelta as its ISO 8601 duration. read_field_tree reads one
+date as its ISO 8601 text, a timedelta as its ISO 8601 duration, a str-Enum member as its value.
+read_field_tree reads one
 strictly: each JSON value must be one its field's annotation can be, and the dataclass built
 from them must accept them. A key no field has, a missing field that has no default, a value
 its annotation cannot be (an object for a dataclass, an array for a sequence, a number but no
 bool for an int, such a number a float can hold for a float, null only for an Optional field,
-one of a Literal's values), an unknown union tag, or a dataclass that refuses its values is
+one of a Literal's or a str-Enum's values), an unknown union tag, or a dataclass that refuses its values is
 refused with a FieldTreeRefused naming the value's dotted path, with [i] for an item and None
 for the root, and the reason. A missing field that has a default takes it.
 without_unknown_keys drops each key the reader would refuse as one no field has, reporting each
 as an UnknownKey, unless its predicate, asked with the dataclass whose object holds the key,
-spares it.
+spares it. is_json_number is the reader's test of a JSON number: an int or a float, but no bool.
 
 The reader and the drop both walk a value by its _shape: a dataclass's object, an array, a dict's
 object or a leaf, each child with the annotation it is read as and its path. The writer, _shape
 and _stored_form all take the containers stored as an array from _ARRAY_CONTAINERS, so a new such
 container is one entry of it; _shape and _stored_form take the annotations read from an object
-from _OBJECT_MAPPINGS. A leaf codec, as the pd.Timestamp, date and timedelta ones, is a
-branch of _read_leaf, of _field_tree_value, and of _stored_form unless it is stored as a string.
+from _OBJECT_MAPPINGS. A leaf codec, as the pd.Timestamp, date, timedelta and str-Enum ones, is a
+branch of _read_leaf, of _field_tree_value unless json writes the value itself, as it writes a
+str-Enum member as its value, and of _stored_form unless it is stored as a string.
 Neither needs an edit of the drop.
 
 The module imports no solar_challenge module. web/stored_runs.py writes and reads a run's
@@ -32,6 +34,7 @@ import functools
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import date, timedelta
+from enum import Enum
 from types import MappingProxyType, UnionType
 from typing import Any, Literal, TypeAlias, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
 
@@ -363,7 +366,8 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
     Any admits anything as it is. A Literal, bool, int, float and str admit only values of their
     JSON type; an int is any number but a bool, and a float any such number a float can hold,
     each kept as decoded. A pd.Timestamp is read from its ISO text, a date from its ISO 8601
-    text, and a timedelta from its ISO 8601 duration as _timedelta_of reads it.
+    text, a timedelta from its ISO 8601 duration as _timedelta_of reads it, and a str-Enum from
+    a string that is one of its members' values, as the member that value names.
 
     Raises:
         FieldTreeRefused: *value* cannot be *annotation*, or *annotation* has no stored form.
@@ -377,10 +381,10 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
         if isinstance(value, bool):
             return value
     elif annotation is int:
-        if _is_number(value):
+        if is_json_number(value):
             return value
     elif annotation is float:
-        if _is_number(value) and _float_can_hold(value):
+        if is_json_number(value) and _float_can_hold(value):
             return value
     elif annotation is str:
         if isinstance(value, str):
@@ -400,6 +404,9 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
     elif annotation is timedelta:
         if isinstance(value, str):
             return _timedelta_of(value, path)
+    elif _is_str_enum(annotation):
+        if isinstance(value, str) and value in _member_values(annotation):
+            return annotation(value)
     else:
         raise FieldTreeRefused(path, f"has no stored form: the stored-run format reads no {annotation!r}")
     raise FieldTreeRefused(path, f"is {_json_value(value)}, not {_stored_form(annotation)}")
@@ -430,7 +437,17 @@ def _timedelta_of(text: str, path: str | None) -> timedelta:
     return converted
 
 
-def _is_number(value: Any) -> bool:
+def _is_str_enum(annotation: Any) -> bool:
+    """Whether *annotation* is a str-Enum, an Enum class whose members are strings."""
+    return isinstance(annotation, type) and issubclass(annotation, Enum) and issubclass(annotation, str)
+
+
+def _member_values(str_enum: type[Enum]) -> list[str]:
+    """The values of *str_enum*'s members, in declaration order."""
+    return [member.value for member in str_enum]
+
+
+def is_json_number(value: Any) -> bool:
     """Whether *value*, decoded JSON, is a number: an int or a float, but no bool."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -539,6 +556,8 @@ def _stored_form(annotation: Any) -> str:
         return "a number"
     if annotation is float:
         return "a number a float can hold"
+    if _is_str_enum(annotation):
+        return f"one of {_member_values(annotation)}"
     return "a string"
 
 

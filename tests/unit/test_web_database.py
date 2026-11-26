@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.load import LoadConfig
@@ -90,6 +91,7 @@ def sample_summary():
         total_export_revenue_gbp=4.0,
         net_cost_gbp=1.0,
         strategy_name="greedy",
+        load_energy_kwh={LoadKind.HOUSEHOLD: 80.0},
     )
 
 

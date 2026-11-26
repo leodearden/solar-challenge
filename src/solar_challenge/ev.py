@@ -108,27 +108,28 @@ class EVConfig:
 
     Construction reads the hours as whole numbers and the required charge as a finite
     number, and the charger type and smart charging mode as their EVChargerType and
-    SmartChargingMode members, and holds what it read; a member reads as its string. It
-    refuses a value outside its range, a charger type or smart charging mode that names no
-    member, by the field's name and its allowed values, or a charge the stay cannot
-    deliver, with a ConfigurationError.
+    SmartChargingMode members, and holds what it read: a string naming a member is read as
+    that member, and the field holds the member. It refuses a value outside its range, a
+    charger type or smart charging mode that names no member, by the field's name and its
+    allowed values, or a charge the stay cannot deliver, with a ConfigurationError.
 
     Attributes:
         charger_type: Charger power rating (3.6kW, 7kW, or 22kW), held as its EVChargerType
+            member
         arrival_hour: Hour of day when EV arrives home (0-23), default 18, 6pm
         departure_hour: Hour of day when EV departs (0-23), default 7am
         required_charge_kwh: Energy required per day in kWh, default 35 kWh
             (typical UK EV doing ~100 miles/day at 3.5 miles/kWh)
         smart_charging_mode: Charging schedule optimization strategy, held as its
-            SmartChargingMode
+            SmartChargingMode member, default SmartChargingMode.NONE
         name: Optional identifier for the EV configuration
     """
 
-    charger_type: str
+    charger_type: EVChargerType
     arrival_hour: int = 18
     departure_hour: int = 7
     required_charge_kwh: float = 35.0
-    smart_charging_mode: str = "none"
+    smart_charging_mode: SmartChargingMode = SmartChargingMode.NONE
     name: str = ""
 
     def __post_init__(self) -> None:
@@ -173,7 +174,7 @@ class EVConfig:
         Returns:
             Charger power in kW
         """
-        return EVChargerType(self.charger_type).power_kw
+        return self.charger_type.power_kw
 
     def get_available_charging_hours(self) -> float:
         """Get available charging window in hours.
@@ -201,7 +202,7 @@ def require_tariff_for_smart_charging(ev_config: EVConfig, tariff: TariffConfig 
     Raises:
         ConfigurationError: ev_config's smart_charging_mode is 'off_peak' and tariff is None.
     """
-    if SmartChargingMode(ev_config.smart_charging_mode) is SmartChargingMode.OFF_PEAK:
+    if ev_config.smart_charging_mode is SmartChargingMode.OFF_PEAK:
         _off_peak_tariff(tariff)
 
 
@@ -232,7 +233,7 @@ def _row_weights(config: EVConfig, tariff: TariffConfig | None, generation_kw: R
     Raises:
         ConfigurationError: off_peak with no tariff, require_tariff_for_smart_charging's refusal; or solar with no generation_kw.
     """
-    mode = SmartChargingMode(config.smart_charging_mode)
+    mode = config.smart_charging_mode
     if mode is SmartChargingMode.OFF_PEAK:
         return _cheap_minutes(_off_peak_tariff(tariff))
     if mode is SmartChargingMode.SOLAR:

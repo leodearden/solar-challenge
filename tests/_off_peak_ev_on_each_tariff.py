@@ -24,11 +24,11 @@ import datetime
 import pandas as pd
 import pytest
 
-from solar_challenge.ev import EVConfig
+from solar_challenge.ev import EVChargerType, EVConfig, SmartChargingMode
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
-OFF_PEAK_EV = EVConfig("7kW", 18, 7, 35.0, "off_peak")
+OFF_PEAK_EV = EVConfig(EVChargerType.FAST, 18, 7, 35.0, SmartChargingMode.OFF_PEAK)
 """The row's EV: home from 18:00 to 07:00, charging 35 kWh at 7 kW in its tariff's cheap minutes."""
 
 JANUARY_DAYS = (pd.Timestamp("2024-01-10"), pd.Timestamp("2024-01-12"))

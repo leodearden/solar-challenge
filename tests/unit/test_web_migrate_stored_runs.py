@@ -39,9 +39,12 @@ holding a run a solar-challenge at that version saved in format 6, is brought fo
 charge_efficiency and discharge_efficiency were derived from, in a run's files and its runs row
 alike, reporting each value that is not null, and keeps the pair. Every older store is brought
 forward by version 9's step too, which drops each stored home summary's seg_revenue_gbp, in a
-run's files and a home run's runs row alike, reporting the pre-975 fleet's two. A store at
-version 8, holding the pre-867 home and the pre-975 fleet as an earlier migration to version 8
-left them, is brought forward by version 9's step alone, which rewrites only those summaries.
+run's files and a home run's runs row alike, reporting the pre-975 fleet's two, and by version
+10's, which gives each stored home summary lacking a load_energy_kwh its household's energy and
+its heat pump's, then drops its three heat-pump figures, reporting nothing of a heat-pump home's
+summary stored before summaries held each load's energy. A store at version 8, holding the pre-867
+home and the pre-975 fleet as an earlier migration to version 8 left them, is brought forward by
+version 9's and version 10's steps alone, which rewrite only those summaries.
 A run that store's migration left in format 1, with no format.json, has its files brought
 forward by every step after format 1, so it is reported, if at all, by its own fault. After its
 steps, migrate_store catches up: it brings forward each run an earlier migration left in its
@@ -67,6 +70,7 @@ from typing import Any
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.dispatch import (
     DispatchStrategyConfig,
     GridChargeConfig,
@@ -119,9 +123,11 @@ from tests._run_stores import empty_run_storage, run_storage_over
 from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
 from tests._stored_run_fixtures import (
     PRE_975_FLEET_SEG_REVENUE_KEYS,
+    PRE_S12_SUMMARY_HEAT_PUMP_KEYS,
     STORED_RUN_FIXTURES,
     fixture_run_type,
     fixture_summary_statistics_documents,
+    install_pre_s12_heat_pump_home,
     install_stored_run_fixture,
 )
 from tests._web_runs import store_home_run
@@ -280,7 +286,7 @@ _FIXTURES_IN_FORMAT_8 = ("pre_867_round_trip_home", "pre_975_seg_fleet")
 
 v7 drops every fixture's battery efficiency, so none is in format 8 as committed. Each still holds
 its home summaries' seg_revenue_gbp, null in the pre-867 home's and not in the pre-975 fleet's,
-which v9 drops.
+which v9 drops, and their null heat-pump figures and no load_energy_kwh, which v10 gives them.
 """
 
 
@@ -531,7 +537,8 @@ def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_
     version 6. v7 drops each battery's efficiency, reporting the pre-867 home's 0.81, from every
     store holding it. v8 drops each home's dispatch_strategy, reporting the battery strategy it gives
     the pre-839 fleet's tou_optimized home. v9 drops each home summary's seg_revenue_gbp, reporting
-    the pre-975 fleet's two.
+    the pre-975 fleet's two. v10 gives each home summary its household's energy, dropping its null
+    heat-pump figures, reporting nothing.
     """
     pre_787_fleet = older_store.run_ids.get("pre_787_dispatch_fleet")
     rewritten_by_v3 = _values_v3_changes_in_the_pre_787_fleet(pre_787_fleet) if pre_787_fleet is not None else ()
@@ -582,10 +589,10 @@ def test_migrate_store_brings_a_store_at_version_6_forward_by_version_7_s_step_d
 
 
 @_NEEDS_PYARROW
-def test_migrate_store_brings_a_store_at_version_8_forward_by_version_9_s_step_alone_rewriting_only_each_home_summary(
+def test_migrate_store_brings_a_store_at_version_8_forward_by_version_9_s_and_10_s_steps_alone_rewriting_only_each_home_summary(
     store_at_version_8: Path, format_8_run_ids: dict[str, str]
 ) -> None:
-    """The upgrade of a dashboard at version 8: v9 alone drops each home summary's seg_revenue_gbp, in a run's files and a home run's runs row, reporting the pre-975 fleet's two values.
+    """The upgrade of a dashboard at version 8: v9 drops each home summary's seg_revenue_gbp, reporting the pre-975 fleet's two values, and v10 gives each its load_energy_kwh, dropping its heat-pump figures, in a run's files and a home run's runs row alike.
 
     Every other document and runs column is left byte for byte, and each run loads.
     """
@@ -1008,12 +1015,13 @@ _FLEET_SUMMARIES_V6_REWRITES = (
 def _summaries_rewritten(name: str, version: int) -> tuple[frozenset[str], frozenset[str]]:
     """The files, then the runs columns, holding a summary of fixture *name* that migrating a store at schema *version* rewrites.
 
-    Below version 9 that is each of its SummaryStatistics documents, which v5 below version 5,
-    dropping its simulation_days and setting its window when it holds none, and v9 below version
-    9, dropping its seg_revenue_gbp, rewrite alike; and below version 6 its FleetSummary too,
-    which v6 rewrites, dropping its SEG revenue pair.
+    Below version 10 that is each of its SummaryStatistics documents, which v5 below version 5,
+    dropping its simulation_days and setting its window when it holds none, v9 below version 9,
+    dropping its seg_revenue_gbp, and v10 below version 10, giving it its load_energy_kwh and
+    dropping its heat-pump figures, rewrite alike; and below version 6 its FleetSummary too, which
+    v6 rewrites, dropping its SEG revenue pair.
     """
-    files, columns = fixture_summary_statistics_documents(name) if version < 9 else (frozenset(), frozenset())
+    files, columns = fixture_summary_statistics_documents(name) if version < 10 else (frozenset(), frozenset())
     if version < 6 and name in _FLEET_SUMMARIES_V6_REWRITES:
         return files | {"summary.json"}, columns | {"summary_json"}
     return files, columns
@@ -1028,7 +1036,8 @@ def test_migrate_store_rewrites_only_the_documents_the_steps_change_and_writes_e
     version 5 has v5 rewrite each SummaryStatistics document, dropping its simulation_days, one
     below version 6 has v6 rewrite each fleet's FleetSummary, dropping its SEG revenue pair, every
     older store has v7 rewrite each config, dropping each battery's efficiency, and every older
-    store has v9 rewrite each SummaryStatistics document, dropping its seg_revenue_gbp.
+    store has v9 and v10 rewrite each SummaryStatistics document, dropping its seg_revenue_gbp and
+    its heat-pump figures and giving it its load_energy_kwh.
     """
     store = older_store.path
     files_before = {run_id: _files_of(_run_dir(store, run_id)) for run_id in older_store.run_ids.values()}
@@ -1083,6 +1092,65 @@ def test_after_migrate_store_no_stored_summary_holds_a_seg_revenue_and_each_run_
             assert [summary.total_export_revenue_gbp for summary in loaded.home_summaries] == pytest.approx(
                 [value for _, value in _PRE_975_HOME_SUMMARY_SEG_REVENUES], abs=1e-9
             )
+
+
+
+def _stored_summaries(store: Path, name: str, run_id: str) -> list[dict[str, Any]]:
+    """Each SummaryStatistics document of fixture *name*, installed as run *run_id* in the store whose database file is *store*: its files', then its runs columns'."""
+    files, columns = fixture_summary_statistics_documents(name)
+    row = runs_rows_of(store)[run_id]
+    return [
+        *(json.loads((_run_dir(store, run_id) / file).read_text()) for file in sorted(files)),
+        *(json.loads(row[column]) for column in sorted(columns)),
+    ]
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_each_stored_summary_holds_its_household_s_energy_and_no_heat_pump_figure_and_each_run_loads(
+    older_store: _OlderStore,
+) -> None:
+    """v10 gives each SummaryStatistics document its load_energy_kwh, its household's energy, the legacy runs having no heat pump, in a run's files and a home run's runs row alike, and drops the three figures."""
+    migrate_store(older_store.path, older_store.path.parent)
+
+    storage = _storage_of(older_store.path)
+    for name, run_id in older_store.run_ids.items():
+        summaries = _stored_summaries(older_store.path, name, run_id)
+        assert summaries, name
+        assert [summary["load_energy_kwh"] for summary in summaries] == [
+            {"household": summary["total_demand_kwh"]} for summary in summaries
+        ], name
+        assert [key for summary in summaries for key in PRE_S12_SUMMARY_HEAT_PUMP_KEYS if key in summary] == [], name
+        loaded = storage.load_run(run_id)
+        if isinstance(loaded, StoredHomeRun):
+            assert loaded.summary.load_energy_kwh == {LoadKind.HOUSEHOLD: loaded.summary.total_demand_kwh}, name
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_gives_a_heat_pump_home_s_summary_stored_before_summaries_held_each_load_s_energy_both_energies_reporting_nothing_of_it(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """B9: its summary.json and its runs row hold its household's energy, its demand less its heat pump's, and its heat pump's, and the run loads.
+
+    The report names only v7's drops of the copy's battery efficiency, which it holds as
+    pre_867_round_trip_home does: nothing of its summary.
+    """
+    store = store_at_version_1
+    copy_id = install_pre_s12_heat_pump_home(Database(store), store.parent, run_id="pre-s12-heat-pump-home")
+
+    report = migrate_store(store, store.parent)
+
+    assert [summary["load_energy_kwh"] for summary in _stored_summaries(store, "pre_867_round_trip_home", copy_id)] == [
+        {"household": 3000.0, "heat_pump": 2400.0}
+    ] * 2
+    assert [
+        each
+        for each in (*report.dropped_values, *report.rewritten_values, *report.unmigrated_runs)
+        if each.run_id == copy_id
+    ] == [DroppedValue(copy_id, document, *_PRE_867_BATTERY_ROUND_TRIP) for document in ("config.json", "runs.config_json")]
+    assert copy_id not in report.caught_up_runs
+    loaded = _storage_of(store).load_run(copy_id)
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.summary.load_energy_kwh == {LoadKind.HOUSEHOLD: 3000.0, LoadKind.HEAT_PUMP: 2400.0}
 
 
 def test_migrate_store_reports_each_value_it_drops_that_is_not_null_naming_the_run_both_documents_and_the_field(
@@ -1630,7 +1698,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     The refusal names each run whose files stay brought forward; v2 drops only null keys from
     them, so it names no value. Run again once the trigger is dropped, the migration leaves
     those files as they are until v3, as they are in format 2 already, then brings them forward
-    by each step from v3 to v9, and brings the runs rows forward.
+    by each step from v3 to v10, and brings the runs rows forward.
     """
     with Database(store_at_version_1).transaction() as conn:
         conn.execute(
