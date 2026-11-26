@@ -29,6 +29,7 @@ from solar_challenge.web.fleet_components import (
     days_window,
 )
 from solar_challenge.web.request_boundary import (
+    present_fields,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
     read_location,
@@ -37,15 +38,11 @@ from solar_challenge.web.request_boundary import (
 
 _HOME_CONFIG = "Home config"
 
-# Each parser's recognised top-level keys, and the value each reads as when absent.
-_DATE_RANGE_DEFAULTS: Mapping[str, Any] = MappingProxyType({
-    "days": None,
-    "start": "",
-    "end": "",
-})
+# The window fields parse_date_range reads, in the order a refusal of days sent with dates names the dates.
+_DATE_RANGE_FIELDS = ("days", "start", "end")
 
 #: The keys of a request body parse_date_range reads.
-DATE_RANGE_KEYS: frozenset[str] = frozenset(_DATE_RANGE_DEFAULTS)
+DATE_RANGE_KEYS: frozenset[str] = frozenset(_DATE_RANGE_FIELDS)
 
 _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
     "pv_kw": 4.0,
@@ -70,7 +67,7 @@ _HOME_CONFIG_DEFAULTS: Mapping[str, Any] = MappingProxyType({
 })
 
 #: The top-level keys of a home config: those parse_home_config and parse_date_range read.
-_HOME_CONFIG_KEYS: frozenset[str] = frozenset(_HOME_CONFIG_DEFAULTS) | DATE_RANGE_KEYS
+HOME_CONFIG_KEYS: frozenset[str] = frozenset(_HOME_CONFIG_DEFAULTS) | DATE_RANGE_KEYS
 
 
 def read_iso_date(value: Any, field: str) -> date:
@@ -122,15 +119,9 @@ def refuse_reversed_or_overlong_window(
 
 
 def _window_sent(data: Mapping[str, Any]) -> dict[str, Any]:
-    """The window fields *data*, a request body, sends, keyed by field in _DATE_RANGE_DEFAULTS order.
-
-    A null value, or the value _DATE_RANGE_DEFAULTS gives an absent field, is not sent.
-    """
-    return {
-        field: data[field]
-        for field, absent in _DATE_RANGE_DEFAULTS.items()
-        if data.get(field) not in (None, absent)
-    }
+    """The window fields *data*, a request body, sends as present_fields reads it, keyed by field in _DATE_RANGE_FIELDS order."""
+    fields = present_fields(data)
+    return {field: fields[field] for field in _DATE_RANGE_FIELDS if field in fields}
 
 
 def _refuse_days_with_dates(days: Any, dates: Mapping[str, Any]) -> None:
@@ -157,7 +148,8 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     - ``start`` / ``end``: ISO 8601 dates (``YYYY-MM-DD``); one not sent reads
       as :data:`DEFAULT_FIRST_DAY` / :data:`DEFAULT_LAST_DAY`.
 
-    A null ``days``, and an empty or null ``start`` or ``end``, read as not sent.
+    A ``days``, ``start`` or ``end`` sent as null or ``""`` reads as not sent
+    (:func:`~solar_challenge.web.request_boundary.present_fields`).
 
     Whichever way sets it, the window must end on or after its start and span
     at most :data:`~solar_challenge.web.fleet_components.MAX_WINDOW_DAYS` days.
@@ -272,6 +264,10 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
 def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timestamp, str | None]:
     """Parse JSON request body into HomeConfig and date range.
 
+    A top-level field sent as null or "" (a cleared input) reads as not sent
+    (:func:`~solar_challenge.web.request_boundary.present_fields`), once the
+    body's keys are checked, so an unrecognised key is refused whatever it holds.
+
     Args:
         data: The home config, a parsed JSON value that must be an object.
 
@@ -291,16 +287,15 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             a sent consumption_kwh lies outside its fleet component's
             value_range, PV's, the battery's or the load's (the error names
             the field, the range and the value sent), or if required fields
-            are missing or invalid. A null nested block (heat_pump, seg,
-            tariff or dispatch_strategy) reads as absent; any other value is
-            read by the block's grammar, and a block that grammar refuses,
-            one that is not a mapping or carries an unrecognised key
-            included, raises the grammar's own refusal: parse_heat_pump_block's
-            for heat_pump. The battery
+            are missing or invalid. A nested block sent (heat_pump, seg,
+            tariff or dispatch_strategy) is read by the block's grammar, and
+            a block that grammar refuses, one that is not a mapping or
+            carries an unrecognised key included, raises the grammar's own
+            refusal: parse_heat_pump_block's for heat_pump. The battery
             settings (max_charge_kw, max_discharge_kw, efficiency_pct and
             dispatch_strategy) are read, and refused, whatever battery_kwh
-            is; a null setting reads as unset. A null system_losses also
-            reads as unset, leaving PVConfig's default. An azimuth, tilt,
+            is; one not sent is unset, leaving BatteryConfig's default. A
+            system_losses not sent leaves PVConfig's default. An azimuth, tilt,
             system_age_years, degradation_rate_per_year or system_losses
             that is not a finite number in PVConfig's range raises
             PVConfig's own refusal, naming it. A name
@@ -309,8 +304,8 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             not text is not checked here.
     """
     data = require_json_object(data, _HOME_CONFIG)
-    refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, _HOME_CONFIG)
-    params = {**_HOME_CONFIG_DEFAULTS, **data}
+    refuse_unrecognised_keys(data, HOME_CONFIG_KEYS, _HOME_CONFIG)
+    params = {**_HOME_CONFIG_DEFAULTS, **present_fields(data)}
     pv_kw = as_finite_float(params["pv_kw"], "pv_kw", within=FLEET_COMPONENTS["pv"].value_range)
     system_losses_setting = _system_losses_setting(params["system_losses"])
     battery_kwh_val = as_finite_float(
@@ -323,7 +318,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     refuse_unencodable_text(name, "name")
 
     # Parse date range using shared helper
-    start, end = parse_date_range(data)
+    start, end = parse_date_range(params)
 
     loc = read_location(params["location"])
 
