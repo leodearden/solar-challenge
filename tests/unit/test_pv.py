@@ -27,6 +27,7 @@ from solar_challenge.pv import (
     create_pvwatts_inverter_params,
     create_simple_inverter_params,
     create_simple_module_params,
+    run_model_chain,
     simulate_pv_output,
     usable_cec_inverters,
     wired_dc_capacity_kw,
@@ -40,7 +41,7 @@ from tests._pv_modules import (
     sapm_library_module,
 )
 from tests._pv_refusals import one_refusal_at_construction_and_at_use
-from tests._pv_runs import clear_day_kwh, per_array
+from tests._pv_runs import clear_day_kwh, clear_day_weather, per_array
 
 
 class TestCreatePVSystem:
@@ -239,6 +240,53 @@ class TestCreateModelChain:
         mc = create_model_chain(config, location)
         assert mc.location.latitude == location.latitude
         assert mc.location.longitude == location.longitude
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+class TestRunModelChain:
+    """run_model_chain is the one way a chain runs, and no run of it raises a RuntimeWarning."""
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(PVConfig.default_4kw(), id="one-array"),
+            pytest.param(PVConfig(capacity_kw=7.6), id="two-arrays"),
+        ],
+    )
+    def test_it_runs_the_chain_it_is_given_over_the_weather(self, config: PVConfig) -> None:
+        chain = create_model_chain(config, Location.bristol())
+        weather = clear_day_weather()
+
+        run = run_model_chain(chain, weather)
+
+        assert run is chain
+        pd.testing.assert_index_equal(run.results.ac.index, weather.index)
+        assert run.results.ac.max() > 0
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(PVConfig.default_4kw(), id="default-4kw"),
+            pytest.param(
+                dataclasses.replace(PVConfig.default_4kw(), system_age_years=20.0),
+                id="default-4kw-at-20-years",
+            ),
+            pytest.param(
+                PVConfig(capacity_kw=8.0, inverter_capacity_kw=3.68), id="8kw-on-3.68kw"
+            ),
+        ],
+    )
+    def test_simulate_pv_output_is_the_run_chains_ac_in_kw_clipped_at_0(
+        self, config: PVConfig
+    ) -> None:
+        bristol = Location.bristol()
+        day = clear_day_weather()
+
+        run = run_model_chain(create_model_chain(config, bristol), day)
+
+        pd.testing.assert_series_equal(
+            simulate_pv_output(config, bristol, day), (run.results.ac / 1000).clip(lower=0)
+        )
 
 
 class TestSimulatePVOutput:
