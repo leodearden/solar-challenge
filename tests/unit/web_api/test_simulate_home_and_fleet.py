@@ -17,6 +17,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_heat_pump_block, parse_location_block
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
+from tests._heat_pump_block_refusals import UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._html_page import element_attributes
@@ -905,13 +906,7 @@ class TestSimulateHomeHeatPump:
         config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
         assert config.heat_pump_config == HeatPumpConfig(heat_pump_type="GSHP", thermal_capacity_kw=12.0)
 
-    @pytest.mark.parametrize(
-        ("block", "key"),
-        [
-            pytest.param({"heat_pump_type": "GSHP", "thermal_capacity": 12}, "thermal_capacity", id="misspelt-key"),
-            pytest.param({"type": "GSHP", "thermal_capacity_kw": 12}, "type", id="form-key"),
-        ],
-    )
+    @pytest.mark.parametrize(("block", "key"), UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS)
     def test_a_block_the_grammar_refuses_returns_400_with_its_refusal_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, block: dict, key: str
     ) -> None:

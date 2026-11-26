@@ -38,6 +38,7 @@ from solar_challenge.web.simulation_params import (
     with_default_days,
 )
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._heat_pump_block_refusals import UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
@@ -579,13 +580,7 @@ class TestParseHomeConfigHeatPumpBlock:
             heat_pump_type="GSHP", thermal_capacity_kw=12.0
         )
 
-    @pytest.mark.parametrize(
-        ("block", "key"),
-        [
-            pytest.param({"heat_pump_type": "GSHP", "thermal_capacity": 12}, "thermal_capacity", id="misspelt-key"),
-            pytest.param({"type": "GSHP", "thermal_capacity_kw": 12}, "type", id="form-key"),
-        ],
-    )
+    @pytest.mark.parametrize(("block", "key"), UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS)
     def test_a_block_the_grammar_refuses_is_refused_with_the_grammars_refusal(
         self, block: dict, key: str
     ) -> None:
