@@ -673,7 +673,7 @@ class DispatchStrategy(ABC):
             - discharge_kw is at most the step's shortfall, max(0, demand_kw - generation_kw);
             - grid_charge_kw is at most the headroom the charge limit leaves after charge_kw;
             - export_kw is at most the headroom the battery's discharge limit,
-              BatteryConfig.max_discharge_kw, leaves after the step's shortfall.
+              Battery.max_discharge_kw, leaves after the step's shortfall.
             simulate_timestep refuses a decision that breaks a bound with ValueError before the
             battery moves; see StepLimits.for_step.
 

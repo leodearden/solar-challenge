@@ -232,10 +232,10 @@ class _BatteryExchange:
     pv_charge_kwh: float
     grid_charge_kwh: float
     discharge_kwh: float
-    exports: bool
+    export_asked: bool
 
 
-_NO_EXCHANGE: Final = _BatteryExchange(pv_charge_kwh=0.0, grid_charge_kwh=0.0, discharge_kwh=0.0, exports=False)
+_NO_EXCHANGE: Final = _BatteryExchange(pv_charge_kwh=0.0, grid_charge_kwh=0.0, discharge_kwh=0.0, export_asked=False)
 
 
 def _execute(decision: DispatchDecision, battery: Battery, timestep_minutes: float) -> _BatteryExchange:
@@ -247,7 +247,7 @@ def _execute(decision: DispatchDecision, battery: Battery, timestep_minutes: flo
             battery.charge(decision.grid_charge_kw, timestep_minutes) if decision.grid_charge_kw > 0 else 0.0
         ),
         discharge_kwh=battery.discharge(discharge_kw, timestep_minutes) if discharge_kw > 0 else 0.0,
-        exports=decision.export_kw > 0,
+        export_asked=decision.export_kw > 0,
     )
 
 
@@ -262,7 +262,7 @@ def _settle(step: _StepEnergies, exchange: _BatteryExchange, battery_soc_kwh: fl
 
     # The battery exports what it delivered beyond the shortfall, but only when its decision asked
     # to: a discharge of just the shortfall can deliver an ulp more, which is not an export.
-    battery_export_kwh = max(0.0, exchange.discharge_kwh - step.shortfall_kwh) if exchange.exports else 0.0
+    battery_export_kwh = max(0.0, exchange.discharge_kwh - step.shortfall_kwh) if exchange.export_asked else 0.0
 
     # Export is the excess the battery did not draw, plus the battery's export; import adds what it
     # drew from the grid (docs/prds/one-dispatch-engine.md §5.2).
