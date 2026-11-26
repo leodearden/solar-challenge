@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Parse the web dashboard's flat simulation-parameter dicts into engine configuration."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date
+from functools import partial
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -212,13 +213,8 @@ def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
     return SEGTariff(name="", rate_pence_per_kwh=rate)
 
 
-def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float | None:
-    """Read a home body's maximum ``direction`` power, its ``max_<direction>_kw``: None, not sent, is unset.
-
-    Any other value must be a finite number, refused naming that field, that a battery accepts.
-    """
-    if value is None:
-        return None
+def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> float:
+    """Read a home body's maximum ``direction`` power, its ``max_<direction>_kw``: a finite number, refused naming that field, that a battery accepts."""
     kw = as_finite_float(value, f"max_{direction}_kw")
     require_valid_power_limit(kw, direction)
     return kw
@@ -238,21 +234,49 @@ def _read_efficiency(value: Any) -> float | None:
     return efficiency_pct / 100
 
 
+# How a home body's sent fields reach a dataclass: each body key's dataclass field and the reader of its value.
+_SettingReaders = Mapping[str, tuple[str, Callable[[Any], Any]]]
+
+
+def _sent_settings(params: Mapping[str, Any], readers: _SettingReaders) -> dict[str, Any]:
+    """The keyword arguments a dataclass receives from *params*, a home body's present fields.
+
+    Each key of *readers* that *params* sends sets its dataclass field to the value its reader
+    reads, in *readers*' order, so a refused value is refused there; a key not sent sets
+    nothing, leaving the dataclass's own default.
+    """
+    return {field: read(params[key]) for key, (field, read) in readers.items() if key in params}
+
+
+# The PV settings, sent under PVConfig's own field names and passed as sent: PVConfig refuses a
+# value it cannot hold, naming it.
+_PV_SETTINGS: _SettingReaders = MappingProxyType({key: (key, lambda value: value) for key in _PV_SETTING_KEYS})
+
+_LOAD_SETTINGS: _SettingReaders = MappingProxyType({
+    "occupants": ("household_occupants", partial(as_whole_number, field="occupants")),
+    "consumption_kwh": (
+        "annual_consumption_kwh",
+        partial(as_finite_float, field="consumption_kwh", within=FLEET_COMPONENTS["load"].value_range),
+    ),
+    "stochastic": ("use_stochastic", bool),
+})
+
+# The battery settings BatteryConfig takes; efficiency_pct, a round trip, is applied by with_round_trip.
+_BATTERY_SETTINGS: _SettingReaders = MappingProxyType({
+    "max_charge_kw": ("max_charge_kw", partial(_read_power_limit, direction="charge")),
+    "max_discharge_kw": ("max_discharge_kw", partial(_read_power_limit, direction="discharge")),
+    "dispatch_strategy": ("dispatch_strategy", parse_dispatch_strategy_config),
+})
+
+
 def _parse_battery(params: Mapping[str, Any], capacity_kwh: float | None) -> BatteryConfig | None:
     """Read the battery a home body describes, its ``capacity_kwh`` read within the battery component's value_range: none when that is not sent (None) or 0.
 
     Each setting is read whatever ``capacity_kwh`` is, so a value a battery refuses is
     refused without one too; a setting not sent is unset, leaving BatteryConfig's default.
     """
-    settings: dict[str, Any] = {}
-    if (max_charge_kw := _read_power_limit(params.get("max_charge_kw"), "charge")) is not None:
-        settings["max_charge_kw"] = max_charge_kw
-    if (max_discharge_kw := _read_power_limit(params.get("max_discharge_kw"), "discharge")) is not None:
-        settings["max_discharge_kw"] = max_discharge_kw
+    settings = _sent_settings(params, _BATTERY_SETTINGS)
     round_trip = _read_efficiency(params.get("efficiency_pct"))
-    dispatch_strategy = parse_dispatch_strategy_config(params.get("dispatch_strategy"))
-    if dispatch_strategy is not None:
-        settings["dispatch_strategy"] = dispatch_strategy
     if capacity_kwh is not None and has_battery(capacity_kwh, "battery_kwh"):
         battery = BatteryConfig(capacity_kwh=capacity_kwh, **settings)
         return battery if round_trip is None else battery.with_round_trip(round_trip)
@@ -320,10 +344,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         params.get("pv_kw", PV_CAPACITY_KW_WHEN_OMITTED), "pv_kw", within=FLEET_COMPONENTS["pv"].value_range
     )
     battery_kwh = _read_sent_number(params, "battery_kwh", "battery")
-    load_settings: dict[str, Any] = {}
-    if "occupants" in params:
-        load_settings["household_occupants"] = as_whole_number(params["occupants"], "occupants")
-    load_settings["use_stochastic"] = bool(params["stochastic"])
+    load_config = LoadConfig(**_sent_settings(params, _LOAD_SETTINGS))
     name = params.get("name")
     refuse_unencodable_text(name, "name")
 
@@ -331,15 +352,9 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
 
     loc = read_location(params["location"])
 
-    pv_config = PVConfig(
-        capacity_kw=pv_kw, **{key: params[key] for key in _PV_SETTING_KEYS if key in params}
-    )
+    pv_config = PVConfig(capacity_kw=pv_kw, **_sent_settings(params, _PV_SETTINGS))
 
     battery_config = _parse_battery(params, battery_kwh)
-
-    if (annual_consumption := _read_sent_number(params, "consumption_kwh", "load")) is not None:
-        load_settings["annual_consumption_kwh"] = annual_consumption
-    load_config = LoadConfig(**load_settings)
 
     heat_pump_config = parse_heat_pump_block(params.get("heat_pump"))
 
