@@ -13,10 +13,10 @@ Usage::
 
     @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     def test_a_fixed_capacity_that_is_not_finite_is_refused_naming_it(value: object) -> None:
-        form = {**valid_distribution_form(), "pv": {"capacity_kw": value}}
-        with pytest.raises(ValueError) as exc_info:
-            form_to_fleet_distribution_config(form)
-        assert str(exc_info.value) == f"pv.capacity_kw must be a finite number, got {value!r}"
+        blocks = {**valid_distribution_form(), "pv": {"capacity_kw": value}}
+        with pytest.raises(ConfigurationError) as exc_info:
+            read_form_fleet(blocks)
+        assert "pv.capacity_kw" in str(exc_info.value)
 """
 
 import pytest

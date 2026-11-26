@@ -39,20 +39,10 @@ _FLEET_FORM_BODY: dict = {
     "location": "london",
     "start": "2024-07-01",
     "end": "2024-07-03",
-    "pv": {
-        "capacity_kw": {
-            "type": "weighted_discrete",
-            "values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 2}],
-        }
-    },
-    "battery": {
-        "capacity_kwh": {
-            "type": "shuffled_pool",
-            "entries": [{"value": 0, "count": 2}, {"value": 5.0, "count": 2}],
-        }
-    },
+    "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [1.0, 2.0]}},
+    "battery": {"capacity_kwh": {"type": "shuffled_pool", "values": [0.0, 5.0], "counts": [2, 2]}},
     "load": {
-        "annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800, "min": 2000, "max": 6000}
+        "annual_consumption_kwh": {"type": "normal", "mean": 3400.0, "std": 800.0, "min": 2000.0, "max": 6000.0}
     },
     "tariff": {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1},
     "seg": {"rate_pence_per_kwh": 5.5},

@@ -20,7 +20,7 @@ FLEET_FORM_BLOCKS = (*FLEET_FORM_COMPONENT_BLOCKS, "tariff", "dispatch_strategy"
 
 
 def valid_distribution_form() -> dict[str, Any]:
-    """A fleet form that form_to_fleet_distribution_config converts, with all three component blocks.
+    """A fleet form that parse_fleet_form reads, with all three component blocks, each field a grammar spec.
 
     Every call builds a new form, nested blocks included, so a test may change its own in place.
     """

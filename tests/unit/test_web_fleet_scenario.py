@@ -24,6 +24,7 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
+from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
     ParsedFleetForm,
@@ -41,20 +42,10 @@ _FLEET_FORM: dict[str, Any] = {
     "name": "Round Trip Fleet",
     "n_homes": 3,
     "seed": 7,
-    "pv": {
-        "capacity_kw": {
-            "type": "weighted_discrete",
-            "values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 3}],
-        }
-    },
-    "battery": {
-        "capacity_kwh": {
-            "type": "shuffled_pool",
-            "entries": [{"value": 0, "count": 1}, {"value": 5.0, "count": 2}],
-        }
-    },
+    "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [1.0, 3.0]}},
+    "battery": {"capacity_kwh": {"type": "shuffled_pool", "values": [0.0, 5.0], "counts": [1, 2]}},
     "load": {
-        "annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800, "min": 2000, "max": 6000}
+        "annual_consumption_kwh": {"type": "normal", "mean": 3400.0, "std": 800.0, "min": 2000.0, "max": 6000.0}
     },
     "start": "2024-07-01",
     "end": "2024-07-10",
@@ -214,9 +205,10 @@ class TestParseFleetForm:
         seg = parse_seg_tariff(form.get("seg"))
         form_dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
         dispatch = SelfConsumptionStrategyConfig() if form_dispatch is None else form_dispatch
-        battery_pool = form["battery"]["capacity_kwh"]["entries"]
-        homes_with_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] > 0)
-        homes_without_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] == 0)
+        battery_pool = form["battery"]["capacity_kwh"]
+        pool = list(zip(battery_pool["values"], battery_pool["counts"], strict=True))
+        homes_with_a_battery = sum(count for value, count in pool if value > 0)
+        homes_without_a_battery = sum(count for value, count in pool if value == 0)
 
         homes = parse_fleet_form(form).homes
 
@@ -367,37 +359,39 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
         assert scenario.simulated_homes() == fleet.homes
         assert scenario.simulation_bounds() == (fleet.start_date, fleet.end_date)
 
-    @pytest.mark.parametrize(
-        ("key", "value", "read_block"),
-        [
-            pytest.param(
-                "tariff", {"type": "flat_rate"}, lambda: parse_tariff_config({"type": "flat_rate"}), id="tariff"
-            ),
-            pytest.param("seg", {}, lambda: parse_seg_rate({}), id="seg"),
-        ],
-    )
-    def test_a_refused_tariff_or_seg_is_refused_before_a_refused_fleet_distribution_as_parse_scenario_reads_them(
+    @pytest.mark.parametrize(("key", "value", "read_block"), _A_REFUSED_TARIFF_OR_SEG_WITH_ITS_READERS_READING)
+    def test_a_refused_fleet_block_is_refused_before_a_refused_tariff_or_seg_naming_the_forms_field(
         self, key: str, value: Any, read_block: Callable[[], object]
     ) -> None:
-        """The reader reads the tariff and SEG before the homes source, so a fleet grammar refusal is the later block's."""
+        """The form's fleet blocks are read at the form's own paths before read_fleet_scenario reads the tariff and SEG, so the refusal is the grammar's of the battery block, naming battery.capacity_kwh."""
         form = {**_FLEET_FORM, key: value, "battery": {"capacity_kwh": {"type": "uniform"}}}
-        with pytest.raises(ConfigurationError) as expected:
+        with pytest.raises(ConfigurationError):
             read_block()
+        blocks = {name: form[name] for name in FLEET_DISTRIBUTION_FORM_KEYS if name in form}
+        with pytest.raises(ConfigurationError) as expected:
+            parse_fleet_distribution_config(blocks, block_path="")
         with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form(form)
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+        assert str(refusal.value).startswith("battery.capacity_kwh")
 
     @pytest.mark.parametrize(("key", "value", "read_block"), _A_REFUSED_TARIFF_OR_SEG_WITH_ITS_READERS_READING)
-    def test_a_refused_tariff_or_seg_is_refused_before_the_dashboards_bound_on_the_fleet(
+    def test_the_dashboards_bound_on_the_fleet_is_refused_before_a_refused_tariff_or_seg(
         self, key: str, value: Any, read_block: Callable[[], object]
     ) -> None:
-        """The reader reads the tariff and SEG before the fleet, so a fleet the dashboard cannot run gets the earlier block's refusal."""
+        """read_form_fleet holds the fleet to the dashboard's bounds before read_fleet_scenario reads the tariff and SEG."""
         form = {**_FLEET_FORM_WITHOUT_A_POOL, "n_homes": MAX_FLEET_HOMES + 1, key: value}
-        with pytest.raises(ConfigurationError) as expected:
+        with pytest.raises(ConfigurationError):
             read_block()
         with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_form(form)
-        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+        assert str(refusal.value) == f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
+
+    def test_a_refused_fleet_block_names_the_field_the_form_posts_not_its_scenario_path(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_form({**_FLEET_FORM, "pv": {"capacity_kw": {"type": "normal"}}})
+        assert str(refusal.value).startswith("pv.capacity_kw")
+        assert "fleet_distribution." not in str(refusal.value)
 
     def test_a_fleet_that_sweeps_is_refused_as_parse_scenario_refuses_its_document(self) -> None:
         """A sweep defines one fleet per point, which 'fleet sweep' runs, so the form's one fleet is refused with parse_scenario's refusal of the document the form describes, naming the swept field."""
@@ -519,7 +513,7 @@ class TestScenarioFromFleetForm:
                 {
                     **_FLEET_FORM,
                     "pv": {
-                        "capacity_kw": {"type": "weighted_discrete", "values": [{"value": 0, "weight": 1}]}
+                        "capacity_kw": {"type": "weighted_discrete", "values": [0], "weights": [1]}
                     },
                 },
                 "capacity_kw must be greater than 0",
