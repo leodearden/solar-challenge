@@ -80,6 +80,19 @@ conventions:
       fix surfaced a downstream finance seam — scenario-level seg_tariff_pence_per_kwh is ignored
       by the 25-yr CBS projection, yielding £0 CBS export income — tracked separately, not this rule.)
 
+  - rule: "Every input type refuses a number setting that is not a finite number by name: constructing it with NaN, ±inf, True or a non-number in any numeric field, or a fraction in a whole-number field, raises ConfigurationError naming the field and the value; every other dataclass with a numeric field in a module directly under solar_challenge is classified with its reason (tests/unit/test_input_type_numbers.py)"
+    why: >
+      Invariant 1 (D27) first read "every dataclass in solar_challenge whose fields include
+      float or int refuses NaN, inf, -inf and True". But computed results, library rows and
+      private values carry no such contract: a computed result raises plain ValueError for its
+      own invariant (docs/prds/errors-leaf.md, contract C4). So the checkable form is two-way.
+      INPUT_TYPES gives each input type a valid instance, whose every numeric field the test
+      replaces with each bad value; NOT_INPUT_TYPES and EXCLUDED_FIELDS give every other numeric
+      dataclass and field its reason. A new numeric dataclass fails the per-task verify until it
+      is classified. An input type reads each number with number_fields.read_field in
+      __post_init__ (docs/prds/finite-quantities.md §5.2, §5.6 and §7; fk-a9c609ecb8ef,
+      fk-606a9211b34d, fk-b69968a37b36).
+
   - rule: "A TariffConfig's periods tile the local day exactly once; TariffConfig refuses a gap or overlap at construction, naming the clock times (tests/unit/test_tariff_tiling.py)"
     why: >
       get_rate reads the minute table construction builds, so the check and the lookup are one
