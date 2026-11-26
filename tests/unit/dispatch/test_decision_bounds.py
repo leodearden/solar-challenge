@@ -62,23 +62,34 @@ DISPATCHES = [
 
 
 class TestADecisionRefusesAPowerThatIsNotFiniteAndAtLeast0:
-    """§9 row 11, the decision's half: each of a decision's three powers is finite and at least 0, whatever its step."""
+    """§9 row 11, the decision's half: each of a decision's four powers is finite and at least 0, whatever its step."""
 
     @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
-    @pytest.mark.parametrize("field", ["charge_kw", "discharge_kw", "grid_charge_kw"])
+    @pytest.mark.parametrize("field", ["charge_kw", "discharge_kw", "grid_charge_kw", "export_kw"])
     def test_the_decision_refuses_the_power_naming_its_field_and_value(self, field: str, value: float) -> None:
-        powers = {"charge_kw": 0.0, "discharge_kw": 0.0, "grid_charge_kw": 0.0, field: value}
+        powers = {"charge_kw": 0.0, "discharge_kw": 0.0, "grid_charge_kw": 0.0, "export_kw": 0.0, field: value}
         refusal = f"{field} must be non-negative and finite, got {value!r} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             DispatchDecision(**powers)
 
     def test_finite_powers_at_least_0_construct_and_the_exclusivity_refusals_still_fire(self) -> None:
-        assert dataclasses.astuple(DispatchDecision(0.0, 0.0, 0.0)) == (0.0, 0.0, 0.0)
-        assert dataclasses.astuple(DispatchDecision(1.5, 0.0, 2.0)) == (1.5, 0.0, 2.0)
+        assert dataclasses.astuple(DispatchDecision(0.0, 0.0, 0.0)) == (0.0, 0.0, 0.0, 0.0)
+        assert dataclasses.astuple(DispatchDecision(1.5, 0.0, 2.0)) == (1.5, 0.0, 2.0, 0.0)
+        assert dataclasses.astuple(DispatchDecision(0.0, 1.0, 0.0, 2.0)) == (0.0, 1.0, 0.0, 2.0)
         with pytest.raises(ValueError, match="^Cannot charge and discharge simultaneously"):
             DispatchDecision(1.0, 1.0, 0.0)
         with pytest.raises(ValueError, match="^Cannot grid-charge and discharge simultaneously"):
             DispatchDecision(0.0, 1.0, 1.0)
+
+    def test_an_export_alongside_a_pv_charge_is_refused(self) -> None:
+        refusal = "Cannot charge and export simultaneously: charge=1.0 kW, export=1.0 kW"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            DispatchDecision(1.0, 0.0, 0.0, 1.0)
+
+    def test_an_export_alongside_a_grid_charge_is_refused(self) -> None:
+        refusal = "Cannot grid-charge and export simultaneously: grid_charge=1.0 kW, export=1.0 kW"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            DispatchDecision(0.0, 0.0, 1.0, 1.0)
 
 
 class TestTheStepRefusesAPowerThatIsNotFiniteAndAtLeast0:
