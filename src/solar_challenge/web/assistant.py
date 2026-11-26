@@ -49,7 +49,7 @@ from solar_challenge.web.fleet_components import (
     MAX_WINDOW_DAYS,
 )
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.request_boundary import refusal_text, request_json_object
+from solar_challenge.web.request_boundary import read_string, refusal_text, request_json_object
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import (
     CHAT_DELTA,
@@ -1354,9 +1354,10 @@ def chat() -> Response:
 
     Request JSON body: ``{"message": "<user text>", "run_id": "<optional>"}``.
     A ``run_id`` puts that run's summary in front of the message as context.
-    A body that is not a JSON object, an unset ANTHROPIC_API_KEY, a message
-    without text and a client that cannot be built are each answered with a
-    lone ``failed`` frame, and no turn is stored.
+    A body that is not a JSON object, a message or run_id that is not a JSON
+    string or holds a lone surrogate (the frame names it), an unset
+    ANTHROPIC_API_KEY, a message without text and a client that cannot be built
+    are each answered with a lone ``failed`` frame, and no turn is stored.
 
     The frames are web/sse.py's chat catalogue: ``delta`` and ``tool`` while the
     reply streams, then ``done``, or ``failed`` carrying the notice to show.
@@ -1366,9 +1367,10 @@ def chat() -> Response:
     """
     try:
         data = request_json_object()
+        user_message = read_string(data.get("message", ""), "message").strip()
+        run_id = read_string(data.get("run_id", ""), "run_id").strip()
     except ValueError as refusal:
         return _refused_turn(refusal_text(refusal))
-    user_message: str = str(data.get("message", "")).strip()
     refusal_reason = _refusal(user_message)
     if refusal_reason is not None:
         return _refused_turn(refusal_reason)
@@ -1376,5 +1378,4 @@ def chat() -> Response:
         client = _create_client()
     except Exception as exc:
         return _refused_turn(f"Could not initialise Anthropic client: {exc}")
-    run_id: str = str(data.get("run_id", "")).strip()
     return event_stream(_answer_frames(client, user_message, run_id))
