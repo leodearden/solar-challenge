@@ -32,7 +32,7 @@ HOME_JOBS_AT_EVERY_LOCATION_PRESET = """
 
     HOME_JOBS = {
         **{location: {"location": location, "days": 1} for location in LOCATION_PRESETS},
-        "heat pump": {"location": "bristol", "days": 1, "heat_pump": {"type": "ASHP"}},
+        "heat pump": {"location": "bristol", "days": 1, "heat_pump": {"heat_pump_type": "ASHP"}},
     }
 
     job_ids = {}

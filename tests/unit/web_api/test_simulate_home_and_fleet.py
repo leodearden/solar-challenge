@@ -11,9 +11,10 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.location import parse_location
 from solar_challenge.pv import PVConfig
-from solar_challenge.scenario_blocks import parse_location_block
+from solar_challenge.scenario_blocks import parse_heat_pump_block, parse_location_block
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
@@ -590,8 +591,8 @@ class TestParseHomeConfigErrorPaths:
             ),
             pytest.param(
                 "/api/simulate/home",
-                {**VALID_HOME_PAYLOAD, "heat_pump": {"thermal_capacity_kw": 10**400}},
-                f"heat_pump.thermal_capacity_kw must be a finite number, got {10**400!r}",
+                {**VALID_HOME_PAYLOAD, "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 10**400}},
+                f"heat_pump: thermal_capacity_kw must be a finite number, got {10**400!r}",
                 id="home-heat_pump.thermal_capacity_kw-too-large-for-a-float",
             ),
         ],
@@ -883,6 +884,45 @@ class TestSimulateHomeSystemLosses:
         resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "system_losses": 1.0})
         assert resp.status_code == 400
         assert resp.get_json()["error"] == str(pv_refusal.value)
+        mock_job_manager.submit_home_job.assert_not_called()
+
+
+class TestSimulateHomeHeatPump:
+    """A home body's heat_pump block is config's heat_pump: block.
+
+    A valid block reaches the submitted home; a block the grammar refuses is a 400 carrying the
+    grammar's refusal, and nothing is submitted.
+    """
+
+    def test_a_gshp_with_its_capacity_set_reaches_the_submitted_home(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with a heat_pump block naming a 12 kW GSHP returns 201, and the submitted home's heat pump is that GSHP."""
+        block = {"heat_pump_type": "GSHP", "thermal_capacity_kw": 12}
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "heat_pump": block})
+        assert resp.status_code == 201, resp.get_json()
+        mock_job_manager.submit_home_job.assert_called_once()
+        config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
+        assert config.heat_pump_config == HeatPumpConfig(heat_pump_type="GSHP", thermal_capacity_kw=12.0)
+
+    @pytest.mark.parametrize(
+        ("block", "key"),
+        [
+            pytest.param({"heat_pump_type": "GSHP", "thermal_capacity": 12}, "thermal_capacity", id="misspelt-key"),
+            pytest.param({"type": "GSHP", "thermal_capacity_kw": 12}, "type", id="form-key"),
+        ],
+    )
+    def test_a_block_the_grammar_refuses_returns_400_with_its_refusal_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, block: dict, key: str
+    ) -> None:
+        """POST with a heat_pump key the grammar does not recognise is a 400 whose error is parse_heat_pump_block's own refusal, naming the key; nothing is submitted."""
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_heat_pump_block(block)
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "heat_pump": block})
+        assert resp.status_code == 400
+        error = resp.get_json()["error"]
+        assert error == str(grammar_refusal.value)
+        assert repr(key) in error
         mock_job_manager.submit_home_job.assert_not_called()
 
 

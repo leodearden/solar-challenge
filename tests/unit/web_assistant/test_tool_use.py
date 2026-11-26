@@ -53,6 +53,7 @@ from solar_challenge.web.storage import RunStorage
 
 from tests._error_records import error_records
 from tests._job_manager_double import autospecced_job_manager
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._run_stores import empty_run_storage, run_storage_over
 from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
@@ -1068,7 +1069,7 @@ class TestSimulationToolUseSignal:
             f"Expected tool_result block in last user message; content: {content}"
         )
         error = json.loads(tool_result_block["content"])["error"]
-        assert "heat_pump must be a mapping, got str" in error, (
+        assert non_mapping_block_refusal("heat_pump", "str") in error, (
             f"Expected the tool_result error to name heat_pump; got: {error!r}"
         )
         jm.submit_home_job.assert_not_called()
