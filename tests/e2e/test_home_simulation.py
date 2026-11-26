@@ -132,7 +132,7 @@ def _choose_variant(page: Page, block: _OptionalBlock, variant: str) -> None:
 
 
 _HEAT_PUMP = _OptionalBlock(
-    "Heat Pump", "Enable Heat Pump", "Heat Pump Type", "heat_pump", "type"
+    "Heat Pump", "Enable Heat Pump", "Heat Pump Type", "heat_pump", "heat_pump_type"
 )
 _TARIFF = _OptionalBlock("Tariff", "Enable Tariff", "Tariff Type", "tariff", "type")
 _SEG = _OptionalBlock(
@@ -195,6 +195,27 @@ def test_seg_custom_rate_form_submission_is_accepted(
     assert sent_seg.get("rate_pence_per_kwh") == 5.5, (
         "The submitted 'seg' block does not carry the typed custom rate, "
         "so a 201 would say nothing about the custom-rate path."
+    )
+    assert response.status == 201, response.text()
+
+
+def test_heat_pump_gshp_run_with_its_capacity_set_is_accepted(
+    page: Page, live_server: str
+) -> None:
+    """Run with the heat pump on, GSHP picked and Thermal Capacity set to 12 kW: /api/simulate/home accepts what the form sends (201)."""
+    page.goto(live_server + "/simulate/home")
+    _switch_on(page, _HEAT_PUMP.tab, _HEAT_PUMP.switch_name)
+    _choose_variant(page, _HEAT_PUMP, "GSHP")
+    page.get_by_role("slider", name="Thermal Capacity", exact=True).fill("12")
+    response = submit_two_day_run(page)
+
+    sent = response.request.post_data_json.get(_HEAT_PUMP.payload_key) or {}
+    assert {key: sent.get(key) for key in ("heat_pump_type", "thermal_capacity_kw")} == {
+        "heat_pump_type": "GSHP",
+        "thermal_capacity_kw": 12,
+    }, (
+        "The submitted 'heat_pump' block does not carry the GSHP and its typed capacity "
+        "under config's keys, so a 201 would say nothing about the GSHP-with-capacity path."
     )
     assert response.status == 201, response.text()
 
