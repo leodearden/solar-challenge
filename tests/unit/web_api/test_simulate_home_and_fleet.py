@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for POST /api/simulate/home and POST /api/simulate/fleet, and for how the simulate endpoints parse and refuse a home config."""
 
+import dataclasses
 import math
 from collections.abc import Callable
 from unittest.mock import NonCallableMagicMock
@@ -12,9 +13,14 @@ from flask.testing import FlaskClient
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location, parse_location
 from solar_challenge.pv import PVConfig
-from solar_challenge.scenario_blocks import parse_heat_pump_block, parse_location_block
+from solar_challenge.scenario_blocks import (
+    PV_CAPACITY_KW_WHEN_OMITTED,
+    parse_heat_pump_block,
+    parse_location_block,
+)
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
 from solar_challenge.web.simulation_params import HOME_CONFIG_KEYS
@@ -360,6 +366,24 @@ class TestSimulateHomeAPI:
 
         assert resp.status_code == 201, resp.get_json()
         assert mock_job_manager.submit_home_job.call_args.kwargs["config"].location == Location.bristol()
+
+    def test_a_body_that_sends_only_its_window_queues_the_engine_defaults(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A field the body does not send takes its engine dataclass's default, not a web copy: PV_CAPACITY_KW_WHEN_OMITTED's array at PVConfig's defaults, LoadConfig's occupants, the TDCV estimate and no battery; stochastic is the web's default, off."""
+        resp = client.post("/api/simulate/home", json={"days": 1})
+
+        assert resp.status_code == 201, resp.get_json()
+        config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
+        assert config.pv_config == PVConfig(capacity_kw=PV_CAPACITY_KW_WHEN_OMITTED)
+        pv_defaults = {field.name: field.default for field in dataclasses.fields(PVConfig)}
+        for setting in ("azimuth", "tilt", "system_age_years", "degradation_rate_per_year"):
+            assert (setting, getattr(config.pv_config, setting)) == (setting, pv_defaults[setting])
+        load_defaults = {field.name: field.default for field in dataclasses.fields(LoadConfig)}
+        assert config.load_config.household_occupants == load_defaults["household_occupants"]
+        assert config.load_config.annual_consumption_kwh is None
+        assert config.load_config.use_stochastic is False
+        assert config.battery_config is None
 
     @pytest.mark.parametrize("unsent", UNSENT_VALUES)
     def test_an_unrecognised_key_sent_as_null_or_empty_text_returns_400_naming_it_and_submits_nothing(
