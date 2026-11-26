@@ -318,7 +318,9 @@ def simulate_timestep(
             or demand_kw is not finite and at least 0, naming it; then, when a grid-charge context
             is built, if useful_charge_ceiling_kwh is neither None nor finite and at least 0,
             naming it; then if the strategy's decision asks for more than the step allows
-            (StepLimits.require_admissible), naming the strategy and each power above its limit.
+            (StepLimits.require_admissible), an export beyond the headroom the battery's discharge
+            limit leaves after the shortfall included, naming the strategy and each power above
+            its limit.
             These checks run before any battery moves energy. Then, after any battery has moved,
             if a flow the step computes is not a finite number at least 0 (an energy beyond a
             float, or one its battery reports), naming each such flow and its value
@@ -357,9 +359,12 @@ def simulate_timestep(
         timestep_minutes=timestep_minutes,
         grid_charge_ctx=grid_charge_ctx,
     )
-    StepLimits.for_step(generation_kw, demand_kw, max_charge_kw=battery.max_charge_kw).require_admissible(
-        decision, strategy.name
-    )
+    StepLimits.for_step(
+        generation_kw,
+        demand_kw,
+        max_charge_kw=battery.max_charge_kw,
+        max_discharge_kw=battery.config.max_discharge_kw,
+    ).require_admissible(decision, strategy.name)
 
     exchange = _execute(decision, battery, timestep_minutes)
     return _settle(step, exchange, battery.soc_kwh)
