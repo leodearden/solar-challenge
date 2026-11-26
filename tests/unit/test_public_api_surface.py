@@ -1215,6 +1215,18 @@ def test_a_changed_form_passes_once_unreleased_names_it_with_a_task_whose_note_e
     test_every_task_unreleased_names_has_its_release_note(tmp_path)
 
 
+def test_a_version_bump_that_keeps_the_released_snapshot_fails_naming_both_versions(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    scratch_edit.setattr(solar_challenge, "__version__", "0.7.0")
+
+    message = _lock_failure(test_the_released_snapshot_is_of_the_package_version)
+
+    assert "'0.7.0'" in message
+    assert "'0.6.0'" in message
+    assert "tests/_released_surface.py" in message
+
+
 # ===========================================================================
 # Name resolution: what the package resolves each name to, and what dir() lists
 # ===========================================================================
