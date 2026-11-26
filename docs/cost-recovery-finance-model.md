@@ -1036,7 +1036,7 @@ rounded up, never to the nearest. It is not an interpolated percentile: on daily
 totals (1.0, 2.0) kW the 90% figure is 1.0 kW, where numpy's linear 10th
 percentile, 1.1 kW, is available on only half the days. The 90% figure never
 exceeds the 50% figure. For a fleet whose homes share one simulated index, as
-`simulate_fleet`'s do, the season minimum, the 0.5.0 tag's figure, never exceeds
+a `FleetRunner.simulate` fan-out's do, the season minimum, the 0.5.0 tag's figure, never exceeds
 the 90% figure either (`tests/unit/test_gridservices.py::TestReliabilityRank`).
 
 **The energy ceiling.** A 5 kWh battery charged to 90% holds 4.0 kWh above its
