@@ -1377,9 +1377,30 @@ class TestFleetSweepRefusesAFileItCannotSweep:
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n  battery:\n"
                 "    capacity_kwh: {type: proportional_to, source: pv.capacity_kw, multiplier: '${BATTERY_RATIO:1.0}'}\n",
                 ("--param", "BATTERY_RATI0", "--min", "0.5", "--max", "2", "--steps", "2"),
-                "Variables with no placeholder in the document: 'BATTERY_RATI0'; "
-                "its placeholders: 'BATTERY_RATIO' at fleet_distribution.battery.capacity_kwh.multiplier",
+                "--param 'BATTERY_RATI0' names no knob and no variable of the document; "
+                "its variables: 'BATTERY_RATIO'; the knobs, each with its aliases: pv_capacity_kw, inverter_capacity_kw",
                 id="param-sweep-of-a-variable-no-placeholder-names",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
+                ("--param", "battery_kwh", "--min", "5", "--max", "10", "--steps", "2"),
+                "--param 'battery_kwh' names no knob and no variable of the document; "
+                "it holds no variables; the knobs, each with its aliases: pv_capacity_kw",
+                id="name-that-is-neither-in-a-document-without-variables",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n  battery:\n"
+                "    capacity_kwh: '${battery_capacity_kwh}'\n",
+                ("--param", "battery_capacity_kwh", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+                "--param 'battery_capacity_kwh' names both the knob 'battery_capacity_kwh' "
+                "and the document's variable ${battery_capacity_kwh}",
+                id="name-that-is-both-a-knob-and-a-variable",
+            ),
+            pytest.param(
+                "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: '${seg}'}\n",
+                ("--param", "seg", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+                "--param 'seg' names both the knob 'seg_tariff_pence_per_kwh' and the document's variable ${seg}",
+                id="alias-that-is-also-a-variable",
             ),
             pytest.param(
                 "name: Street\nfleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
