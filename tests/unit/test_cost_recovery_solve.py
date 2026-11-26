@@ -738,15 +738,10 @@ class TestSolveCostRecoveryRateRequiresASimulator:
 # ---------------------------------------------------------------------------
 
 
-def test_the_packages_frozen_solve_answers_as_the_projections_solve() -> None:
-    """solar_challenge.solve_cost_recovery_rate returns the solution solar_challenge.projection's solve returns."""
-    scenario = make_scenario(n_homes=3)
-    finance = _make_finance(n_homes=3)
-    simulate = answering_with(make_fleet_results(n_homes=3))
-
-    frozen = solar_challenge.solve_cost_recovery_rate(scenario, finance, simulate=simulate)
-
-    assert frozen == solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+def test_the_packages_frozen_solve_is_the_one_projection_defines() -> None:
+    """solar_challenge.solve_cost_recovery_rate is solar_challenge.projection's solve, defined there (B15)."""
+    assert solar_challenge.solve_cost_recovery_rate is solve_cost_recovery_rate
+    assert solar_challenge.solve_cost_recovery_rate.__module__ == "solar_challenge.projection"
 
 
 # ---------------------------------------------------------------------------

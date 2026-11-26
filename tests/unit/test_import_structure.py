@@ -92,12 +92,6 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "(tests/unit/test_conftests_need_no_web_extra.py) only while create_app defers web.app, "
         "which imports Flask"
     ),
-
-    ("solar_challenge.finance", "solar_challenge.projection"): Transitional(
-        "S8 ι, task 939: the surface bump moves solve_cost_recovery_rate to "
-        "solar_challenge.projection and deletes finance's frozen wrapper "
-        "(docs/prds/finance-partition.md §5.3)"
-    ),
 }
 
 

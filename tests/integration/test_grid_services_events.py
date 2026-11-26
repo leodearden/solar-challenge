@@ -36,12 +36,13 @@ import pandas as pd
 import pytest
 import yaml
 
+import solar_challenge
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.board_report import GridServicesIncome, generate_finance_report
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
-from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.flex import FLEX_VALUE_BANDS
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
@@ -373,13 +374,19 @@ _JUNE_2024_HOURS = pd.date_range(
 )
 
 
-def test_a_projection_shows_each_unobserved_window_warning_once() -> None:
-    """Every simulated age prices a June-only fleet, which neither event window enters.
+def _june_only_simulate(
+    fleet_config: FleetConfig, start_ts: pd.Timestamp, end_ts: pd.Timestamp
+) -> FleetResults:
+    """Every home of *fleet_config* with a spare battery through June 2024 alone."""
+    homes = fleet_config.homes
+    return make_fleet_results_of(
+        [_make_spare_battery_sim_results(hours=_JUNE_2024_HOURS) for _ in homes],
+        homes=homes,
+    )
 
-    Each age's pricing warns of both windows in the same words, and the
-    projection shows each window's warning once, attributed to its caller
-    (docs/prds/grid-services-pricing-model.md §5.4).
-    """
+
+def _june_only_fleet_on_two_unentered_windows() -> tuple[ScenarioConfig, FinanceConfig, FleetSimulate]:
+    """A 2-home, 5 kWh battery scenario priced at the default winter window and a March one, simulated in June alone."""
     march_window = EventWindow(
         months=(3,),
         weekdays=(0, 1, 2, 3, 4),
@@ -397,16 +404,20 @@ def test_a_projection_shows_each_unobserved_window_warning_once() -> None:
             event_windows=(DEFAULT_EVENT_WINDOWS[0], march_window)
         ),
     )
+    return scenario, finance_events, _june_only_simulate
 
-    def _june_only_simulate(fleet_config, start_ts, end_ts):  # type: ignore[no-untyped-def]
-        homes = fleet_config.homes
-        return make_fleet_results_of(
-            [_make_spare_battery_sim_results(hours=_JUNE_2024_HOURS) for _ in homes],
-            homes=homes,
-        )
+
+def test_a_projection_shows_each_unobserved_window_warning_once() -> None:
+    """Every simulated age prices a June-only fleet, which neither event window enters.
+
+    Each age's pricing warns of both windows in the same words, and the
+    projection shows each window's warning once, attributed to its caller
+    (docs/prds/grid-services-pricing-model.md §5.4).
+    """
+    scenario, finance_events, simulate = _june_only_fleet_on_two_unentered_windows()
 
     with pytest.warns(UserWarning) as record:
-        curve = project_multi_year(scenario, finance_events, simulate=_june_only_simulate)
+        curve = project_multi_year(scenario, finance_events, simulate=simulate)
 
     # Premise: several ages are priced, so a warning shown per age would repeat.
     assert len(curve.sampled_ages) >= 3, curve.sampled_ages
@@ -414,6 +425,17 @@ def test_a_projection_shows_each_unobserved_window_warning_once() -> None:
         window_warnings = [w for w in record if names_the_window in str(w.message)]
         assert len(window_warnings) == 1, [str(w.message) for w in window_warnings]
         assert window_warnings[0].filename == __file__
+
+
+def test_the_packages_frozen_solve_attributes_a_projection_warning_to_its_caller() -> None:
+    """A window warning the projection shows through solar_challenge.solve_cost_recovery_rate names the line that calls it."""
+    scenario, finance_events, simulate = _june_only_fleet_on_two_unentered_windows()
+
+    with pytest.warns(UserWarning) as record:
+        solar_challenge.solve_cost_recovery_rate(scenario, finance_events, simulate=simulate)
+
+    march_window_warnings = [w for w in record if "months=(3,)" in str(w.message)]
+    assert [w.filename for w in march_window_warnings] == [__file__]
 
 
 # ---------------------------------------------------------------------------

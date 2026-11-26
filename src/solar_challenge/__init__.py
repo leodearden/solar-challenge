@@ -20,12 +20,13 @@ __all__: list[str] = [
     # --- finance / bill engine (finance.py) ---
     "bill",              # period-native billing core; bare name is intentional — mirrors householder_bill brevity, primary platform import target
     "householder_bill",
-    "solve_cost_recovery_rate",
     "bill_distribution",
     "BillBreakdown",
     "BillDistribution",
     "CostRecoverySolution",
     "FinanceConfig",
+    # --- cost-recovery solve (projection.py) ---
+    "solve_cost_recovery_rate",
     # --- signature-closure types required to call the bill engine ---
     "SummaryStatistics",   # home.py   — arg to householder_bill
     "ScenarioConfig",      # config.py — arg to solve_cost_recovery_rate
@@ -115,12 +116,13 @@ _SYMBOL_MODULE: dict[str, str] = {
     # finance
     "bill": "finance",
     "householder_bill": "finance",
-    "solve_cost_recovery_rate": "finance",
     "bill_distribution": "finance",
     "BillBreakdown": "finance",
     "BillDistribution": "finance",
     "CostRecoverySolution": "finance",
     "FinanceConfig": "finance",
+    # cost-recovery solve
+    "solve_cost_recovery_rate": "projection",
     # signature-closure types
     "SummaryStatistics": "home",
     "ScenarioConfig": "config",
@@ -276,12 +278,13 @@ if TYPE_CHECKING:
     # finance
     from solar_challenge.finance import bill as bill
     from solar_challenge.finance import householder_bill as householder_bill
-    from solar_challenge.finance import solve_cost_recovery_rate as solve_cost_recovery_rate
     from solar_challenge.finance import bill_distribution as bill_distribution
     from solar_challenge.finance import BillBreakdown as BillBreakdown
     from solar_challenge.finance import BillDistribution as BillDistribution
     from solar_challenge.finance import CostRecoverySolution as CostRecoverySolution
     from solar_challenge.finance import FinanceConfig as FinanceConfig
+    # cost-recovery solve
+    from solar_challenge.projection import solve_cost_recovery_rate as solve_cost_recovery_rate
     # signature-closure types
     from solar_challenge.home import SummaryStatistics as SummaryStatistics
     from solar_challenge.config import ScenarioConfig as ScenarioConfig
