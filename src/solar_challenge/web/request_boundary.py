@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How the web reads a request body, refuses one it cannot read, and answers a refusal.
+"""How the web reads a request body and its fields, refuses one it cannot read, and answers a refusal.
+
+A field a request sends as text is read with read_string, or read_optional_string where null
+means no value, as a JSON string that encodes as UTF-8; a boolean field is read with
+read_boolean, as true or false.
 
 Every refusal a web reader raises is a ConfigurationError. refusal_text is the one judge
 of a refusal at the web boundary: any other ValueError is answered as a refusal too, but
@@ -17,6 +21,7 @@ from typing import Any
 from flask import Response, jsonify, request
 from werkzeug.exceptions import InternalServerError
 
+from solar_challenge.boolean_fields import as_boolean
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location, parse_location
 from solar_challenge.scenario_blocks import parse_location_block
@@ -113,6 +118,39 @@ def require_encodable_text(text: str, what: str) -> str:
     except UnicodeEncodeError:
         raise ConfigurationError(f"{what} must be text that encodes as UTF-8, holding no lone surrogate; got {text!r}") from None
     return text
+
+
+def read_string(value: object, field: str) -> str:
+    """Return *value*, the text a request's *field* sends: a JSON string that encodes as UTF-8.
+
+    Raises:
+        ConfigurationError: For a value that is not a JSON string, naming *field* and the type of
+            *value*; from require_encodable_text, naming *field* and *value*, for text holding a
+            lone surrogate.
+    """
+    if not isinstance(value, str):
+        raise ConfigurationError(f"{field} must be a JSON string, got {type(value).__name__}")
+    return require_encodable_text(value, field)
+
+
+def read_optional_string(value: object, field: str) -> str | None:
+    """None for a *value* of None, a JSON null or a field not sent read with .get; any other *value* as read_string reads *field*.
+
+    Raises:
+        ConfigurationError: From read_string, for a value it refuses.
+    """
+    if value is None:
+        return None
+    return read_string(value, field)
+
+
+def read_boolean(value: object, field: str) -> bool:
+    """Return *value*, the boolean a request's *field* sends: true or false, as boolean_fields.as_boolean reads it.
+
+    Raises:
+        ConfigurationError: From as_boolean, naming *field* and *value*, for any other value.
+    """
+    return as_boolean(value, field)
 
 
 def refuse_unencodable_text(value: object, what: str) -> None:
