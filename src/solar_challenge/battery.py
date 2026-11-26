@@ -543,6 +543,11 @@ class Battery:
         """The maximum charging power in kW, the limit charge() applies."""
         return self._config.max_charge_kw
 
+    @property
+    def max_discharge_kw(self) -> float:
+        """The maximum discharging power in kW, the limit discharge() applies."""
+        return self._config.max_discharge_kw
+
     def charge(self, power_kw: float, duration_minutes: float) -> float:
         """Charge the battery.
 
@@ -602,7 +607,7 @@ class Battery:
         _require_valid_request("discharge", power_kw, duration_minutes)
 
         # Limit to max discharge rate
-        actual_power = min(power_kw, self._config.max_discharge_kw)
+        actual_power = min(power_kw, self.max_discharge_kw)
 
         # Calculate energy requested
         duration_hours = duration_minutes * HOURS_PER_MINUTE

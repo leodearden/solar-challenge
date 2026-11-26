@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""docs/prds/one-dispatch-engine.md §9 rows 8-12: a decision's powers, and a step's generation and demand, are finite and at least 0, and simulate_timestep refuses a decision that asks for more than its step allows, before the battery moves; no built-in strategy's decision does."""
+"""docs/prds/one-dispatch-engine.md §9 rows 8-12, and docs/prds/event-dispatch-and-battery-sizing.md §9 B2: a decision's powers, and a step's generation and demand, are finite and at least 0, and simulate_timestep refuses a decision that asks for more than its step allows, its export included, before the battery moves; no built-in strategy's decision does."""
 
 import dataclasses
 import functools
@@ -29,7 +29,9 @@ from solar_challenge.flow import EnergyFlowResult, simulate_timestep
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._fixed_decision_strategy import FixedDecisionStrategy
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
+from tests._ten_kwh_battery import ten_kwh_battery
 from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 NOT_FINITE_AND_AT_LEAST_0 = [
@@ -60,53 +62,35 @@ DISPATCHES = [
 ]
 
 
-class _ConsumerStrategy(DispatchStrategy):
-    """Test double: a strategy of a consumer's own, which checks none of its inputs, records each call's generation and demand, and returns one decision whatever the step."""
-
-    def __init__(self, decision: DispatchDecision, name: str = "consumer") -> None:
-        self._decision = decision
-        self._name = name
-        self.calls: list[tuple[float, float]] = []
-
-    @property
-    def name(self) -> str:
-        """Return the name this double was built with."""
-        return self._name
-
-    def decide_action(
-        self,
-        timestamp: datetime,
-        generation_kw: float,
-        demand_kw: float,
-        battery_soc_kwh: float,
-        battery_capacity_kwh: float,
-        timestep_minutes: float,
-        *,
-        grid_charge_ctx: Optional[GridChargeContext] = None,
-    ) -> DispatchDecision:
-        """Record generation_kw and demand_kw, and return the decision this double was built with."""
-        self.calls.append((generation_kw, demand_kw))
-        return self._decision
-
-
 class TestADecisionRefusesAPowerThatIsNotFiniteAndAtLeast0:
-    """§9 row 11, the decision's half: each of a decision's three powers is finite and at least 0, whatever its step."""
+    """§9 row 11, the decision's half: each of a decision's four powers is finite and at least 0, whatever its step."""
 
     @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
-    @pytest.mark.parametrize("field", ["charge_kw", "discharge_kw", "grid_charge_kw"])
+    @pytest.mark.parametrize("field", ["charge_kw", "discharge_kw", "grid_charge_kw", "export_kw"])
     def test_the_decision_refuses_the_power_naming_its_field_and_value(self, field: str, value: float) -> None:
-        powers = {"charge_kw": 0.0, "discharge_kw": 0.0, "grid_charge_kw": 0.0, field: value}
+        powers = {"charge_kw": 0.0, "discharge_kw": 0.0, "grid_charge_kw": 0.0, "export_kw": 0.0, field: value}
         refusal = f"{field} must be non-negative and finite, got {value!r} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             DispatchDecision(**powers)
 
     def test_finite_powers_at_least_0_construct_and_the_exclusivity_refusals_still_fire(self) -> None:
-        assert dataclasses.astuple(DispatchDecision(0.0, 0.0, 0.0)) == (0.0, 0.0, 0.0)
-        assert dataclasses.astuple(DispatchDecision(1.5, 0.0, 2.0)) == (1.5, 0.0, 2.0)
+        assert dataclasses.astuple(DispatchDecision(0.0, 0.0, 0.0)) == (0.0, 0.0, 0.0, 0.0)
+        assert dataclasses.astuple(DispatchDecision(1.5, 0.0, 2.0)) == (1.5, 0.0, 2.0, 0.0)
+        assert dataclasses.astuple(DispatchDecision(0.0, 1.0, 0.0, 2.0)) == (0.0, 1.0, 0.0, 2.0)
         with pytest.raises(ValueError, match="^Cannot charge and discharge simultaneously"):
             DispatchDecision(1.0, 1.0, 0.0)
         with pytest.raises(ValueError, match="^Cannot grid-charge and discharge simultaneously"):
             DispatchDecision(0.0, 1.0, 1.0)
+
+    def test_an_export_alongside_a_pv_charge_is_refused(self) -> None:
+        refusal = "Cannot charge and export simultaneously: charge=1.0 kW, export=1.0 kW"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            DispatchDecision(1.0, 0.0, 0.0, 1.0)
+
+    def test_an_export_alongside_a_grid_charge_is_refused(self) -> None:
+        refusal = "Cannot grid-charge and export simultaneously: grid_charge=1.0 kW, export=1.0 kW"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            DispatchDecision(0.0, 0.0, 1.0, 1.0)
 
 
 class TestTheStepRefusesAPowerThatIsNotFiniteAndAtLeast0:
@@ -140,10 +124,10 @@ class TestTheStepRefusesAPowerThatIsNotFiniteAndAtLeast0:
     def test_simulate_timestep_refuses_the_power_before_a_strategy_of_the_consumer_s_own_decides(
         self, power: str, quantity: str, value: float
     ) -> None:
-        """Unlike the built-in strategies, _ConsumerStrategy checks none of its inputs, so the step's own check is all that refuses the power."""
+        """Unlike the built-in strategies, FixedDecisionStrategy checks none of its inputs, so the step's own check is all that refuses the power."""
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        strategy = _ConsumerStrategy(DispatchDecision(0.0, 0.0))
+        strategy = FixedDecisionStrategy(DispatchDecision(0.0, 0.0))
         refusal = f"{quantity} must be non-negative and finite, got {value} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             simulate_timestep(
@@ -161,11 +145,6 @@ def _refusal(*breaches: str) -> str:
     return "Dispatch strategy 'over_limit' decided more than the step allows: " + "; ".join(breaches)
 
 
-def _ten_kwh_battery(soc_kwh: float) -> Battery:
-    """A 10 kWh battery at *soc_kwh*, with the default 2.5 kW limits and 0.975 efficiencies."""
-    return Battery(BatteryConfig(capacity_kwh=10.0, max_charge_kw=2.5), initial_soc_kwh=soc_kwh)
-
-
 def _hour_under(
     decision: DispatchDecision, *, generation_kw: float, demand_kw: float, battery: Battery
 ) -> EnergyFlowResult:
@@ -175,7 +154,7 @@ def _hour_under(
         demand_kw=demand_kw,
         battery=battery,
         timestep_minutes=60,
-        strategy=_ConsumerStrategy(decision, name="over_limit"),
+        strategy=FixedDecisionStrategy(decision, name="over_limit"),
     )
 
 
@@ -184,7 +163,7 @@ class TestAStepRefusesADecisionBeyondItsLimitsBeforeTheBatteryMoves:
 
     def test_a_grid_charge_above_the_headroom_the_pv_charge_leaves_is_refused(self) -> None:
         """§9 row 8: a 5 kW PV charge takes all of the battery's 2.5 kW charge limit, leaving no headroom for the 5 kW grid charge."""
-        battery = _ten_kwh_battery(1.0)
+        battery = ten_kwh_battery(1.0)
         refusal = _refusal("grid_charge_kw=5.0 kW is above 0.0 kW, the charge limit's headroom after charge_kw")
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             _hour_under(DispatchDecision(5.0, 0.0, 5.0), generation_kw=10.0, demand_kw=0.0, battery=battery)
@@ -192,7 +171,7 @@ class TestAStepRefusesADecisionBeyondItsLimitsBeforeTheBatteryMoves:
 
     def test_a_pv_charge_above_the_excess_is_refused(self) -> None:
         """§9 row 9: with no PV the step has no excess to charge from."""
-        battery = _ten_kwh_battery(1.0)
+        battery = ten_kwh_battery(1.0)
         refusal = _refusal("charge_kw=2.5 kW is above 0.0 kW, the step's PV excess")
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             _hour_under(DispatchDecision(2.5, 0.0, 0.0), generation_kw=0.0, demand_kw=0.0, battery=battery)
@@ -200,14 +179,14 @@ class TestAStepRefusesADecisionBeyondItsLimitsBeforeTheBatteryMoves:
 
     def test_a_discharge_above_the_shortfall_is_refused(self) -> None:
         """§9 row 10: 2.5 kW of discharge against a 1.0 kW shortfall."""
-        battery = _ten_kwh_battery(5.0)
+        battery = ten_kwh_battery(5.0)
         refusal = _refusal("discharge_kw=2.5 kW is above 1.0 kW, the step's shortfall")
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             _hour_under(DispatchDecision(0.0, 2.5, 0.0), generation_kw=0.0, demand_kw=1.0, battery=battery)
         assert battery.soc_kwh == 5.0
 
     def test_every_breach_of_one_decision_is_named_in_one_refusal(self) -> None:
-        battery = _ten_kwh_battery(1.0)
+        battery = ten_kwh_battery(1.0)
         refusal = _refusal(
             "charge_kw=2.5 kW is above 0.0 kW, the step's PV excess",
             "grid_charge_kw=2.5 kW is above 0.0 kW, the charge limit's headroom after charge_kw",
@@ -217,22 +196,51 @@ class TestAStepRefusesADecisionBeyondItsLimitsBeforeTheBatteryMoves:
         assert battery.soc_kwh == 1.0
 
 
+class TestAStepRefusesAnExportBeyondItsLimitBeforeTheBatteryMoves:
+    """docs/prds/event-dispatch-and-battery-sizing.md §9 B2: simulate_timestep refuses an export_kw above the headroom the battery's 2.5 kW discharge limit leaves after the step's shortfall, naming the strategy, the field, its value and its limit, and leaves the battery's SOC as it was."""
+
+    def test_an_export_above_the_headroom_the_shortfall_leaves_is_refused(self) -> None:
+        battery = ten_kwh_battery(5.0)
+        refusal = _refusal("export_kw=2.0 kW is above 1.5 kW, the discharge limit's headroom after the step's shortfall")
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            _hour_under(DispatchDecision(0.0, 1.0, 0.0, 2.0), generation_kw=0.0, demand_kw=1.0, battery=battery)
+        assert battery.soc_kwh == 5.0
+
+    def test_an_export_on_a_step_whose_shortfall_takes_the_whole_discharge_limit_is_refused(self) -> None:
+        battery = ten_kwh_battery(5.0)
+        refusal = _refusal("export_kw=0.5 kW is above 0.0 kW, the discharge limit's headroom after the step's shortfall")
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            _hour_under(DispatchDecision(0.0, 2.5, 0.0, 0.5), generation_kw=0.0, demand_kw=3.0, battery=battery)
+        assert battery.soc_kwh == 5.0
+
+    def test_an_export_and_a_discharge_beyond_their_limits_are_both_named_in_field_order(self) -> None:
+        battery = ten_kwh_battery(5.0)
+        refusal = _refusal(
+            "discharge_kw=2.0 kW is above 1.0 kW, the step's shortfall",
+            "export_kw=2.0 kW is above 1.5 kW, the discharge limit's headroom after the step's shortfall",
+        )
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            _hour_under(DispatchDecision(0.0, 2.0, 0.0, 2.0), generation_kw=0.0, demand_kw=1.0, battery=battery)
+        assert battery.soc_kwh == 5.0
+
+
 class TestAStepAdmitsADecisionWithinItsLimits:
     """A decision at its step's limits runs, and so does a PV charge above the battery's charge limit, an offer the battery clamps."""
 
     def test_a_decision_at_both_of_its_charge_limits_runs(self) -> None:
         """1.0 kW of PV charge takes the whole excess, and 1.5 kW of grid charge the whole headroom it leaves of 2.5 kW."""
-        battery = _ten_kwh_battery(1.0)
+        battery = ten_kwh_battery(1.0)
         _hour_under(DispatchDecision(1.0, 0.0, 1.5), generation_kw=1.0, demand_kw=0.0, battery=battery)
         assert battery.soc_kwh == pytest.approx(1.0 + (1.0 + 1.5) * battery.charge_efficiency)
 
     def test_a_pv_charge_above_the_charge_limit_runs_at_the_limit(self) -> None:
-        battery = _ten_kwh_battery(1.0)
+        battery = ten_kwh_battery(1.0)
         _hour_under(DispatchDecision(5.0, 0.0, 0.0), generation_kw=10.0, demand_kw=0.0, battery=battery)
         assert battery.soc_kwh == pytest.approx(1.0 + battery.max_charge_kw * 1.0 * battery.charge_efficiency)
 
 
 _MAX_CHARGE_KW = 2.5
+_MAX_DISCHARGE_KW = 2.5
 
 # Task 1362's pair: two powers an ulp apart, whose energies over a minute are equal.
 _POWER_KW = 3.9243814029178457
@@ -240,37 +248,57 @@ _AN_ULP_ABOVE_KW = math.nextafter(_POWER_KW, math.inf)
 
 
 class _Step(NamedTuple):
-    """A step's generation and demand, and the PV excess and shortfall they leave, all in kW."""
+    """A step's generation and demand, the PV excess and shortfall they leave, and the export the shortfall leaves room for under a 2.5 kW discharge limit, all in kW."""
 
     generation_kw: float
     demand_kw: float
     excess_kw: float
     shortfall_kw: float
+    max_export_kw: float
 
 
 STEPS = [
-    pytest.param(_Step(3.0, 1.0, excess_kw=2.0, shortfall_kw=0.0), id="excess"),
-    pytest.param(_Step(1.0, 3.0, excess_kw=0.0, shortfall_kw=2.0), id="shortfall"),
-    pytest.param(_Step(1.5, 1.5, excess_kw=0.0, shortfall_kw=0.0), id="balanced"),
+    pytest.param(_Step(3.0, 1.0, excess_kw=2.0, shortfall_kw=0.0, max_export_kw=2.5), id="excess"),
+    pytest.param(_Step(1.0, 3.0, excess_kw=0.0, shortfall_kw=2.0, max_export_kw=0.5), id="shortfall"),
+    pytest.param(_Step(1.5, 1.5, excess_kw=0.0, shortfall_kw=0.0, max_export_kw=2.5), id="balanced"),
     pytest.param(
-        _Step(_POWER_KW, _AN_ULP_ABOVE_KW, excess_kw=0.0, shortfall_kw=4.440892098500626e-16), id="short-by-an-ulp"
+        _Step(
+            _POWER_KW,
+            _AN_ULP_ABOVE_KW,
+            excess_kw=0.0,
+            shortfall_kw=4.440892098500626e-16,
+            max_export_kw=2.4999999999999996,
+        ),
+        id="short-by-an-ulp",
     ),
     pytest.param(
-        _Step(_AN_ULP_ABOVE_KW, _POWER_KW, excess_kw=4.440892098500626e-16, shortfall_kw=0.0), id="over-by-an-ulp"
+        _Step(_AN_ULP_ABOVE_KW, _POWER_KW, excess_kw=4.440892098500626e-16, shortfall_kw=0.0, max_export_kw=2.5),
+        id="over-by-an-ulp",
     ),
-    pytest.param(_Step(0.1 + 0.2, 0.3, excess_kw=5.551115123125783e-17, shortfall_kw=0.0), id="0.1+0.2-over-0.3"),
-    pytest.param(_Step(0.0, 2.0, excess_kw=0.0, shortfall_kw=2.0), id="no-pv"),
-    pytest.param(_Step(2.0, 0.0, excess_kw=2.0, shortfall_kw=0.0), id="no-demand"),
+    pytest.param(
+        _Step(0.1 + 0.2, 0.3, excess_kw=5.551115123125783e-17, shortfall_kw=0.0, max_export_kw=2.5),
+        id="0.1+0.2-over-0.3",
+    ),
+    pytest.param(_Step(0.0, 2.0, excess_kw=0.0, shortfall_kw=2.0, max_export_kw=0.5), id="no-pv"),
+    pytest.param(_Step(2.0, 0.0, excess_kw=2.0, shortfall_kw=0.0, max_export_kw=2.5), id="no-demand"),
+    pytest.param(
+        _Step(0.0, 3.0, excess_kw=0.0, shortfall_kw=3.0, max_export_kw=0.0), id="shortfall-beyond-the-discharge-limit"
+    ),
 ]
 
 
 class TestTheLimitsForAStep:
-    """StepLimits.for_step: a step's PV excess and its shortfall are each the difference of its powers in kW, or 0, even an ulp's difference, and its charge limit is the battery's."""
+    """StepLimits.for_step: a step's PV excess and its shortfall are each the difference of its powers in kW, or 0, even an ulp's difference, its charge limit is the battery's, and its export limit is the battery's discharge limit less the shortfall, or 0."""
 
     @pytest.mark.parametrize("step", STEPS)
-    def test_the_limits_are_the_step_s_excess_shortfall_and_charge_limit(self, step: _Step) -> None:
-        assert StepLimits.for_step(step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW) == StepLimits(
-            excess_kw=step.excess_kw, shortfall_kw=step.shortfall_kw, max_charge_kw=_MAX_CHARGE_KW
+    def test_the_limits_are_the_step_s_excess_shortfall_charge_limit_and_export_limit(self, step: _Step) -> None:
+        assert StepLimits.for_step(
+            step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW, max_discharge_kw=_MAX_DISCHARGE_KW
+        ) == StepLimits(
+            excess_kw=step.excess_kw,
+            shortfall_kw=step.shortfall_kw,
+            max_charge_kw=_MAX_CHARGE_KW,
+            max_export_kw=step.max_export_kw,
         )
 
 
@@ -365,13 +393,16 @@ class TestEveryBuiltInDecisionIsWithinTheLimitsForItsStep:
         grid_charge_ctx: Optional[GridChargeContext],
     ) -> None:
         decision = _decision(strategy, timestamp, step.generation_kw, step.demand_kw, grid_charge_ctx)
-        StepLimits.for_step(step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW).require_admissible(
-            decision, strategy.name
-        )
+        StepLimits.for_step(
+            step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW, max_discharge_kw=_MAX_DISCHARGE_KW
+        ).require_admissible(decision, strategy.name)
+        assert decision.export_kw == 0.0
 
     @pytest.mark.parametrize("step", STEPS)
     def test_self_consumption_asks_for_exactly_the_step_s_excess_or_shortfall(self, step: _Step) -> None:
-        limits = StepLimits.for_step(step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW)
+        limits = StepLimits.for_step(
+            step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW, max_discharge_kw=_MAX_DISCHARGE_KW
+        )
         decision = _decision(SelfConsumptionStrategy(), _on_2024_01_15_at(12), step.generation_kw, step.demand_kw)
         assert decision == DispatchDecision(charge_kw=limits.excess_kw, discharge_kw=limits.shortfall_kw)
 

@@ -2,11 +2,12 @@
 """Single home simulation combining PV, battery, and load."""
 
 import datetime
+import math
 import numbers
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
-from typing import Optional
+from typing import Final, Optional
 
 import pandas as pd
 from pandas.api.types import is_float_dtype, is_integer_dtype
@@ -255,6 +256,9 @@ class SimulationResults:
             SeriesRefused, a household entry, an entry off demand's rows, and additional
             loads that exceed demand by more than 1e-9 kW in a row, naming that row. loads holds the household's
             load, demand less these, beside them.
+        battery_export: Optional power the battery sent to the grid in kW, a part of both
+            battery_discharge and grid_export (None when no row of the run exported battery
+            energy)
     """
 
     generation: pd.Series = field(metadata=_power("generation_kw", "generation_kwh"))
@@ -276,6 +280,7 @@ class SimulationResults:
     pricing: Optional[RunPricing] = None
     grid_charge_forecast: Optional[GridChargeForecast] = None
     additional_loads: Mapping[LoadKind, pd.Series] = field(default_factory=lambda: PerLoad({}))
+    battery_export: Optional[pd.Series] = field(default=None, metadata=_power("battery_export_kw", "battery_export_kwh"))
 
     def __post_init__(self) -> None:
         """Name each set series after its column, without renaming the series it was built from, and settle the additional loads.
@@ -477,11 +482,17 @@ class SimulationResults:
         )
 
 
+_SUMMED_ROWS_REL_TOL: Final = 1e-12
+"""The rounding SummaryStatistics admits in a discharge above self-consumption plus a battery export: each total sums rows, and a sum of rows' differences is not the difference of their sums."""
+
+
 @dataclass(frozen=True)
 class SummaryStatistics:
     """Summary statistics for a simulation period.
 
-    All energy values in kWh, all financial values in £.
+    All energy values in kWh, all financial values in £. The battery's discharge is split
+    between the self-consumption that counts its discharge to the home and its export, its
+    discharge to the grid, so it is at most their sum.
     """
 
     total_generation_kwh: float
@@ -490,8 +501,9 @@ class SummaryStatistics:
     total_grid_import_kwh: float
     total_grid_export_kwh: float
     total_battery_charge_kwh: float
-    # Energy the battery delivered to the home's bus, after its discharge losses: a part of
-    # total_self_consumption_kwh, which counts it.
+    # Energy the battery delivered to the home's bus, after its discharge losses: split between
+    # total_self_consumption_kwh, which counts its discharge to the home, and
+    # total_battery_export_kwh, its discharge to the grid, so at most their sum.
     total_battery_discharge_kwh: float
     peak_generation_kw: float
     peak_demand_kw: float
@@ -517,9 +529,12 @@ class SummaryStatistics:
     grid_charge_forecast: Optional[GridChargeForecast] = None
     # Each load's energy in kWh by LoadKind, summing to total_demand_kwh.
     load_energy_kwh: Mapping[LoadKind, float] = field(kw_only=True)
+    # Energy the battery sent to the grid, after its discharge losses: a part of both
+    # total_battery_discharge_kwh and total_grid_export_kwh.
+    total_battery_export_kwh: float = field(default=0.0, kw_only=True)
 
     def __post_init__(self) -> None:
-        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, and a load energy keyed by no load kind or that is not a real number of at least 0 (a boolean is not one); hold load_energy_kwh as a PerLoad of the floats read."""
+        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_export_kwh that is not a part of both the battery discharge and the grid export, a total_battery_discharge_kwh above the self-consumption and export it is split between, and a load energy keyed by no load kind or that is not a real number of at least 0 (a boolean is not one); hold load_energy_kwh as a PerLoad of the floats read."""
         if not isinstance(self.window, SimulationWindow):
             raise ValueError(
                 "SummaryStatistics' window is the SimulationWindow its totals were computed over, which "
@@ -535,12 +550,27 @@ class SummaryStatistics:
                 f"total_grid_import_kwh={self.total_grid_import_kwh!r}"
             )
         discharge = self.total_battery_discharge_kwh
-        if not discharge <= self.total_self_consumption_kwh:
+        export = self.total_battery_export_kwh
+        if not 0.0 <= export or (export > 0.0 and (export > discharge or export > self.total_grid_export_kwh)):
             raise ValueError(
-                "SummaryStatistics' total_battery_discharge_kwh is a part of total_self_consumption_kwh, which "
-                "counts the battery's discharge, so it is at most it: "
+                "SummaryStatistics' total_battery_export_kwh is a part of both total_battery_discharge_kwh and "
+                "total_grid_export_kwh, so it is at least 0 and at most each: "
+                f"got total_battery_export_kwh={export!r}, "
+                f"total_battery_discharge_kwh={discharge!r}, "
+                f"total_grid_export_kwh={self.total_grid_export_kwh!r}"
+            )
+        discharge_bound = self.total_self_consumption_kwh + export
+        if not (
+            discharge <= discharge_bound
+            or (export > 0.0 and math.isclose(discharge, discharge_bound, rel_tol=_SUMMED_ROWS_REL_TOL))
+        ):
+            raise ValueError(
+                "SummaryStatistics' total_battery_discharge_kwh is split between total_self_consumption_kwh, "
+                "which counts the battery's discharge to the home, and total_battery_export_kwh, its discharge "
+                "to the grid, so it is at most their sum: "
                 f"got total_battery_discharge_kwh={discharge!r}, "
-                f"total_self_consumption_kwh={self.total_self_consumption_kwh!r}"
+                f"total_self_consumption_kwh={self.total_self_consumption_kwh!r}, "
+                f"total_battery_export_kwh={export!r}"
             )
         load_energy_kwh = PerLoad({
             kind: _load_energy(kind, energy) for kind, energy in PerLoad(self.load_energy_kwh).items()
@@ -559,8 +589,11 @@ class SummaryStatistics:
 
     @property
     def total_direct_self_consumption_kwh(self) -> float:
-        """PV the home used directly, in kWh: its self-consumption less the battery's discharge, which self-consumption counts too, so at least 0."""
-        return self.total_self_consumption_kwh - self.total_battery_discharge_kwh
+        """PV the home used directly, in kWh: its self-consumption less the battery's discharge to the home, which self-consumption counts too, so at least 0."""
+        direct_kwh = self.total_self_consumption_kwh - (self.total_battery_discharge_kwh - self.total_battery_export_kwh)
+        # Only an exporting run's totals, within _SUMMED_ROWS_REL_TOL, can put it a rounding below 0;
+        # a NaN, such as infinity less infinity, is kept.
+        return 0.0 if direct_kwh < 0.0 else direct_kwh
 
     @property
     def total_grid_to_demand_kwh(self) -> float:
@@ -833,6 +866,9 @@ def _results(
         pricing=pricing,
         grid_charge_forecast=grid_charge_forecast,
         additional_loads=additional_loads,
+        battery_export=(
+            power_kw(lambda flow: flow.battery_export) if any(flow.battery_export > 0 for flow in flows) else None
+        ),
     )
 
 
@@ -1011,6 +1047,7 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
         strategy_name=results.strategy_name,
         total_grid_charge_cost_gbp=total_grid_charge_cost,
         total_grid_charge_kwh=total_grid_charge,
+        total_battery_export_kwh=totals["battery_export_kwh"] if results.battery_export is not None else 0.0,
         pricing=results.pricing,
         grid_charge_forecast=results.grid_charge_forecast,
         load_energy_kwh=load_energy_kwh,

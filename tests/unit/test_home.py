@@ -171,9 +171,12 @@ def _results_with_every_series_set(*, with_heat_pump: bool = True) -> Simulation
 
 
 def _results_with_no_optional_series() -> SimulationResults:
-    """_results_with_every_series_set's results with no heat pump and neither optional series set."""
+    """_results_with_every_series_set's results with no heat pump and none of its optional series set."""
     return dataclasses.replace(
-        _results_with_every_series_set(with_heat_pump=False), grid_charge_cost=None, grid_charge=None
+        _results_with_every_series_set(with_heat_pump=False),
+        grid_charge_cost=None,
+        grid_charge=None,
+        battery_export=None,
     )
 
 
@@ -488,6 +491,7 @@ class TestPerStepAmounts:
                 "grid_export_kwh": results.grid_export / 60,
                 "heat_pump_load_kwh": results.additional_loads[LoadKind.HEAT_PUMP] / 60,
                 "grid_charge_kwh": results.grid_charge / 60,
+                "battery_export_kwh": results.battery_export / 60,
                 "import_cost_gbp": results.import_cost,
                 "export_revenue_gbp": results.export_revenue,
                 "grid_charge_cost_gbp": results.grid_charge_cost,
@@ -1462,14 +1466,77 @@ class TestSummaryStatistics:
             home_summary(total_battery_discharge_kwh=discharge_kwh, total_self_consumption_kwh=self_consumption_kwh)
 
         message = str(refused.value)
-        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert "total_battery_discharge_kwh is split between total_self_consumption_kwh" in message
         assert f"total_battery_discharge_kwh={discharge_kwh!r}" in message
         assert f"total_self_consumption_kwh={self_consumption_kwh!r}" in message
+        assert "total_battery_export_kwh=0.0" in message
 
     def test_a_discharge_that_is_all_of_its_self_consumption_is_accepted_with_no_direct_use(self) -> None:
         summary = home_summary(total_battery_discharge_kwh=60.0, total_self_consumption_kwh=60.0)
 
         assert summary.total_direct_self_consumption_kwh == 0.0
+
+    @pytest.mark.parametrize(
+        ("export_kwh", "discharge_kwh", "grid_export_kwh"),
+        [
+            pytest.param(9.0, 8.0, 40.0, id="above-the-discharge"),
+            pytest.param(5.0, 8.0, 4.0, id="above-the-grid-export"),
+            pytest.param(-1.0, 8.0, 40.0, id="negative"),
+            pytest.param(float("nan"), 8.0, 40.0, id="not-a-number"),
+        ],
+    )
+    def test_a_battery_export_that_is_not_a_part_of_both_the_discharge_and_the_grid_export_is_refused_naming_the_three_totals(
+        self, export_kwh: float, discharge_kwh: float, grid_export_kwh: float
+    ) -> None:
+        with pytest.raises(ValueError) as refused:
+            home_summary(
+                total_battery_export_kwh=export_kwh,
+                total_battery_discharge_kwh=discharge_kwh,
+                total_grid_export_kwh=grid_export_kwh,
+            )
+
+        message = str(refused.value)
+        assert "total_battery_export_kwh is a part of both total_battery_discharge_kwh and total_grid_export_kwh" in message
+        assert f"total_battery_export_kwh={export_kwh!r}" in message
+        assert f"total_battery_discharge_kwh={discharge_kwh!r}" in message
+        assert f"total_grid_export_kwh={grid_export_kwh!r}" in message
+
+    def test_a_discharge_above_its_self_consumption_and_export_is_refused_naming_the_three_totals(self) -> None:
+        with pytest.raises(ValueError) as refused:
+            home_summary(
+                total_battery_discharge_kwh=8.0, total_battery_export_kwh=1.0, total_self_consumption_kwh=6.0
+            )
+
+        message = str(refused.value)
+        assert "total_battery_discharge_kwh is split between total_self_consumption_kwh" in message
+        assert "total_battery_discharge_kwh=8.0" in message
+        assert "total_self_consumption_kwh=6.0" in message
+        assert "total_battery_export_kwh=1.0" in message
+
+    def test_a_discharge_that_is_all_of_its_self_consumption_and_export_is_accepted_with_no_direct_use(self) -> None:
+        summary = home_summary(
+            total_battery_discharge_kwh=70.0, total_battery_export_kwh=10.0, total_self_consumption_kwh=60.0
+        )
+
+        assert summary.total_direct_self_consumption_kwh == 0.0
+
+    def test_a_discharge_a_rounding_above_its_self_consumption_and_export_is_accepted_with_no_direct_use(
+        self,
+    ) -> None:
+        """An exporting run's totals each sum rows, so its discharge can land a rounding above self-consumption plus export, leaving no direct use rather than a negative one."""
+        summary = home_summary(
+            total_battery_discharge_kwh=math.nextafter(70.0, math.inf),
+            total_battery_export_kwh=10.0,
+            total_self_consumption_kwh=60.0,
+        )
+
+        assert summary.total_direct_self_consumption_kwh == 0.0
+
+    def test_the_direct_use_of_infinite_totals_without_an_export_is_not_a_number(self) -> None:
+        """Without an export the direct use is self-consumption less discharge, so infinity less infinity stays NaN rather than reading as no direct use."""
+        summary = home_summary(total_battery_discharge_kwh=math.inf, total_self_consumption_kwh=math.inf)
+
+        assert math.isnan(summary.total_direct_self_consumption_kwh)
 
     def test_refuses_a_field_assignment(self) -> None:
         """A summary is a frozen value: neither its window nor simulation_days, a read-only property of its window, can be assigned after construction."""

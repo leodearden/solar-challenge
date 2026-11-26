@@ -1424,6 +1424,7 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
             "grid_import": 2.0,
             "battery_soc": 1.0,
             "grid_charge": 0.0,
+            "battery_export": 0.0,
         }
 
     @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
@@ -1443,6 +1444,7 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
             "grid_import": 0.0,
             "battery_soc": 4.0,
             "grid_charge": 0.0,
+            "battery_export": 0.0,
         }
 
     @pytest.mark.parametrize("step", GRID_CHARGING_STEPS)
@@ -1472,6 +1474,7 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
             "grid_import": 1.0,
             "battery_soc": 4.0,
             "grid_charge": 0.0,
+            "battery_export": 0.0,
         }
 
 
@@ -1512,6 +1515,7 @@ FLOWS = (
     "grid_export",
     "grid_import",
     "grid_charge",
+    "battery_export",
 )
 
 NOT_A_FINITE_NUMBER_AT_LEAST_0 = [

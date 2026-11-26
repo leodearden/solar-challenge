@@ -82,7 +82,7 @@ FROZEN_SURFACE: dict[str, str] = {
     # --- cost-recovery solve (projection.py) ---
     "solve_cost_recovery_rate": "(scenario: ScenarioConfig, finance: FinanceConfig, *, simulate: Callable[[FleetConfig, Timestamp, Timestamp], FleetResults]) -> CostRecoverySolution",
     # --- signature-closure types ---
-    "SummaryStatistics": "dataclass[eq, frozen, match_args] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, window: SimulationWindow, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None, *, load_energy_kwh: Mapping[LoadKind, float]) -> None",
+    "SummaryStatistics": "dataclass[eq, frozen, match_args] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, window: SimulationWindow, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None, *, load_energy_kwh: Mapping[LoadKind, float], total_battery_export_kwh: float = 0.0) -> None",
     "ScenarioConfig": "dataclass[eq, frozen, match_args] (name: str, period: SimulationWindow, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, finance: FinanceConfig | None = None, flex_band: GridServicesBand | None = None) -> None",
     "FleetConfig": "dataclass[eq, frozen, match_args] (homes: tuple[HomeConfig, ...] = (), name: str = '') -> None",
     "FleetResults": "dataclass[eq, frozen, match_args] (per_home_results: tuple[SimulationResults, ...], home_configs: tuple[HomeConfig, ...]) -> None",
@@ -94,7 +94,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "HomesDone": "_CallableGenericAlias",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": "()",
-    "DispatchDecision": "dataclass[eq, frozen, match_args] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0) -> None",
+    "DispatchDecision": "dataclass[eq, frozen, match_args] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0, export_kw: float = 0.0) -> None",
     "GridChargeContext": "dataclass[eq, frozen, match_args] (current_rate: float, peak_rate: float, is_cheap_period: bool, target_soc_kwh: float, max_charge_kw: float, round_trip_efficiency: float, charge_efficiency: float, useful_charge_ceiling_kwh: float | None = None) -> None",
     "compute_grid_charge_power_kw": "(ctx: GridChargeContext, *, battery_soc_kwh: float, pv_charge_power_kw: float, timestep_minutes: float) -> float",
     "SelfConsumptionStrategy": "()",
@@ -106,7 +106,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "BatteryConfig": "dataclass[eq, frozen, match_args] (capacity_kwh: float, max_charge_kw: float = 2.5, max_discharge_kw: float = 2.5, name: str = '', dispatch_strategy: SelfConsumptionStrategyConfig | TOUOptimizedStrategyConfig | PeakShavingStrategyConfig = SelfConsumptionStrategyConfig(strategy_type='self_consumption'), grid_charging: GridChargeConfig | None = None, min_soc_fraction: float = 0.1, max_soc_fraction: float = 0.9, charge_efficiency: float = 0.975, discharge_efficiency: float = 0.975, system_age_years: float = 0.0, calendar_fade_rate_per_year: float = 0.02, cycle_fade_per_equivalent_full_cycle: float = 5e-05, soh_floor: float = 0.5, soh: float | None = None) -> None",
     "compute_soh": "(system_age_years: float, cumulative_throughput_kwh: float, usable_capacity_kwh: float, params: BatteryConfig) -> float",
     # --- flow (flow.py) ---
-    "EnergyFlowResult": "dataclass[eq, frozen, match_args] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
+    "EnergyFlowResult": "dataclass[eq, frozen, match_args] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0, battery_export: float = 0.0) -> None",
     "simulate_timestep": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestep_minutes: float, timestamp: datetime | None = None, strategy: DispatchStrategy | None = None, *, tariff: TariffConfig | None = None, useful_charge_ceiling_kwh: float | None = None) -> EnergyFlowResult",
     "validate_energy_balance": "(result: EnergyFlowResult, tolerance: float = 0.001) -> bool",
     "calculate_self_consumption": "(generation: Series, demand: Series) -> Series",
@@ -245,7 +245,7 @@ FROZEN_CLOSURE: dict[str, str] = {
     "heat_pump.HeatPumpConfig": "dataclass[eq, frozen, match_args] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
     "home.HomeConfig": "dataclass[eq, frozen, match_args] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, seg_tariff: SEGTariff | None = None) -> None",
     "home.RunPricing": "dataclass[eq, frozen, match_args] (import_tariff_mean_rate_gbp_per_kwh: float | None, seg_rate_pence_per_kwh: float | None) -> None",
-    "home.SimulationResults": "dataclass[eq, frozen, match_args] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', grid_charge_cost: Series | None = None, grid_charge: Series | None = None, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None, additional_loads: Mapping[LoadKind, Series] = <factory>) -> None",
+    "home.SimulationResults": "dataclass[eq, frozen, match_args] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', grid_charge_cost: Series | None = None, grid_charge: Series | None = None, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None, additional_loads: Mapping[LoadKind, Series] = <factory>, battery_export: Series | None = None) -> None",
     "timebase.LocalDay": "dataclass[frozen, match_args] (date: date, rows: DatetimeIndex) -> None",
     "timebase.SimulationWindow": "dataclass[eq, frozen, match_args] (first_day: date, last_day: date, cadence: timedelta, timezone: str | None = None) -> None",
 }
@@ -383,6 +383,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "available_charge_capacity_kwh": "property (self) -> float",
         "available_discharge_capacity_kwh": "property (self) -> float",
         "max_charge_kw": "property (self) -> float",
+        "max_discharge_kw": "property (self) -> float",
         "charge": "(self, power_kw: float, duration_minutes: float) -> float",
         "discharge": "(self, power_kw: float, duration_minutes: float) -> float",
     },
