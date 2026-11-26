@@ -12,7 +12,8 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
 - The drift report: how a failing lock names each drifted path with its frozen and
   current forms, labels each additive or breaking, and says what each kind needs.
 - Changes since the last release: UNRELEASED lists each path whose form differs from
-  the released snapshot, tests/_released_surface.py, with the task that last changed it.
+  the released snapshot, tests/_released_surface.py, with the task that last changed it,
+  and each task it names has its release note.
 - Name resolution: every exported name resolves to its typed import, the object the
   package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
   names, and an unknown name raises AttributeError; and each EXPECTED_KIND name resolves
@@ -1120,6 +1121,21 @@ def test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_releas
         entries = "".join(f"\n  solar_challenge.{path} (task {task})" for path, task in stale.items())
         problems.append(f"UNRELEASED lists paths whose forms are as released; drop each:{entries}")
     assert not problems, "\n".join(problems)
+
+
+def test_every_task_unreleased_names_has_its_release_note(project_root: Path) -> None:
+    """Each task UNRELEASED names has its note file under *project_root*; a file-existence check that reads no note."""
+    missing = [
+        f"{note_path(CONSUMPTION_DOC, task)} (for solar_challenge.{path})"
+        for path, task in UNRELEASED.items()
+        if not (project_root / note_path(CONSUMPTION_DOC, task)).is_file()
+    ]
+    assert not missing, (
+        f"UNRELEASED names tasks whose release notes do not exist: {missing}. Each task "
+        "UNRELEASED names writes its note in the commit that adds its row ('Changes merged "
+        "since the last tag', in docs/domain-library-consumption.md); a release that empties "
+        "UNRELEASED deletes the notes it folds."
+    )
 
 
 def test_a_form_changed_since_the_release_that_unreleased_does_not_list_fails_naming_its_released_and_current_forms_and_its_change(
