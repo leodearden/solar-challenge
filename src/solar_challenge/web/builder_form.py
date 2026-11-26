@@ -86,7 +86,7 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
     as sent, for config.parse_scenario to refuse, as builder_form_errors reports.
 
     Raises:
-        ValueError: naming the form field at fault, for a form that is not an object, a
+        ConfigurationError: naming the form field at fault, for a form that is not an object, a
             key the builder does not send, a flat field that is not the number it should
             be, an unknown location preset, or a malformed distribution row.
     """
@@ -222,7 +222,7 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
     one the form leaves out; scenario_blocks.parse_location_block reads it as any location: block.
 
     Raises:
-        ValueError: for any other preset, naming it, or for a custom coordinate that is
+        ConfigurationError: for any other preset, naming it, or for a custom coordinate that is
             not a finite number.
     """
     preset = fields["location_preset"]
@@ -230,7 +230,7 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
         return _present_numbers(fields, _CUSTOM_LOCATION_FORM_KEYS)
     if isinstance(preset, str) and preset in LOCATION_PRESETS:
         return location_block(LOCATION_PRESETS[preset])
-    raise ValueError(
+    raise ConfigurationError(
         f"location_preset must be 'custom' or one of "
         f"{', '.join(map(repr, LOCATION_PRESETS))}, got {preset!r}"
     )
@@ -254,7 +254,7 @@ def _component_block(fields: Mapping[str, Any], component: ComponentLimits) -> d
     distribution editor holds its type in (keys_the_editor_holds).
 
     Raises:
-        ValueError: From distribution_grammar_spec, for malformed rows, naming the
+        ConfigurationError: From distribution_grammar_spec, for malformed rows, naming the
             builder's field, or for a fixed value that is not a finite number.
     """
     distribution_fields = _distribution_fields(component)

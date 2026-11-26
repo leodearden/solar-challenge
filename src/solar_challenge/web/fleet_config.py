@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import Any, TypeGuard
 
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import FleetDistributionConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_blocks import child_path
@@ -52,7 +53,7 @@ def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list
     Raises:
         ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
             naming a count's field and the value sent.
-        ValueError: When the counts total more than MAX_FLEET_HOMES, more values than a
+        ConfigurationError: When the counts total more than MAX_FLEET_HOMES, more values than a
             dashboard fleet has homes to take, naming *pool_field* and the total.
     """
     read_counts = [
@@ -60,7 +61,7 @@ def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list
     ]
     total = sum(read_counts)
     if total > MAX_FLEET_HOMES:
-        raise ValueError(
+        raise ConfigurationError(
             f"{pool_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
         )
     return read_counts
@@ -87,7 +88,7 @@ def sample_distribution(
     Raises:
         ConfigurationError: If n_samples is not a whole number from 1 to MAX_FLEET_HOMES
             (see :func:`~solar_challenge.number_fields.as_whole_number`).
-        ValueError: If params are not a dict (see :func:`_require_dict`),
+        ConfigurationError: If params are not a dict (see :func:`_require_dict`),
             :func:`_preview_spec` refuses the distribution, naming type or the field under
             ``params``, params leave out what the type is drawn from (see
             :func:`_refuse_a_preview_without_what_its_type_is_drawn_from`),
@@ -104,7 +105,7 @@ def sample_distribution(
     samples = _draw_samples(spec, n_samples)
     for sample in samples:
         if not math.isfinite(sample):
-            raise ValueError(
+            raise ConfigurationError(
                 f"params must draw samples that are finite numbers, got a sample of {sample!r}"
             )
     return samples
@@ -116,14 +117,14 @@ def _refuse_a_preview_without_what_its_type_is_drawn_from(
     """Refuse *distribution*, an editor distribution of a type the editor offers, when it leaves out, or sends as null, a key the preview draws its type from: the preview never runs fleet_distribution.py's grammar, which would name it.
 
     Raises:
-        ValueError: Naming the first such key's field, from *fields*, and the keys the
+        ConfigurationError: Naming the first such key's field, from *fields*, and the keys the
             type is drawn from.
     """
     dist_type = distribution["type"]
     drawn_from = _EDITOR_TYPES[dist_type].drawn_from
     for key in drawn_from:
         if distribution.get(key) is None:
-            raise ValueError(
+            raise ConfigurationError(
                 f"{fields[key]} must be given: the preview draws a {dist_type} distribution "
                 f"from its {' and '.join(drawn_from)}"
             )
@@ -133,7 +134,7 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
     """Draw *n_samples* values from *spec*, a distribution :func:`_preview_spec` read, with a fixed seed.
 
     Raises:
-        ValueError: If its parameters are ones it cannot draw from, such as a negative std
+        ConfigurationError: If its parameters are ones it cannot draw from, such as a negative std
             or a min above max.
     """
     rng = random.Random(42)
@@ -141,7 +142,7 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
 
     if dist_type == "normal":
         if spec["std"] < 0:
-            raise ValueError("Standard deviation cannot be negative")
+            raise ConfigurationError("Standard deviation cannot be negative")
         samples = [rng.gauss(spec["mean"], spec["std"]) for _ in range(n_samples)]
         if "min" in spec:
             samples = [max(spec["min"], s) for s in samples]
@@ -151,24 +152,24 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
 
     if dist_type == "uniform":
         if spec["min"] > spec["max"]:
-            raise ValueError("min cannot be greater than max")
+            raise ConfigurationError("min cannot be greater than max")
         return [rng.uniform(spec["min"], spec["max"]) for _ in range(n_samples)]
 
     if dist_type == "weighted_discrete":
         if not spec["values"]:
-            raise ValueError("weighted_discrete requires non-empty 'values' list")
+            raise ConfigurationError("weighted_discrete requires non-empty 'values' list")
         if sum(spec["weights"]) == 0:
-            raise ValueError("Weights cannot all be zero")
+            raise ConfigurationError("Weights cannot all be zero")
         return rng.choices(spec["values"], weights=spec["weights"], k=n_samples)
 
     if dist_type == "shuffled_pool":
         if not spec["values"]:
-            raise ValueError("shuffled_pool requires non-empty 'entries' list")
+            raise ConfigurationError("shuffled_pool requires non-empty 'entries' list")
         pool: list[float] = []
         for value, count in zip(spec["values"], spec["counts"]):
             pool.extend([value] * count)
         if not pool:
-            raise ValueError("shuffled_pool produced an empty pool")
+            raise ConfigurationError("shuffled_pool produced an empty pool")
         rng.shuffle(pool)
         # Cycle through pool to fill n_samples
         samples = [pool[i % len(pool)] for i in range(n_samples)]
@@ -207,7 +208,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     apply to the fleet it reads (see :func:`refuse_a_fleet_the_dashboard_cannot_run`).
 
     Raises:
-        ValueError: If a pv/battery/load block is neither null nor a dict (see
+        ConfigurationError: If a pv/battery/load block is neither null nor a dict (see
             :func:`_component_block`),
             a battery block sets a dispatch strategy (see
             :func:`_refuse_battery_dispatch_strategy`), or
@@ -240,7 +241,7 @@ def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any] | No
     """Return the *key* component block of *form_data*: None when it is absent or null.
 
     Raises:
-        ValueError: If the block is neither null nor a dict (see :func:`_require_dict`).
+        ConfigurationError: If the block is neither null nor a dict (see :func:`_require_dict`).
     """
     block = form_data.get(key)
     return None if block is None else _require_dict(block, key)
@@ -250,7 +251,7 @@ def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, 
     """Return the *key* component block of *form_data*, reading an absent or null block as empty.
 
     Raises:
-        ValueError: If the block is neither null nor a dict (see :func:`_component_block`).
+        ConfigurationError: If the block is neither null nor a dict (see :func:`_component_block`).
     """
     block = _component_block(form_data, key)
     return {} if block is None else block
@@ -265,12 +266,12 @@ def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
     dispatch_strategy to every battery, over any the block sets.
 
     Raises:
-        ValueError: If the block's dispatch_strategy is present and not null; the error
+        ConfigurationError: If the block's dispatch_strategy is present and not null; the error
             names battery.dispatch_strategy, the form's dispatch_strategy and the value sent.
     """
     strategy = battery.get("dispatch_strategy")
     if strategy is not None:
-        raise ValueError(
+        raise ConfigurationError(
             "battery.dispatch_strategy must be absent or null: every battery takes the "
             f"fleet's dispatch_strategy, got {strategy!r}"
         )
@@ -280,10 +281,10 @@ def _require_dict(value: object, field: str) -> dict[str, Any]:
     """Return *value*, refusing one that is not a dict.
 
     Raises:
-        ValueError: If *value* is not a dict; the error names *field* and the type sent.
+        ConfigurationError: If *value* is not a dict; the error names *field* and the type sent.
     """
     if not isinstance(value, dict):
-        raise ValueError(f"{field} must be a mapping, got {type(value).__name__}")
+        raise ConfigurationError(f"{field} must be a mapping, got {type(value).__name__}")
     return value
 
 
@@ -306,7 +307,7 @@ def _parse_component_distribution(
         Component distribution config dict.
 
     Raises:
-        ValueError: If *data* is itself a distribution (see
+        ConfigurationError: If *data* is itself a distribution (see
             :func:`_refuse_block_that_is_a_distribution`), or
             :func:`distribution_grammar_spec` refuses a distribution's rows; the error names
             its field as a dot path under *block*.
@@ -328,12 +329,12 @@ def _refuse_block_that_is_a_distribution(
     """Refuse *data*, the fleet form's *block* component block, when it is itself a distribution: a block holds its distribution in *primary_field*.
 
     Raises:
-        ValueError: If *data* is a distribution (see :func:`_is_distribution`), whatever
+        ConfigurationError: If *data* is a distribution (see :func:`_is_distribution`), whatever
             else it holds; the error names ``block.type``, ``block.primary_field`` and the
             type sent.
     """
     if _is_distribution(data):
-        raise ValueError(
+        raise ConfigurationError(
             f"{block}.type must be absent: the {block} block's distribution goes in "
             f"{block}.{primary_field}, got {data['type']!r}"
         )
@@ -349,7 +350,7 @@ def _setting_as_passed_on(value: object, field: str) -> object:
     read or refuse.
 
     Raises:
-        ValueError: If :func:`distribution_grammar_spec` refuses the distribution's rows;
+        ConfigurationError: If :func:`distribution_grammar_spec` refuses the distribution's rows;
             the error names its field under *field*.
     """
     if _is_distribution(value):
@@ -454,7 +455,7 @@ def distribution_grammar_spec(
     in, which every refusal names.
 
     Raises:
-        ValueError: For rows sent beside a list they become, naming the rows' field and the
+        ConfigurationError: For rows sent beside a list they become, naming the rows' field and the
             list; or for rows :func:`_rows_spec` refuses, naming the rows' field.
     """
     spec = {key: value for key, value in distribution.items() if value is not None}
@@ -464,7 +465,7 @@ def distribution_grammar_spec(
         sent_rows = spec.pop(rows.key)
         lists_beside = [key for key in ("values", rows.grammar_key) if key in spec]
         if lists_beside:
-            raise ValueError(
+            raise ConfigurationError(
                 f"{fields[rows.key]} gives the {spec['type']}'s values and {rows.grammar_key}, "
                 f"so its distribution must not also send {' and '.join(map(repr, lists_beside))}"
             )
@@ -476,18 +477,18 @@ def _rows_spec(sent_rows: object, rows_field: str, rows: _EditorRows) -> dict[st
     """The values list and the *rows* column list of *sent_rows*, an editor distribution's rows sent in *rows_field*, as fleet_distribution.py's grammar spells them, each cell as sent.
 
     Raises:
-        ValueError: Naming *rows_field*, with a row's index, for rows that are not a list,
+        ConfigurationError: Naming *rows_field*, with a row's index, for rows that are not a list,
             or a row that is not a mapping or lacks its value or its column.
     """
     if not isinstance(sent_rows, list):
-        raise ValueError(f"{rows_field} must be a list, got {type(sent_rows).__name__}")
+        raise ConfigurationError(f"{rows_field} must be a list, got {type(sent_rows).__name__}")
     values: list[Any] = []
     column: list[Any] = []
     for index, sent_row in enumerate(sent_rows):
         row_field = f"{rows_field}[{index}]"
         row = _require_dict(sent_row, row_field)
         if not {"value", rows.column} <= row.keys():
-            raise ValueError(
+            raise ConfigurationError(
                 f"{row_field} must be a mapping with 'value' and {rows.column!r}, got {row!r}"
             )
         values.append(row["value"])
@@ -503,14 +504,14 @@ def _preview_spec(distribution: Mapping[str, Any], fields: Mapping[str, str]) ->
     editor key is sent in.  A key its type does not draw is ignored.
 
     Raises:
-        ValueError: For a type the editor does not offer, naming its field and the type
+        ConfigurationError: For a type the editor does not offer, naming its field and the type
             sent; for rows :func:`distribution_grammar_spec` refuses; or for a parameter or
             cell those reads refuse, naming its field.
     """
     dist_type = distribution.get("type")
     editor_type = _editor_type(dist_type)
     if editor_type is None:
-        raise ValueError(
+        raise ConfigurationError(
             f"{fields['type']} must be one of {', '.join(_EDITOR_TYPES)}, got {dist_type!r}"
         )
     spec = distribution_grammar_spec(distribution, fields)
@@ -550,7 +551,7 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
     grammar reads it as 1 or 0.
 
     Raises:
-        ValueError: For a *spec* the editor cannot hold, naming *path*: an absent
+        ConfigurationError: For a *spec* the editor cannot hold, naming *path*: an absent
             distribution, a type the editor has no form for, a normal without both clamps,
             a value that is not a finite number, a boolean included, or shuffled_pool
             counts :func:`read_pool_counts` refuses.
@@ -560,7 +561,7 @@ def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
     if _is_distribution(spec) and spec["type"] == "fixed":
         return as_finite_float(spec.get("value"), f"{path}.value")
     if not _is_distribution(spec) or _editor_type(spec["type"]) is None:
-        raise ValueError(
+        raise ConfigurationError(
             f"{path} must be a fixed value or one of the fleet page's distributions "
             f"({', '.join(_EDITOR_TYPES)}), got {spec!r}"
         )

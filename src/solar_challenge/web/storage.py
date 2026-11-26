@@ -33,6 +33,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, TypedDict, assert_never, get_args
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import Database, RowRefused, TableSchema, check_one_of, rebuild_table, sql_string_literal
@@ -686,8 +687,8 @@ class RunQuery:
     by id, descending or not, and page numbers from 1 the pages of per_page runs.
 
     Raises:
-        ValueError: sort is not one of RUN_SORTS, run_type is not one of RUN_TYPES, page is below
-            1, or per_page is not from 1 to 100; the message names the field and its value.
+        ConfigurationError: sort is not one of RUN_SORTS, run_type is not one of RUN_TYPES, page is
+            below 1, or per_page is not from 1 to 100; the message names the field and its value.
     """
 
     run_type: RunType | None = None
@@ -704,9 +705,9 @@ class RunQuery:
         if self.run_type is not None:
             one_of(self.run_type, RUN_TYPES, "run_type")
         if self.page < 1:
-            raise ValueError(f"page is {self.page!r}, not a page number: pages are numbered from 1")
+            raise ConfigurationError(f"page is {self.page!r}, not a page number: pages are numbered from 1")
         if not 1 <= self.per_page <= _MAX_RUNS_PER_PAGE:
-            raise ValueError(f"per_page is {self.per_page!r}, not from 1 to {_MAX_RUNS_PER_PAGE} runs a page")
+            raise ConfigurationError(f"per_page is {self.per_page!r}, not from 1 to {_MAX_RUNS_PER_PAGE} runs a page")
 
 
 @dataclass(frozen=True)
