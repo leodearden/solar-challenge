@@ -439,7 +439,7 @@ grid_services_income(t) = M.annual_income_gbp(F_t)
     M   = finance.grid_services_model, read once, before any simulation
     F_t = the fleet simulated at age t
   NoGridServices()    → 0
-  FlatGridServices(r) → r × Σ_{battery homes of F_t} max_discharge_kw
+  FlatGridServices(g) → g × Σ_{battery homes of F_t} max_discharge_kw
   a GridServicesEventsConfig as grid_services_model:
                       → Σ_w avail_w(F_t) × (a × N_w + u × h_w × U / 1000 × N_w) × (1 − s)
     avail_w = compute_fleet_spare_capacity_kw(F_t, windows, delivery_baseline)[w],
@@ -973,12 +973,12 @@ aggregates (§8.2).
 
 ### 8.1 Grid-Services Income (Flat £/kW/yr or Capacity at Events)
 
-Under the flat model, `FinanceConfig.grid_services_model = FlatGridServices(r)`,
-a W1-filled rate.  At each projection year:
+Under the flat model, `FinanceConfig.grid_services_model = FlatGridServices(g)`,
+where g, the pricing's `income_per_kw_per_year_gbp`, is a W1-filled rate (£/kW/yr).
+At each projection year:
 
 ```
-grid_services_income = r.income_per_kw_per_year_gbp
-                       × Σ_homes battery.max_discharge_kw
+grid_services_income = g × Σ_homes battery.max_discharge_kw
 ```
 
 A positive value increases `fleet_revenue_gbp` without changing householder
