@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
@@ -49,6 +50,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec, swept_parameter_path
 from solar_challenge.output import compute_community_metrics, generate_community_report
+from solar_challenge.scenario_knobs import Knob, is_knob_name, knob_named
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -343,6 +345,45 @@ def sweep(
         print_success(cli, f"Sweep summary saved to {summary_file}")
 
 
+@dataclass(frozen=True)
+class KnobAxis:
+    """A --param sweep of a knob: each point is the document's one scenario with the knob set to the point's value."""
+
+    knob: Knob
+
+    @property
+    def label(self) -> str:
+        """The knob's canonical name, which names each point and its output file."""
+        return self.knob.name
+
+    def scenarios(self, document: dict[str, Any], values: Iterable[float]) -> list[tuple[float, ScenarioConfig]]:
+        """Each of *values* with the scenario *document* reads as, its placeholders at their defaults, and the knob set to that value."""
+        scenario = parse_scenario(substitute_config_variables(document))
+        return [(value, self.knob.apply(scenario, value)) for value in values]
+
+
+@dataclass(frozen=True)
+class VariableAxis:
+    """A --param sweep of a variable: each point is the scenario the document reads as once the point's value replaces ${name}."""
+
+    name: str
+
+    @property
+    def label(self) -> str:
+        """The variable's name, which names each point and its output file."""
+        return self.name
+
+    def scenarios(self, document: dict[str, Any], values: Iterable[float]) -> list[tuple[float, ScenarioConfig]]:
+        """Each of *values* with the scenario *document* reads as once that value replaces ${name}."""
+        return [
+            (value, parse_scenario(substitute_config_variables(document, {self.name: value})))
+            for value in values
+        ]
+
+
+SweepAxis = KnobAxis | VariableAxis
+
+
 def _param_sweep(
     raw_config: dict[str, Any],
     param: str,
@@ -351,14 +392,12 @@ def _param_sweep(
     steps: int,
     mode: str,
 ) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
-    """The name of the sweep, param, its spec, and each sweep value with the scenario raw_config reads as once that value replaces ${param}."""
+    """The label of the axis param names, its spec, and each sweep value with the scenario the axis builds from raw_config for it."""
     if min_val is None or max_val is None:
         raise ConfigurationError("CLI sweep requires --min and --max values")
     sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=SweepMode.parse(mode))
-    return param, sweep_spec, [
-        (value, parse_scenario(substitute_config_variables(raw_config, {param: value})))
-        for value in sweep_spec.get_values()
-    ]
+    axis: SweepAxis = KnobAxis(knob_named(param)) if is_knob_name(param) else VariableAxis(param)
+    return axis.label, sweep_spec, axis.scenarios(raw_config, sweep_spec.get_values())
 
 
 def _yaml_sweep(
@@ -383,7 +422,7 @@ def _sweep_bounds(
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
     """The start and end every point of the sweep simulates over, which is its document's period with each flag replacing only its own day.
 
-    Every point holds that one period: a YAML sweep reads the document's blocks once, and a ${VAR} stands only for a number, which is neither a day nor a timezone.
+    Every point holds that one period: a YAML sweep reads the document's blocks once, a ${VAR} stands only for a number, which is neither a day nor a timezone, and a knob edits homes, the SEG rate or finance, never the period or location.
     """
     return with_window_options(points[0][1], start=start, end=end).simulation_bounds()
 
