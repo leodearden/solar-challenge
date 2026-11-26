@@ -1,14 +1,19 @@
 {#
-    distribution_editor(dist, component, subject='') writes the controls that edit one distribution, inside a
+    distribution_editor(dist, component, subject='') writes the controls that edit one fleet component's spec, inside a
     distributionEditor scope (static/js/distribution-editor.js) of their own.
     simulate/fleet.html and scenarios/builder.html both call it.
 
-    dist is the Alpine expression, in the caller's scope, of the distribution:
-        { type, mean, std, min, max, values: [{value, weight}, ...], entries: [{value, count}, ...], fixed }
-    component is the fleet component whose distribution it edits, one of page_limits.components (FLEET_COMPONENTS in
-    web/fleet_components.py). An added row starts at its new_row_value, and every value but a weight or count steps by
-    its step. Type '' (Fixed Value) edits dist.fixed within its value_range; Std Dev is at least 0, and Mean, the clamps
-    and Uniform's Min and Max take any number.
+    dist is the Alpine expression, in the caller's scope, of the editor's state, as #page-limits writes each component's
+    start (EditorStart.editor_state in web/fleet_components.py):
+        { type, fixed, specs: { <editor type name>: <its spec as the grammar writes it, without its type>, ... } }
+    type names the editor type shown, '' for Fixed Value, which edits fixed. A row list is a spec's two parallel lists,
+    'values' and its paired list; DistributionEditor.wire posts the shown type's spec, a blank input as null.
+    component is the fleet component whose spec it edits, one of page_limits.components (FLEET_COMPONENTS in
+    web/fleet_components.py). Its scalar_form titles Fixed Value, and its editor_types, fleet_distribution's records,
+    give every other option, panel, parameter and row list, so no type is named here. Fixed Value lies within its
+    value_range; a parameter takes any number, the server refusing one the grammar does not hold; a row's paired entry
+    is at least 0, a count stepping by 1. Every value but a paired entry steps by its step, and an added row starts at its
+    new_row_value.
     subject starts every control's accessible name, e.g. 'PV Capacity Value 2'; without it a control is named by its
     caption alone, e.g. 'Value 2', for a page whose cards are fieldset groups.
 
@@ -33,18 +38,23 @@
     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
 {% endmacro %}
 
-{% macro _row_list(subject, rows, paired_key, paired_caption, paired_step, step) %}
-<template x-for="(row, idx) in {{ rows }}" :key="idx">
+{# The row list of the spec the Alpine expression spec holds, whose two parallel lists rows (a SpecRows) keys #}
+{% macro _row_list(subject, spec, rows, step) %}
+{% set values_key, paired_key = rows.keys %}
+{% set values = spec ~ '.' ~ values_key %}
+{% set paired = spec ~ '.' ~ paired_key %}
+{% set counted = rows.paired_kind.name == 'COUNT' %}
+<template x-for="(value, idx) in {{ values }}" :key="idx">
     <div class="flex items-end gap-3">
         <label class="flex-1 min-w-0 space-y-1">
             <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_caption(subject, 'Value') }}</span>
-            {{ _number_input('row.value', step) }}
+            {{ _number_input(values ~ '[idx]', step) }}
         </label>
         <label class="flex-1 min-w-0 space-y-1">
-            <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_caption(subject, paired_caption) }}</span>
-            {{ _number_input('row.' ~ paired_key, paired_step, min=0) }}
+            <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_caption(subject, rows.paired_title) }}</span>
+            {{ _number_input(paired ~ '[idx]', '1' if counted else 'any', min=0) }}
         </label>
-        <button type="button" @click="removeRow({{ rows }}, idx)" :hidden="!canRemoveRow({{ rows }})"
+        <button type="button" @click="removeRow({{ spec }}, '{{ values_key }}', '{{ paired_key }}', idx)" :hidden="!canRemoveRow({{ values }})"
             class="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
         >
             <span class="sr-only">{{ _row_caption(subject, 'Remove Row') }}</span>
@@ -55,7 +65,7 @@
     </div>
 </template>
 <div class="flex items-center justify-between">
-    <button type="button" @click="addRow({{ rows }}, '{{ paired_key }}')"
+    <button type="button" @click="addRow({{ spec }}, '{{ values_key }}', '{{ paired_key }}')"
         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
     >
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -63,7 +73,11 @@
         </svg>
         {{ _caption(subject, 'Add Row') }}
     </button>
-    {% if caller is defined %}{{ caller() }}{% endif %}
+    {% if counted %}
+    <span class="text-xs text-slate-500 dark:text-slate-400">
+        Total: <span x-text="{{ paired }}.reduce((total, count) => total + (count || 0), 0)"></span> homes
+    </span>
+    {% endif %}
 </div>
 {% endmacro %}
 
@@ -81,42 +95,32 @@
         <select x-model="dist.type"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
         >
-            <option value="">Fixed Value</option>
-            <option value="normal">Normal (Gaussian)</option>
-            <option value="uniform">Uniform</option>
-            <option value="weighted_discrete">Weighted Discrete</option>
-            <option value="shuffled_pool">Shuffled Pool</option>
+            <option value="">{{ component.scalar_form.title }}</option>
+            {% for editor_type in component.editor_types %}
+            <option value="{{ editor_type.name }}">{{ editor_type.title }}</option>
+            {% endfor %}
         </select>
     </label>
 
     {% call _type_panel('!dist.type') %}
-        {{ number_field(none, _caption(subject, 'Fixed Value'), 'dist.fixed', component.value_range, step) }}
+        {{ number_field(none, _caption(subject, component.scalar_form.title), 'dist.fixed', component.value_range, step) }}
     {% endcall %}
 
-    {% call _type_panel("dist.type === 'normal'", 'grid grid-cols-2 gap-4') %}
-        {{ number_field(none, _caption(subject, 'Mean'), 'dist.mean', step=step) }}
-        {{ number_field(none, _caption(subject, 'Std Dev'), 'dist.std', {'low': 0}, step) }}
-        {{ number_field(none, _caption(subject, 'Min (clamp)'), 'dist.min', step=step) }}
-        {{ number_field(none, _caption(subject, 'Max (clamp)'), 'dist.max', step=step) }}
+    {% for editor_type in component.editor_types %}
+    {% set spec = 'dist.specs.' ~ editor_type.name %}
+    {% call _type_panel("dist.type === '" ~ editor_type.name ~ "'", 'space-y-3') %}
+        {% if editor_type.parameters %}
+        <div class="grid grid-cols-2 gap-4">
+            {% for parameter in editor_type.parameters %}
+            {{ number_field(none, _caption(subject, parameter.title), spec ~ '.' ~ parameter.key, step=step) }}
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if editor_type.rows %}
+        <div class="text-sm text-slate-500 dark:text-slate-400">{% if editor_type.rows.paired_kind.name == 'COUNT' %}Define exact value-count pairs. Counts should sum to the fleet size.{% else %}Define value-{{ editor_type.rows.paired_title|lower }} pairs. {{ editor_type.rows.paired_title }}s are auto-normalised.{% endif %}</div>
+        {{ _row_list(subject, spec, editor_type.rows, step) }}
+        {% endif %}
     {% endcall %}
-
-    {% call _type_panel("dist.type === 'uniform'", 'grid grid-cols-2 gap-4') %}
-        {{ number_field(none, _caption(subject, 'Min'), 'dist.min', step=step) }}
-        {{ number_field(none, _caption(subject, 'Max'), 'dist.max', step=step) }}
-    {% endcall %}
-
-    {% call _type_panel("dist.type === 'weighted_discrete'", 'space-y-3') %}
-        <div class="text-sm text-slate-500 dark:text-slate-400">Define value-weight pairs. Weights are auto-normalised.</div>
-        {{ _row_list(subject, 'dist.values', 'weight', 'Weight', 'any', step) }}
-    {% endcall %}
-
-    {% call _type_panel("dist.type === 'shuffled_pool'", 'space-y-3') %}
-        <div class="text-sm text-slate-500 dark:text-slate-400">Define exact value-count pairs. Counts should sum to the fleet size.</div>
-        {% call _row_list(subject, 'dist.entries', 'count', 'Count', '1', step) %}
-        <span class="text-xs text-slate-500 dark:text-slate-400">
-            Total: <span x-text="dist.entries.reduce((s, e) => s + (e.count || 0), 0)"></span> homes
-        </span>
-        {% endcall %}
-    {% endcall %}
+    {% endfor %}
 </div>
 {% endmacro %}

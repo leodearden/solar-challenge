@@ -1,6 +1,20 @@
 document.addEventListener('alpine:init', () => {
     // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
     const limits = JSON.parse(document.getElementById('page-limits').textContent);
+    // Each fleet component, by its key
+    const components = Object.fromEntries(limits.components.map((component) => [component.key, component]));
+
+    // A component's block of the body: its spec, the grammar's own, under its grammar key
+    function componentBlock(key, dist) {
+        return { [components[key].grammar_key]: DistributionEditor.wire(dist) };
+    }
+
+    // A new dist showing the spec `block`, a form's block for component `key`, holds, over `dist`
+    function loadedDist(key, dist, block) {
+        const component = components[key];
+        const path = key + '.' + component.grammar_key;
+        return DistributionEditor.load(dist, (block || {})[component.grammar_key], component, path);
+    }
 
     Alpine.data('fleetSimulator', (tariffPresetRates) => ({
         n_homes: limits.fleet_size_default,
@@ -17,24 +31,11 @@ document.addEventListener('alpine:init', () => {
         startDate: limits.custom_range_default[0],
         endDate: limits.custom_range_default[1],
 
-        /* ---- PV distribution state ---- */
-        pvDist: {
-            type: 'shuffled_pool',
-            fixed: 4.0,
-            mean: 4.0, std: 1.0, min: 2.0, max: 8.0,
-            values: [
-                { value: 3.0, weight: 20 },
-                { value: 4.0, weight: 40 },
-                { value: 5.0, weight: 30 },
-                { value: 6.0, weight: 10 }
-            ],
-            entries: [
-                { value: 3.0, count: 20 },
-                { value: 4.0, count: 40 },
-                { value: 5.0, count: 30 },
-                { value: 6.0, count: 10 }
-            ]
-        },
+        /* ---- Each component's distribution editor state: its start in #page-limits ---- */
+        pvDist: structuredClone(components.pv.start),
+        batteryEnabled: true,
+        batteryDist: structuredClone(components.battery.start),
+        loadDist: structuredClone(components.load.start),
 
         /* ---- Fleet-wide tariff / dispatch / SEG state ---- */
         tariffEnabled: false,
@@ -54,52 +55,17 @@ document.addEventListener('alpine:init', () => {
         segPreset: 'custom',
         segRatePencePerKwh: 4.0,
 
-        /* ---- Battery distribution state ---- */
-        batteryEnabled: true,
-        batteryDist: {
-            type: 'shuffled_pool',
-            fixed: 5.0,
-            mean: 5.0, std: 2.0, min: 0.0, max: 15.0,
-            values: [
-                { value: 0, weight: 40 },
-                { value: 5.0, weight: 40 },
-                { value: 10.0, weight: 20 }
-            ],
-            entries: [
-                { value: 0, count: 40 },
-                { value: 5.0, count: 40 },
-                { value: 10.0, count: 20 }
-            ]
-        },
-
-        /* ---- Load distribution state ---- */
-        loadDist: {
-            type: 'normal',
-            fixed: 3500,
-            mean: 3400, std: 800, min: 2000, max: 6000,
-            values: [
-                { value: 2900, weight: 30 },
-                { value: 3500, weight: 40 },
-                { value: 4500, weight: 30 }
-            ],
-            entries: [
-                { value: 2900, count: 30 },
-                { value: 3500, count: 40 },
-                { value: 4500, count: 30 }
-            ]
-        },
-
         /* ---- Build payload from current state ---- */
         buildPayload() {
             const payload = {
                 name: this.simName,
                 n_homes: this.n_homes,
                 seed: this.seed,
-                pv: { capacity_kw: this._buildDistPayload(this.pvDist) },
-                load: { annual_consumption_kwh: this._buildDistPayload(this.loadDist) }
+                pv: componentBlock('pv', this.pvDist),
+                load: componentBlock('load', this.loadDist)
             };
             if (this.batteryEnabled) {
-                payload.battery = { capacity_kwh: this._buildDistPayload(this.batteryDist) };
+                payload.battery = componentBlock('battery', this.batteryDist);
             }
             if (this.periodMode === 'preset') {
                 payload.days = this.periodDays;
@@ -138,25 +104,6 @@ document.addEventListener('alpine:init', () => {
             }
 
             return payload;
-        },
-
-        _buildDistPayload(dist) {
-            if (!dist.type) return dist.fixed;
-            const d = { type: dist.type };
-            if (dist.type === 'normal') {
-                d.mean = dist.mean;
-                d.std = dist.std;
-                d.min = dist.min;
-                d.max = dist.max;
-            } else if (dist.type === 'uniform') {
-                d.min = dist.min;
-                d.max = dist.max;
-            } else if (dist.type === 'weighted_discrete') {
-                d.values = dist.values.map(v => ({ value: v.value, weight: v.weight }));
-            } else if (dist.type === 'shuffled_pool') {
-                d.entries = dist.entries.map(e => ({ value: e.value, count: e.count }));
-            }
-            return d;
         },
 
         /* ---- Simulation submission ---- */
@@ -254,22 +201,16 @@ document.addEventListener('alpine:init', () => {
             this.simName = form.name ?? '';
             this.n_homes = form.n_homes;
             this.seed = form.seed ?? limits.seed_default;
-            this.pvDist = this._distFromConfig(form.pv.capacity_kw, this.pvDist);
+            this.pvDist = loadedDist('pv', this.pvDist, form.pv);
             this.batteryEnabled = Boolean(form.battery);
             if (form.battery) {
-                this.batteryDist = this._distFromConfig(form.battery.capacity_kwh, this.batteryDist);
+                this.batteryDist = loadedDist('battery', this.batteryDist, form.battery);
             }
-            this.loadDist = this._distFromConfig(form.load.annual_consumption_kwh, this.loadDist);
+            this.loadDist = loadedDist('load', this.loadDist, form.load);
             this._applyPeriod(form.start, form.end);
             this._applyTariff(form.tariff);
             this._applySeg(form.seg);
             this._applyDispatch(form.dispatch_strategy);
-        },
-
-        /* The inverse of _buildDistPayload: a fixed value, a number, as the card's Fixed Value (type ''), and a distribution's fields over the card's current distribution. */
-        _distFromConfig(spec, current) {
-            if (typeof spec === 'number') return { ...current, type: '', fixed: spec };
-            return { ...current, ...spec };
         },
 
         /* A scenario without a period fixes no dates, so the form runs its default period. */

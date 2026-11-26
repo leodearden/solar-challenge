@@ -9,10 +9,15 @@ document.addEventListener('alpine:init', () => {
         return value !== null && typeof value === 'object' && !Array.isArray(value);
     }
 
-    // The form fields whose preview is `scenario`, a document in the preview's grammar. The distribution of each of
-    // `components` is the form's one in `dists` with what its spec sets laid over it.
+    // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
+    const limits = JSON.parse(document.getElementById('page-limits').textContent);
+    // The fleet components, each with its key (its fleet_distribution block), its grammar key and its editor's start
+    const components = limits.components;
+
+    // The form fields whose preview is `scenario`, a document in the preview's grammar. Each component's dist is its
+    // one in `dists` showing the spec the scenario gives it.
     // Throws, saying why, for a document the form cannot hold.
-    function scenarioFormFields(scenario, components, dists) {
+    function scenarioFormFields(scenario, dists) {
         if (!isMapping(scenario)) {
             throw new Error('it does not hold a YAML mapping');
         }
@@ -31,7 +36,13 @@ document.addEventListener('alpine:init', () => {
             import_rate: tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '',
             seg_rate_pence_per_kwh: inputValue((scenario.seg || {}).rate_pence_per_kwh),
             dists: Object.fromEntries(components.map((component) => [
-                component.key, { ...dists[component.key], ...componentDistribution(fleet, component) },
+                component.key,
+                DistributionEditor.load(
+                    dists[component.key],
+                    (fleet[component.key] || {})[component.grammar_key],
+                    component,
+                    'fleet_distribution.' + component.key + '.' + component.grammar_key,
+                ),
             ])),
         };
         if (scenario.location) {
@@ -43,70 +54,7 @@ document.addEventListener('alpine:init', () => {
         return fields;
     }
 
-    // The fields of one component's distribution that its spec in `fleet` sets: a fixed number, or a distribution.
-    // Throws, naming the spec, for one the form cannot hold.
-    function componentDistribution(fleet, { key, grammar_key }) {
-        const spec = (fleet[key] || {})[grammar_key];
-        const path = 'fleet_distribution.' + key + '.' + grammar_key;
-        if (spec === undefined || spec === null || typeof spec === 'number') {
-            return { type: '', fixed: inputValue(spec) };
-        }
-        if (!isMapping(spec)) {
-            throw new Error(path + ' must be a number or a distribution, got ' + JSON.stringify(spec));
-        }
-        if (spec.type === 'weighted_discrete') {
-            return { type: spec.type, values: distributionRows(spec, 'weights', 'weight', path) };
-        }
-        if (spec.type === 'shuffled_pool') {
-            return { type: spec.type, entries: distributionRows(spec, 'counts', 'count', path) };
-        }
-        if (spec.type === 'normal' || spec.type === 'uniform') {
-            const distribution = { type: spec.type };
-            for (const parameter of ['mean', 'std', 'min', 'max']) {
-                distribution[parameter] = inputValue(spec[parameter]);
-            }
-            return distribution;
-        }
-        throw new Error(path + ' has distribution type ' + JSON.stringify(spec.type) + ', which the builder does not offer');
-    }
-
-    // The form's rows of a distribution: each of its values, with the same entry of its `listKey` list as `rowKey`.
-    // Throws, naming `path`, unless both are lists of the same length.
-    function distributionRows(spec, listKey, rowKey, path) {
-        const values = spec.values;
-        const column = spec[listKey];
-        if (!Array.isArray(values) || !Array.isArray(column) || values.length !== column.length) {
-            throw new Error(path + ' needs values and ' + listKey + ' lists of the same length');
-        }
-        return values.map((value, i) => ({ value, [rowKey]: column[i] }));
-    }
-
-    // The fields of the form the builder sends that give one component's distribution `dist`: its fixed value, or its
-    // type and the fields that type reads (all four parameters for normal and uniform alike)
-    function componentFormData(dist, { key, fixed_field }) {
-        if (!dist.type) {
-            return { [fixed_field]: dist.fixed };
-        }
-        const data = { [key + '_distribution_type']: dist.type };
-        if (dist.type === 'weighted_discrete') {
-            data[key + '_wd_values'] = dist.values;
-        } else if (dist.type === 'shuffled_pool') {
-            data[key + '_sp_entries'] = dist.entries;
-        } else {
-            for (const parameter of ['mean', 'std', 'min', 'max']) {
-                data[key + '_' + parameter] = dist[parameter];
-            }
-        }
-        return data;
-    }
-
-    // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
-    const limits = JSON.parse(document.getElementById('page-limits').textContent);
-
-    // components is what scenarios.py lists from web/fleet_components.py for each fleet component: its key (its
-    // fleet_distribution block and its form fields' prefix), the field a fixed value is sent in, its grammar key, and
-    // the distribution its card starts at.
-    Alpine.data('scenarioBuilder', (initialSection, components) => ({
+    Alpine.data('scenarioBuilder', (initialSection) => ({
         // Form state
         name: '',
         description: '',
@@ -120,8 +68,8 @@ document.addEventListener('alpine:init', () => {
         import_rate: 0.245,
         seg_rate_pence_per_kwh: '',
 
-        // Each component's distribution, by its key: a fixed value while type is ''
-        dists: Object.fromEntries(components.map((component) => [component.key, component.dist])),
+        // Each component's distribution editor state, by its key, starting at its start in #page-limits
+        dists: Object.fromEntries(components.map((component) => [component.key, structuredClone(component.start)])),
 
         // UI state
         yamlPreview: '# Configure your scenario...',
@@ -223,7 +171,7 @@ document.addEventListener('alpine:init', () => {
             event.target.value = '';
             let fields;
             try {
-                fields = scenarioFormFields(jsyaml.load(text), components, this.dists);
+                fields = scenarioFormFields(jsyaml.load(text), this.dists);
             } catch (e) {
                 this.yamlPreview = '# ' + file.name + ' was not loaded: ' + e.message;
                 return;
@@ -282,7 +230,7 @@ document.addEventListener('alpine:init', () => {
                 data.altitude = this.altitude;
             }
             for (const component of components) {
-                Object.assign(data, componentFormData(this.dists[component.key], component));
+                data[component.key] = { [component.grammar_key]: DistributionEditor.wire(this.dists[component.key]) };
             }
             return data;
         },
