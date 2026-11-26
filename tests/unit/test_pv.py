@@ -294,50 +294,24 @@ class TestSimulatePVOutput:
         # Last entry has zero irradiance
         assert output.iloc[-1] == pytest.approx(0.0, abs=0.01)
 
-    def test_degradation_applied_in_live_path(self, sample_weather_data):
-        """simulate_pv_output with system_age_years=20 returns 90% of the age-0 output.
-
-        This is the live-path signal test: it verifies that degradation is wired into
-        the production function, not just the standalone apply_degradation helper.
-        The pre-degradation ac_power is identical for age-0 and age-20 (the new fields
-        don't enter the pvlib model chain), so the ratio is exactly 0.90.
-        """
-        location = Location.bristol()
-        age0_config = PVConfig(capacity_kw=4.0)
-        age20_config = PVConfig(capacity_kw=4.0, system_age_years=20)
-
-        age0 = simulate_pv_output(age0_config, location, sample_weather_data)
-        age20 = simulate_pv_output(age20_config, location, sample_weather_data)
-
-        # Ensure there is meaningful generation (not all-zero)
-        assert age0.sum() > 0
-
-        # age-20 output must be exactly 90% of age-0 (factor = 1 - 20*0.005 = 0.90)
-        assert age20.sum() == pytest.approx(0.90 * age0.sum(), rel=1e-6)
-        assert np.allclose(age20.values, (age0 * 0.90).values)
-
-    def test_fully_degraded_system_yields_zero(self, sample_weather_data):
-        """A fully degraded system (age*rate > 1) yields all-zero generation, not negative.
-
-        calculate_degradation_factor clamps the factor to max(0.0, factor). With
-        system_age_years=300 and degradation_rate_per_year=0.01 the raw factor would
-        be 1 - 300*0.01 = -2.0, which is clamped to 0.0. This exercises that branch
-        via the live simulate_pv_output path so negative output is never returned.
-        """
+    @pytest.mark.parametrize("capacity_kw", [4.0, 7.6], ids=["one-array", "two-arrays"])
+    def test_fully_degraded_system_yields_zero(
+        self, sample_weather_data: pd.DataFrame, capacity_kw: float
+    ) -> None:
+        """A fully degraded system (age*rate > 1) yields all-zero generation, not negative, from one array and from two."""
         location = Location.bristol()
         # Confirm there is meaningful pre-degradation generation (non-trivial fixture)
-        age0_config = PVConfig(capacity_kw=4.0)
+        age0_config = PVConfig(capacity_kw=capacity_kw)
         age0 = simulate_pv_output(age0_config, location, sample_weather_data)
         assert age0.sum() > 0, "fixture must produce non-zero generation for this test to be meaningful"
 
         # 300 years * 0.01/yr = raw factor -2.0 → clamped to 0.0 → all-zero output
         fully_degraded_config = PVConfig(
-            capacity_kw=4.0,
+            capacity_kw=capacity_kw,
             system_age_years=300,
             degradation_rate_per_year=0.01,
         )
         output = simulate_pv_output(fully_degraded_config, location, sample_weather_data)
-        # Factor == 0.0 is exact (clamped integer multiplication), so == 0.0 is safe
         assert (output == 0.0).all(), (
             "Fully degraded system must produce zero output, not negative values"
         )
@@ -1392,36 +1366,64 @@ CHAIN_BUILDERS = [
 ]
 
 
-class TestSystemLossesReachTheInverterAsDCPower:
-    """Each array's DC power falls by PVConfig.system_losses before the inverter, at unchanged voltage."""
+AGES_AND_DEGRADATION_FACTORS = [
+    pytest.param(0.0, 1.0, id="new"),
+    pytest.param(20.0, 0.90, id="20-years"),
+]
+
+
+class TestSystemLossesAndAgeingReachTheInverterAsDCPower:
+    """Each array's DC power falls by PVConfig.system_losses and by the modules' ageing before the inverter, at unchanged voltage."""
 
     @pytest.mark.parametrize(
-        "config",
+        ("config", "degradation_factor"),
         [
-            pytest.param(LINEAR_INVERTER_CONFIG, id="default-losses"),
+            pytest.param(LINEAR_INVERTER_CONFIG, 1.0, id="default-losses"),
             pytest.param(
-                dataclasses.replace(LINEAR_INVERTER_CONFIG, system_losses=0.05), id="5%-losses"
+                dataclasses.replace(LINEAR_INVERTER_CONFIG, system_losses=0.05),
+                1.0,
+                id="5%-losses",
+            ),
+            pytest.param(
+                dataclasses.replace(LINEAR_INVERTER_CONFIG, system_age_years=20.0),
+                0.90,
+                id="20-years",
+            ),
+            pytest.param(
+                dataclasses.replace(
+                    LINEAR_INVERTER_CONFIG,
+                    system_losses=0.05,
+                    system_age_years=10.0,
+                    degradation_rate_per_year=0.01,
+                ),
+                0.90,
+                id="5%-losses-10-years-at-1%",
             ),
         ],
     )
     @pytest.mark.parametrize("day", CLEAR_AND_OVERCAST_DAYS)
     def test_a_linear_inverter_passes_on_exactly_the_kept_fraction(
-        self, config: PVConfig, day: Callable[[], pd.DataFrame]
+        self, config: PVConfig, degradation_factor: float, day: Callable[[], pd.DataFrame]
     ) -> None:
         """The simple inverter's AC is (Paco / Pdco) x DC power whatever the voltage, and 4 kW of modules never reach its 8 kW rating."""
         weather = day()
-        lossless = dataclasses.replace(config, system_losses=0.0)
+        reference = dataclasses.replace(config, system_losses=0.0, system_age_years=0.0)
 
-        lossless_kwh = simulate_pv_output(lossless, Location.bristol(), weather).sum()
+        reference_kwh = simulate_pv_output(reference, Location.bristol(), weather).sum()
         kwh = simulate_pv_output(config, Location.bristol(), weather).sum()
 
-        assert lossless_kwh > 0
-        assert kwh / lossless_kwh == pytest.approx(1 - config.system_losses, rel=1e-9), (
-            f"{config.system_losses:.4%} system losses on the {day.__name__} kept {kwh:.4f} kWh "
-            f"of the lossless {lossless_kwh:.4f} kWh"
+        kept = (1 - config.system_losses) * degradation_factor
+        assert reference_kwh > 0
+        assert kwh / reference_kwh == pytest.approx(kept, rel=1e-9), (
+            f"{config.system_losses:.4%} system losses at {config.system_age_years:g} years "
+            f"({config.degradation_rate_per_year:.1%}/year) on the {day.__name__} kept "
+            f"{kwh:.4f} kWh of the same system's new and lossless {reference_kwh:.4f} kWh"
         )
 
     @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    @pytest.mark.parametrize(
+        ("system_age_years", "degradation_factor"), AGES_AND_DEGRADATION_FACTORS
+    )
     @pytest.mark.parametrize("build", CHAIN_BUILDERS)
     @pytest.mark.parametrize(
         ("capacity_kw", "array_count"), [(4.0, 1), (7.6, 2)], ids=["one-array", "two-arrays"]
@@ -1431,46 +1433,59 @@ class TestSystemLossesReachTheInverterAsDCPower:
         build: Callable[[PVConfig], pvlib.modelchain.ModelChain],
         capacity_kw: float,
         array_count: int,
+        system_age_years: float,
+        degradation_factor: float,
     ) -> None:
         """The Sandia and ADR inverters read v_mp, and create_pv_system matches the strings' voltage to the inverter's MPPT window."""
-        config = PVConfig(capacity_kw=capacity_kw)
-        lossy = build(config)
-        lossless = build(dataclasses.replace(config, system_losses=0.0))
-        assert len(lossy.system.arrays) == array_count, (
-            f"{capacity_kw} kW was wired as {_wiring(lossy.system)} (modules per string, "
+        config = PVConfig(capacity_kw=capacity_kw, system_age_years=system_age_years)
+        chain = build(config)
+        reference = build(dataclasses.replace(config, system_losses=0.0, system_age_years=0.0))
+        assert len(chain.system.arrays) == array_count, (
+            f"{capacity_kw} kW was wired as {_wiring(chain.system)} (modules per string, "
             f"strings), not as the {array_count} array(s) this case covers"
         )
 
         weather = clear_june_daytime()
-        lossy.run_model(weather)
-        lossless.run_model(weather)
+        chain.run_model(weather)
+        reference.run_model(weather)
 
-        kept = 1 - config.system_losses
-        for lossy_dc, lossless_dc in zip(
-            per_array(lossy.results.dc), per_array(lossless.results.dc), strict=True
+        kept = (1 - config.system_losses) * degradation_factor
+        for dc, reference_dc in zip(
+            per_array(chain.results.dc), per_array(reference.results.dc), strict=True
         ):
-            np.testing.assert_allclose(lossy_dc["p_mp"], lossless_dc["p_mp"] * kept)
-            np.testing.assert_allclose(lossy_dc["i_mp"], lossless_dc["i_mp"] * kept)
-            pd.testing.assert_series_equal(lossy_dc["v_mp"], lossless_dc["v_mp"])
+            np.testing.assert_allclose(dc["p_mp"], reference_dc["p_mp"] * kept)
+            np.testing.assert_allclose(dc["i_mp"], reference_dc["i_mp"] * kept)
+            pd.testing.assert_series_equal(dc["v_mp"], reference_dc["v_mp"])
 
     @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
     @pytest.mark.parametrize(
-        "config",
+        ("config", "degradation_factor"),
         [
-            pytest.param(PVConfig(capacity_kw=4.0), id="default-losses"),
-            pytest.param(PVConfig(capacity_kw=4.0, system_losses=0.0), id="no-losses"),
+            pytest.param(PVConfig(capacity_kw=4.0), 1.0, id="default-losses"),
+            pytest.param(PVConfig(capacity_kw=4.0, system_losses=0.0), 1.0, id="no-losses"),
+            pytest.param(
+                PVConfig(capacity_kw=4.0, system_losses=0.0, system_age_years=20.0),
+                0.90,
+                id="20-years-no-losses",
+            ),
+            pytest.param(PVConfig(capacity_kw=4.0, system_age_years=20.0), 0.90, id="20-years"),
         ],
     )
     def test_a_run_chain_records_the_fraction_of_dc_power_it_kept(
-        self, config: PVConfig
+        self, config: PVConfig, degradation_factor: float
     ) -> None:
         """results.losses holds the kept fraction, as pvlib's own losses models record it: 1 with no loss."""
         chain = create_model_chain(config, Location.bristol())
 
         chain.run_model(clear_june_daytime())
 
-        assert chain.results.losses == pytest.approx(1 - config.system_losses)
+        assert chain.results.losses == pytest.approx(
+            (1 - config.system_losses) * degradation_factor
+        )
 
+    @pytest.mark.parametrize(
+        ("system_age_years", "degradation_factor"), AGES_AND_DEGRADATION_FACTORS
+    )
     @pytest.mark.parametrize(
         "config",
         [
@@ -1486,23 +1501,32 @@ class TestSystemLossesReachTheInverterAsDCPower:
         ],
     )
     def test_an_inverter_limited_array_still_reaches_its_rating(
-        self, config: PVConfig
+        self, config: PVConfig, system_age_years: float, degradation_factor: float
     ) -> None:
         """A derate of the AC instead would cap the peak below the rating and take the whole fraction of the energy."""
         weather = clear_june_daytime()
-        lossy = simulate_pv_output(config, Location.bristol(), weather)
-        lossless = simulate_pv_output(
-            dataclasses.replace(config, system_losses=0.0), Location.bristol(), weather
+        output = simulate_pv_output(
+            dataclasses.replace(config, system_age_years=system_age_years),
+            Location.bristol(),
+            weather,
         )
-        system = f"{config.capacity_kw} kW on a {config.effective_inverter_capacity_kw} kW inverter"
+        reference = simulate_pv_output(
+            dataclasses.replace(config, system_losses=0.0, system_age_years=0.0),
+            Location.bristol(),
+            weather,
+        )
+        system = (
+            f"{config.capacity_kw} kW on a {config.effective_inverter_capacity_kw} kW inverter "
+            f"at {system_age_years:g} years"
+        )
 
-        assert lossy.max() == pytest.approx(lossless.max()), (
-            f"{system} peaked at {lossy.max():.3f} kW with system losses "
-            f"and at {lossless.max():.3f} kW without"
+        assert output.max() == pytest.approx(reference.max()), (
+            f"{system} peaked at {output.max():.3f} kW with its system losses and ageing, "
+            f"and at {reference.max():.3f} kW new and lossless"
         )
-        kept = 1 - config.system_losses
-        assert kept * lossless.sum() < lossy.sum() < lossless.sum(), (
-            f"{system} kept {lossy.sum() / lossless.sum():.4f} of its lossless energy on the clear "
-            f"June day; with the inverter clipping, it should keep more than its DC's {kept:.4f} "
-            "and less than all of it"
+        kept = (1 - config.system_losses) * degradation_factor
+        assert kept * reference.sum() < output.sum() < reference.sum(), (
+            f"{system} kept {output.sum() / reference.sum():.4f} of its new and lossless energy "
+            "on the clear June day; with the inverter clipping, it should keep more than its "
+            f"DC's {kept:.4f} and less than all of it"
         )
