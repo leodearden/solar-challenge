@@ -153,17 +153,6 @@ def read_boolean(value: object, field: str) -> bool:
     return as_boolean(value, field)
 
 
-def refuse_unencodable_text(value: object, what: str) -> None:
-    """Refuse *value*, a request's *what*, when it is text require_encodable_text refuses, and leave any other value to its reader.
-
-    Raises:
-        ConfigurationError: From require_encodable_text, naming *what* and *value*, for text holding
-            a lone surrogate.
-    """
-    if isinstance(value, str):
-        require_encodable_text(value, what)
-
-
 #: The location a home or fleet form body that sends none runs at, as read_location reads it:
 #: Bristol, the community energy project's site (location.LOCATION_PRESETS' bristol).
 WEB_DEFAULT_LOCATION = "bristol"

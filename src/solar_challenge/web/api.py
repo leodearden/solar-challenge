@@ -49,7 +49,6 @@ from solar_challenge.web.request_boundary import (
     answer_server_error,
     read_optional_string,
     read_string,
-    refuse_unencodable_text,
     request_json_object,
     require_json_object,
 )
@@ -703,15 +702,15 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
 
 
-def _read_labels(data: Mapping[str, Any]) -> dict[RunLabel, Any]:
-    """The run labels the PATCH body *data* sends, each refused before any is written: text require_encodable_text refuses, or a name that cannot name a run.
+def _read_labels(data: Mapping[str, Any]) -> dict[RunLabel, str | None]:
+    """The run labels the PATCH body *data* sends, each refused before any is written: a label that read_optional_string refuses, or a name that cannot name a run.
 
     Raises:
-        ConfigurationError: From refuse_unencodable_text or read_run_name, naming the label.
+        ConfigurationError: From read_optional_string, naming the label, for a label that is
+            neither a JSON string nor null, or holds a lone surrogate; from read_run_name, for
+            a null or blank name.
     """
-    labels = {label: data[label] for label in RUN_LABELS if label in data}
-    for label, value in labels.items():
-        refuse_unencodable_text(value, label)
+    labels = {label: read_optional_string(data[label], label) for label in RUN_LABELS if label in data}
     if "name" in labels:
         read_run_name(labels["name"])
     return labels
@@ -729,8 +728,8 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     Returns:
         JSON response with updated run data, or 404 if not found. 400 with the refusal as
         ``error``, naming ``name``, for a null or blank name, which read_run_name refuses;
-        and naming the label, for a name or notes holding a lone surrogate. Both are refused
-        before any label is written.
+        and naming the label, for a name or notes that is neither a JSON string nor null, or
+        holds a lone surrogate. Each is refused before any label is written.
     """
     data = request_json_object()
     storage = get_storage()
