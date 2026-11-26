@@ -102,25 +102,15 @@ class ConfigResult:
     baseline economics, outlay and surplus are at the configured own-use rate
     (``baseline_own_use_rate_pence_per_kwh``).
 
+    The five solved fields, ``representative_outlay_gbp``,
+    ``solved_own_use_rate_pence_per_kwh``, ``surplus_at_solved_gbp``,
+    ``feasible`` and ``binding``, are read-only properties that read through
+    ``solution``, so they cannot disagree with it.
+
     Attributes:
         config: The install specification for this grid cell.
         solution: Full :class:`~solar_challenge.finance.CostRecoverySolution`
             from :func:`~solar_challenge.projection.run_cost_recovery`.
-        representative_outlay_gbp: Representative (median-outlay) home's total
-            annual outlay at the solved own-use rate (£).
-            == solution.representative_outlay_gbp.
-        solved_own_use_rate_pence_per_kwh: Solved own-use rate charged by the
-            CBS to householders (p/kWh, ≥ 0).
-            == solution.own_use_rate_pence_per_kwh.
-        surplus_at_solved_gbp: Project net surplus per home per year at the
-            solved rate (£/home/year).
-            == solution.net_surplus_per_home_per_year_gbp.
-        feasible: True when the CBS can meet the retained_cash_floor within
-            [0, retail_baseline_rate].
-            == solution.feasible.
-        binding: Binding constraint — one of ``'floor'``,
-            ``'rate_clamped_zero'``, ``'infeasible_above_retail'``.
-            == solution.binding.
         total_capex_gbp: Total fleet capex (£) from the baseline economics, at
             the configured own-use rate (baseline_own_use_rate_pence_per_kwh).
         min_dscr: Minimum DSCR over loan years from the baseline economics.
@@ -147,21 +137,6 @@ class ConfigResult:
     solution: "CostRecoverySolution"
     """Cost-recovery solve result."""
 
-    representative_outlay_gbp: float
-    """Representative home annual outlay at the solved rate (£).  Primary rank key."""
-
-    solved_own_use_rate_pence_per_kwh: float
-    """Solved own-use rate (p/kWh, ≥ 0)."""
-
-    surplus_at_solved_gbp: float
-    """Project net surplus per home per year at the solved rate (£/home/year)."""
-
-    feasible: bool
-    """True when solved within [0, retail_baseline_rate]."""
-
-    binding: str
-    """'floor', 'rate_clamped_zero', or 'infeasible_above_retail'."""
-
     total_capex_gbp: float
     """Total fleet capex (£) from the baseline project_economics, at the configured own-use rate."""
 
@@ -182,6 +157,31 @@ class ConfigResult:
 
     baseline_surplus_per_home_gbp: float
     """Project net surplus per home per year at the configured own-use rate (£/home/year)."""
+
+    @property
+    def representative_outlay_gbp(self) -> float:
+        """Representative home annual outlay at the solved rate (£), the solution's; the primary rank key."""
+        return self.solution.representative_outlay_gbp
+
+    @property
+    def solved_own_use_rate_pence_per_kwh(self) -> float:
+        """The solution's solved own-use rate (p/kWh, ≥ 0)."""
+        return self.solution.own_use_rate_pence_per_kwh
+
+    @property
+    def surplus_at_solved_gbp(self) -> float:
+        """The solution's project net surplus per home per year at the solved rate (£/home/year)."""
+        return self.solution.net_surplus_per_home_per_year_gbp
+
+    @property
+    def feasible(self) -> bool:
+        """The solution's feasible flag: False exactly when its binding is 'infeasible_above_retail'."""
+        return self.solution.feasible
+
+    @property
+    def binding(self) -> str:
+        """The solution's binding: 'floor', 'rate_clamped_zero' or 'infeasible_above_retail'."""
+        return self.solution.binding
 
 
 # ---------------------------------------------------------------------------
@@ -662,9 +662,9 @@ def feasible_split(
 ) -> "tuple[List[ConfigResult], List[ConfigResult]]":
     """Partition ConfigResults into feasible and infeasible lists.
 
-    The split predicate is ``binding == 'infeasible_above_retail'``; records
-    with ``binding`` of ``'floor'`` or ``'rate_clamped_zero'`` land in the
-    feasible side regardless of the :attr:`ConfigResult.feasible` boolean.
+    The split is on :attr:`ConfigResult.feasible`, which is False exactly
+    for ``binding == 'infeasible_above_retail'``: the solution refuses any
+    other pairing at construction.
 
     Input order is preserved within each output list.
 
@@ -673,16 +673,16 @@ def feasible_split(
 
     Returns:
         ``(feasible, infeasible)`` where *infeasible* contains every record
-        whose ``binding == 'infeasible_above_retail'`` and *feasible* contains
-        the remainder.  Both sides are :class:`ConfigResult` lists.
+        whose ``feasible`` is False and *feasible* contains the remainder.
+        Both sides are :class:`ConfigResult` lists.
     """
     feasible: List[ConfigResult] = []
     infeasible: List[ConfigResult] = []
     for r in results:
-        if r.binding == "infeasible_above_retail":
-            infeasible.append(r)
-        else:
+        if r.feasible:
             feasible.append(r)
+        else:
+            infeasible.append(r)
     return feasible, infeasible
 
 
@@ -783,11 +783,6 @@ def _evaluate_config(
     return ConfigResult(
         config=point,
         solution=solution,
-        representative_outlay_gbp=solution.representative_outlay_gbp,
-        solved_own_use_rate_pence_per_kwh=solution.own_use_rate_pence_per_kwh,
-        surplus_at_solved_gbp=solution.net_surplus_per_home_per_year_gbp,
-        feasible=solution.feasible,
-        binding=solution.binding,
         total_capex_gbp=econ.total_capex_gbp,
         min_dscr=econ.min_dscr,
         equity_irr=econ.equity_irr,

@@ -12,8 +12,9 @@ assertions actually care about.
 payment rather than accepting it, so a fixture that violates
 ``BillBreakdown``'s ``cbs_amount_due_gbp == own_use_payment_gbp +
 own_use_vat_gbp`` invariant is unconstructible here.
-``make_cost_recovery_solution`` and ``make_config_result`` likewise read each
-field their dataclass mirrors from the value it mirrors.
+``make_cost_recovery_solution`` likewise reads each field its dataclass
+mirrors from the value it mirrors, and ``ConfigResult`` reads its five solved
+fields from its solution, so ``make_config_result`` passes only the solution.
 
 Usage::
 
@@ -206,12 +207,12 @@ def make_config_result(
     baseline_outlay_gbp: float = 450.0,
     baseline_surplus_per_home_gbp: float = 80.0,
 ) -> ConfigResult:
-    """Build a synthetic ConfigResult, reading its five solved fields from its solution.
+    """Build a synthetic ConfigResult over make_cost_recovery_solution's solution for the solve arguments.
 
-    The solution is make_cost_recovery_solution's for the solve arguments, so
-    it takes *outlay* or *representative_outlay_gbp* as that builder does.
-    ``representative_outlay_gbp``, ``solved_own_use_rate_pence_per_kwh``,
-    ``surplus_at_solved_gbp``, ``feasible`` and ``binding`` are the solution's.
+    The solution takes *outlay* or *representative_outlay_gbp* as that builder
+    does.  ConfigResult reads ``representative_outlay_gbp``,
+    ``solved_own_use_rate_pence_per_kwh``, ``surplus_at_solved_gbp``,
+    ``feasible`` and ``binding`` from it.
     """
     solution = make_cost_recovery_solution(
         own_use_rate_pence_per_kwh=solved_own_use_rate_pence_per_kwh,
@@ -224,11 +225,6 @@ def make_config_result(
     return ConfigResult(
         config=ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw),
         solution=solution,
-        representative_outlay_gbp=solution.representative_outlay_gbp,
-        solved_own_use_rate_pence_per_kwh=solution.own_use_rate_pence_per_kwh,
-        surplus_at_solved_gbp=solution.net_surplus_per_home_per_year_gbp,
-        feasible=solution.feasible,
-        binding=solution.binding,
         total_capex_gbp=total_capex_gbp,
         min_dscr=min_dscr,
         equity_irr=equity_irr,

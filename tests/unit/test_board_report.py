@@ -159,7 +159,7 @@ class TestABindingOutsideTheLabelTableIsRefused:
             generate_finance_report(sections_of(make_assumption_section(cost_recovery=solution)))
 
     def test_a_ranking_report_refuses_a_binding_outside_the_label_table_by_name(self) -> None:
-        cr = replace(make_config_result(), solution=_solution_with_binding_other(), binding="other")
+        cr = replace(make_config_result(), solution=_solution_with_binding_other())
 
         with pytest.raises(ValueError, match="'other'"):
             generate_config_ranking_report(make_ranked_sweep((cr,)))
