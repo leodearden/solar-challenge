@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
+import dataclasses
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -54,6 +55,21 @@ from solar_challenge.output import compute_community_metrics, generate_community
 from solar_challenge.scenario_knobs import KNOBS, Knob, is_knob_name, knob_named, names_with_aliases
 
 app = typer.Typer(help="Fleet simulation commands")
+
+
+def _sweep_spec_default_mode() -> SweepMode:
+    """The mode SweepSpec spaces its points by when none is given, read from its own field.
+
+    Raises:
+        RuntimeError: If that default is not a SweepMode: a defect of fleet_distribution, not of a command line.
+    """
+    default = next(field.default for field in dataclasses.fields(SweepSpec) if field.name == "mode")
+    if not isinstance(default, SweepMode):
+        raise RuntimeError(f"SweepSpec.mode defaults to {default!r}, which is not a SweepMode")
+    return default
+
+
+_SWEEP_SPEC_DEFAULT_MODE = _sweep_spec_default_mode()
 
 
 def _export_fleet_results(results: FleetResults, output: Path) -> None:
@@ -233,12 +249,12 @@ def sweep(
         ),
     ] = 10,
     mode: Annotated[
-        str,
+        SweepMode,
         typer.Option(
             "--mode",
-            help="Sweep mode: geometric or linear",
+            help="How the points are spaced from --min to --max: by a constant step (linear) or a constant ratio (geometric)",
         ),
-    ] = "geometric",
+    ] = _SWEEP_SPEC_DEFAULT_MODE,
     output_dir: Annotated[
         Optional[Path],
         typer.Option(
@@ -391,12 +407,12 @@ def _param_sweep(
     min_val: Optional[float],
     max_val: Optional[float],
     steps: int,
-    mode: str,
+    mode: SweepMode,
 ) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
     """The label of the axis param names, its spec, and each sweep value with the scenario the axis builds from raw_config for it."""
     if min_val is None or max_val is None:
         raise ConfigurationError("CLI sweep requires --min and --max values")
-    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=SweepMode.parse(mode))
+    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
     axis = _sweep_axis(raw_config, param)
     return axis.label, sweep_spec, axis.scenarios(raw_config, sweep_spec.get_values())
 
