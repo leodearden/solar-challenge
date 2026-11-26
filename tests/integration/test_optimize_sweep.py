@@ -18,6 +18,7 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
@@ -245,6 +246,7 @@ class TestRankedSweep:
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=cr.config,
             pareto_baseline=(pareto_pt,),
+            self_consumption_override=None,
         )
 
         assert rs.results == (cr,)
@@ -253,22 +255,41 @@ class TestRankedSweep:
         assert rs.cheapest_feasible is cr.config
         assert rs.pareto_baseline == (pareto_pt,)
 
-    def test_the_own_use_override_reads_back_and_defaults_to_none(self) -> None:
-        """self_consumption_override reads back as built, and is None (simulated own-use) when not given."""
+    def _built(self, self_consumption_override: float | None) -> RankedSweep:
+        """A one-config sweep solved under *self_consumption_override*."""
         cr = self._make_one_feasible()
+        return RankedSweep(
+            results=(cr,),
+            infeasible=(),
+            retained_cash_floor_gbp=100.0,
+            cheapest_feasible=cr.config,
+            pareto_baseline=(),
+            self_consumption_override=self_consumption_override,
+        )
 
-        def built(**override: float) -> RankedSweep:
-            return RankedSweep(
+    @pytest.mark.parametrize("override", [None, 0.6, 1.0], ids=["simulated", "an-override", "the-whole-generation"])
+    def test_the_own_use_override_reads_back(self, override: float | None) -> None:
+        """self_consumption_override reads back as built: None for simulated own-use, else the fraction."""
+        assert self._built(override).self_consumption_override == override
+
+    @pytest.mark.parametrize("override", [0.0, 1.7, -0.2, float("nan")], ids=["zero", "above-one", "negative", "nan"])
+    def test_an_override_finance_config_refuses_is_refused_naming_it(self, override: float) -> None:
+        """A sweep cannot record an own-use assumption no FinanceConfig could hold, so its report cannot name one."""
+        with pytest.raises(ConfigurationError, match="self_consumption_override") as refusal:
+            self._built(override)
+        assert str(override) in str(refusal.value)
+
+    def test_the_own_use_override_has_no_default(self) -> None:
+        """A sweep built by hand states the own-use assumption it was solved under."""
+        cr = self._make_one_feasible()
+        with pytest.raises(TypeError, match="self_consumption_override"):
+            RankedSweep(
                 results=(cr,),
                 infeasible=(),
                 retained_cash_floor_gbp=100.0,
                 cheapest_feasible=cr.config,
                 pareto_baseline=(),
-                **override,
             )
-
-        assert built(self_consumption_override=0.6).self_consumption_override == pytest.approx(0.6)
-        assert built().self_consumption_override is None
 
     def test_cheapest_feasible_equals_results_0_config(self) -> None:
         """When results non-empty, cheapest_feasible must equal results[0].config."""
@@ -279,6 +300,7 @@ class TestRankedSweep:
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=cr.config,
             pareto_baseline=(),
+            self_consumption_override=None,
         )
         assert rs.cheapest_feasible is rs.results[0].config
 
@@ -290,6 +312,7 @@ class TestRankedSweep:
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=None,
             pareto_baseline=(),
+            self_consumption_override=None,
         )
         assert rs.cheapest_feasible is None
 
@@ -304,6 +327,7 @@ class TestRankedSweep:
                 retained_cash_floor_gbp=100.0,
                 cheapest_feasible=wrong,
                 pareto_baseline=(),
+                self_consumption_override=None,
             )
 
     def test_frozen_raises_on_assignment(self) -> None:
@@ -315,6 +339,7 @@ class TestRankedSweep:
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=cr.config,
             pareto_baseline=(),
+            self_consumption_override=None,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             rs.retained_cash_floor_gbp = 999.0  # type: ignore[misc]

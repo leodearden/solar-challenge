@@ -28,7 +28,7 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.config import ScenarioConfig, load_scenario
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import OwnUseBasis, with_own_use_basis
+from solar_challenge.finance import DEFAULT_SPREADSHEET_SELF_CONSUMPTION, OwnUseBasis, with_own_use_basis
 from solar_challenge.gridservices import GridServicesEventsConfig, GridServicesModel
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
@@ -249,8 +249,8 @@ def configs(
             "--assumptions",
             help=(
                 "The self-consumption assumption every config is ranked under: physics (model) "
-                "or spreadsheet (the scenario's override, else 70%).  both is finance run's and "
-                "is refused here: run once per assumption."
+                f"or spreadsheet (the scenario's override, else {DEFAULT_SPREADSHEET_SELF_CONSUMPTION:.0%}).  "
+                "both is finance run's and is refused here: run once per assumption."
             ),
             case_sensitive=False,
         ),

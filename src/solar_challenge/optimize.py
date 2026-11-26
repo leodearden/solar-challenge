@@ -15,13 +15,13 @@ import itertools
 from collections import Counter
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence, TypeVar
+from typing import TYPE_CHECKING, Callable, Generic, Iterator, List, Mapping, Optional, Sequence, TypeVar
 
 from solar_challenge.battery import CAPACITY_SETTING_KWH
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
-from solar_challenge.number_fields import POSITIVE, as_finite_float, read_field
+from solar_challenge.number_fields import FRACTION, POSITIVE, as_finite_float, read_field
 from solar_challenge.projection import run_cost_recovery, scenario_fleet
 from solar_challenge.scenario_knobs import KNOBS, Knob
 
@@ -214,7 +214,9 @@ class RankedSweep:
             config's finance sets, which :func:`run_sweep` requires to be one:
             ``None`` when every config is solved on simulated own-use
             (``finance.OwnUseBasis.SIMULATED``), else the fraction every
-            config's own-use is overridden to (``OwnUseBasis.OVERRIDE``).
+            config's own-use is overridden to (``OwnUseBasis.OVERRIDE``), in
+            (0, 1] as ``FinanceConfig`` reads it.  It has no default, so a
+            sweep built by hand states the assumption it was solved under.
     """
 
     results: tuple[ConfigResult, ...]
@@ -232,11 +234,19 @@ class RankedSweep:
     pareto_baseline: tuple[ConfigPoint, ...]
     """Non-dominated set on (baseline_outlay ↓, baseline_surplus ↑) over all configs."""
 
-    self_consumption_override: Optional[float] = None
+    self_consumption_override: Optional[float]
     """The configs' common self_consumption_override, every solve's own-use assumption (None: simulated)."""
 
     def __post_init__(self) -> None:
-        """Validate cheapest_feasible invariant."""
+        """Refuse a cheapest_feasible other than results[0].config, and a self_consumption_override FinanceConfig would refuse.
+
+        Raises:
+            ValueError: If cheapest_feasible is not results[0].config, or not
+                None when results is empty.
+            ConfigurationError: If self_consumption_override is not None and
+                not a finite number in (0, 1], naming it.
+        """
+        read_field(self, "self_consumption_override", as_finite_float, FRACTION, optional=True)
         if self.results:
             if self.cheapest_feasible is not self.results[0].config:
                 raise ValueError(
@@ -477,20 +487,8 @@ def _baseline_top(
             "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs hold "
             f"{list(expected.elements())} but the baseline evaluated {list(evaluated.elements())}"
         )
-    floor = _common_floor(base_configs)
-    if baseline.retained_cash_floor_gbp != floor:
-        raise ValueError(
-            "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs set a "
-            f"retained-cash floor of {floor!r} £/home/yr but the baseline was solved at "
-            f"{baseline.retained_cash_floor_gbp!r}"
-        )
-    override = _common_override(base_configs)
-    if baseline.self_consumption_override != override:
-        raise ValueError(
-            "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs set a "
-            f"self_consumption_override of {override!r} but the baseline was solved at "
-            f"{baseline.self_consumption_override!r}"
-        )
+    for setting in _RECORDED_SETTINGS:
+        setting.refuse_a_baseline_at_another(base_configs, baseline)
     if baseline.cheapest_feasible is None:
         raise ValueError(
             "baseline run_sweep has no feasible config; cannot form a sensitivity panel"
@@ -751,52 +749,71 @@ def _required_finance(point: ConfigPoint, scenario: ScenarioConfig) -> FinanceCo
     return scenario.finance
 
 
-_Setting = TypeVar("_Setting")
+_Setting = TypeVar("_Setting", covariant=True)
 
 
-def _common_setting(
-    configs: Sequence[tuple[ConfigPoint, ScenarioConfig]],
-    read: Callable[[FinanceConfig], _Setting],
-    *,
-    setting: str,
-    unit: str,
-    remedy: str,
-) -> _Setting:
-    """The value *read* takes from every config's finance, refusing configs on two, naming both and *remedy*."""
-    first_point, first_scenario = configs[0]
-    value = read(_required_finance(first_point, first_scenario))
-    for point, scenario in configs[1:]:
-        other = read(_required_finance(point, scenario))
-        if other != value:
+@dataclass(frozen=True)
+class _RecordedSetting(Generic[_Setting]):
+    """A finance setting a cost-recovery sweep solves every config at one value of, and records on its RankedSweep.
+
+    run_sweep reads each one's common value through :meth:`common`, and
+    sensitivity_panel refuses, through :meth:`refuse_a_baseline_at_another`,
+    a baseline that recorded another value than its base configs share.
+    """
+
+    name: str
+    unit: str
+    of_finance: Callable[[FinanceConfig], _Setting]
+    of_sweep: Callable[[RankedSweep], _Setting]
+    remedy: str
+
+    def common(self, configs: Sequence[tuple[ConfigPoint, ScenarioConfig]]) -> _Setting:
+        """The value every config's finance sets, refusing configs on two, naming both and the remedy."""
+        first_point, first_scenario = configs[0]
+        value = self.of_finance(_required_finance(first_point, first_scenario))
+        for point, scenario in configs[1:]:
+            other = self.of_finance(_required_finance(point, scenario))
+            if other != value:
+                raise ValueError(
+                    f"a cost-recovery sweep solves every config at one {self.name}; "
+                    f"config {first_point!r} sets {value!r}{self.unit} but config {point!r} sets {other!r}. "
+                    f"{self.remedy}"
+                )
+        return value
+
+    def refuse_a_baseline_at_another(
+        self, base_configs: Sequence[tuple[ConfigPoint, ScenarioConfig]], baseline: RankedSweep
+    ) -> None:
+        """Refuse *baseline* when it recorded another value than *base_configs* share, naming both."""
+        expected = self.common(base_configs)
+        solved = self.of_sweep(baseline)
+        if solved != expected:
             raise ValueError(
-                f"a cost-recovery sweep solves every config at one {setting}; "
-                f"config {first_point!r} sets {value!r}{unit} but config {point!r} sets {other!r}. {remedy}"
+                "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs set a "
+                f"{self.name} of {expected!r}{self.unit} but the baseline was solved at {solved!r}"
             )
-    return value
 
 
-def _common_floor(configs: Sequence[tuple[ConfigPoint, ScenarioConfig]]) -> float:
-    """The retained-cash floor every config's finance sets, refusing configs at two floors."""
-    return _common_setting(
-        configs,
-        lambda finance: finance.retained_cash_floor_per_home_per_year_gbp,
-        setting="retained-cash floor",
-        unit=" £/home/yr",
-        remedy="Set the floor on the base scenario, through its "
-        "retained_cash_floor_per_home_per_year_gbp knob, before enumerate_configs.",
-    )
+_RETAINED_CASH_FLOOR: _RecordedSetting[float] = _RecordedSetting(
+    name="retained-cash floor",
+    unit=" £/home/yr",
+    of_finance=lambda finance: finance.retained_cash_floor_per_home_per_year_gbp,
+    of_sweep=lambda sweep: sweep.retained_cash_floor_gbp,
+    remedy="Set the floor on the base scenario, through its "
+    "retained_cash_floor_per_home_per_year_gbp knob, before enumerate_configs.",
+)
 
+_SELF_CONSUMPTION_OVERRIDE: _RecordedSetting[Optional[float]] = _RecordedSetting(
+    name="self_consumption_override",
+    unit="",
+    of_finance=lambda finance: finance.self_consumption_override,
+    of_sweep=lambda sweep: sweep.self_consumption_override,
+    remedy="Put the base scenario on one own-use assumption, e.g. with "
+    "finance.with_own_use_basis, before enumerate_configs.",
+)
 
-def _common_override(configs: Sequence[tuple[ConfigPoint, ScenarioConfig]]) -> Optional[float]:
-    """The self_consumption_override every config's finance sets, refusing configs on two own-use assumptions."""
-    return _common_setting(
-        configs,
-        lambda finance: finance.self_consumption_override,
-        setting="own-use assumption (self_consumption_override)",
-        unit="",
-        remedy="Put the base scenario on one assumption, e.g. with "
-        "finance.with_own_use_basis, before enumerate_configs.",
-    )
+_RECORDED_SETTINGS: tuple[_RecordedSetting[object], ...] = (_RETAINED_CASH_FLOOR, _SELF_CONSUMPTION_OVERRIDE)
+"""Every setting a RankedSweep records, each one sensitivity_panel checks its baseline against."""
 
 
 def _evaluate_config(
@@ -895,8 +912,8 @@ def run_sweep(
         raise ValueError(
             "run_sweep: configs must be non-empty; received an empty list"
         )
-    common_floor = _common_floor(configs)
-    common_override = _common_override(configs)
+    common_floor = _RETAINED_CASH_FLOOR.common(configs)
+    common_override = _SELF_CONSUMPTION_OVERRIDE.common(configs)
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [

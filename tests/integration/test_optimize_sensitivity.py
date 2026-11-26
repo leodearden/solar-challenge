@@ -542,6 +542,30 @@ class TestBaseline:
         assert "run_sweep" not in str(refusal.value)
         assert panel_asked == []
 
+    def test_base_configs_on_two_own_use_assumptions_are_refused_naming_both_and_no_run_sweep(self) -> None:
+        """The panel refuses base_configs on two own-use assumptions as any cost-recovery sweep does: its refusal names both, not a run_sweep its caller never called."""
+        base_configs = self._base_configs(pv_kwp=4.0) + [
+            (point, dataclasses.replace(scenario, finance=_overridden(scenario, 0.6)))
+            for point, scenario in self._base_configs(pv_kwp=5.0)
+        ]
+        baseline = run_sweep(
+            self._base_configs(pv_kwp=4.0) + self._base_configs(pv_kwp=5.0), simulate=_paired_const_simulate
+        )
+        panel_asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError, match="one self_consumption_override") as refusal:
+            sensitivity_panel(
+                base_configs,
+                {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
+                baseline=baseline,
+                simulate=recording(panel_asked, _paired_const_simulate),
+            )
+
+        assert "None" in str(refusal.value)
+        assert "0.6" in str(refusal.value)
+        assert "run_sweep" not in str(refusal.value)
+        assert panel_asked == []
+
     def test_a_repeated_axis_value_is_refused_before_any_simulation(self) -> None:
         base_configs = self._base_configs()
         baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
