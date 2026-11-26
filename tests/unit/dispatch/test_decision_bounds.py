@@ -29,6 +29,7 @@ from solar_challenge.flow import EnergyFlowResult, simulate_timestep
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._fixed_decision_strategy import FixedDecisionStrategy
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
@@ -58,35 +59,6 @@ DISPATCHES = [
         id="tou_on_the_tariff_s_clock-peak",
     ),
 ]
-
-
-class _ConsumerStrategy(DispatchStrategy):
-    """Test double: a strategy of a consumer's own, which checks none of its inputs, records each call's generation and demand, and returns one decision whatever the step."""
-
-    def __init__(self, decision: DispatchDecision, name: str = "consumer") -> None:
-        self._decision = decision
-        self._name = name
-        self.calls: list[tuple[float, float]] = []
-
-    @property
-    def name(self) -> str:
-        """Return the name this double was built with."""
-        return self._name
-
-    def decide_action(
-        self,
-        timestamp: datetime,
-        generation_kw: float,
-        demand_kw: float,
-        battery_soc_kwh: float,
-        battery_capacity_kwh: float,
-        timestep_minutes: float,
-        *,
-        grid_charge_ctx: Optional[GridChargeContext] = None,
-    ) -> DispatchDecision:
-        """Record generation_kw and demand_kw, and return the decision this double was built with."""
-        self.calls.append((generation_kw, demand_kw))
-        return self._decision
 
 
 class TestADecisionRefusesAPowerThatIsNotFiniteAndAtLeast0:
@@ -140,10 +112,10 @@ class TestTheStepRefusesAPowerThatIsNotFiniteAndAtLeast0:
     def test_simulate_timestep_refuses_the_power_before_a_strategy_of_the_consumer_s_own_decides(
         self, power: str, quantity: str, value: float
     ) -> None:
-        """Unlike the built-in strategies, _ConsumerStrategy checks none of its inputs, so the step's own check is all that refuses the power."""
+        """Unlike the built-in strategies, FixedDecisionStrategy checks none of its inputs, so the step's own check is all that refuses the power."""
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        strategy = _ConsumerStrategy(DispatchDecision(0.0, 0.0))
+        strategy = FixedDecisionStrategy(DispatchDecision(0.0, 0.0))
         refusal = f"{quantity} must be non-negative and finite, got {value} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             simulate_timestep(
@@ -175,7 +147,7 @@ def _hour_under(
         demand_kw=demand_kw,
         battery=battery,
         timestep_minutes=60,
-        strategy=_ConsumerStrategy(decision, name="over_limit"),
+        strategy=FixedDecisionStrategy(decision, name="over_limit"),
     )
 
 
