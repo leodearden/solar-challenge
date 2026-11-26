@@ -849,10 +849,18 @@ def parse_tariff_config(
     return _read_typed_block(_TARIFF_TYPES, data, block_path=block_path, kind="tariff")
 
 
-def parse_heat_pump_block(
-    data: Optional[dict[str, Any]], *, block_path: str = "heat_pump"
-) -> Optional[HeatPumpConfig]:
-    """Parse a heat_pump: block into a HeatPumpConfig as HEAT_PUMP_BLOCK reads it; a null block is no heat pump, and a refusal is _read_component_block's, prefixed by block_path."""
+def parse_heat_pump_block(data: object, *, block_path: str = "heat_pump") -> Optional[HeatPumpConfig]:
+    """Parse a ``heat_pump:`` block into a HeatPumpConfig, as HEAT_PUMP_BLOCK reads it.
+
+    A null block is no heat pump. A null key reads as absent, and an omitted key other than
+    heat_pump_type takes HeatPumpConfig's declared default.
+
+    Raises:
+        ConfigurationError: each refusal prefixed by *block_path*: for a block that is not a
+            mapping, naming its type; for a key outside HEAT_PUMP_BLOCK.keys, null or not,
+            naming each such key and the recognised ones; for a block that sets no
+            heat_pump_type; or for a value HeatPumpConfig refuses, as it refuses it.
+    """
     if data is None:
         return None
     return _read_component_block(HEAT_PUMP_BLOCK, data, block_path=block_path)
