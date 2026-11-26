@@ -809,6 +809,24 @@ class TestSweepValueLabels:
     def test_equal_values_share_a_label(self) -> None:
         assert sweep_value_labels((1.0, 1.0)) == ("1.0000", "1.0000")
 
+    @pytest.mark.parametrize(
+        ("values", "labels"),
+        [
+            pytest.param((1e-300, 2e-300), ("1e-300", "2e-300"), id="tiny"),
+            pytest.param((1e30, 2e30), ("1e+30", "2e+30"), id="huge"),
+        ],
+    )
+    def test_values_whose_fixed_point_labels_would_outrun_a_floats_repr_are_labelled_by_repr(
+        self, values: tuple[float, ...], labels: tuple[str, ...]
+    ) -> None:
+        """No label is longer than a float's repr, so each fits in the CSV file name fleet sweep writes."""
+        assert sweep_value_labels(values) == labels
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"])
+    def test_a_value_that_is_not_finite_is_refused_naming_it(self, value: float) -> None:
+        with pytest.raises(ConfigurationError, match=re.escape(f"values[1] must be a finite number, got {value!r}")):
+            sweep_value_labels((1.0, value, float("nan")))
+
 
 class TestParseSweepFleetConfigs:
     """parse_sweep_fleet_configs builds each point of a fleet file's sweep as load_fleet_config builds that point's file."""

@@ -46,7 +46,7 @@ from solar_challenge.fleet_distribution import (
 from solar_challenge.gridservices import GridServicesBand
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
-from solar_challenge.number_fields import as_finite_float
+from solar_challenge.number_fields import as_finite_float, as_finite_floats
 from solar_challenge.scenario_blocks import (
     HOME_BLOCK_KEYS,
     RETIRED_DISPATCH_STRATEGY_KEY,
@@ -845,12 +845,26 @@ def fleet_of(scenario: ScenarioConfig, *, name: Optional[str] = None) -> FleetCo
     return FleetConfig(homes=scenario.simulated_homes(), name=scenario.name if name is None else name)
 
 
+_LONGEST_FLOAT_REPR = 24
+"""The most characters repr gives a float: a sign, 17 significant digits, a point and a five-character exponent, as in repr(-2.2250738585072014e-308)."""
+
+
 def sweep_value_labels(values: Sequence[float]) -> tuple[str, ...]:
-    """Each of a sweep's *values* as the text naming its point: at four decimals, or at the fewest more at which no two distinct values share a text."""
+    """Each of a sweep's *values* as the text naming its point: at four decimals, or at the fewest more at which no two distinct values share a text; or each value's repr where such a text would be longer than any float's repr, so every label fits in a file name.
+
+    Raises:
+        ConfigurationError: If a value is not a finite number, naming its index and the value.
+    """
+    numbers = as_finite_floats(values, "values")
+    distinct = len(set(numbers))
     decimals = 4
-    while len({f"{value:.{decimals}f}" for value in values}) < len(set(values)):
+    while True:
+        labels = tuple(f"{number:.{decimals}f}" for number in numbers)
+        if max(map(len, labels), default=0) > _LONGEST_FLOAT_REPR:
+            return tuple(repr(number) for number in numbers)
+        if len(set(labels)) == distinct:
+            return labels
         decimals += 1
-    return tuple(f"{value:.{decimals}f}" for value in values)
 
 
 def sweep_point_fleet(param_name: str, value_label: str, scenario: ScenarioConfig) -> FleetConfig:
