@@ -21,7 +21,7 @@ from solar_challenge.scenario_blocks import (
     parse_heat_pump_block,
     parse_location_block,
 )
-from solar_challenge.web.request_boundary import read_boolean, read_location, require_encodable_text
+from solar_challenge.web.request_boundary import read_boolean, read_location, read_string, require_encodable_text
 from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
 from solar_challenge.web.simulation_params import HOME_CONFIG_KEYS
 from tests._heat_pump_block_refusals import UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS
@@ -538,6 +538,44 @@ class TestSimulateFleetAPI:
 
         assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
         mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param({"x": 1}, id="object"),
+            pytest.param(5, id="integer"),
+            pytest.param(["a"], id="array"),
+        ],
+    )
+    def test_a_fleet_name_that_is_not_a_json_string_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_string(value, "name")
+
+        resp = client.post("/api/simulate/fleet", json={**VALID_FLEET_PAYLOAD, "name": value})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_a_later_homes_name_that_is_not_a_json_string_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        resp = client.post(
+            "/api/simulate/fleet", json={"homes": [VALID_HOME_PAYLOAD, {**VALID_HOME_PAYLOAD, "name": ["a"]}]}
+        )
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": "name must be a JSON string, got list"})
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_a_fleet_name_sent_as_null_is_submitted_with_none(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A null name is no name, as a fleet posted without one is: the JobManager names the run."""
+        resp = client.post("/api/simulate/fleet", json={**VALID_FLEET_PAYLOAD, "name": None})
+
+        assert resp.status_code == 201
+        assert mock_job_manager.submit_fleet_job.call_args.kwargs["name"] is None
 
 
 class TestParseHomeConfigErrorPaths:
