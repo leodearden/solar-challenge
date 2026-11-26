@@ -15,6 +15,7 @@ from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import FlatGridServices, GridServicesEventsConfig, NoGridServices
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.scenario_knobs import (
     ALIASES,
@@ -225,7 +226,6 @@ _REAL_NUMBER_FINANCE_FIELDS = {
     "opex_per_home_per_year_gbp",
     "own_use_rate_pence_per_kwh",
     "retained_cash_floor_per_home_per_year_gbp",
-    "grid_services_income_per_kw_per_year_gbp",
 }
 
 
@@ -270,7 +270,7 @@ class TestNames:
         assert [name for name in (*KNOBS, *ALIASES) if name not in message] == []
 
     def test_the_finance_knobs_are_financeconfigs_real_number_fields(self) -> None:
-        """The year counts, grid_services_model and grid_services_events are not knobs; every real-number finance field is."""
+        """The year counts and grid_services_model are not knobs; every real-number finance field is."""
         assert {field.name for field in dataclasses.fields(FinanceConfig)} & set(KNOBS) == _REAL_NUMBER_FINANCE_FIELDS
 
     def test_names_with_aliases_names_each_knob_given_with_its_aliases(self) -> None:
@@ -315,12 +315,47 @@ class TestFinanceKnobs:
         assert new.finance.pv_cost_per_kwp_gbp == pytest.approx(scenario.finance.pv_cost_per_kwp_gbp)
         assert scenario.finance.battery_cost_per_kwh_gbp == pytest.approx(old_battery_cost)
 
-    def test_grid_services_sets_the_flat_grid_services_income(self) -> None:
-        """grid_services lands on the returned finance's grid_services_income_per_kw_per_year_gbp."""
+    def test_grid_services_prices_the_copy_at_the_flat_rate_it_is_given(self) -> None:
+        """grid_services sets the returned finance's grid_services_model to FlatGridServices at the rate."""
         new = knob_named("grid_services").apply(_default_fleet(), 42.0)
 
         assert new.finance is not None
-        assert new.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(42.0)
+        assert new.finance.grid_services_model == FlatGridServices(42.0)
+
+    def test_grid_services_at_zero_prices_the_copy_at_no_grid_services(self) -> None:
+        """A zero rate is NoGridServices, which FlatGridServices refuses to stand for."""
+        scenario = _default_fleet()
+        assert scenario.finance is not None
+        scenario = dataclasses.replace(
+            scenario, finance=dataclasses.replace(scenario.finance, grid_services_model=FlatGridServices(12.0))
+        )
+
+        new = knob_named("grid_services").apply(scenario, 0.0)
+
+        assert new.finance is not None
+        assert new.finance.grid_services_model == NoGridServices()
+
+    def test_grid_services_leaves_the_argument_scenario_unchanged(self) -> None:
+        scenario = _default_fleet()
+        before = copy.deepcopy(scenario)
+
+        knob_named("grid_services").apply(scenario, 42.0)
+
+        assert scenario == before
+
+    def test_grid_services_under_the_events_model_is_refused_naming_the_knob_and_the_model(self) -> None:
+        """The capacity-at-events model reads no flat rate, so the knob refuses rather than silently replacing the model."""
+        scenario = _default_fleet()
+        assert scenario.finance is not None
+        scenario = dataclasses.replace(
+            scenario, finance=dataclasses.replace(scenario.finance, grid_services_model=GridServicesEventsConfig())
+        )
+
+        with pytest.raises(ConfigurationError) as refused:
+            knob_named("grid_services").apply(scenario, 42.0)
+
+        assert "grid_services_income_per_kw_per_year_gbp" in str(refused.value)
+        assert "capacity_at_events" in str(refused.value)
 
     def test_a_finance_knob_on_a_scenario_without_finance_is_refused_naming_the_knob_and_the_scenario(self) -> None:
         """With finance None the knob raises ConfigurationError naming itself and the scenario, not a TypeError."""
