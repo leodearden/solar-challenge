@@ -3,7 +3,8 @@
 
 Every refusal a web reader raises is a ConfigurationError. refusal_text is the one judge
 of a refusal at the web boundary: any other ValueError is answered as a refusal too, but
-logged at ERROR as a probable defect first (docs/prds/web-request-boundary.md §3.1).
+logged at ERROR as a probable defect first (docs/prds/web-request-boundary.md §3, its
+reading of D2).
 
 It imports no solar_challenge.web module, so a reader that needs only it loads none of
 the web's Flask services (tests/unit/test_web_readers_below_services.py).

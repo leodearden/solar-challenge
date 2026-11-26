@@ -19,7 +19,7 @@ class ConfigurationError(ValueError):
     refusal answer. It gives any other ValueError the same answer, but
     request_boundary.refusal_text first logs it at ERROR as a probable defect. Anything
     else is not a refusal, and an /api view answers it HTTP 500 with a JSON body
-    (docs/prds/web-request-boundary.md §3.1).
+    (docs/prds/web-request-boundary.md §3, its reading of D2).
 
     It is a ValueError, so code that catches ValueError catches every refusal. A handler
     that treats a refusal apart from other ValueErrors names ConfigurationError before
