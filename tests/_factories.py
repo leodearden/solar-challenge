@@ -241,11 +241,13 @@ def make_ranked_sweep(
     infeasible: Sequence[ConfigPoint] = (),
     pareto: Sequence[ConfigPoint] = (),
     floor: float = 27.0,
+    self_consumption_override: Optional[float] = None,
 ) -> RankedSweep:
     """Build a RankedSweep whose cheapest_feasible is results[0].config, None when *results* is empty.
 
     That is the rule ``RankedSweep.__post_init__`` enforces, so the factory
-    cannot build a sweep that breaks it; ``floor`` is the retained-cash floor.
+    cannot build a sweep that breaks it; ``floor`` is the retained-cash floor
+    and ``self_consumption_override`` the configs' own-use assumption.
     """
     return RankedSweep(
         results=tuple(results),
@@ -253,6 +255,7 @@ def make_ranked_sweep(
         retained_cash_floor_gbp=floor,
         cheapest_feasible=results[0].config if results else None,
         pareto_baseline=tuple(pareto),
+        self_consumption_override=self_consumption_override,
     )
 
 
