@@ -40,6 +40,7 @@ import pytest
 import solar_challenge
 import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
+from tests._released_surface import RELEASED_CALLS, RELEASED_CLOSURE, RELEASED_MEMBERS, RELEASED_SURFACE
 from tests._surface_forms import (
     is_additive_change,
     is_additive_member_change,
@@ -1052,6 +1053,60 @@ def test_a_pinned_dataclass_whose_instances_lose_their_dict_prints_breaking(
         f"current: {FROZEN_SURFACE['SEGTariff'].replace('match_args]', 'match_args, slots]')}",
         "change:  breaking",
     ]
+
+
+# ===========================================================================
+# Changes since the last release: each path whose form differs from the
+# released snapshot, with the task whose release note describes it
+# ===========================================================================
+
+
+def test_a_form_changed_since_the_release_that_unreleased_does_not_list_fails_naming_its_released_and_current_forms_and_its_change(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def calculate_degradation_factor(
+        system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0
+    ) -> float: ...
+
+    scratch_edit.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    assert _printed_entry(message, "calculate_degradation_factor") == [
+        "solar_challenge.calculate_degradation_factor",
+        f"released: {RELEASED_SURFACE['calculate_degradation_factor']}",
+        "current:  (system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0) -> float",
+        "change:   additive",
+    ]
+
+
+def test_an_unreleased_path_whose_form_is_as_released_fails_naming_the_entry(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    scratch_edit.setitem(UNRELEASED, "calculate_degradation_factor", 1702)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    assert "solar_challenge.calculate_degradation_factor (task 1702)" in [
+        line.strip() for line in message.splitlines()
+    ]
+
+
+def test_a_pinned_call_changed_since_the_release_is_listed_under_its_class_path_and_dunder_call(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def __call__(self, config: object, start_date: object, end_date: object, *, weather: object) -> object: ...
+
+    scratch_edit.setattr(solar_challenge.HomeSimulator, "__call__", __call__)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    entry = _printed_entry(message, "HomeSimulator.__call__")
+    assert entry[:2] == [
+        "solar_challenge.HomeSimulator.__call__",
+        f"released: {RELEASED_CALLS['HomeSimulator']}",
+    ]
+    assert entry[3:] == ["change:   breaking"]
 
 
 # ===========================================================================
