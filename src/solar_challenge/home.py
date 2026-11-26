@@ -490,9 +490,9 @@ _SUMMED_ROWS_REL_TOL: Final = 1e-12
 class SummaryStatistics:
     """Summary statistics for a simulation period.
 
-    All energy values in kWh, all financial values in £. The battery's discharge is a part
-    of its self-consumption and its export, which count its discharge to the home and to the
-    grid.
+    All energy values in kWh, all financial values in £. The battery's discharge is split
+    between the self-consumption that counts its discharge to the home and its export, its
+    discharge to the grid, so it is at most their sum.
     """
 
     total_generation_kwh: float
@@ -501,8 +501,9 @@ class SummaryStatistics:
     total_grid_import_kwh: float
     total_grid_export_kwh: float
     total_battery_charge_kwh: float
-    # Energy the battery delivered to the home's bus, after its discharge losses: a part of
-    # total_self_consumption_kwh and total_battery_export_kwh, which count it.
+    # Energy the battery delivered to the home's bus, after its discharge losses: split between
+    # total_self_consumption_kwh, which counts its discharge to the home, and
+    # total_battery_export_kwh, its discharge to the grid, so at most their sum.
     total_battery_discharge_kwh: float
     peak_generation_kw: float
     peak_demand_kw: float
@@ -533,7 +534,7 @@ class SummaryStatistics:
     total_battery_export_kwh: float = field(default=0.0, kw_only=True)
 
     def __post_init__(self) -> None:
-        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_export_kwh that is not a part of both the battery discharge and the grid export, a total_battery_discharge_kwh above the self-consumption and export that count it, and a load energy keyed by no load kind or that is not a real number of at least 0 (a boolean is not one); hold load_energy_kwh as a PerLoad of the floats read."""
+        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_export_kwh that is not a part of both the battery discharge and the grid export, a total_battery_discharge_kwh above the self-consumption and export it is split between, and a load energy keyed by no load kind or that is not a real number of at least 0 (a boolean is not one); hold load_energy_kwh as a PerLoad of the floats read."""
         if not isinstance(self.window, SimulationWindow):
             raise ValueError(
                 "SummaryStatistics' window is the SimulationWindow its totals were computed over, which "
@@ -564,9 +565,9 @@ class SummaryStatistics:
             or (export > 0.0 and math.isclose(discharge, discharge_bound, rel_tol=_SUMMED_ROWS_REL_TOL))
         ):
             raise ValueError(
-                "SummaryStatistics' total_battery_discharge_kwh is a part of total_self_consumption_kwh and "
-                "total_battery_export_kwh, which count the battery's discharge to the home and to the grid, so it "
-                "is at most their sum: "
+                "SummaryStatistics' total_battery_discharge_kwh is split between total_self_consumption_kwh, "
+                "which counts the battery's discharge to the home, and total_battery_export_kwh, its discharge "
+                "to the grid, so it is at most their sum: "
                 f"got total_battery_discharge_kwh={discharge!r}, "
                 f"total_self_consumption_kwh={self.total_self_consumption_kwh!r}, "
                 f"total_battery_export_kwh={export!r}"
@@ -589,7 +590,10 @@ class SummaryStatistics:
     @property
     def total_direct_self_consumption_kwh(self) -> float:
         """PV the home used directly, in kWh: its self-consumption less the battery's discharge to the home, which self-consumption counts too, so at least 0."""
-        return max(0.0, self.total_self_consumption_kwh - (self.total_battery_discharge_kwh - self.total_battery_export_kwh))
+        direct_kwh = self.total_self_consumption_kwh - (self.total_battery_discharge_kwh - self.total_battery_export_kwh)
+        # Only an exporting run's totals, within _SUMMED_ROWS_REL_TOL, can put it a rounding below 0;
+        # a NaN, such as infinity less infinity, is kept.
+        return 0.0 if direct_kwh < 0.0 else direct_kwh
 
     @property
     def total_grid_to_demand_kwh(self) -> float:

@@ -1466,7 +1466,7 @@ class TestSummaryStatistics:
             home_summary(total_battery_discharge_kwh=discharge_kwh, total_self_consumption_kwh=self_consumption_kwh)
 
         message = str(refused.value)
-        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert "total_battery_discharge_kwh is split between total_self_consumption_kwh" in message
         assert f"total_battery_discharge_kwh={discharge_kwh!r}" in message
         assert f"total_self_consumption_kwh={self_consumption_kwh!r}" in message
         assert "total_battery_export_kwh=0.0" in message
@@ -1508,7 +1508,7 @@ class TestSummaryStatistics:
             )
 
         message = str(refused.value)
-        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert "total_battery_discharge_kwh is split between total_self_consumption_kwh" in message
         assert "total_battery_discharge_kwh=8.0" in message
         assert "total_self_consumption_kwh=6.0" in message
         assert "total_battery_export_kwh=1.0" in message
@@ -1519,6 +1519,24 @@ class TestSummaryStatistics:
         )
 
         assert summary.total_direct_self_consumption_kwh == 0.0
+
+    def test_a_discharge_a_rounding_above_its_self_consumption_and_export_is_accepted_with_no_direct_use(
+        self,
+    ) -> None:
+        """An exporting run's totals each sum rows, so its discharge can land a rounding above self-consumption plus export, leaving no direct use rather than a negative one."""
+        summary = home_summary(
+            total_battery_discharge_kwh=math.nextafter(70.0, math.inf),
+            total_battery_export_kwh=10.0,
+            total_self_consumption_kwh=60.0,
+        )
+
+        assert summary.total_direct_self_consumption_kwh == 0.0
+
+    def test_the_direct_use_of_infinite_totals_without_an_export_is_not_a_number(self) -> None:
+        """Without an export the direct use is self-consumption less discharge, so infinity less infinity stays NaN rather than reading as no direct use."""
+        summary = home_summary(total_battery_discharge_kwh=math.inf, total_self_consumption_kwh=math.inf)
+
+        assert math.isnan(summary.total_direct_self_consumption_kwh)
 
     def test_refuses_a_field_assignment(self) -> None:
         """A summary is a frozen value: neither its window nor simulation_days, a read-only property of its window, can be assigned after construction."""

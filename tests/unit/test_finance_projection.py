@@ -264,7 +264,7 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
 
         self_consumption_kwh = calculate_summary(finite).total_self_consumption_kwh
         message = str(exc_info.value)
-        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert "total_battery_discharge_kwh is split between total_self_consumption_kwh" in message
         assert message.endswith(
             f"got total_battery_discharge_kwh=inf, total_self_consumption_kwh={self_consumption_kwh!r}, "
             "total_battery_export_kwh=0.0"
