@@ -115,22 +115,31 @@ FLAT_PRICING_REMEDY = "set the scenario's finance.grid_services_model to type: f
 """The form to write that each refusal of the flat rate under capacity-at-events pricing ends with."""
 
 
+def flat_rate_pricing(rate: float) -> GridServicesModel:
+    """The grid-services pricing the flat rate *rate* (£/kW/yr) stands for: NoGridServices() at exactly 0, else FlatGridServices(rate).
+
+    Raises:
+        ConfigurationError: If *rate* is not a finite number at least 0,
+            naming the flat grid-services knob.
+    """
+    income = as_finite_float(rate, _FLAT_GRID_SERVICES_KNOB, NON_NEGATIVE)
+    return NoGridServices() if income == 0 else FlatGridServices(income)
+
+
 def _with_flat_grid_services(scenario: ScenarioConfig, rate: float) -> ScenarioConfig:
-    """*scenario* priced at the flat grid-services rate *rate* (£/kW/yr), or at no grid services at exactly 0.
+    """*scenario* priced at :func:`flat_rate_pricing` of *rate*.
 
     Raises:
         ConfigurationError: If *scenario* has no finance block, or its
             finance prices capacity at events, which reads no flat rate; or
-            if *rate* is not a finite number at least 0, naming the knob.
+            if flat_rate_pricing refuses *rate*.
     """
     finance = _required_finance(scenario, _FLAT_GRID_SERVICES_KNOB, "grid_services_model")
     if isinstance(finance.grid_services_model, GridServicesEventsConfig):
         raise ConfigurationError(
             f"Scenario {scenario.name!r} cannot take {FLAT_RATE_UNREAD_UNDER_EVENTS}; {FLAT_PRICING_REMEDY}"
         )
-    income = as_finite_float(rate, _FLAT_GRID_SERVICES_KNOB, NON_NEGATIVE)
-    pricing: GridServicesModel = NoGridServices() if income == 0 else FlatGridServices(income)
-    return replace(scenario, finance=replace(finance, grid_services_model=pricing))
+    return replace(scenario, finance=replace(finance, grid_services_model=flat_rate_pricing(rate)))
 
 
 def _real_number_finance_fields() -> tuple[str, ...]:

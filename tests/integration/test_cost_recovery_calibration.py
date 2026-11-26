@@ -27,7 +27,7 @@ from solar_challenge.finance import (
     basis_c_own_use_kwh,
     bill_distribution,
 )
-from solar_challenge.gridservices import FlatGridServices, NoGridServices
+from solar_challenge.gridservices import NoGridServices
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.projection import (
@@ -39,6 +39,7 @@ from solar_challenge.projection import (
     scenario_fleet,
     solve_cost_recovery_rate,
 )
+from solar_challenge.scenario_knobs import flat_rate_pricing
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
@@ -124,7 +125,7 @@ def _make_finance_cr6(
     """_make_finance_fin_cr6's [FIN] finance, with the five fields CR6's interior and flex regimes vary replaced."""
     return dataclasses.replace(
         _make_finance_fin_cr6(),
-        grid_services_model=NoGridServices() if grid_services == 0 else FlatGridServices(grid_services),
+        grid_services_model=flat_rate_pricing(grid_services),
         retained_cash_floor_per_home_per_year_gbp=retained_cash_floor,
         retail_baseline_rate_pence_per_kwh=retail_rate,
         pv_cost_per_kwp_gbp=pv_cost_per_kwp,

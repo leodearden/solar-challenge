@@ -22,6 +22,7 @@ from solar_challenge.scenario_knobs import (
     FLAT_PRICING_REMEDY,
     KNOBS,
     Knob,
+    flat_rate_pricing,
     is_knob_name,
     knob_listing,
     knob_named,
@@ -338,6 +339,15 @@ class TestFinanceKnobs:
 
         assert new.finance is not None
         assert new.finance.grid_services_model == NoGridServices()
+
+    @pytest.mark.parametrize(
+        ("rate", "pricing"), [(0.0, NoGridServices()), (12.0, FlatGridServices(12.0))]
+    )
+    def test_flat_rate_pricing_is_no_grid_services_at_zero_and_the_flat_rate_above(
+        self, rate: float, pricing: object
+    ) -> None:
+        """flat_rate_pricing is the one rule the knob, and a builder priced at a flat rate, read a rate through."""
+        assert flat_rate_pricing(rate) == pricing
 
     @pytest.mark.parametrize(
         ("rate", "requirement"),

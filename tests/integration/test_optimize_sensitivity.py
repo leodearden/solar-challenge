@@ -20,7 +20,7 @@ from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
-from solar_challenge.gridservices import FlatGridServices, GridServicesEventsConfig, NoGridServices
+from solar_challenge.gridservices import GridServicesEventsConfig
 from solar_challenge.home import RunPricing, SimulationResults
 from solar_challenge.optimize import (
     ConfigPoint,
@@ -30,7 +30,7 @@ from solar_challenge.optimize import (
     run_sweep,
     sensitivity_panel,
 )
-from solar_challenge.scenario_knobs import KNOBS, Knob
+from solar_challenge.scenario_knobs import KNOBS, Knob, flat_rate_pricing
 from solar_challenge.seg import SEGTariff
 from tests._finance_builders import (
     make_fleet_results,
@@ -74,7 +74,7 @@ def _make_finance(
         grant_gbp=grant_gbp,
         vat_rate=0.05,
         battery_cost_per_kwh_gbp=battery_cost_per_kwh_gbp,
-        grid_services_model=NoGridServices() if grid_services_income == 0 else FlatGridServices(grid_services_income),
+        grid_services_model=flat_rate_pricing(grid_services_income),
     )
 
 
