@@ -11,6 +11,7 @@ scripts/measure_charge_window_bills.py and scripts/measure_grid_charge_forecast.
 
 import dataclasses
 import statistics
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
@@ -187,6 +188,33 @@ class TestMeasureMpptWindow:
             pd.read_csv(csv_path, dtype={"inverter_kw": str}), census_rows, check_exact=True
         )
         assert not (working / DEFAULT_CACHE_DIR).exists()
+
+    @pytest.mark.filterwarnings("error::RuntimeWarning")
+    def test_measure_year_runs_with_no_runtime_warning_though_main_has_not_run(
+        self, mppt_window: ModuleType, one_day_tmy: pd.DataFrame
+    ) -> None:
+        config = PVConfig.default_4kw()
+
+        year = mppt_window.measure_year(create_model_chain(config, Location.bristol()), one_day_tmy)
+
+        assert year.ac_kwh == pytest.approx(
+            simulate_pv_output(config, Location.bristol(), one_day_tmy).sum(), rel=1e-9
+        )
+
+    def test_main_leaves_the_process_warning_filters_as_it_found_them(
+        self, mppt_window: ModuleType, tmp_path: Path
+    ) -> None:
+        """A first run inside catch_warnings makes every import main makes, so no first import adds a filter of its own to the run measured."""
+        cache_dir = tmp_path / "weather-cache"
+        _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir))
+        argv = ["--cache-dir", str(cache_dir), "--dc-kw", "4"]
+        with warnings.catch_warnings():
+            mppt_window.main(argv)
+        before = list(warnings.filters)
+
+        mppt_window.main(argv)
+
+        assert warnings.filters == before
 
     def test_strings_held_at_either_edge_keep_at_most_their_maximum_power_less_the_same_losses(
         self, mppt_window: ModuleType, one_day_tmy: pd.DataFrame
