@@ -33,9 +33,10 @@ from solar_challenge.web.fleet_components import (
 from solar_challenge.web.request_boundary import (
     WEB_DEFAULT_LOCATION,
     present_fields,
-    refuse_unencodable_text,
     refuse_unrecognised_keys,
+    read_boolean,
     read_location,
+    read_optional_string,
     require_json_object,
 )
 
@@ -258,7 +259,7 @@ _LOAD_SETTINGS: _SettingReaders = MappingProxyType({
         "annual_consumption_kwh",
         partial(as_finite_float, field="consumption_kwh", within=FLEET_COMPONENTS["load"].value_range),
     ),
-    "stochastic": ("use_stochastic", bool),
+    "stochastic": ("use_stochastic", partial(read_boolean, field="stochastic")),
 })
 
 # The battery settings BatteryConfig takes; efficiency_pct, a round trip, is applied by with_round_trip.
@@ -332,10 +333,10 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             is. An azimuth, tilt,
             system_age_years, degradation_rate_per_year or system_losses
             that is not a finite number in PVConfig's range raises
-            PVConfig's own refusal, naming it. A name
-            sent as text holding a lone surrogate is refused with
-            require_encodable_text's refusal, naming name; a name that is
-            not text is not checked here.
+            PVConfig's own refusal, naming it. A name that is not a JSON
+            string, or text holding a lone surrogate, raises read_string's
+            refusal naming name; a stochastic that is not true or false
+            raises read_boolean's, naming stochastic.
     """
     data = require_json_object(data, _HOME_CONFIG)
     refuse_unrecognised_keys(data, HOME_CONFIG_KEYS, _HOME_CONFIG)
@@ -345,8 +346,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     )
     battery_kwh = _read_sent_number(params, "battery_kwh", "battery")
     load_config = LoadConfig(**_sent_settings(params, _LOAD_SETTINGS))
-    name = params.get("name")
-    refuse_unencodable_text(name, "name")
+    name = read_optional_string(params.get("name"), "name")
 
     start, end = parse_date_range(params)
 
