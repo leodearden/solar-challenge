@@ -9,8 +9,10 @@ import yaml
 from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
+from solar_challenge.fleet_distribution import SweepSpec
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
+from tests._cli_table_text import table_text
 from tests._fleet_sweep_paths import SWEEP_PATHS, SweepPath, two_home_fleet_distribution
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import sunless_weather
@@ -182,6 +184,24 @@ def test_a_knob_given_by_an_alias_labels_its_points_by_the_knobs_canonical_name(
         "sweep_summary.csv",
     ]
     assert list(pd.read_csv(Path("out", "sweep_summary.csv"))["param"]) == ["seg_tariff_pence_per_kwh"] * 2
+
+
+def test_a_sweep_given_no_mode_spaces_its_points_as_sweepspecs_default_mode_does() -> None:
+    result = _sweep(2.0, "--param", "battery_capacity_kwh", "--min", "5", "--max", "20", "--steps", "3")
+
+    assert result.exit_code == 0, result.output
+    assert sorted(path.name for path in Path("out").iterdir()) == sorted(
+        [f"battery_capacity_kwh_{value:.4f}.csv" for value in SweepSpec(min=5.0, max=20.0, steps=3).get_values()]
+        + ["sweep_summary.csv"]
+    )
+
+
+def test_a_mode_no_sweep_mode_names_is_refused_by_the_option_naming_both_modes() -> None:
+    result = _sweep("${CAP}", "--param", "CAP", "--min", "5", "--max", "10", "--steps", "2", "--mode", "log")
+
+    assert result.exit_code == 2
+    assert "Invalid value for '--mode': 'log' is not one of 'linear', 'geometric'." in table_text(result.stderr)
+    assert not Path("out").exists()
 
 
 def test_a_param_sweep_of_a_placeholder_in_the_location_block_simulates_each_point_at_its_latitude(
