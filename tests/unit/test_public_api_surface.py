@@ -11,6 +11,8 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
   docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
   current forms, labels each additive or breaking, and says what each kind needs.
+- Changes since the last release: UNRELEASED lists each path whose form differs from
+  the released snapshot, tests/_released_surface.py, with the task that last changed it.
 - Name resolution: every exported name resolves to its typed import, the object the
   package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
   names, and an unknown name raises AttributeError; and each EXPECTED_KIND name resolves
@@ -1059,6 +1061,64 @@ def test_a_pinned_dataclass_whose_instances_lose_their_dict_prints_breaking(
 # Changes since the last release: each path whose form differs from the
 # released snapshot, with the task whose release note describes it
 # ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# The paths whose forms have changed since the last release, each with the
+# task that last changed it
+#
+# Each key is a path as the drift report prints it, less 'solar_challenge.':
+# an exported name, a FROZEN_CLOSURE path, a FROZEN_MEMBERS member path, or a
+# FROZEN_CALLS class path plus '.__call__'.  Each value is the id of the task
+# that last changed that path, whose note
+# docs/unreleased/domain-library-consumption/<id>.md exists.  A release
+# empties it.
+# ---------------------------------------------------------------------------
+UNRELEASED: dict[str, int] = {
+    "SummaryStatistics": 1702,
+    "DispatchDecision": 1702,
+    "EnergyFlowResult": 1702,
+    "home.SimulationResults": 1702,
+    "Battery.max_discharge_kw": 1702,
+}
+
+
+def _changed_since_release() -> dict[str, _Drift]:
+    """Each path whose live form differs from the released snapshot's, by its UNRELEASED spelling, each lock's paths in turn."""
+    return {
+        **_export_drift(RELEASED_SURFACE),
+        **_closure_drift(RELEASED_CLOSURE),
+        **_member_drift(_by_member_path(RELEASED_MEMBERS)),
+        **{f"{path}.__call__": drift for path, drift in _call_drift(RELEASED_CALLS).items()},
+    }
+
+
+def test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release() -> None:
+    """UNRELEASED lists each path whose form differs from the released snapshot, and no other.
+
+    Fails once, naming each changed path UNRELEASED lacks with its released and current
+    forms, labelled additive or breaking, then each UNRELEASED path whose form is as
+    released, with its task.
+    """
+    changed = _changed_since_release()
+    unlisted = {path: drift for path, drift in changed.items() if path not in UNRELEASED}
+    stale = {path: task for path, task in UNRELEASED.items() if path not in changed}
+    problems = []
+    if unlisted:
+        entries = _drift_entries(unlisted, baseline_label="released", absent_baseline="(not in the release)")
+        problems.append(
+            "Surface forms differ from the released snapshot, tests/_released_surface.py, at "
+            f"paths UNRELEASED does not list:{entries}\n"
+            "Add an UNRELEASED row for each, mapping its path to the id of the task that "
+            "changed it, and write that task's note, "
+            "docs/unreleased/domain-library-consumption/<task id>.md, in the same commit. A "
+            "breaking one lands only inside an open release window ('Release windows', in the "
+            "'Tag / release convention' section of docs/domain-library-consumption.md)."
+        )
+    if stale:
+        entries = "".join(f"\n  solar_challenge.{path} (task {task})" for path, task in stale.items())
+        problems.append(f"UNRELEASED lists paths whose forms are as released; drop each:{entries}")
+    assert not problems, "\n".join(problems)
 
 
 def test_a_form_changed_since_the_release_that_unreleased_does_not_list_fails_naming_its_released_and_current_forms_and_its_change(
