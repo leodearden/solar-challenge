@@ -94,8 +94,11 @@ SummaryStatistics, as they are named in an installed copy too.
 
 install_stored_run_fixture puts a fixture into a store: its row into the runs table, with SQL,
 and a copy of its run/ as that run's directory, under the fixture's run id or another, so a
-store can hold a copy of a fixture beside the fixture itself. The functions import the web
-package only when they are called, so importing this module needs no web extra.
+store can hold a copy of a fixture beside the fixture itself. install_pre_s12_heat_pump_home
+puts in a copy of pre_867_round_trip_home whose summary, in its files and its runs row, holds
+PRE_S12_HEAT_PUMP_SUMMARY_FIGURES, a heat-pump home's figures as a summary saved before
+summaries held each load's energy holds them. The functions import the web package only when
+they are called, so importing this module needs no web extra.
 
 Usage::
 
@@ -110,7 +113,9 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
@@ -138,6 +143,19 @@ STORED_RUN_FIXTURES: tuple[str, ...] = (
 PRE_975_FLEET_SEG_REVENUE_KEYS: tuple[str, ...] = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
 """The SEG revenue pair a fleet summary held before task 975, which pre_975_seg_fleet's holds non-null
 and the stored-run format's v6 step drops, in the order that FleetSummary declared them."""
+
+PRE_S12_HEAT_PUMP_SUMMARY_FIGURES: Mapping[str, float] = MappingProxyType(
+    {
+        "total_demand_kwh": 5400.0,
+        "total_heat_pump_load_kwh": 2400.0,
+        "peak_heat_pump_load_kw": 3.2,
+        "heat_pump_load_ratio": 2400.0 / 5400.0,
+    }
+)
+"""The figures of a stored summary of a heat-pump home saved before summaries held each load's energy: its
+demand, 3000 kWh of it its household's, and its heat pump's total, peak and share of that demand. The
+stored-run format's v10 step carries the heat pump's total into the summary's load_energy_kwh and drops the
+three heat-pump keys."""
 
 
 def stored_run_fixture_dir(name: str) -> Path:
@@ -221,6 +239,32 @@ def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *,
         conn.execute(f"INSERT INTO runs ({columns}) VALUES ({placeholders})", row)
     installed_id: str = row["id"]
     shutil.copytree(stored_run_fixture_dir(name), stored_run_dir(RunStorage(database, data_dir), installed_id))
+    return installed_id
+
+
+def install_pre_s12_heat_pump_home(database: Database, data_dir: Path, *, run_id: str) -> str:
+    """Put into the store of *database* and *data_dir* a copy of pre_867_round_trip_home as the run *run_id*, its summary a heat-pump home's; return the run's id.
+
+    The copy's summary.json and its runs row's summary_json hold PRE_S12_HEAT_PUMP_SUMMARY_FIGURES
+    in place of the fixture's figures of those names, as a summary of a heat-pump home saved
+    before summaries held each load's energy holds them. Its data.parquet is the fixture's own,
+    as the stored-run format's v10 step reads only summaries.
+
+    Raises:
+        sqlite3.Error: The runs table refuses the row, e.g. for an id one of its runs already has.
+    """
+    from solar_challenge.web.storage import RunStorage
+
+    from tests._run_storage_layout import stored_run_dir
+
+    installed_id = install_stored_run_fixture("pre_867_round_trip_home", database, data_dir, run_id=run_id)
+    summary_path = stored_run_dir(RunStorage(database, data_dir), installed_id) / "summary.json"
+    summary = {**json.loads(summary_path.read_text()), **PRE_S12_HEAT_PUMP_SUMMARY_FIGURES}
+    summary_path.write_text(json.dumps(summary, indent=2))
+    with database.transaction() as conn:
+        (stored,) = conn.execute("SELECT summary_json FROM runs WHERE id = ?", (installed_id,)).fetchone()
+        row_summary = {**json.loads(stored), **PRE_S12_HEAT_PUMP_SUMMARY_FIGURES}
+        conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (json.dumps(row_summary), installed_id))
     return installed_id
 
 

@@ -59,20 +59,32 @@ home with no battery having none to take; that v2 keeps each home's dispatch_str
 it leaves a config, or a fleet's home, that is not an object as it is; and that it changes none of
 its input.
 
-Last it pins v9, the step that drops each stored SummaryStatistics' seg_revenue_gbp, a second copy
+Then it pins v9, the step that drops each stored SummaryStatistics' seg_revenue_gbp, a second copy
 of its total_export_revenue_gbp: that it drops it from a home run's summary and from each fleet
 home summary, in a run's files and its runs row alike, reporting each value that is not null, the
 dropped values being the export revenue each summary keeps; that it drops each legacy fixture's
 null one, reporting nothing; that v2 keeps it for v9; that it leaves a fleet's FleetSummary and
 config, and a summary that is not an object, as they are; that it changes none of its input; and
 that a run stored with one reads once brought forward.
+
+Last it pins v10, the step that gives each stored SummaryStatistics lacking a load_energy_kwh its
+household's energy, its demand less its heat pump's, and its heat pump's, then drops its
+total_heat_pump_load_kwh, peak_heat_pump_load_kw and heat_pump_load_ratio: that it gives each
+legacy fixture's summaries their household's energy alone, dropping their null figures and
+reporting nothing, and leaves a fleet's FleetSummary and every config as they are; that it gives a
+heat-pump home's summary both energies, in a home run's files and its runs row and a fleet's home
+summaries alike, reporting nothing, and leaves its own result as it is; that it keeps a
+load_energy_kwh a summary already holds, reporting a dropped heat-pump total only when that
+load_energy_kwh does not hold it; that it leaves a summary whose demand or heat-pump total is not a
+number, or that is not an object, as it is; that it changes none of its input; that v2 keeps the
+three figures for it; and that a heat-pump home's summary reads once brought forward.
 """
 
 import copy
 import dataclasses
 import json
 import shutil
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +94,7 @@ import pytest
 pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.dispatch import (
     GridChargeConfig,
     PeakShavingStrategyConfig,
@@ -116,6 +129,7 @@ from tests._every_field_shape import home_of_every_field_shape
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._stored_run_fixtures import (
     PRE_975_FLEET_SEG_REVENUE_KEYS,
+    PRE_S12_HEAT_PUMP_SUMMARY_FIGURES,
     STORED_RUN_FIXTURES,
     fixture_run_type,
     fixture_runs_row,
@@ -1668,3 +1682,219 @@ def test_each_home_summary_of_a_run_stored_with_a_seg_revenue_reads_once_brought
     summaries = [summary.read(SummaryStatistics) for summary in _current_documents(_PRE_975).home_summaries]
 
     assert [summary.total_export_revenue_gbp for summary in summaries] == pytest.approx(stored, abs=1e-9)
+
+
+_SUMMARY_HEAT_PUMP_KEYS = ("total_heat_pump_load_kwh", "peak_heat_pump_load_kw", "heat_pump_load_ratio")
+"""The heat pump's figures a SummaryStatistics stored before format 10 holds, its total, its peak and its share of the demand, which v10 drops, carrying the total into the summary's load_energy_kwh."""
+
+_LOAD_ENERGY = "load_energy_kwh"
+
+_HEAT_PUMP_HOME_S_LOAD_ENERGY = {"household": 3000.0, "heat_pump": 2400.0}
+"""The load_energy_kwh of a summary holding PRE_S12_HEAT_PUMP_SUMMARY_FIGURES: its household's energy, its demand less its heat pump's, and its heat pump's."""
+
+
+def _with_heat_pump_figures(documents: StoredRunDocuments, document: str) -> StoredRunDocuments:
+    """*documents*, with a copy of the summary named *document* holding PRE_S12_HEAT_PUMP_SUMMARY_FIGURES, a heat-pump home's figures as a summary saved before summaries held each load's energy holds them."""
+    for key, figure in PRE_S12_HEAT_PUMP_SUMMARY_FIGURES.items():
+        documents = _with_value(documents, document, (key,), figure)
+    return documents
+
+
+def _given_load_energy(documents: StoredRunDocuments, document: str, load_energy: Any) -> StoredRunDocuments:
+    """*documents*, with a copy of the summary named *document* holding *load_energy* as its load_energy_kwh and lacking the heat pump's figures."""
+    documents = _with_value(documents, document, (_LOAD_ENERGY,), load_energy)
+    for key in _SUMMARY_HEAT_PUMP_KEYS:
+        documents = _without(documents, document, key)
+    return documents
+
+
+def _summaries_at_format_10(
+    documents: StoredRunDocuments, run_type: RunType, load_energy: dict[str, Any] | None = None
+) -> StoredRunDocuments:
+    """*documents*, of a run of *run_type*, with a copy of each SummaryStatistics document lacking the heat pump's figures.
+
+    Each holds *load_energy*'s entry for its name as its load_energy_kwh, or, when *load_energy*
+    names none, its household's energy, its total_demand_kwh.
+    """
+    for summary in _summary_documents(documents, run_type):
+        household = {"household": summary.content["total_demand_kwh"]}
+        documents = _given_load_energy(documents, summary.name, (load_energy or {}).get(summary.name, household))
+    return documents
+
+
+_A_SUMMARY_OF_EACH_KIND = [
+    pytest.param(_PRE_867, _fixture_documents, "summary.json", id="home-run-files"),
+    pytest.param(_PRE_867, _runs_row_documents, "runs.summary_json", id="home-runs-row"),
+    pytest.param(_PRE_975, _fixture_documents, "homes/home_1_summary.json", id="fleet-home-summaries-too"),
+]
+"""A SummaryStatistics document of each kind, by the fixture holding it, its documents and its name: a home run's summary, in its files and its runs row, and a fleet run's home summary."""
+
+
+@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
+def test_v10_gives_each_legacy_fixture_s_summaries_their_household_s_energy_dropping_their_null_heat_pump_figures_reporting_nothing(
+    name: str,
+) -> None:
+    """A home run's summary and each of a fleet run's home summaries alike; a fleet's FleetSummary and every config are left as they are."""
+    v10 = _step(10)
+    run_type = fixture_run_type(name)
+    documents = _documents_before(v10, name)
+    summaries = _summary_documents(documents, run_type)
+    assert summaries and all(summary.content[key] is None for summary in summaries for key in _SUMMARY_HEAT_PUMP_KEYS)
+
+    result = v10.apply(run_type, documents)
+
+    assert result.documents == _summaries_at_format_10(documents, run_type)
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+@pytest.mark.parametrize(("name", "stored_documents", "document"), _A_SUMMARY_OF_EACH_KIND)
+def test_v10_gives_a_heat_pump_home_s_summary_its_household_s_and_its_heat_pump_s_energy_reporting_nothing(
+    name: str, stored_documents: Callable[[str], StoredRunDocuments], document: str
+) -> None:
+    """Its heat pump's total moves into load_energy_kwh, and its peak and share are its run's series' and load_share's: nothing is lost, so nothing is reported, and v10 leaves its own result as it is."""
+    v10 = _step(10)
+    run_type = fixture_run_type(name)
+    documents = _with_heat_pump_figures(_brought_forward_before(v10, run_type, stored_documents(name)), document)
+
+    result = v10.apply(run_type, documents)
+    again = v10.apply(run_type, result.documents)
+
+    assert result.documents == _summaries_at_format_10(documents, run_type, {document: _HEAT_PUMP_HOME_S_LOAD_ENERGY})
+    assert (result.dropped, result.rewritten) == ((), ())
+    assert (again.documents, again.dropped, again.rewritten) == (result.documents, (), ())
+
+
+_LOAD_ENERGIES_HOLDING_THEIR_HEAT_PUMP_S_TOTAL = [
+    pytest.param(_HEAT_PUMP_HOME_S_LOAD_ENERGY, PRE_S12_HEAT_PUMP_SUMMARY_FIGURES, id="a-heat-pump"),
+    pytest.param({"household": 36.0}, {}, id="no-heat-pump"),
+    pytest.param({}, {}, id="no-load"),
+]
+"""A summary's load_energy_kwh and the heat-pump figures beside it, as a save between task 897 and format 10 wrote them, each total its heat pump's energy or null: those of the summary of a heat-pump home, of a home with no heat pump, and an empty one, which v10 keeps too."""
+
+
+@pytest.mark.parametrize(("load_energy", "figures"), _LOAD_ENERGIES_HOLDING_THEIR_HEAT_PUMP_S_TOTAL)
+@pytest.mark.parametrize(("name", "stored_documents", "document"), _A_SUMMARY_OF_EACH_KIND)
+def test_v10_keeps_a_summary_s_load_energy_dropping_only_its_heat_pump_figures_reporting_nothing(
+    name: str,
+    stored_documents: Callable[[str], StoredRunDocuments],
+    document: str,
+    load_energy: dict[str, float],
+    figures: Mapping[str, float],
+) -> None:
+    v10 = _step(10)
+    run_type = fixture_run_type(name)
+    documents = _with_value(
+        _brought_forward_before(v10, run_type, stored_documents(name)), document, (_LOAD_ENERGY,), load_energy
+    )
+    for key, figure in figures.items():
+        documents = _with_value(documents, document, (key,), figure)
+
+    result = v10.apply(run_type, documents)
+
+    assert result.documents == _summaries_at_format_10(documents, run_type, {document: load_energy})
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+@pytest.mark.parametrize(
+    "load_energy",
+    [{"household": 36.0}, {"household": 34.0, "heat_pump": 1.5}],
+    ids=["no-heat-pump", "another-heat-pump"],
+)
+@pytest.mark.parametrize(("name", "stored_documents", "document"), _A_SUMMARY_OF_EACH_KIND)
+def test_v10_reports_a_dropped_heat_pump_total_its_summary_s_load_energy_does_not_hold(
+    name: str, stored_documents: Callable[[str], StoredRunDocuments], document: str, load_energy: dict[str, float]
+) -> None:
+    """The summary's load_energy_kwh is kept as it is, so the heat pump's total it does not hold is lost: v10 names it by its document."""
+    v10 = _step(10)
+    run_type = fixture_run_type(name)
+    brought_forward = _brought_forward_before(v10, run_type, stored_documents(name))
+    documents = _with_value(
+        _with_value(brought_forward, document, (_LOAD_ENERGY,), load_energy), document, ("total_heat_pump_load_kwh",), 2.0
+    )
+
+    result = v10.apply(run_type, documents)
+
+    assert result.documents == _summaries_at_format_10(documents, run_type, {document: load_energy})
+    assert result.dropped == (DroppedValue(name, document, "total_heat_pump_load_kwh", 2.0),)
+    assert result.rewritten == ()
+
+
+@pytest.mark.parametrize("key", ["total_demand_kwh", "total_heat_pump_load_kwh"])
+@pytest.mark.parametrize("value", ["2400.0", True], ids=["text", "bool"])
+def test_v10_leaves_a_summary_whose_demand_or_heat_pump_total_is_not_a_number_as_it_is(key: str, value: Any) -> None:
+    """The strict reader refuses it, naming the figure, and its run is left unmigrated."""
+    v10 = _step(10)
+    documents = _with_value(
+        _with_heat_pump_figures(_documents_before(v10, _PRE_867), "summary.json"), "summary.json", (key,), value
+    )
+
+    result = v10.apply("home", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v10_leaves_a_summary_holding_no_demand_as_it_is() -> None:
+    v10 = _step(10)
+    documents = _without(_documents_before(v10, _PRE_867), "summary.json", "total_demand_kwh")
+
+    result = v10.apply("home", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+@pytest.mark.parametrize("content", ["not an object", [1.23], None], ids=["text", "list", "null"])
+def test_v10_leaves_a_summary_that_is_not_an_object_as_it_is(content: Any) -> None:
+    v10 = _step(10)
+    documents = dataclasses.replace(
+        _documents_before(v10, "pre_469_home"), summary=StoredDocument("pre_469_home", "summary.json", content)
+    )
+
+    result = v10.apply("home", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+@pytest.mark.parametrize(("name", "stored_documents", "document"), _A_SUMMARY_OF_EACH_KIND)
+def test_v10_changes_none_of_its_input_documents(
+    name: str, stored_documents: Callable[[str], StoredRunDocuments], document: str
+) -> None:
+    v10 = _step(10)
+    run_type = fixture_run_type(name)
+    documents = _with_heat_pump_figures(_brought_forward_before(v10, run_type, stored_documents(name)), document)
+    before = copy.deepcopy(documents)
+
+    v10.apply(run_type, documents)
+
+    assert documents == before
+
+
+@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
+def test_v2_keeps_each_stored_summary_s_heat_pump_figures_for_v10_reporting_none(name: str) -> None:
+    """v10 carries a summary's heat-pump total into its load_energy_kwh, then drops the three figures, so v2, which drops each key a dataclass lacks, keeps them, null or not."""
+    run_type = fixture_run_type(name)
+    fixture = _fixture_documents(name)
+    holding_figures = fixture
+    for summary in _summary_documents(fixture, run_type):
+        holding_figures = _with_heat_pump_figures(holding_figures, summary.name)
+
+    def heat_pump_figures(stored: StoredRunDocuments) -> list[list[Any]]:
+        return [[summary.content[key] for key in _SUMMARY_HEAT_PUMP_KEYS] for summary in _summary_documents(stored, run_type)]
+
+    for documents in (fixture, holding_figures):
+        result = _V2.apply(run_type, documents)
+
+        assert heat_pump_figures(result.documents) == heat_pump_figures(documents)
+        assert [each for each in result.dropped if each.field in _SUMMARY_HEAT_PUMP_KEYS] == []
+
+
+def test_a_heat_pump_home_s_summary_stored_before_summaries_held_each_load_s_energy_reads_once_brought_forward() -> None:
+    """It reads as the summary whose heat pump drew its stored total, its share of the demand that total's."""
+    documents = _with_heat_pump_figures(_fixture_documents(_PRE_867), "summary.json")
+
+    summary = documents_in_current_format("home", documents).summary.read(SummaryStatistics)
+
+    assert summary.load_energy_kwh == {LoadKind.HOUSEHOLD: 3000.0, LoadKind.HEAT_PUMP: 2400.0}
+    assert summary.load_share(LoadKind.HEAT_PUMP) == pytest.approx(4 / 9)

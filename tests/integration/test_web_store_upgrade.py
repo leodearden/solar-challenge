@@ -50,6 +50,7 @@ from tests._stored_run_fixtures import (
     STORED_RUN_FIXTURES,
     fixture_run_type,
     fixture_summary_statistics_documents,
+    install_pre_s12_heat_pump_home,
     install_stored_run_fixture,
     stored_run_fixture_dir,
 )
@@ -332,3 +333,57 @@ def test_each_home_run_stored_with_a_seg_revenue_renders_without_it_once_migrate
     }
     assert again.exit_code == 0, again.output
     assert {run_id: _files_of_the_run(dashboard, run_id) for run_id in legacy_store.stored_runs} == files
+
+
+_SUMMARY_HEAT_PUMP_KEYS = ("total_heat_pump_load_kwh", "peak_heat_pump_load_kw", "heat_pump_load_ratio")
+"""The heat pump's figures a SummaryStatistics stored before format 10 holds, which `web migrate` drops, carrying the total into the summary's load_energy_kwh."""
+
+
+def test_a_heat_pump_home_stored_before_summaries_held_each_load_s_energy_renders_with_both_once_migrated_and_a_second_migrate_leaves_every_run_alone(
+    legacy_store: _LegacyStore, served_dashboards: list[Flask]
+) -> None:
+    """B9 of docs/prds/load-composition-and-calendar-days.md: no stored SummaryStatistics keeps a heat-pump figure, and each holds each load's energy.
+
+    The heat-pump copy's summary, in its run directory and its runs row alike, holds its
+    household's 3000 kWh and its heat pump's 2400; pre_469_home's holds its demand as its
+    household's; each fleet run's homes/home_<i>_summary.json loses the figures too. Each home
+    run's results page answers 200, and the second `web migrate` leaves every stored run's files
+    byte for byte.
+    """
+    copy_id = install_pre_s12_heat_pump_home(
+        Database(legacy_store.database), default_store_location().data_dir, run_id="pre-s12-heat-pump-home"
+    )
+    stored_runs = {**legacy_store.stored_runs, copy_id: "pre_867_round_trip_home"}
+    (pre_469_home,) = [run_id for run_id, name in legacy_store.stored_runs.items() if name == "pre_469_home"]
+
+    migrated = _web("migrate")
+    assert migrated.exit_code == 0, migrated.output
+    started = _web("start")
+    assert started.exit_code == 0, started.output
+    (dashboard,) = served_dashboards
+    client = dashboard.test_client()
+    rows = {row["id"]: row for row in _history_rows(client)}
+    home_runs = [run_id for run_id, name in stored_runs.items() if fixture_run_type(name) == "home"]
+    files = {run_id: _files_of_the_run(dashboard, run_id) for run_id in stored_runs}
+    runs_rows = runs_rows_of(legacy_store.database)
+    summaries = {
+        run_id: _summary_statistics_held(name, files[run_id], runs_rows[run_id]) for run_id, name in stored_runs.items()
+    }
+
+    again = _web("migrate")
+
+    assert [summary["load_energy_kwh"] for summary in summaries[copy_id]] == [
+        {"household": 3000.0, "heat_pump": 2400.0}
+    ] * 2
+    assert [summary["load_energy_kwh"] for summary in summaries[pre_469_home]] == [
+        {"household": summary["total_demand_kwh"]} for summary in summaries[pre_469_home]
+    ]
+    assert all(summaries.values()), summaries
+    assert {
+        run_id: [key for each in stored for key in _SUMMARY_HEAT_PUMP_KEYS if key in each]
+        for run_id, stored in summaries.items()
+    } == {run_id: [] for run_id in summaries}
+    pages = {run_id: client.get(rows[run_id]["results_url"]).status_code for run_id in home_runs}
+    assert copy_id in home_runs and pages == dict.fromkeys(home_runs, 200)
+    assert again.exit_code == 0, again.output
+    assert {run_id: _files_of_the_run(dashboard, run_id) for run_id in stored_runs} == files

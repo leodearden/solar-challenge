@@ -1396,6 +1396,26 @@ class TestSummaryStatistics:
         with pytest.raises(TypeError, match="seg_revenue_gbp"):
             SummaryStatistics(**_REQUIRED_FIGURES, seg_revenue_gbp=None)
 
+    @pytest.mark.parametrize("retired", ["total_heat_pump_load_kwh", "peak_heat_pump_load_kw", "heat_pump_load_ratio"])
+    def test_a_summary_takes_no_heat_pump_figure(self, retired: str) -> None:
+        """A heat pump's energy is its load_energy_kwh entry, its share load_share's, and its peak its run's own series', so a summary holds no second copy."""
+        with pytest.raises(TypeError, match=retired):
+            SummaryStatistics(**_REQUIRED_FIGURES, **{retired: 1.0})
+
+    def test_a_summary_takes_each_load_s_energy(self) -> None:
+        figures = {name: figure for name, figure in _REQUIRED_FIGURES.items() if name != "load_energy_kwh"}
+
+        with pytest.raises(TypeError, match="load_energy_kwh"):
+            SummaryStatistics(**figures)
+
+    def test_a_summary_takes_each_load_s_energy_by_keyword_alone(self) -> None:
+        """A caller passing every field by position, each load's energy where it is declared last, lands no mapping in another field: it is refused."""
+        figures = [figure for name, figure in _REQUIRED_FIGURES.items() if name != "load_energy_kwh"]
+        defaults = ["self_consumption", 0.0, 0.0, None, None]
+
+        with pytest.raises(TypeError, match="positional argument"):
+            SummaryStatistics(*figures, *defaults, {LoadKind.HOUSEHOLD: 80.0})
+
     def test_a_summarys_simulation_days_are_its_windows_days(self):
         assert home_summary(window=_TWO_JUNE_DAYS).simulation_days == 2
 
