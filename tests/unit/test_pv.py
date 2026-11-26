@@ -589,13 +589,11 @@ class TestBatteryInverterChargersAreNotPicked:
     (docs/pv-inverter-string-matching.md §7).
     """
 
-    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
     @pytest.mark.parametrize("config", NEAREST_RATED_TO_A_BATTERY_INVERTER_CONFIGS, ids=_config_id)
     def test_strings_deliver_a_clear_summer_days_dc_energy_above_the_mppt_floor(
         self, config: PVConfig
     ) -> None:
-        chain = create_model_chain(config, Location.bristol())
-        chain.run_model(clear_june_daytime())
+        chain = run_model_chain(create_model_chain(config, Location.bristol()), clear_june_daytime())
         floor_v = chain.system.inverter_parameters["Mppt_low"]
 
         arrays = per_array(chain.results.dc)
@@ -1468,7 +1466,6 @@ class TestSystemLossesAndAgeingReachTheInverterAsDCPower:
             f"{kwh:.4f} kWh of the same system's new and lossless {reference_kwh:.4f} kWh"
         )
 
-    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
     @pytest.mark.parametrize(
         ("system_age_years", "degradation_factor"), AGES_AND_DEGRADATION_FACTORS
     )
@@ -1494,8 +1491,8 @@ class TestSystemLossesAndAgeingReachTheInverterAsDCPower:
         )
 
         weather = clear_june_daytime()
-        chain.run_model(weather)
-        reference.run_model(weather)
+        run_model_chain(chain, weather)
+        run_model_chain(reference, weather)
 
         kept = (1 - config.system_losses) * degradation_factor
         for dc, reference_dc in zip(
@@ -1505,7 +1502,6 @@ class TestSystemLossesAndAgeingReachTheInverterAsDCPower:
             np.testing.assert_allclose(dc["i_mp"], reference_dc["i_mp"] * kept)
             pd.testing.assert_series_equal(dc["v_mp"], reference_dc["v_mp"])
 
-    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
     @pytest.mark.parametrize(
         ("config", "degradation_factor"),
         [
@@ -1525,7 +1521,7 @@ class TestSystemLossesAndAgeingReachTheInverterAsDCPower:
         """results.losses holds the kept fraction, as pvlib's own losses models record it: 1 with no loss."""
         chain = create_model_chain(config, Location.bristol())
 
-        chain.run_model(clear_june_daytime())
+        run_model_chain(chain, clear_june_daytime())
 
         assert chain.results.losses == pytest.approx(
             (1 - config.system_losses) * degradation_factor
