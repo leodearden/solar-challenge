@@ -1066,9 +1066,8 @@ kW of battery discharge, under a headline of the band's time-shift plus it; a
 scenario that prices no grid services shows the band's consulting figure there,
 labelled not booked (docs/flexibility-buildability.md §1)
 (`tests/unit/test_gridservices.py::TestDisplacedEveningSelfUse`;
-`tests/unit/test_board_report_grid_services.py`, whose
-`TestGridServicesIncomeSection::test_with_several_event_windows_no_per_window_figure_is_summed`
-holds the several-window rule;
+`tests/unit/test_board_report_grid_services.py`, the several-window rule in
+`tests/unit/test_board_report_grid_services.py::TestGridServicesIncomeSection::test_with_several_event_windows_no_per_window_figure_is_summed`;
 `tests/integration/test_grid_services_events.py::test_b10_finance_run_renders_the_booked_grid_services_income_with_the_economics`,
 `tests/integration/test_grid_services_events.py::test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement`).
 
