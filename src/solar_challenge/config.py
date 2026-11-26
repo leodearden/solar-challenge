@@ -638,6 +638,17 @@ def substitute_config_variables(
     return substitution.document(supplied)
 
 
+def config_variables(config: Mapping[str, Any]) -> tuple[str, ...]:
+    """The variable each placeholder of *config* names, each once, in document order, defaulted or not.
+
+    Raises:
+        ConfigurationError: naming its key path and its variable, for a placeholder inside a
+            longer string or a default that is not a finite number, as substitute_config_variables
+            refuses them.
+    """
+    return tuple(dict.fromkeys(each.name for each in _substitute_mapping(config, {}, "").placeholders))
+
+
 def load_config_yaml(path: Union[str, Path]) -> dict[str, Any]:
     """Load configuration from a YAML file.
 
