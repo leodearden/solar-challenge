@@ -255,6 +255,9 @@ class SimulationResults:
             SeriesRefused, a household entry, an entry off demand's rows, and additional
             loads that exceed demand by more than 1e-9 kW in a row, naming that row. loads holds the household's
             load, demand less these, beside them.
+        battery_export: Optional power the battery sent to the grid in kW, a part of both
+            battery_discharge and grid_export (None when no row of the run exported battery
+            energy)
     """
 
     generation: pd.Series = field(metadata=_power("generation_kw", "generation_kwh"))
@@ -276,6 +279,7 @@ class SimulationResults:
     pricing: Optional[RunPricing] = None
     grid_charge_forecast: Optional[GridChargeForecast] = None
     additional_loads: Mapping[LoadKind, pd.Series] = field(default_factory=lambda: PerLoad({}))
+    battery_export: Optional[pd.Series] = field(default=None, metadata=_power("battery_export_kw", "battery_export_kwh"))
 
     def __post_init__(self) -> None:
         """Name each set series after its column, without renaming the series it was built from, and settle the additional loads.
@@ -833,6 +837,9 @@ def _results(
         pricing=pricing,
         grid_charge_forecast=grid_charge_forecast,
         additional_loads=additional_loads,
+        battery_export=(
+            power_kw(lambda flow: flow.battery_export) if any(flow.battery_export > 0 for flow in flows) else None
+        ),
     )
 
 

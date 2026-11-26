@@ -363,11 +363,18 @@ def _simulated(home: HomeConfig, day_id: str, strategy: DispatchStrategy) -> Sim
     )
 
 
+# A base that keeps the battery's charge for its 16:00 to 20:00 peak, so the battery has charge to export from 17:00
+# even on the sunless day, which self-consumption would have drained by then.
+_BASE_HOLDING_FOR_THE_PEAK = TOUOptimizedStrategy([(16, 20)])
+
+
 @functools.cache
 def _exporting_run(day_id: str) -> SimulationResults:
-    """_HOME on _HOME_DAYS[day_id] under self-consumption, exporting all it may from 17:00 to 19:00, simulated once for every test that reads it."""
+    """_HOME on _HOME_DAYS[day_id] under _BASE_HOLDING_FOR_THE_PEAK, exporting all it may from 17:00 to 19:00, simulated once for every test that reads it."""
     assert _HOME.battery_config is not None
-    return _simulated(_HOME, day_id, _ExportingStrategy(SelfConsumptionStrategy(), _EXPORT_HOURS, _HOME.battery_config))
+    return _simulated(
+        _HOME, day_id, _ExportingStrategy(_BASE_HOLDING_FOR_THE_PEAK, _EXPORT_HOURS, _HOME.battery_config)
+    )
 
 
 def _battery_export_kw(results: SimulationResults) -> pd.Series:
