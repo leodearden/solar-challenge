@@ -1,6 +1,6 @@
 # PV System Losses: PVWatts v5's Default Budget on Each Array's DC Power
 
-**Task:** #252
+**Task:** #252; ageing #284, ported by #810
 **Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig.system_losses`, `create_model_chain_picking_from`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py) (§5); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
@@ -13,6 +13,11 @@
   as pvlib's losses model, which runs between the DC and AC models: each array's
   maximum-power-point power and current are scaled by `1 - system_losses`, and its
   voltage stays as the module model computed it.
+- The same step applies the modules' ageing. It scales each array's DC power and current
+  by one kept fraction,
+  `(1 - system_losses) * calculate_degradation_factor(system_age_years, degradation_rate_per_year)`,
+  the two combined as PVWatts combines its categories (§2), and the chain's
+  `results.losses` records that fraction, as pvlib's own losses models record theirs.
 - The default is `pvlib.pvsystem.pvwatts_losses() / 100`, 14.08% (0.14075660688264469 in
   pvlib 0.15.1). A value outside [0, 1) raises `ValueError`, so 14.0, the percent that
   PVGIS and PVWatts take, is refused.
@@ -51,8 +56,9 @@ model's annual performance ratio lands on the two UK references (§5):
 ## 3. What It Excludes, and Why
 
 - Inverter, temperature and angle-of-incidence losses: the model computes them.
-- Ageing: `system_age_years × degradation_rate_per_year` applies it, and PVWatts' age
-  category is 0.
+- Ageing: it is not in the budget, whose Age category is 0. The same DC step applies it
+  as its own factor,
+  `calculate_degradation_factor(system_age_years, degradation_rate_per_year)` (§1, §4).
 - PVGIS's 14%: per the PVGIS user manual it covers cable, inverter, dirt and
   lifetime-ageing losses, for a model with no inverter of its own, so here its inverter
   and ageing shares would count twice. Its total happens to be close to PVWatts' (14 and
@@ -82,6 +88,23 @@ model's annual performance ratio lands on the two UK references (§5):
   `losses_model='pvwatts'` multiplies the whole DC frame, `v_mp` and `v_oc` included, so
   it would move that voltage by 14%; it also reads its categories from the `PVSystem`,
   not one fraction.
+
+Ageing applies on the DC side for the same reason, so an aged inverter-limited array
+still clips at its rating. This is a dated record: 2026-11-26, task 810's step-2 commit
+("age each array's DC power before the inverter, in the model chain's losses step") on
+its branch from main 565664b0, CPython 3.12.3, pvlib 0.15.1, pandas 3.1.1, numpy 2.4.6,
+Bristol's scaled TMY (weather cache entry `tmy_f8a4df0259c4`, GHI 1069.46 kWh/m²,
+[tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)), with every array's cells at
+NOCT-SAM's temperature ([pv-cell-temperature.md](pv-cell-temperature.md)). As a fraction
+of the same system's annual AC when new, at age 20 (factor 0.90), 6 kW on a 3.68 kW
+inverter keeps 0.9186 and still peaks at 3.680 kW, where a derate of the AC keeps 0.9000
+and peaks at 3.312 kW; 8 kW on 3.68 kW keeps 0.9352. The default sizes (3, 3.68, 4, 5
+and 6 kW, with the inverter at the DC capacity) keep 0.8984, 0.8979, 0.8990, 0.8991 and
+0.8976, a little under the factor, because the inverter's efficiency falls at part load.
+Task 284 read 0.9165 for 6 kW on 3.68 kW under SAPM's cell temperature, before task 823.
+To re-measure, compare `simulate_pv_output`'s annual sum and peak for a config at
+`system_age_years` 20.0 and 0.0 on that TMY, read offline with
+`PvgisTmy(WeatherCache(<the main checkout's .cache/weather>)).get(Location.bristol())`.
 
 ## 5. Measurements
 
@@ -163,7 +186,6 @@ PVGIS-14% 0.793–0.815.
   `home run --system-losses` (§1). A fleet's `pv:` distribution draws it after task 919
   (S7 δ). The fleet page has no input for it, and `home quick` takes no PV setting but
   capacity.
-- **Task 284:** ageing is applied to the AC after clipping, not to the DC.
 
 ## 8. When to Revisit
 

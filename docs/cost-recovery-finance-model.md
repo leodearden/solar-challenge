@@ -910,8 +910,8 @@ single-year sum also charges debt service in the ten debt-free years 15–24, wo
 and PCHIP returns that constant.  PV degradation (0.5 %/yr, §7.2) shows only in
 `YearPoint.pv_soh` (1.00 at year 0 → 0.88 at year 24), because the injected results
 ignore the aged home configs.  On a real-physics run, degradation lowers later-year
-generation (`_aged_homes` → `simulate_pv_output` → `apply_degradation`), which would
-raise `r*`, not lower it.
+generation (`_aged_homes` → `simulate_pv_output`, which ages each array's DC power before
+the inverter), which would raise `r*`, not lower it.
 
 **The key structural result is exact.**  At binding = 'floor' the closed-form affine solve
 returns `net_surplus_per_home_per_year_gbp == floor` to float ε, regardless of the rate
