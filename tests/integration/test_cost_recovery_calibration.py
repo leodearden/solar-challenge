@@ -27,6 +27,7 @@ from solar_challenge.finance import (
     basis_c_own_use_kwh,
     bill_distribution,
 )
+from solar_challenge.gridservices import NoGridServices
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
 from solar_challenge.projection import (
@@ -38,6 +39,7 @@ from solar_challenge.projection import (
     scenario_fleet,
     solve_cost_recovery_rate,
 )
+from solar_challenge.scenario_knobs import flat_rate_pricing
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
@@ -123,7 +125,7 @@ def _make_finance_cr6(
     """_make_finance_fin_cr6's [FIN] finance, with the five fields CR6's interior and flex regimes vary replaced."""
     return dataclasses.replace(
         _make_finance_fin_cr6(),
-        grid_services_income_per_kw_per_year_gbp=grid_services,
+        grid_services_model=flat_rate_pricing(grid_services),
         retained_cash_floor_per_home_per_year_gbp=retained_cash_floor,
         retail_baseline_rate_pence_per_kwh=retail_rate,
         pv_cost_per_kwp_gbp=pv_cost_per_kwp,
@@ -151,11 +153,8 @@ def _surplus_the_bills_fund_cr6(
         f"per-home outlays range £{min(outlays):.6f} to £{max(outlays):.6f}, "
         "so the representative bill does not stand for every home"
     )
-    assert finance.grid_services_model == "flat", (
-        f"grid services are priced by the {finance.grid_services_model!r} model, not the flat rate"
-    )
-    assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, (
-        f"grid services earn £{finance.grid_services_income_per_kw_per_year_gbp}/kW/yr"
+    assert finance.grid_services_model == NoGridServices(), (
+        f"grid services are priced by {finance.grid_services_model!r}, not at no grid-services income"
     )
     export_revenues_gbp = [
         calculate_summary(r).total_export_revenue_gbp for r in fleet.per_home_results

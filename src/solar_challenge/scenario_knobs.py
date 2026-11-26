@@ -14,7 +14,9 @@ from solar_challenge.battery import BatteryConfig, has_battery
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import FlatGridServices, GridServicesEventsConfig, GridServicesModel, NoGridServices
 from solar_challenge.home import HomeConfig
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float
 
 
 @dataclass(frozen=True)
@@ -82,17 +84,62 @@ def _with_seg_rate(scenario: ScenarioConfig, rate: float) -> ScenarioConfig:
     return replace(scenario, seg_tariff_pence_per_kwh=rate)
 
 
+def _required_finance(scenario: ScenarioConfig, knob_name: str, field: str) -> FinanceConfig:
+    """*scenario*'s finance block, which the knob *knob_name* edits at *field*, refusing a scenario without one by the knob's, the field's and the scenario's names."""
+    if scenario.finance is None:
+        raise ConfigurationError(
+            f"Knob {knob_name!r} sets finance.{field}, but scenario {scenario.name!r} has no finance block"
+        )
+    return scenario.finance
+
+
 def _finance_knob(field: str) -> Knob:
     """The knob that sets the FinanceConfig field *field* of a scenario's finance block."""
 
     def apply(scenario: ScenarioConfig, value: float) -> ScenarioConfig:
-        if scenario.finance is None:
-            raise ConfigurationError(
-                f"Knob {field!r} sets finance.{field}, but scenario {scenario.name!r} has no finance block"
-            )
-        return replace(scenario, finance=replace(scenario.finance, **{field: value}))  # type: ignore[arg-type]  # debt: ticket tkt_0RXDDPSS2PASXMGCK3XCD1FW0A
+        finance = _required_finance(scenario, field, field)
+        return replace(scenario, finance=replace(finance, **{field: value}))  # type: ignore[arg-type]  # debt: ticket tkt_0RXDDPSS2PASXMGCK3XCD1FW0A
 
     return Knob(field, apply)
+
+
+_FLAT_GRID_SERVICES_KNOB = "grid_services_income_per_kw_per_year_gbp"
+
+FLAT_RATE_UNREAD_UNDER_EVENTS = (
+    f"the flat grid-services rate, {_FLAT_GRID_SERVICES_KNOB}, "
+    "which the scenario's capacity_at_events grid_services_model does not read"
+)
+"""Why the flat grid-services knob, and every flag or axis that sets it, has nothing to set under capacity-at-events pricing: the clause each such refusal quotes."""
+
+FLAT_PRICING_REMEDY = "set the scenario's finance.grid_services_model to type: flat"
+"""The form to write that each refusal of the flat rate under capacity-at-events pricing ends with."""
+
+
+def flat_rate_pricing(rate: float) -> GridServicesModel:
+    """The grid-services pricing the flat rate *rate* (£/kW/yr) stands for: NoGridServices() at exactly 0, else FlatGridServices(rate).
+
+    Raises:
+        ConfigurationError: If *rate* is not a finite number at least 0,
+            naming the flat grid-services knob.
+    """
+    income = as_finite_float(rate, _FLAT_GRID_SERVICES_KNOB, NON_NEGATIVE)
+    return NoGridServices() if income == 0 else FlatGridServices(income)
+
+
+def _with_flat_grid_services(scenario: ScenarioConfig, rate: float) -> ScenarioConfig:
+    """*scenario* priced at :func:`flat_rate_pricing` of *rate*.
+
+    Raises:
+        ConfigurationError: If *scenario* has no finance block, or its
+            finance prices capacity at events, which reads no flat rate; or
+            if flat_rate_pricing refuses *rate*.
+    """
+    finance = _required_finance(scenario, _FLAT_GRID_SERVICES_KNOB, "grid_services_model")
+    if isinstance(finance.grid_services_model, GridServicesEventsConfig):
+        raise ConfigurationError(
+            f"Scenario {scenario.name!r} cannot take {FLAT_RATE_UNREAD_UNDER_EVENTS}; {FLAT_PRICING_REMEDY}"
+        )
+    return replace(scenario, finance=replace(finance, grid_services_model=flat_rate_pricing(rate)))
 
 
 def _real_number_finance_fields() -> tuple[str, ...]:
@@ -101,9 +148,6 @@ def _real_number_finance_fields() -> tuple[str, ...]:
     return tuple(
         field.name for field in dataclasses.fields(FinanceConfig) if hints[field.name] in (float, Optional[float])
     )
-
-
-_LEADING_FINANCE_FIELDS = ("grid_services_income_per_kw_per_year_gbp",)
 
 
 def _registry(
@@ -138,17 +182,13 @@ KNOBS, ALIASES = _registry(
         _home_knob("annual_consumption_kwh", _with_annual_consumption),
         _home_knob("degradation_rate_per_year", _with_pv_degradation),
         Knob("seg_tariff_pence_per_kwh", _with_seg_rate),
-        *(_finance_knob(field) for field in _LEADING_FINANCE_FIELDS),
-        *(
-            _finance_knob(field)
-            for field in _real_number_finance_fields()
-            if field not in _LEADING_FINANCE_FIELDS
-        ),
+        Knob(_FLAT_GRID_SERVICES_KNOB, _with_flat_grid_services),
+        *(_finance_knob(field) for field in _real_number_finance_fields()),
     ),
     {
         "degradation": "degradation_rate_per_year",
         "seg": "seg_tariff_pence_per_kwh",
-        "grid_services": "grid_services_income_per_kw_per_year_gbp",
+        "grid_services": _FLAT_GRID_SERVICES_KNOB,
         "retained_floor": "retained_cash_floor_per_home_per_year_gbp",
         "battery_cost": "battery_cost_per_kwh_gbp",
         "pv_cost": "pv_cost_per_kwp_gbp",

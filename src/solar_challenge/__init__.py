@@ -79,6 +79,9 @@ __all__: list[str] = [
     "compute_grid_services_at_events",
     "GRID_SERVICES_RATE_BANDS",
     "DEFAULT_EVENT_WINDOWS",
+    "GridServicesBand",
+    "NoGridServices",
+    "FlatGridServices",
     # --- community (community.py) ---
     "CommunityConfig",
     "CommunityBillingConfig",
@@ -175,6 +178,9 @@ _SYMBOL_MODULE: dict[str, str] = {
     "compute_grid_services_at_events": "gridservices",
     "GRID_SERVICES_RATE_BANDS": "gridservices",
     "DEFAULT_EVENT_WINDOWS": "gridservices",
+    "GridServicesBand": "gridservices",
+    "NoGridServices": "gridservices",
+    "FlatGridServices": "gridservices",
     # community
     "CommunityConfig": "community",
     "CommunityBillingConfig": "community",
@@ -337,6 +343,9 @@ if TYPE_CHECKING:
     from solar_challenge.gridservices import compute_grid_services_at_events as compute_grid_services_at_events
     from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS as GRID_SERVICES_RATE_BANDS
     from solar_challenge.gridservices import DEFAULT_EVENT_WINDOWS as DEFAULT_EVENT_WINDOWS
+    from solar_challenge.gridservices import GridServicesBand as GridServicesBand
+    from solar_challenge.gridservices import NoGridServices as NoGridServices
+    from solar_challenge.gridservices import FlatGridServices as FlatGridServices
     # community
     from solar_challenge.community import CommunityConfig as CommunityConfig
     from solar_challenge.community import CommunityBillingConfig as CommunityBillingConfig

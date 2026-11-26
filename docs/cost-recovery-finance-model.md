@@ -436,11 +436,11 @@ seg_revenue       = Σ_homes ℓ_h.seg_income_gbp
                     both rates.
 
 grid_services_income(t) = M.annual_income_gbp(F_t)
-    M   = grid_services_model_of(finance), resolved once, before any simulation
+    M   = finance.grid_services_model, read once, before any simulation
     F_t = the fleet simulated at age t
   NoGridServices()    → 0
-  FlatGridServices(r) → r × Σ_{battery homes of F_t} max_discharge_kw
-  grid_services_model = "capacity_at_events", the GridServicesEventsConfig:
+  FlatGridServices(g) → g × Σ_{battery homes of F_t} max_discharge_kw
+  a GridServicesEventsConfig as grid_services_model:
                       → Σ_w avail_w(F_t) × (a × N_w + u × h_w × U / 1000 × N_w) × (1 − s)
     avail_w = compute_fleet_spare_capacity_kw(F_t, windows, delivery_baseline)[w],
               the mean over event window w's event days of the fleet's firm
@@ -579,7 +579,7 @@ discharge and cumulative throughput, `project_multi_year` refuses the age, raisi
 
 **No-flex identity** (flat-rate fleet, grid_services = 0):
 
-When `grid_services_income_per_kw_per_year_gbp=0.0` and no SEG rate priced the
+When there is no grid-services income (`grid_services_model = NoGridServices()`) and no SEG rate priced the
 fleet's runs (`RunPricing.seg_rate_pence_per_kwh` None; synthetic SEG-free fleet):
 
 ```
@@ -824,7 +824,7 @@ and spells the other values, and CR6's anchor builds it with no self-consumption
 | `retail_baseline_rate_pence_per_kwh` | 23 p/kWh |
 | `vat_rate` | 5 % |
 | `standing_charge_pence_per_day` | 60 p/day (`make_fin_finance` sets it to 60; a required `FinanceConfig` field) |
-| `grid_services_income_per_kw_per_year_gbp` | £0 (no-flex) |
+| `grid_services_model` | `NoGridServices()` (no-flex) |
 | PV degradation rate (`PVConfig.degradation_rate_per_year`) | 0.5 %/yr (0.005, linear; default in `calculate_degradation_factor`) |
 
 ### 7.3 Live Calibration Output (REPORTED — not pinned)
@@ -973,12 +973,12 @@ aggregates (§8.2).
 
 ### 8.1 Grid-Services Income (Flat £/kW/yr or Capacity at Events)
 
-Under the flat model, `FinanceConfig.grid_services_income_per_kw_per_year_gbp`
-is a W1-filled field.  At each projection year:
+Under the flat model, `FinanceConfig.grid_services_model = FlatGridServices(g)`,
+where g, the pricing's `income_per_kw_per_year_gbp`, is a W1-filled rate (£/kW/yr).
+At each projection year:
 
 ```
-grid_services_income = grid_services_income_per_kw_per_year_gbp
-                       × Σ_homes battery.max_discharge_kw
+grid_services_income = g × Σ_homes battery.max_discharge_kw
 ```
 
 A positive value increases `fleet_revenue_gbp` without changing householder
@@ -991,7 +991,7 @@ r*(flex) = r*(no-flex) − grid_services_income / (fleet_billed_own_use / 100)  
 This directional property is hard-asserted in
 `tests/integration/test_cost_recovery_calibration.py::TestFlexLowersSolvedRate::test_grid_services_lowers_solved_rate`.
 
-Under `grid_services_model = "capacity_at_events"` the income is §4's
+Under a `GridServicesEventsConfig` as `grid_services_model` the income is §4's
 capacity-at-events term, priced at each projection age from that age's simulated
 fleet: £9.97 per kW of firm spare capacity per year in the central band (§4).
 
@@ -1010,7 +1010,7 @@ avail_w     = mean over w's event days d of A(d)      the figure §4 prices
 ```
 
 `GridServicesEventsConfig.delivery_baseline` names the baseline, and the
-scenario key `grid_services_events.delivery_baseline` sets it: `"operational"`,
+scenario key `grid_services_model.delivery_baseline` sets it: `"operational"`,
 the default, or `"capacity"`; any other value is refused with a
 `ConfigurationError` naming both. Each mirrors a product. `operational` counts the
 increment above the battery's own discharge, as NESO's Demand Flexibility

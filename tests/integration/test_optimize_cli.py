@@ -1081,10 +1081,7 @@ class TestOptimizeCLIE2EFast:
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5"],
             n_homes=1,
-            finance_overrides={
-                "grid_services_model": "capacity_at_events",
-                "grid_services_events": {"band": "central"},
-            },
+            finance_overrides={"grid_services_model": {"type": "capacity_at_events", "band": "central"}},
         )
 
         stderr = " ".join(result.stderr.split())
@@ -1331,7 +1328,7 @@ class TestOptimizeCLIE2EFast:
         assert 6.0 not in grid_band, f"The premise needs 6.0 outside the grid-services band {grid_band}"
         finance_overrides: dict[str, object] = {
             "retained_cash_floor_per_home_per_year_gbp": 27.0,
-            "grid_services_income_per_kw_per_year_gbp": 6.0,
+            "grid_services_model": {"type": "flat", "income_per_kw_per_year_gbp": 6.0},
         }
         options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
         sweep_only, one_sweeps_fleets = self._invoke_configs(
@@ -1361,7 +1358,7 @@ class TestOptimizeCLIE2EFast:
         """C9: --retained-floor at the scenario's own floor of 27 is the scenario's floor, so the run reports and simulates exactly as it does without the flag."""
         finance_overrides: dict[str, object] = {
             "retained_cash_floor_per_home_per_year_gbp": 27.0,
-            "grid_services_income_per_kw_per_year_gbp": 6.0,
+            "grid_services_model": {"type": "flat", "income_per_kw_per_year_gbp": 6.0},
         }
         options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
         without_flag, fleets_without_flag = self._invoke_configs(
@@ -1463,7 +1460,8 @@ def test_without_sensitivity_under_the_events_model_a_status_line_names_grid_ser
     assert isinstance(result.exception, ReachedTheSweep), result.output
     assert (
         "Sensitivity axis grid_services omitted from the default: it sweeps the flat grid-services rate, "
-        "grid_services_income_per_kw_per_year_gbp, which grid_services_model='capacity_at_events' does not read."
+        "grid_services_income_per_kw_per_year_gbp, which the scenario's capacity_at_events grid_services_model "
+        "does not read."
     ) in stderr
     assert "Sensitivity axis retained_floor" not in stderr
 

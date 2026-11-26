@@ -15,11 +15,14 @@ from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import FlatGridServices, GridServicesEventsConfig, NoGridServices
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.scenario_knobs import (
     ALIASES,
+    FLAT_PRICING_REMEDY,
     KNOBS,
     Knob,
+    flat_rate_pricing,
     is_knob_name,
     knob_listing,
     knob_named,
@@ -109,6 +112,7 @@ _HOME_TARGETS = {
     "degradation_rate_per_year": "pv_config.degradation_rate_per_year",
 }
 _SCENARIO_TARGETS = {"seg_tariff_pence_per_kwh": "seg_tariff_pence_per_kwh"}
+_PRICING_TARGETS = {"grid_services_income_per_kw_per_year_gbp": "finance.grid_services_model"}
 _FINANCE_FIELD_NAMES = frozenset(field.name for field in dataclasses.fields(FinanceConfig))
 
 
@@ -118,6 +122,8 @@ def _target(knob: Knob) -> re.Pattern[str]:
         return re.compile(rf"(home|homes\[\d+\])\.{re.escape(_HOME_TARGETS[knob.name])}([.\[].*)?")
     if knob.name in _SCENARIO_TARGETS:
         return re.compile(re.escape(_SCENARIO_TARGETS[knob.name]))
+    if knob.name in _PRICING_TARGETS:
+        return re.compile(rf"{re.escape(_PRICING_TARGETS[knob.name])}(\..*)?")
     if knob.name in _FINANCE_FIELD_NAMES:
         return re.compile(rf"finance\.{re.escape(knob.name)}")
     pytest.fail(f"knob {knob.name!r} has no target in this test's table")
@@ -225,7 +231,6 @@ _REAL_NUMBER_FINANCE_FIELDS = {
     "opex_per_home_per_year_gbp",
     "own_use_rate_pence_per_kwh",
     "retained_cash_floor_per_home_per_year_gbp",
-    "grid_services_income_per_kw_per_year_gbp",
 }
 
 
@@ -270,7 +275,7 @@ class TestNames:
         assert [name for name in (*KNOBS, *ALIASES) if name not in message] == []
 
     def test_the_finance_knobs_are_financeconfigs_real_number_fields(self) -> None:
-        """The year counts, grid_services_model and grid_services_events are not knobs; every real-number finance field is."""
+        """The year counts and grid_services_model are not knobs; every real-number finance field is."""
         assert {field.name for field in dataclasses.fields(FinanceConfig)} & set(KNOBS) == _REAL_NUMBER_FINANCE_FIELDS
 
     def test_names_with_aliases_names_each_knob_given_with_its_aliases(self) -> None:
@@ -315,12 +320,71 @@ class TestFinanceKnobs:
         assert new.finance.pv_cost_per_kwp_gbp == pytest.approx(scenario.finance.pv_cost_per_kwp_gbp)
         assert scenario.finance.battery_cost_per_kwh_gbp == pytest.approx(old_battery_cost)
 
-    def test_grid_services_sets_the_flat_grid_services_income(self) -> None:
-        """grid_services lands on the returned finance's grid_services_income_per_kw_per_year_gbp."""
+    def test_grid_services_prices_the_copy_at_the_flat_rate_it_is_given(self) -> None:
+        """grid_services sets the returned finance's grid_services_model to FlatGridServices at the rate."""
         new = knob_named("grid_services").apply(_default_fleet(), 42.0)
 
         assert new.finance is not None
-        assert new.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(42.0)
+        assert new.finance.grid_services_model == FlatGridServices(42.0)
+
+    def test_grid_services_at_zero_prices_the_copy_at_no_grid_services(self) -> None:
+        """A zero rate is NoGridServices, which FlatGridServices refuses to stand for."""
+        scenario = _default_fleet()
+        assert scenario.finance is not None
+        scenario = dataclasses.replace(
+            scenario, finance=dataclasses.replace(scenario.finance, grid_services_model=FlatGridServices(12.0))
+        )
+
+        new = knob_named("grid_services").apply(scenario, 0.0)
+
+        assert new.finance is not None
+        assert new.finance.grid_services_model == NoGridServices()
+
+    @pytest.mark.parametrize(
+        ("rate", "pricing"), [(0.0, NoGridServices()), (12.0, FlatGridServices(12.0))]
+    )
+    def test_flat_rate_pricing_is_no_grid_services_at_zero_and_the_flat_rate_above(
+        self, rate: float, pricing: object
+    ) -> None:
+        """flat_rate_pricing is the one rule the knob, and a builder priced at a flat rate, read a rate through."""
+        assert flat_rate_pricing(rate) == pricing
+
+    @pytest.mark.parametrize(
+        ("rate", "requirement"),
+        [(-1.0, "at least 0"), (float("nan"), "a finite number"), (float("inf"), "a finite number")],
+    )
+    def test_grid_services_refuses_a_rate_below_zero_or_not_finite_naming_itself_and_the_bound_it_applies(
+        self, rate: float, requirement: str
+    ) -> None:
+        """The knob takes 0 as no grid services, so it refuses below 0 itself, under its own name, rather than leaving FlatGridServices to refuse 0 and below."""
+        with pytest.raises(ConfigurationError) as refused:
+            knob_named("grid_services").apply(_default_fleet(), rate)
+
+        assert str(refused.value) == f"grid_services_income_per_kw_per_year_gbp must be {requirement}, got {rate!r}"
+
+    def test_grid_services_leaves_the_argument_scenario_unchanged(self) -> None:
+        scenario = _default_fleet()
+        before = copy.deepcopy(scenario)
+
+        knob_named("grid_services").apply(scenario, 42.0)
+
+        assert scenario == before
+
+    def test_grid_services_under_the_events_model_is_refused_naming_the_knob_and_the_model(self) -> None:
+        """The capacity-at-events model reads no flat rate, so the knob refuses rather than silently replacing the model."""
+        scenario = _default_fleet()
+        assert scenario.finance is not None
+        scenario = dataclasses.replace(
+            scenario, finance=dataclasses.replace(scenario.finance, grid_services_model=GridServicesEventsConfig())
+        )
+
+        with pytest.raises(ConfigurationError) as refused:
+            knob_named("grid_services").apply(scenario, 42.0)
+
+        assert "grid_services_income_per_kw_per_year_gbp" in str(refused.value)
+        assert "capacity_at_events" in str(refused.value)
+        assert repr(scenario.name) in str(refused.value)
+        assert str(refused.value).endswith(FLAT_PRICING_REMEDY)
 
     def test_a_finance_knob_on_a_scenario_without_finance_is_refused_naming_the_knob_and_the_scenario(self) -> None:
         """With finance None the knob raises ConfigurationError naming itself and the scenario, not a TypeError."""

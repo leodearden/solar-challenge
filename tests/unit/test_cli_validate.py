@@ -253,7 +253,7 @@ def _flex_document_with_infinite_event_hours() -> dict[str, Any]:
     """scenarios/bristol-phase1-flex.yaml as loaded, its first event window's event_hours infinite."""
     flex = SCENARIOS_DIR / "bristol-phase1-flex.yaml"
     document: dict[str, Any] = yaml.safe_load(flex.read_text())
-    document["finance"]["grid_services_events"]["event_windows"][0]["event_hours"] = float("inf")
+    document["finance"]["grid_services_model"]["event_windows"][0]["event_hours"] = float("inf")
     return document
 
 
@@ -605,9 +605,9 @@ home:
             ),
             pytest.param(
                 yaml.safe_dump(_flex_document_with_infinite_event_hours()),
-                "finance.grid_services_events.event_windows[0]",
+                "finance.grid_services_model.event_windows[0]",
                 lambda: EventWindow(
-                    **_flex_document_with_infinite_event_hours()["finance"]["grid_services_events"]["event_windows"][0]
+                    **_flex_document_with_infinite_event_hours()["finance"]["grid_services_model"]["event_windows"][0]
                 ),
                 id="flex-fleet-event-hours-infinite",
             ),

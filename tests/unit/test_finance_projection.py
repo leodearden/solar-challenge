@@ -403,9 +403,7 @@ def _projection_priced_at_events() -> tuple[FleetProjection, dict[int, FleetResu
     scenario, finance = make_scenario_and_finance(
         n_homes=2, asset_life_years=25, battery_config=BatteryConfig(capacity_kwh=5.0)
     )
-    finance = dataclasses.replace(
-        finance, grid_services_model="capacity_at_events", grid_services_events=_EVENTS_PRICING
-    )
+    finance = dataclasses.replace(finance, grid_services_model=_EVENTS_PRICING)
     simulate, answered = _spare_battery_simulate()
     return project_fleet(scenario_fleet(scenario), finance, simulate=simulate), answered
 

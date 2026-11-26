@@ -348,9 +348,8 @@ def _model_line(pricing: FlatGridServices | GridServicesEventsConfig) -> str:
     """*pricing*'s model as the board reads it: the events model with its band and delivery baseline, or the flat rate."""
     if isinstance(pricing, FlatGridServices):
         return f"flat, £{pricing.income_per_kw_per_year_gbp:.1f}/kW-yr"
-    band = GridServicesBand.parse(pricing.band, what="GridServicesEventsConfig.band")
     baseline = DeliveryBaseline.parse(pricing.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline")
-    return f"capacity at events, {band} band, {baseline} delivery baseline"
+    return f"capacity at events, {pricing.band} band, {baseline} delivery baseline"
 
 
 def _refuse_projections_over_different_asset_lives(sections: Sequence[AssumptionSection]) -> int:

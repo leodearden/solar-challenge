@@ -51,7 +51,6 @@ from solar_challenge.finance import (
     annualise,
     annuity_payment,
     bill_distribution,
-    grid_services_model_of,
     home_ledger,
     irr,
     one_window,
@@ -117,7 +116,7 @@ class YearPoint:
     own-use revenue (own_use_rate × fleet_billed_own_use_kwh / 100)
     + the year's income: SEG export income (Σ each home's ledger
     ``seg_income_gbp``, :func:`~solar_challenge.finance.home_ledger`)
-    + grid-services income (``grid_services_model_of(finance).annual_income_gbp``
+    + grid-services income (``finance.grid_services_model.annual_income_gbp``
     of the simulated fleet).  Between simulated ages the income follows PCHIP
     through the income at the simulated ages, which reads no own-use rate, so
     the revenue is affine in the rate in every year.
@@ -923,7 +922,7 @@ def _project(
     refuse_analysis_only_forecasts(fleet.homes)
     fleet_pv_dc_kw = _fleet_wired_dc_kw(fleet.homes)
     simulate_at: _SimulateAt = functools.partial(
-        _simulate_node, fleet, finance=finance, grid_services=grid_services_model_of(finance), simulate=simulate
+        _simulate_node, fleet, finance=finance, grid_services=finance.grid_services_model, simulate=simulate
     )
     asset_life = finance.asset_life_years
     seeds = _simulated_seeds(simulate_at, len(fleet.homes), asset_life)
@@ -968,7 +967,7 @@ def project_fleet(
     home's battery SOH counting its battery throughput from installation to
     that age (:func:`_throughput_at`), so ``battery_soh`` never rises.  Each
     sampled age's grid-services income is priced from that age's own simulated
-    fleet by ``grid_services_model_of(finance)``, and is annual by
+    fleet by ``finance.grid_services_model``, and is annual by
     construction.  Each distinct warning that grid-services pricing raises,
     such as one naming an event window the simulated period never enters, is
     shown once per call, however many ages raise it, and is attributed to the

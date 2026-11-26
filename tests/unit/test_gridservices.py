@@ -528,6 +528,35 @@ class TestGridServicesEventsConfigDefaults:
         assert pickle.loads(pickle.dumps(cfg)) == cfg
 
 
+class TestGridServicesEventsConfigBand:
+    """GridServicesEventsConfig holds its band as the GridServicesBand member it names, given a member or its value."""
+
+    def test_a_band_value_is_held_as_the_member_it_names(self) -> None:
+        cfg = GridServicesEventsConfig(band="high")
+
+        assert type(cfg.band) is GridServicesBand
+        assert cfg.band is GridServicesBand.HIGH
+
+    def test_the_default_band_is_the_central_member(self) -> None:
+        cfg = GridServicesEventsConfig()
+
+        assert type(cfg.band) is GridServicesBand
+        assert cfg.band is GridServicesBand.CENTRAL
+
+    def test_a_replaced_band_value_is_held_as_the_member_it_names(self) -> None:
+        cfg = dataclasses.replace(GridServicesEventsConfig(band="high"), band="low")
+
+        assert type(cfg.band) is GridServicesBand
+        assert cfg.band is GridServicesBand.LOW
+
+    def test_a_config_given_the_member_equals_one_given_its_value(self) -> None:
+        assert GridServicesEventsConfig(band=GridServicesBand.HIGH) == GridServicesEventsConfig(band="high")
+
+    def test_the_rate_table_resolves_a_band_member(self) -> None:
+        assert GRID_SERVICES_RATE_BANDS.resolve(GridServicesBand.HIGH) is GRID_SERVICES_RATE_BANDS.high
+        assert resolve_grid_services_rate_band(GridServicesBand.LOW) is GRID_SERVICES_RATE_BANDS.low
+
+
 # ---------------------------------------------------------------------------
 # Step-9: GridServicesEventsConfig validation
 # ---------------------------------------------------------------------------

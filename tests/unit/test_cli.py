@@ -440,20 +440,20 @@ class TestErrorHandling:
             ),
             pytest.param(
                 {
-                    "grid_services_model": "capacity_at_events",
-                    "grid_services_events": {
+                    "grid_services_model": {
+                        "type": "capacity_at_events",
                         "event_windows": [
                             {"months": [13], "weekdays": [0], "hours": [17], "events_per_year": 1, "event_hours": 1.0}
-                        ]
+                        ],
                     }
                 },
-                "finance.grid_services_events.event_windows[0]: months[0] must be between 1 and 12, got 13",
+                "finance.grid_services_model.event_windows[0]: months[0] must be between 1 and 12, got 13",
                 id="event-window-month-13",
             ),
             pytest.param(
                 {
-                    "grid_services_model": "capacity_at_events",
-                    "grid_services_events": {
+                    "grid_services_model": {
+                        "type": "capacity_at_events",
                         "event_windows": [
                             {
                                 "months": [11],
@@ -465,7 +465,7 @@ class TestErrorHandling:
                         ]
                     }
                 },
-                "finance.grid_services_events.event_windows[0]: event_hours must be a finite number, got inf",
+                "finance.grid_services_model.event_windows[0]: event_hours must be a finite number, got inf",
                 id="event-window-infinite-event-hours",
             ),
         ],

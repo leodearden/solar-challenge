@@ -174,12 +174,13 @@ class GridServicesRateBands:
     central: GridServicesRateBand
     high: GridServicesRateBand
 
-    def resolve(self, band: str) -> GridServicesRateBand:
+    def resolve(self, band: GridServicesBand) -> GridServicesRateBand:
         """Return the band matching *band*.
 
         Args:
-            band: One of ``"low"``, ``"central"``, ``"high"``, or a
-                :class:`GridServicesBand`.
+            band: A :class:`GridServicesBand`; its value string
+                (``"low"``, ``"central"`` or ``"high"``) is read alike at
+                runtime.
 
         Returns:
             The matching :class:`GridServicesRateBand`.
@@ -226,14 +227,14 @@ GRID_SERVICES_RATE_BANDS: GridServicesRateBands = GridServicesRateBands(
 )
 
 
-def resolve_grid_services_rate_band(band: str) -> GridServicesRateBand:
+def resolve_grid_services_rate_band(band: GridServicesBand) -> GridServicesRateBand:
     """Validate *band* and return the corresponding :class:`GridServicesRateBand`.
 
     Delegates to :meth:`GRID_SERVICES_RATE_BANDS.resolve`.
 
     Args:
-        band: One of ``"low"``, ``"central"``, ``"high"``, or a
-            :class:`GridServicesBand`.
+        band: A :class:`GridServicesBand`; its value string (``"low"``,
+            ``"central"`` or ``"high"``) is read alike at runtime.
 
     Returns:
         The matching :class:`GridServicesRateBand` from
@@ -336,8 +337,9 @@ class GridServicesEventsConfig:
     """Configuration for the capacity-at-events grid-services pricing model.
 
     Attributes:
-        band: Uncertainty band name, a :class:`GridServicesBand` value
-            (``"low"``, ``"central"``, or ``"high"``).
+        band: Uncertainty band, held as the :class:`GridServicesBand` it
+            names; its value string (``"low"``, ``"central"`` or ``"high"``)
+            is read as that member.
         event_windows: Tuple of :class:`EventWindow` objects describing when
             activation events can occur.
         aggregator_share: Fraction of gross income paid to the aggregator;
@@ -355,7 +357,7 @@ class GridServicesEventsConfig:
             ``"capacity"``).
     """
 
-    band: str = "central"
+    band: GridServicesBand = GridServicesBand.CENTRAL
     event_windows: tuple[EventWindow, ...] = DEFAULT_EVENT_WINDOWS
     aggregator_share: float = 0.25
     utilisation_factor: float = 0.6
@@ -364,12 +366,12 @@ class GridServicesEventsConfig:
     delivery_baseline: str = "operational"
 
     def __post_init__(self) -> None:
-        """Read the numbers through number_fields, holding the floats read, then refuse an unknown band, an unknown delivery baseline or no event windows, raising ConfigurationError."""
+        """Read the numbers through number_fields, holding the floats read, and hold the band as the member it names, then refuse an unknown band, an unknown delivery baseline or no event windows, raising ConfigurationError."""
         read_field(self, "aggregator_share", as_finite_float, Interval(0, 1, high_open=True))
         read_field(self, "utilisation_factor", as_finite_float, UNIT_INTERVAL)
         read_field(self, "availability_gbp_per_kw_per_event", as_finite_float, NON_NEGATIVE, optional=True)
         read_field(self, "utilisation_gbp_per_mwh", as_finite_float, NON_NEGATIVE, optional=True)
-        GridServicesBand.parse(self.band, what="GridServicesEventsConfig.band")
+        object.__setattr__(self, "band", GridServicesBand.parse(self.band, what="GridServicesEventsConfig.band"))
         DeliveryBaseline.parse(self.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline")
         if not self.event_windows:
             raise ConfigurationError(
