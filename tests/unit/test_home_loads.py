@@ -7,7 +7,8 @@ Tests cover:
 - TestAdditionalLoadsAreRefusedUnlessTheyArePartsOfDemand: construction reads
   additional_loads' keys as load kinds, and refuses a household entry, a load off
   demand's rows, one holding no number or of a bool dtype, and additional loads that
-  exceed demand in a row by more than 1e-9 kW; within it, the household's load is 0
+  exceed demand in a row by more than 1e-9 kW; within it, the household's load is 0; the
+  results take no heat_pump_load beside them
 - TestAdditionalLoadsInFramesAndAmounts: to_dataframe writes each additional load under
   its column, from_dataframe reads it back, and each has an energy amount
 - TestAdditionalLoadsPickle: results keep their additional loads through pickle, as a
@@ -166,6 +167,11 @@ class TestAdditionalLoadsAreRefusedUnlessTheyArePartsOfDemand:
             _results(additional_loads={LoadKind.EV: pd.Series(True, index=_ROWS)})
 
         assert refusal.value.column == "ev_load_kw"
+
+    def test_results_take_no_heat_pump_load_beside_the_additional_loads(self) -> None:
+        """A heat pump's load is additional_loads[LoadKind.HEAT_PUMP], so the results take no second field for it."""
+        with pytest.raises(TypeError, match="heat_pump_load"):
+            _results(heat_pump_load=_flat(_HEAT_PUMP_KW))
 
 
 class TestAdditionalLoadsInFramesAndAmounts:
