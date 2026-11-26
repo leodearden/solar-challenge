@@ -1197,9 +1197,11 @@ def parse_community_config(
 
     Raises:
         ConfigurationError: For a block that is not a mapping; for a block that
-            sets the retired ``sharing_mode``, null or not, naming
-            ``community.sharing_mode`` and saying the mode follows
-            ``community_battery``; for a block that carries a key it does not
+            sets the retired ``sharing_mode``, null or not, naming the key's
+            path under *block_path* (``community.sharing_mode`` as
+            :func:`~solar_challenge.config.load_community_config` reads it)
+            and saying the mode follows ``community_battery``; for a block
+            that carries a key it does not
             read; as a nested block's reader refuses that block; or as
             CommunityConfig refuses the block, prefixed by its path.
     """
