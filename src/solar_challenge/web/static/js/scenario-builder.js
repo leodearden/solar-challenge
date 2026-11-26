@@ -1,13 +1,7 @@
 document.addEventListener('alpine:init', () => {
-    // A scenario value as a form input holds it: '' (a cleared input, which the server reads as absent) for none
-    function inputValue(value) {
-        return value === undefined || value === null ? '' : value;
-    }
-
-    // Whether `value` is a YAML mapping, as a scenario document and each of its blocks is
-    function isMapping(value) {
-        return value !== null && typeof value === 'object' && !Array.isArray(value);
-    }
+    // A scenario value as a form input holds it, '' (a cleared input, which the server reads as absent) for none, and
+    // whether a scenario document or one of its blocks is a mapping: the distribution editor's rules
+    const { blankIfNull, isMapping } = DistributionEditor;
 
     // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
     const limits = JSON.parse(document.getElementById('page-limits').textContent);
@@ -28,13 +22,13 @@ document.addEventListener('alpine:init', () => {
         const period = scenario.period || {};
         const tariff = scenario.tariff || {};
         const fields = {
-            name: inputValue(scenario.name),
-            description: inputValue(scenario.description),
-            start_date: inputValue(period.start_date),
-            end_date: inputValue(period.end_date),
-            n_homes: inputValue(fleet.n_homes),
-            import_rate: tariff.type === 'flat_rate' ? inputValue(tariff.rate_per_kwh) : '',
-            seg_rate_pence_per_kwh: inputValue((scenario.seg || {}).rate_pence_per_kwh),
+            name: blankIfNull(scenario.name),
+            description: blankIfNull(scenario.description),
+            start_date: blankIfNull(period.start_date),
+            end_date: blankIfNull(period.end_date),
+            n_homes: blankIfNull(fleet.n_homes),
+            import_rate: tariff.type === 'flat_rate' ? blankIfNull(tariff.rate_per_kwh) : '',
+            seg_rate_pence_per_kwh: blankIfNull((scenario.seg || {}).rate_pence_per_kwh),
             dists: Object.fromEntries(components.map((component) => [
                 component.key,
                 DistributionEditor.load(
@@ -47,9 +41,9 @@ document.addEventListener('alpine:init', () => {
         };
         if (scenario.location) {
             fields.location_preset = 'custom';
-            fields.latitude = inputValue(scenario.location.latitude);
-            fields.longitude = inputValue(scenario.location.longitude);
-            fields.altitude = inputValue(scenario.location.altitude);
+            fields.latitude = blankIfNull(scenario.location.latitude);
+            fields.longitude = blankIfNull(scenario.location.longitude);
+            fields.altitude = blankIfNull(scenario.location.altitude);
         }
         return fields;
     }

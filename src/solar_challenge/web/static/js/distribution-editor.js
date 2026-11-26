@@ -2,7 +2,8 @@
 // An editor's dist is { type, fixed, specs }, as #page-limits writes each component's start: type names the editor
 // type shown, '' for Fixed Value, and specs holds each editor type's spec as the grammar writes it, without its type.
 // A component is one of #page-limits' components, whose editor_types and scalar_form name every type, so no type is
-// named here. The page scripts call these outside any editor's scope, so they are one global, not scope methods.
+// named here. The page scripts call these outside any editor's scope, so they are one global, not scope methods; it
+// also gives them its rule for a null as a blank input (blankIfNull) and its test of a mapping (isMapping).
 const DistributionEditor = (() => {
     // A blank input, '' (an empty number input holds it), or an absent value, as null, which the grammar reads as absent
     function nullIfBlank(value) {
@@ -19,6 +20,7 @@ const DistributionEditor = (() => {
         return Array.isArray(value) ? value.map(read) : read(value);
     }
 
+    // Whether `value` is a mapping, as a spec of a type and a scenario document and each of its blocks are
     function isMapping(value) {
         return value !== null && typeof value === 'object' && !Array.isArray(value);
     }
@@ -69,7 +71,7 @@ const DistributionEditor = (() => {
         return { ...dist, type: editorType.name, specs: { ...dist.specs, [editorType.name]: held } };
     }
 
-    return { wire, load };
+    return { wire, load, blankIfNull, isMapping };
 })();
 
 document.addEventListener('alpine:init', () => {
