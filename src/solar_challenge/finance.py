@@ -433,23 +433,28 @@ class CostRecoverySolution:
         own_use_rate_pence_per_kwh: Solved own-use rate (p/kWh, ∈ [0, retail_baseline]).
         outlay: Full fleet-level BillDistribution at the solved rate (age-0 sim).
         representative_outlay_gbp: Representative (median-outlay) home's total annual
-            outlay in £.  == outlay.representative.total_outlay_gbp.
+            outlay in £.  Must == outlay.representative.total_outlay_gbp.
         net_surplus_per_home_per_year_gbp: Project net surplus per home per year at
             the solved rate (£).  Equals floor to float ε for binding='floor';
             strictly > floor for 'rate_clamped_zero'; < floor for
             'infeasible_above_retail'.
         saving_vs_baseline_gbp: Householder saving vs. no-solar baseline (£)
-            at the solved rate.  == outlay.representative.saving_vs_baseline_gbp.
+            at the solved rate.  Must == outlay.representative.saving_vs_baseline_gbp.
         saving_pct: Householder % saving vs. baseline.
-            == outlay.representative.saving_pct.
+            Must == outlay.representative.saving_pct.
         feasible: True when the CBS can meet the retained_cash_floor within
-            [0, retail_baseline_rate].  False only for 'infeasible_above_retail'.
+            [0, retail_baseline_rate].  Must == (binding != 'infeasible_above_retail').
         binding: One of 'floor', 'rate_clamped_zero', 'infeasible_above_retail':
             - 'floor': r* ∈ [0, retail] and surplus(r*) == floor to ε.
             - 'rate_clamped_zero': r* < 0 (project over-delivers at r=0);
               rate clamped to 0, surplus > floor.
             - 'infeasible_above_retail': r* > retail; rate clamped to retail,
               surplus < floor; feasible=False.
+
+    Construction refuses a record that breaks any "Must ==" above: each is a
+    bare equality, no tolerance, since the solve copies the very value it is
+    checked against, and ``__post_init__`` raises a ValueError naming both
+    values.
     """
 
     own_use_rate_pence_per_kwh: float
@@ -461,7 +466,7 @@ class CostRecoverySolution:
     representative_outlay_gbp: float
     """Representative (median-outlay) home's total annual outlay (£, the primary key).
 
-    Invariant: representative_outlay_gbp == outlay.representative.total_outlay_gbp.
+    Refused at construction unless == outlay.representative.total_outlay_gbp.
     """
 
     net_surplus_per_home_per_year_gbp: float
@@ -470,17 +475,20 @@ class CostRecoverySolution:
     saving_vs_baseline_gbp: float
     """Householder saving vs no-solar baseline at the solved rate (£).
 
-    Invariant: == outlay.representative.saving_vs_baseline_gbp.
+    Refused at construction unless == outlay.representative.saving_vs_baseline_gbp.
     """
 
     saving_pct: float
     """Householder % saving vs baseline at the solved rate.
 
-    Invariant: == outlay.representative.saving_pct.
+    Refused at construction unless == outlay.representative.saving_pct.
     """
 
     feasible: bool
-    """True when the CBS can meet the retained_cash_floor within [0, retail_baseline_rate]."""
+    """True when the CBS can meet the retained_cash_floor within [0, retail_baseline_rate].
+
+    Refused at construction unless == (binding != 'infeasible_above_retail').
+    """
 
     binding: str
     """Binding constraint: one of 'floor', 'rate_clamped_zero', 'infeasible_above_retail'."""
@@ -495,6 +503,27 @@ class CostRecoverySolution:
                 f"own_use_rate_pence_per_kwh must be >= 0 and finite, "
                 f"got {self.own_use_rate_pence_per_kwh!r}"
             )
+        expected_feasible = self.binding != "infeasible_above_retail"
+        if self.feasible != expected_feasible:
+            raise ValueError(
+                f"feasible must be binding != 'infeasible_above_retail' "
+                f"({expected_feasible!r} for binding={self.binding!r}), "
+                f"got feasible={self.feasible!r}"
+            )
+        representative = self.outlay.representative
+        for copy, copied, source, sourced in (
+            ("representative_outlay_gbp", self.representative_outlay_gbp,
+             "total_outlay_gbp", representative.total_outlay_gbp),
+            ("saving_vs_baseline_gbp", self.saving_vs_baseline_gbp,
+             "saving_vs_baseline_gbp", representative.saving_vs_baseline_gbp),
+            ("saving_pct", self.saving_pct,
+             "saving_pct", representative.saving_pct),
+        ):
+            if copied != sourced:
+                raise ValueError(
+                    f"{copy} must equal outlay.representative.{source} "
+                    f"({sourced!r}), got {copy}={copied!r}"
+                )
 
 
 # ---------------------------------------------------------------------------
