@@ -42,6 +42,42 @@ class TestCommunityBlockParsing:
         assert cfg.community_battery is None
         assert cfg.billing is None
 
+    def test_an_empty_community_block_is_a_p2p_community(self, load_community_block: LoadCommunityBlock) -> None:
+        cfg = load_community_block({})
+        assert isinstance(cfg, CommunityConfig)
+        assert cfg.community_battery is None
+        assert cfg.billing is None
+        assert cfg.sharing_mode == "p2p"
+
+    def test_a_block_with_a_community_battery_shares_through_it(self, load_community_block: LoadCommunityBlock) -> None:
+        cfg = load_community_block({"community_battery": {"capacity_kwh": 20.0}})
+        assert cfg is not None
+        assert cfg.sharing_mode == "community_battery"
+        assert cfg.community_battery is not None
+        assert cfg.community_battery.capacity_kwh == 20.0
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param({"sharing_mode": "p2p"}, id="p2p"),
+            pytest.param(
+                {"sharing_mode": "community_battery", "community_battery": {"capacity_kwh": 20.0}},
+                id="community-battery",
+            ),
+            pytest.param({"sharing_mode": None}, id="null"),
+        ],
+    )
+    def test_a_block_setting_sharing_mode_is_refused_naming_it(
+        self, load_community_block: LoadCommunityBlock, block: dict[str, Any]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_block(block)
+        assert str(refusal.value) == (
+            "community.sharing_mode: the sharing mode follows community_battery; "
+            "a community with a community_battery block shares through that battery, "
+            "and one without nets peer to peer, so delete sharing_mode"
+        )
+
     # ------------------------------------------------------------------
     # community_battery mode + invalid combinations
     # ------------------------------------------------------------------

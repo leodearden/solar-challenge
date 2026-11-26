@@ -232,10 +232,18 @@ class TestDemoScenario:
         cfg = load_community_config(SCENARIO)
         assert cfg is not None, "Expected a community: block in scenario YAML"
 
-    def test_community_sharing_mode_is_community_battery(self) -> None:
+    def test_the_migrated_scenario_sets_no_sharing_mode_and_keeps_its_community(self) -> None:
+        """The scenario's community holds the values it held while it set sharing_mode, so its community table is unchanged."""
+        assert "sharing_mode" not in yaml.safe_load(SCENARIO.read_text())["community"]
+
         cfg = load_community_config(SCENARIO)
+
         assert cfg is not None
         assert cfg.sharing_mode == "community_battery"
+        assert cfg.community_battery == BatteryConfig(capacity_kwh=20.0, max_charge_kw=10.0, max_discharge_kw=10.0)
+        assert cfg.billing == CommunityBillingConfig(
+            tariff=TariffConfig.flat_rate(rate_per_kwh=0.30), seg_rate_pence_per_kwh=4.1
+        )
 
     def test_community_battery_spec_present(self) -> None:
         cfg = load_community_config(SCENARIO)
@@ -866,6 +874,23 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
         assert "Configuration error" in result.output
         assert "grid_charging" in result.output
         assert "self_consumption" in result.output
+        assert "Simulating fleet" not in result.output
+        assert started(marker_dir) == {}
+
+    def test_the_pre_migration_scenario_is_refused_naming_community_sharing_mode(
+        self, tmp_path: Path, marker_dir: Path, marking_runner: FleetRunner
+    ) -> None:
+        """The scenario as it was before sharing_mode retired, its community block naming the mode its battery implies."""
+        scenario = yaml.safe_load(SCENARIO.read_text())
+        scenario["community"] = {"sharing_mode": "community_battery", **scenario["community"]}
+        refused = tmp_path / "bristol-community-pre-migration.yaml"
+        refused.write_text(yaml.safe_dump(scenario))
+
+        result = invoke_cli(["fleet", "run", str(refused), "--start", "2024-01-15", "--end", "2024-01-15"], marking_runner)
+
+        assert result.exit_code == 1, result.output
+        assert "Configuration error" in result.output
+        assert "community.sharing_mode" in result.output
         assert "Simulating fleet" not in result.output
         assert started(marker_dir) == {}
 
