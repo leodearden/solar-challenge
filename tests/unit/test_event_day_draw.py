@@ -7,13 +7,15 @@ tests assert those properties, never the dates a seed picks, so they hold whatev
 """
 
 import random
-from datetime import date, datetime, timedelta
+from collections.abc import Iterator
+from datetime import date, datetime
 
 import numpy as np
 import pytest
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.gridservices import DEFAULT_EVENT_WINDOWS, EventWindow, drawn_event_days
+from tests._calendar_dates import every_date
 
 WINDOW = DEFAULT_EVENT_WINDOWS[0]
 """November to February weekdays, 12 events a year: 2024 has 87 such days and 2025 has 86."""
@@ -21,18 +23,22 @@ WINDOW = DEFAULT_EVENT_WINDOWS[0]
 _EVERY_WEEKDAY = (0, 1, 2, 3, 4, 5, 6)
 
 
-def _days(first: date, last: date) -> list[date]:
-    """Every date from *first* to *last*, both included."""
-    return [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
-
-
-_YEAR_2024 = _days(date(2024, 1, 1), date(2024, 12, 31))
+_YEAR_2024 = every_date(date(2024, 1, 1), date(2024, 12, 31))
 
 
 def _every_day_window(months: tuple[int, ...], events_per_year: int) -> EventWindow:
     return EventWindow(
         months=months, weekdays=_EVERY_WEEKDAY, hours=(17,), events_per_year=events_per_year, event_hours=1.0
     )
+
+
+@pytest.fixture
+def global_generators_restored() -> Iterator[None]:
+    """Put numpy's and the stdlib's global generators back as the test found them, so a test that seeds them leaves no later test on its worker a fixed stream."""
+    numpy_state, stdlib_state = np.random.get_state(), random.getstate()
+    yield
+    np.random.set_state(numpy_state)
+    random.setstate(stdlib_state)
 
 
 class TestTheDaysDrawn:
@@ -68,6 +74,7 @@ class TestTheDaysDrawn:
         assert drawn_event_days(WINDOW, list(reversed(_YEAR_2024)), 0, position=0) == in_order
         assert drawn_event_days(WINDOW, [*_YEAR_2024, date(2024, 1, 15)], 0, position=0) == in_order
 
+    @pytest.mark.usefixtures("global_generators_restored")
     def test_the_draw_reads_and_advances_neither_global_generator(self) -> None:
         np.random.seed(11)
         random.seed(11)
@@ -84,20 +91,41 @@ class TestHowManyDaysAreDrawn:
     """The count is the window's events per year times the share of each year's eligible days the period holds, rounded half up, from 1 to the eligible days."""
 
     def test_two_months_draw_their_share_of_the_year_s_events(self) -> None:
-        days = drawn_event_days(WINDOW, _days(date(2024, 1, 1), date(2024, 2, 29)), 0, position=0)
+        days = drawn_event_days(WINDOW, every_date(date(2024, 1, 1), date(2024, 2, 29)), 0, position=0)
 
         assert len(days) == 6
         assert all(day.year == 2024 and day.month in (1, 2) and day.weekday() < 5 for day in days)
 
     def test_two_full_years_draw_each_year_s_events(self) -> None:
-        days = drawn_event_days(WINDOW, _days(date(2024, 1, 1), date(2025, 12, 31)), 0, position=0)
+        days = drawn_event_days(WINDOW, every_date(date(2024, 1, 1), date(2025, 12, 31)), 0, position=0)
 
         assert len(days) == 24
+
+    def test_each_year_s_days_count_over_that_year_s_own_eligible_days(self) -> None:
+        february_2024_and_2025 = every_date(date(2024, 2, 1), date(2025, 2, 28))
+
+        days = drawn_event_days(_every_day_window((2,), events_per_year=28), february_2024_and_2025, 0, position=0)
+
+        # 28 × 29/29 + 28 × 28/28; over 2024's 29 eligible days alone, 28 × 57/29 would round to 55.
+        assert len(days) == 56
+
+    def test_a_period_across_new_year_counts_each_side_over_its_own_year(self) -> None:
+        december_2023_and_january_2024 = every_date(date(2023, 12, 1), date(2024, 1, 31))
+        winter_weekends = EventWindow(months=(12, 1), weekdays=(5, 6), hours=(17,), events_per_year=10, event_hours=1.0)
+
+        days = drawn_event_days(winter_weekends, december_2023_and_january_2024, 0, position=0)
+
+        # 10 × (10/19 + 8/17) = 9.97: 2023 has 19 such weekend days, 10 of them in December, and 2024 17, 8 in
+        # January; over 2023's alone 10 × 18/19 would round to 9, and over 2024's alone 10 × 18/17 to 11.
+        assert len(days) == 10
+        assert all(
+            (day.year, day.month) in ((2023, 12), (2024, 1)) and day.weekday() in (5, 6) for day in days
+        )
 
     def test_a_half_event_rounds_up(self) -> None:
         window = _every_day_window((1, 2), events_per_year=5)
 
-        days = drawn_event_days(window, _days(date(2024, 1, 1), date(2024, 1, 30)), 0, position=0)
+        days = drawn_event_days(window, every_date(date(2024, 1, 1), date(2024, 1, 30)), 0, position=0)
 
         assert len(days) == 3
 
@@ -105,14 +133,12 @@ class TestHowManyDaysAreDrawn:
         assert drawn_event_days(WINDOW, [date(2024, 1, 15)], 0, position=0) == (date(2024, 1, 15),)
 
     def test_no_more_days_are_drawn_than_are_eligible(self) -> None:
-        january = _days(date(2024, 1, 1), date(2024, 1, 31))
+        january = every_date(date(2024, 1, 1), date(2024, 1, 31))
 
-        assert drawn_event_days(_every_day_window((1,), events_per_year=40), january, 0, position=0) == tuple(
-            january
-        )
+        assert drawn_event_days(_every_day_window((1,), events_per_year=40), january, 0, position=0) == january
 
     def test_a_period_with_no_eligible_day_draws_none(self) -> None:
-        assert drawn_event_days(WINDOW, _days(date(2024, 6, 1), date(2024, 6, 30)), 0, position=0) == ()
+        assert drawn_event_days(WINDOW, every_date(date(2024, 6, 1), date(2024, 6, 30)), 0, position=0) == ()
 
 
 class TestRefusals:

@@ -8,7 +8,7 @@ observed configuration, the default, leaves the homes as they were.
 """
 
 import dataclasses
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 
 import pandas as pd
@@ -34,6 +34,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from tests._calendar_dates import every_date
 from tests._exporting_runs import RUN_DAYS, home_of_the_runs
 from tests._synthetic_weather import weather_for
 
@@ -63,11 +64,6 @@ _HOMES = (
         name="pv-only",
     ),
 )
-
-
-def _dates(first: date, last: date) -> tuple[date, ...]:
-    """Every date from *first* to *last*, both included."""
-    return tuple(first + timedelta(days=offset) for offset in range((last - first).days + 1))
 
 
 def _period(first: date, last: date) -> SimulationWindow:
@@ -113,7 +109,7 @@ def _drawn_windows(
     windows: tuple[EventWindow, ...], first: date, last: date, seed: int
 ) -> tuple[EventDischargeWindow, ...]:
     """One EventDischargeWindow per window of *windows* that draws a day over *first* to *last*: the days drawn_event_days draws with *seed* at its position."""
-    dates = _dates(first, last)
+    dates = every_date(first, last)
     drawn = (
         (window, drawn_event_days(window, dates, seed, position=position))
         for position, window in enumerate(windows)

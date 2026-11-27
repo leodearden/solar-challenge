@@ -8,7 +8,7 @@ shows where the batteries discharged. An observed configuration, the default, ex
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,6 +20,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenario
 from solar_challenge.gridservices import EventWindow, drawn_event_days
 from solar_challenge.weather import WeatherCache
+from tests._calendar_dates import every_date
 from tests._synthetic_weather import sunless_tmy
 
 _FIRST_DAY = date(2024, 1, 15)
@@ -108,15 +109,11 @@ def _aggregate_grid_export(
     return output.read_bytes(), export
 
 
-def _scenario_days() -> tuple[date, ...]:
-    return tuple(_FIRST_DAY + timedelta(days=offset) for offset in range((_LAST_DAY - _FIRST_DAY).days + 1))
-
-
 def test_a_dispatched_fleet_exports_on_the_drawn_event_days_in_the_window_hours_and_nowhere_else(
     tmp_path: Path, weather_cache: WeatherCache
 ) -> None:
-    drawn = drawn_event_days(_EVENT_WINDOW, _scenario_days(), _EVENT_DAY_SEED, position=0)
-    assert 0 < len(drawn) < len(_scenario_days())
+    drawn = drawn_event_days(_EVENT_WINDOW, every_date(_FIRST_DAY, _LAST_DAY), _EVENT_DAY_SEED, position=0)
+    assert 0 < len(drawn) < len(every_date(_FIRST_DAY, _LAST_DAY))
 
     _, export = _aggregate_grid_export(tmp_path, weather_cache, "dispatched")
 
