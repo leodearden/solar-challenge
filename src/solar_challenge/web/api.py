@@ -59,6 +59,7 @@ from solar_challenge.web.run_names import read_run_name
 from solar_challenge.web.scenario_import import ImportedForm
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
+from solar_challenge.web.sweep_request import SWEEP_MAX_STEPS
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from solar_challenge.web.text_options import read_one_of
@@ -448,9 +449,6 @@ _SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
     "battery_capacity_kwh": "battery_kwh",
     "annual_consumption_kwh": "consumption_kwh",
 }
-
-#: The most steps a sweep may have, which the sweep page's Steps input offers.
-SWEEP_MAX_STEPS = 50
 
 #: The days each point of a sweep runs when its base_config sends no window of its own.
 _SWEEP_DEFAULT_DAYS = 7

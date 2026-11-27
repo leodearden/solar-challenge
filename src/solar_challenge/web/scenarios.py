@@ -16,7 +16,6 @@ from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import as_finite_float
-from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import SweepPoint, sweep_panels
 from solar_challenge.web.dashboard import get_storage
 from solar_challenge.web.request_boundary import (
@@ -27,6 +26,7 @@ from solar_challenge.web.request_boundary import (
     require_json_object,
 )
 from solar_challenge.web.stored_runs import StoredRunUnreadable
+from solar_challenge.web.sweep_request import SWEEP_MAX_STEPS
 from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
 bp = Blueprint("scenarios", __name__)

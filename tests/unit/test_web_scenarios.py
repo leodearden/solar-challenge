@@ -29,7 +29,6 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
@@ -39,6 +38,7 @@ from solar_challenge.web.fleet_components import (
     page_limits,
 )
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.sweep_request import SWEEP_MAX_STEPS
 from tests._chart_absences import sweep_reason
 from tests._error_records import error_records
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
