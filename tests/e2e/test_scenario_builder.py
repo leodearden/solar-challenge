@@ -1387,10 +1387,13 @@ def _save_under_the_scenario_name(page: Page) -> Response:
     """Click Save, accept the name the Save Scenario dialog offers, the scenario's own or 'My Scenario', and return the answer to the save.
 
     The dialog's own Save button is hidden until the dialog opens, so the one Save button shown is the toolbar's.
+    It waits for the name box to show before pressing Enter into it, since the dialog shows only at the next animation frame and press, unlike click, does not wait for an element to show.
     """
     page.get_by_role("button", name="Save", exact=True).click()
+    save_name = page.locator("#save_name")
+    expect(save_name).to_be_visible()
     with page.expect_response("**/api/scenarios/save") as save:
-        page.locator("#save_name").press("Enter")
+        save_name.press("Enter")
     return save.value
 
 
