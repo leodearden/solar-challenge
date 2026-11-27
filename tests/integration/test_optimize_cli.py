@@ -1030,7 +1030,11 @@ class TestBatteryPowerAndReference:
 def test_the_victron_sweep_prints_each_configurations_marginal_columns_against_the_smallest_battery(
     tmp_path: Path, weather_cache: WeatherCache
 ) -> None:
-    """The signal: the Victron board scenario, cut to two 4 kWp homes, swept over four battery sizes and powers on the real engine for one winter day."""
+    """The signal: the Victron board scenario, cut to two 4 kWp homes, swept over four battery sizes and powers on the real engine for two winter weekdays.
+
+    Two days, not one: the scenario meters delivery against the operational
+    baseline, which needs an eligible day without an event.
+    """
     document = yaml.safe_load((SCENARIOS_DIR / "bristol-phase1-victron.yaml").read_text(encoding="utf-8"))
     document["fleet_distribution"]["n_homes"] = 2
     document["fleet_distribution"]["pv"]["capacity_kw"] = 4.0
@@ -1042,7 +1046,7 @@ def test_the_victron_sweep_prints_each_configurations_marginal_columns_against_t
         [
             "optimize", "configs", str(path),
             "--pv", "4", "--battery", "5.12,10.24,10.24,15.36", "--battery-kw", "2.4,2.4,3.68,3.68",
-            "--inverter", "3.68", "--sensitivity", "", "--start", "2024-01-15", "--end", "2024-01-15",
+            "--inverter", "3.68", "--sensitivity", "", "--start", "2024-01-15", "--end", "2024-01-16",
         ],
         dataclasses.replace(default_runner(), parallel=False),
     )

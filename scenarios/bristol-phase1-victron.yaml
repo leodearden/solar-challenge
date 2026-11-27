@@ -1,0 +1,112 @@
+# Bristol Phase 1 Victron — Board Fleet Scenario (event dispatch ε)
+#
+# bristol-phase1-flex.yaml's fleet, tariff and finance on the battery and
+# inverter-charger of PRD docs/prds/event-dispatch-and-battery-sizing.md §2.3:
+# Victron Lithium NG 51.2 V/100 Ah modules of 5.12 kWh, behind a MultiPlus-II
+# 48/3000 that discharges at 2.4 kW continuous and charges at 35 A, about 1.8 kW.
+#
+# Each one-way efficiency is the battery's 92% round trip with the inverter's
+# loss folded in: sqrt(0.92) x 0.95 = 0.911, 0.95 being the MultiPlus-II
+# 48/3000's maximum efficiency on Victron's datasheet, so a round trip through
+# the inverter is about 83%.  The 48/5000's 96% is not modelled: every sweep
+# point keeps this file's figure.
+#
+# participation: dispatched enrols every battery home in the drawn event
+# windows, and 3.68 kW is G98's 16 A site limit while a battery exports.
+# The battery inverter is unpriced (finance.battery_inverter_cost_per_kw_gbp
+# defaults to 0) until a quote is set.  `optimize configs --battery-kw` sets
+# charge and discharge power alike, so the sweep's points are symmetric and do
+# not keep this file's 1.8 kW charge.
+
+name: Bristol Phase 1 Victron
+# Render the flexibility-value block at the central uncertainty estimate by default.
+# Override per-run with: solar-challenge finance run ... --flex-band high
+flex_band: central
+
+location:
+  latitude: 51.45
+  longitude: -2.58
+  timezone: Europe/London
+  altitude: 11.0
+  name: Bristol, UK
+
+# Full calendar year — board artifact showing the annual time-shift value.
+# Integration tests use a single injected winter day and annualise × 365.
+period:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+
+# Smart Export Guarantee: match bristol-phase1.yaml Octopus rate
+seg:
+  rate_pence_per_kwh: 4.1
+
+# Economy-7 tariff (matching bristol-arbitrage.yaml)
+# Economy 7 at its preset rates (tariff.PRESET_RATES) and off-peak window; set
+# off_peak_rate, peak_rate, off_peak_start or off_peak_end to override.
+tariff:
+  type: economy_7
+
+fleet_distribution:
+  n_homes: 100
+  seed: 42
+
+  pv:
+    capacity_kw:
+      type: shuffled_pool
+      values: [3.0, 4.0, 5.0, 6.0]
+      counts: [20, 40, 30, 10]
+    azimuth: 180
+    tilt: 35
+
+  # One Victron 5.12 kWh module per home, charging at 1.8 kW and discharging at 2.4 kW.
+  # Grid charging target SOC 90% — fills the battery overnight at off-peak rate.
+  battery:
+    capacity_kwh: 5.12
+    max_charge_kw: 1.8
+    max_discharge_kw: 2.4
+    charge_efficiency: 0.911
+    discharge_efficiency: 0.911
+    # TOU-optimised dispatch on Economy 7's clock (no peak_hours): it grid-charges in the
+    # tariff's cheap minutes and discharges in its expensive ones.
+    dispatch_strategy:
+      strategy_type: tou_optimized
+    grid_charging:
+      target_soc_fraction: 0.9
+      # The realistic forecast caps each night's fill at the charge the day's PV will not
+      # strand; pv_blind, the default, always fills to the target (docs/grid-charge-forecast.md).
+      forecast: trailing_14_days
+
+  load:
+    annual_consumption_kwh:
+      type: normal
+      mean: 3400
+      std: 800
+      min: 2000
+      max: 6000
+    use_stochastic: false
+
+# Financial parameters matching bristol-phase1.yaml baseline.
+# The grid_services_model block below prices grid services as capacity at
+#   events (type: capacity_at_events), in the central band, matching this
+#   scenario's flex_band: central.  The events pricing reads no flat rate
+#   (see docs/prds/grid-services-pricing-model.md §5.2).
+finance:
+  standing_charge_pence_per_day: 60.0
+  own_use_rate_pence_per_kwh: 15.0
+  retained_cash_floor_per_home_per_year_gbp: 27.0
+  # Capacity-at-events: winter Demand Flexibility Service (DFS) style events.
+  # One winter-weekday evening window, 12 events/yr × 3h (DEFAULT_EVENT_WINDOWS).
+  # aggregator_share: 0.25 (aggregator fee); utilisation_factor: 0.6 (availability weight).
+  grid_services_model:
+    type: capacity_at_events
+    band: central
+    participation: dispatched
+    site_export_limit_kw: 3.68
+    aggregator_share: 0.25
+    utilisation_factor: 0.6
+    event_windows:
+      - months: [11, 12, 1, 2]
+        weekdays: [0, 1, 2, 3, 4]
+        hours: [16, 17, 18]
+        events_per_year: 12
+        event_hours: 3.0
