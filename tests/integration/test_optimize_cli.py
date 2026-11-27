@@ -8,6 +8,7 @@ tests/unit/test_board_report.py.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
@@ -27,7 +28,7 @@ from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli, s
 from tests._cli_stderr_text import stderr_text
 from tests._finance_builders import make_fleet_results, make_home_config
 from tests._fleet_simulate_stand_in import answering_with
-from tests._ranking_report_tables import TRADE_OFF, config_row
+from tests._ranking_report_tables import RANK, TRADE_OFF, config_row, section_under
 from tests.integration._helpers import SCENARIO
 
 
@@ -901,6 +902,124 @@ class TestOptimizeCLIE2EFast:
         assert refusal.startswith("Configuration error:"), refusal
         assert "both" in refusal, refusal
         assert simulated_fleets == []
+
+
+# ---------------------------------------------------------------------------
+# §C2 — --battery-kw sizes each battery's power, and --reference names what the marginal columns compare against
+# ---------------------------------------------------------------------------
+
+
+_REFERENCE_LINE = "Marginal columns compare each configuration against the reference **"
+_SMALL = "4.0 kWp / 5.1 kWh at 2.4 kW / 3.7 kW"
+_LARGE = "4.0 kWp / 10.2 kWh at 3.7 kW / 3.7 kW"
+_EXTRA_CAPEX = "Extra CapEx vs Reference (£/home)"
+_OUTLAY_CHANGE = "Outlay Change vs Reference (£/yr)"
+
+
+def _signed_pounds(cell: str) -> float:
+    """The figure of a report's '+£1,234.56' or '-£3.25' cell."""
+    return float(cell.replace("£", "").replace(",", ""))
+
+
+class TestBatteryPowerAndReference:
+    """`optimize configs --battery-kw` pairs a power with each --battery size, and --reference names the marginal columns' reference."""
+
+    _GRID = ["--pv", "4", "--inverter", "3.68", "--sensitivity", "", "--battery", "5.12,10.24"]
+    _PAIRED = [*_GRID, "--battery-kw", "2.4,3.68"]
+
+    @staticmethod
+    def _run(tmp_path: Path, fleet_results: FleetResults, options: list[str]) -> tuple[Result, list[FleetConfig]]:
+        return TestOptimizeCLIE2EFast._invoke_configs(tmp_path, fleet_results, options)
+
+    def test_each_battery_size_is_simulated_at_its_power(
+        self, tmp_path: Path, optimize_fleet_results: FleetResults
+    ) -> None:
+        result, asked = self._run(tmp_path, optimize_fleet_results, self._PAIRED)
+
+        assert result.exit_code == 0, result.output
+        powers = {
+            (battery.capacity_kwh, battery.max_charge_kw, battery.max_discharge_kw)
+            for fleet in asked
+            for home in fleet.homes
+            if (battery := home.battery_config) is not None
+        }
+        assert powers == {(5.12, 2.4, 2.4), (10.24, 3.68, 3.68)}
+
+    def test_a_power_count_other_than_the_size_count_is_refused_naming_both_flags_before_any_simulation(
+        self, tmp_path: Path, optimize_fleet_results: FleetResults
+    ) -> None:
+        result, asked = self._run(tmp_path, optimize_fleet_results, [*self._GRID, "--battery-kw", "2.4"])
+
+        stderr = " ".join(result.stderr.split())
+        assert result.exit_code == 1, result.output
+        assert "Configuration error:" in stderr
+        assert re.search(r"--battery(?!-kw)", stderr)
+        assert "--battery-kw" in stderr
+        assert asked == []
+
+    def test_without_a_reference_the_smallest_battery_at_the_smallest_pv_is_the_reference(
+        self, tmp_path: Path, optimize_fleet_results: FleetResults
+    ) -> None:
+        result, _ = self._run(tmp_path, optimize_fleet_results, self._PAIRED)
+
+        assert result.exit_code == 0, result.output
+        assert f"{_REFERENCE_LINE}{_SMALL}**" in section_under(result.stdout, RANK)
+        row = config_row(result.stdout, RANK, _SMALL)
+        assert (row[_EXTRA_CAPEX], row[_OUTLAY_CHANGE]) == ("+£0", "+£0.00")
+
+    def test_a_reference_names_the_configuration_every_row_is_compared_against(
+        self, tmp_path: Path, optimize_fleet_results: FleetResults
+    ) -> None:
+        result, _ = self._run(tmp_path, optimize_fleet_results, [*self._PAIRED, "--reference", "4,10.24,3.68,3.68"])
+
+        assert result.exit_code == 0, result.output
+        assert f"{_REFERENCE_LINE}{_LARGE}**" in section_under(result.stdout, RANK)
+        reference = config_row(result.stdout, RANK, _LARGE)
+        other = config_row(result.stdout, RANK, _SMALL)
+        change = _signed_pounds(other[_OUTLAY_CHANGE])
+        assert change == pytest.approx(
+            _pounds(other["Rep Outlay (£)"]) - _pounds(reference["Rep Outlay (£)"]), abs=0.011
+        )
+        assert other["Pays For Itself"] == ("yes" if change <= 0 else "no")
+
+    def test_a_reference_outside_the_grid_is_refused_listing_the_grid_before_any_simulation(
+        self, tmp_path: Path, optimize_fleet_results: FleetResults
+    ) -> None:
+        result, asked = self._run(tmp_path, optimize_fleet_results, [*self._PAIRED, "--reference", "4,7,3.68,2.4"])
+
+        stderr = " ".join(result.stderr.split())
+        assert result.exit_code == 1, result.output
+        assert "Configuration error:" in stderr
+        assert "--reference" in stderr
+        assert "4,5.12,3.68,2.4" in stderr
+        assert "4,10.24,3.68,3.68" in stderr
+        assert asked == []
+
+    @pytest.mark.parametrize(
+        ("battery_kw", "reference"),
+        [
+            pytest.param(["--battery-kw", "2.4,3.68"], "4,5.12,3.68", id="three-values-with-battery-kw"),
+            pytest.param([], "4,5.12,3.68,2.4", id="four-values-without-battery-kw"),
+        ],
+    )
+    def test_a_reference_of_the_wrong_arity_is_refused_naming_its_form_before_any_simulation(
+        self, tmp_path: Path, optimize_fleet_results: FleetResults, battery_kw: list[str], reference: str
+    ) -> None:
+        result, asked = self._run(tmp_path, optimize_fleet_results, [*self._GRID, *battery_kw, "--reference", reference])
+
+        stderr = " ".join(result.stderr.split())
+        assert result.exit_code == 1, result.output
+        assert "Configuration error:" in stderr
+        assert "--reference" in stderr
+        assert "PV,BATTERY,INVERTER[,BATTERY_KW]" in stderr
+        assert asked == []
+
+    def test_the_help_lists_both_flags(self) -> None:
+        result = CliRunner().invoke(app, ["optimize", "configs", "--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "--battery-kw" in result.output
+        assert "--reference" in result.output
 
 
 # ---------------------------------------------------------------------------
