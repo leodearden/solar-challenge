@@ -8,6 +8,7 @@ Each check is stated across pages, and every expected value comes from those two
 refusing reader, never a literal copy.
 """
 
+import json
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -29,9 +30,16 @@ from solar_challenge.fleet_distribution import (
     parse_fleet_distribution_config,
     write_distribution_spec,
 )
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits
+from solar_challenge.number_fields import Interval
+from solar_challenge.scenario_blocks import parse_tariff_config
+from solar_challenge.tariff import TariffConfig
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits, page_limits
+from solar_challenge.web.form_choices import flat_rate_choice
+from tests._alpine_component_arguments import component_arguments
 from tests._builder_form import builder_page_starting_form
 from tests._fleet_form import fleet_page_starting_form, start_wire
+from tests._html_page import element_attributes, script_text_by_id
+from tests._html_select_options import options_of_each
 from tests._repository_paths import SCENARIOS_DIR
 from tests._web_app import app_builder
 
@@ -244,3 +252,97 @@ def test_each_pages_export_loads_on_the_other_page_with_the_same_component_block
     assert imported.status_code == 200, imported.get_data(as_text=True)
     loaded = imported.get_json()["form"]
     assert {key: loaded[key] for key in FLEET_COMPONENTS} == {key: form[key] for key in FLEET_COMPONENTS}
+
+
+#: The dashboard's form pages, each of which writes #page-limits.
+_FORM_PAGE_PATHS = ("/simulate/home", _FLEET_PAGE.path, _BUILDER.path, "/scenarios/sweep")
+
+#: What the dashboard's forms accept and start at, which every page check below expects.
+_LIMITS = page_limits()
+
+
+def _page(client: FlaskClient, path: str) -> str:
+    """The HTML the dashboard renders at *path*."""
+    response = client.get(path)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return response.get_data(as_text=True)
+
+
+def test_every_form_page_writes_the_one_page_limits_value_into_its_page_limits_element(client: FlaskClient) -> None:
+    """L1: the home, fleet, builder and sweep pages each write page_limits().as_json() as their #page-limits."""
+    written = {path: json.loads(script_text_by_id(_page(client, path), "page-limits")) for path in _FORM_PAGE_PATHS}
+
+    assert written == dict.fromkeys(_FORM_PAGE_PATHS, _LIMITS.as_json())
+
+
+@pytest.mark.parametrize(
+    ("path", "input_id", "limit"),
+    [
+        pytest.param(_FLEET_PAGE.path, "n_homes", _LIMITS.fleet_size, id="fleet-n_homes"),
+        pytest.param(_BUILDER.path, "builder_n_homes", _LIMITS.fleet_size, id="builder-n_homes"),
+        pytest.param(_BUILDER.path, "builder_seed", _LIMITS.seed, id="builder-seed"),
+        pytest.param("/simulate/home", "pv_kw", _LIMITS.components["pv"].value_range, id="home-pv_kw"),
+        pytest.param(
+            "/simulate/home", "consumption_kwh", _LIMITS.components["load"].value_range, id="home-consumption_kwh"
+        ),
+        pytest.param("/scenarios/sweep", "sweep_base_days", _LIMITS.window_days, id="sweep-base_days"),
+    ],
+)
+def test_every_input_a_page_limit_bounds_spans_that_limit(
+    client: FlaskClient, path: str, input_id: str, limit: Interval
+) -> None:
+    """L1: the one input carrying *input_id* on *path* has the page limit's ends as its min and max."""
+    (attributes,) = [each for each in element_attributes(_page(client, path), "input") if each.get("id") == input_id]
+
+    assert (attributes.get("min"), attributes.get("max")) == (str(limit.low), str(limit.high))
+
+
+def test_both_fleet_pages_offer_each_component_fixed_value_then_its_editor_types_titled_by_the_table(
+    client: FlaskClient,
+) -> None:
+    """Each card's Distribution Type, on both fleet pages, offers Fixed Value then its component's editor types, each by its name and title in DISTRIBUTION_TYPES."""
+    offered = {
+        page.name: options_of_each(_page(client, page.path), {"x-model": "dist.type"}) for page in (_FLEET_PAGE, _BUILDER)
+    }
+
+    assert offered == dict.fromkeys(
+        offered,
+        [
+            [("", component.scalar_form.title), *((each.name, each.title) for each in component.editor_types)]
+            for component in FLEET_COMPONENTS.values()
+        ],
+    )
+
+
+def test_both_fleet_pages_bound_each_fixed_value_by_its_components_value_range(client: FlaskClient) -> None:
+    """L1: each card's Fixed Value input, on both fleet pages and in card order, spans its component's value_range."""
+    bounds = {
+        page.name: [
+            (attributes.get("min"), attributes.get("max"))
+            for attributes in element_attributes(_page(client, page.path), "input")
+            if attributes.get("x-model.number") == "dist.fixed"
+        ]
+        for page in (_FLEET_PAGE, _BUILDER)
+    }
+
+    assert bounds == dict.fromkeys(
+        bounds,
+        [(str(component.value_range.low), str(component.value_range.high)) for component in FLEET_COMPONENTS.values()],
+    )
+
+
+def test_the_fleet_page_and_the_builder_start_their_flat_rate_at_flat_rate_start(client: FlaskClient) -> None:
+    """V3: the flat-rate tariff the fleet page's script posts at its starts, and the builder's starting import rate, export one tariff at flat_rate_start."""
+    flat_rate_type = flat_rate_choice(_FLEET_PAGE.name).type
+    tariff_choices = component_arguments(_page(client, _FLEET_PAGE.path), "fleetSimulator")[0]
+    (flat_rate,) = [choice for choice in tariff_choices if choice["type"] == flat_rate_type]
+    posted_tariff = {"type": flat_rate_type, **{setting["key"]: setting["start"] for setting in flat_rate["settings"]}}
+
+    documents = {
+        _FLEET_PAGE.name: _FLEET_PAGE.export(client, {**_FLEET_PAGE.starting_form(), "tariff": posted_tariff}),
+        _BUILDER.name: _BUILDER.export(client, _BUILDER.starting_form()),
+    }
+
+    assert {name: parse_tariff_config(yaml.safe_load(text)["tariff"]) for name, text in documents.items()} == dict.fromkeys(
+        documents, TariffConfig.flat_rate(_LIMITS.flat_rate_start)
+    )
