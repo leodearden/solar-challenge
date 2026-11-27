@@ -670,11 +670,16 @@ def _home_displaced_self_use(
     )
 
 
-def _fleet_day_sums(home_days: list[pd.DataFrame], column: str) -> tuple[float, ...]:
-    """The fleet's total of *column* on each date of *home_days*, each one home's figures per event date: the sum over the homes on the sorted union of their dates, a home lacking a date adding 0 to it."""
+def _fleet_day_totals(home_days: list[pd.DataFrame], column: str) -> pd.Series:
+    """The fleet's total of *column* on each date of *home_days*, each one home's figures per event date, indexed by date: the sum over the homes on the sorted union of their dates, a home lacking a date adding 0 to it."""
     if not home_days:
-        return ()
-    return tuple(pd.concat([days[column] for days in home_days]).groupby(level=0).sum().tolist())
+        return pd.Series(dtype=float)
+    return pd.concat([days[column] for days in home_days]).groupby(level=0).sum()
+
+
+def _fleet_day_sums(home_days: list[pd.DataFrame], column: str) -> tuple[float, ...]:
+    """The figures of :func:`_fleet_day_totals`, in date order."""
+    return tuple(_fleet_day_totals(home_days, column).tolist())
 
 
 def _mean_or_zero(values: tuple[float, ...]) -> float:
@@ -725,19 +730,19 @@ class _EventDayTotals:
 
     Attributes:
         window: The event window.
+        days: The event days, in date order.
         avail_kw: The fleet's firm spare capacity on each event day, A(d) (kW).
     """
 
     window: EventWindow
+    days: tuple[date, ...]
     avail_kw: tuple[float, ...]
 
     @classmethod
     def of(cls, event_days: _PerHomeEventDays) -> "_EventDayTotals":
         """Sum *event_days*' avail_kw over its homes on each event day."""
-        return cls(
-            window=event_days.window,
-            avail_kw=_fleet_day_sums([days for _, days in event_days.homes], "avail_kw"),
-        )
+        totals = _fleet_day_totals([days for _, days in event_days.homes], "avail_kw")
+        return cls(window=event_days.window, days=tuple(totals.index), avail_kw=tuple(totals.tolist()))
 
     @property
     def mean_avail_kw(self) -> float:
@@ -776,6 +781,34 @@ def _displaced_self_use(event_days: _PerHomeEventDays) -> _DisplacedSelfUse:
         gbp_per_year=_mean_or_zero(_fleet_day_sums(home_days, "displaced_gbp"))
         * event_days.window.events_per_year,
     )
+
+
+def _home_window_days(sim: "SimulationResults", window: EventWindow) -> pd.DataFrame:
+    """One home's rows in *window*, grouped by local date, indexed by date in date order.
+
+    Column export_kwh is the battery export over the day's rows (kWh), 0 for a home
+    whose results hold no ``battery_export``.  It reads the index's step length.
+
+    Raises:
+        ValueError: If the home's index has no step length (:attr:`SimulationResults.window`).
+    """
+    index = sim.battery_discharge.index
+    rows = np.flatnonzero(window.mask(index).to_numpy())
+    export_kw = np.zeros(len(rows)) if sim.battery_export is None else sim.battery_export.to_numpy(dtype=float)[rows]
+    return (
+        pd.DataFrame({"export_kwh": export_kw * sim.window.step_hours})
+        .groupby(index[rows].date)
+        .agg(export_kwh=("export_kwh", "sum"))
+    )
+
+
+def _battery_export_kwh_per_event(
+    battery_homes: list[tuple["SimulationResults", BatteryConfig]], totals: _EventDayTotals
+) -> float:
+    """The mean over *totals*' event days of the battery homes' battery export in its window (kWh), a home lacking a day adding 0; 0.0 with no event day."""
+    home_days = [_home_window_days(sim, totals.window) for sim, _ in battery_homes]
+    fleet_kwh = _fleet_day_totals(home_days, "export_kwh").reindex(list(totals.days), fill_value=0.0)
+    return _mean_or_zero(tuple(fleet_kwh.tolist()))
 
 
 def _per_home_event_days(
@@ -915,10 +948,21 @@ class GridServicesAtEvents:
             home simulated without a tariff (``tariff_rate`` 0) adds £0, and one
             whose import price is below 0 over its span adds a value below 0.
             The householders import it; neither income figure subtracts it.
+        per_window_battery_export_kwh_per_event: Per-window battery export an
+            event holds (kWh), in window order: the battery homes' battery
+            export over the window's rows on each event day, summed over homes
+            and averaged over event days; a home whose results hold no
+            ``battery_export`` adds 0, and a window with no event day gives 0.0.
+
+    The two displaced-self-use fields are reported together or not at all: each
+    holds one entry per event window, or both are empty, ``()``, the breakdown's
+    one "not reported".  Every other per-window field holds one entry per event
+    window.
 
     Construction raises ValueError for a breakdown of no event window, a
-    per-window field without one entry per event window, a NaN figure, a
-    capacity, energy or income below 0, and an *annual_income_gbp* that is not
+    displaced-self-use field empty while the other is not, a per-window field
+    otherwise without one entry per event window, a NaN figure, a capacity,
+    energy or income below 0, and an *annual_income_gbp* that is not
     ``sum(per_window_income_gbp)``.
     Consumers must NOT re-apply ``(1 - aggregator_share)`` to the per-window
     tuple — it has already been applied.
@@ -931,16 +975,24 @@ class GridServicesAtEvents:
     per_window_avail_p90_kw: tuple[float, ...]
     per_window_displaced_self_use_kwh_per_event: tuple[float, ...]
     per_window_displaced_import_gbp_per_year: tuple[float, ...]
+    per_window_battery_export_kwh_per_event: tuple[float, ...]
 
     def __post_init__(self) -> None:
-        """Refuse no event window, a per-window field without one entry per window, a NaN figure, a capacity, energy or income below 0, and a total other than the window sum."""
+        """Refuse no event window, a half-reported displaced self-use, a per-window field otherwise without one entry per window, a NaN figure, a capacity, energy or income below 0, and a total other than the window sum."""
         windows = len(self.per_window_avail_kw)
         if windows == 0:
             raise ValueError(
                 "GridServicesAtEvents prices at least one event window, as GridServicesEventsConfig requires: "
                 f"got per_window_avail_kw={self.per_window_avail_kw!r}"
             )
-        misfits = [f"{name}={entries!r}" for name in _PER_WINDOW_FIELDS if len(entries := getattr(self, name)) != windows]
+        displaced = {name: getattr(self, name) for name in _DISPLACED_SELF_USE_FIELDS}
+        if any(displaced.values()) and not all(displaced.values()):
+            raise ValueError(
+                "GridServicesAtEvents reports its displaced self-use in both its fields, or in neither, each () "
+                f"when it is not reported: got {', '.join(f'{name}={entries!r}' for name, entries in displaced.items())}"
+            )
+        reported = [name for name in _PER_WINDOW_FIELDS if name not in displaced or any(displaced.values())]
+        misfits = [f"{name}={entries!r}" for name in reported if len(entries := getattr(self, name)) != windows]
         if misfits:
             raise ValueError(
                 f"GridServicesAtEvents holds one entry per event window in each per-window field, {windows} as "
@@ -971,6 +1023,7 @@ class GridServicesAtEvents:
 
 _PER_WINDOW_FIELDS = tuple(field.name for field in fields(GridServicesAtEvents) if field.name != "annual_income_gbp")
 _IMPORT_PRICE_SIGNED_FIELDS = frozenset({"per_window_displaced_import_gbp_per_year"})
+_DISPLACED_SELF_USE_FIELDS = ("per_window_displaced_self_use_kwh_per_event", "per_window_displaced_import_gbp_per_year")
 
 
 # ---------------------------------------------------------------------------
@@ -1112,6 +1165,8 @@ def compute_grid_services_at_events(
           ``per_window_displaced_import_gbp_per_year`` — the evening self-use an
           event displaces and its value, reported beside the income, which is
           gross of them.
+        - ``per_window_battery_export_kwh_per_event`` — the battery export an
+          event's window holds, the mean over the window's event days.
 
     Raises:
         ValueError: If a battery home's index has no step length to read its
@@ -1130,6 +1185,7 @@ def compute_grid_services_at_events(
     )
     per_window_net = _net_income_per_window_gbp(cfg, per_window_totals)
     displaced = [_displaced_self_use(event_days) for event_days in per_window_event_days]
+    battery_homes = _battery_homes(fleet_results)
     return GridServicesAtEvents(
         annual_income_gbp=float(sum(per_window_net)),
         per_window_avail_kw=tuple(totals.mean_avail_kw for totals in per_window_totals),
@@ -1145,5 +1201,8 @@ def compute_grid_services_at_events(
         ),
         per_window_displaced_import_gbp_per_year=tuple(
             window_displaced.gbp_per_year for window_displaced in displaced
+        ),
+        per_window_battery_export_kwh_per_event=tuple(
+            _battery_export_kwh_per_event(battery_homes, totals) for totals in per_window_totals
         ),
     )
