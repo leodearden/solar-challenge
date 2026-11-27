@@ -1029,6 +1029,26 @@ Service measures delivery against an operational baseline; `capacity` counts the
 battery's whole window discharge, as NGED baselines domestic storage at its
 capacity (`tests/unit/test_gridservices.py::TestFirmCapacityPerEventDay`).
 
+**Enrolment.** `grid_services_model.participation` says what part the fleet
+takes in its events: `"observed"`, the default, runs the fleet's own dispatch,
+or `"dispatched"`, which enrols it. A dispatched scenario's
+`ScenarioConfig.simulated_homes` gives every battery home the same event
+windows: for each window, at its position in `event_windows`, the days
+`gridservices.drawn_event_days` draws from the simulated period with
+`event_day_seed`. The count is `events_per_year` times the share of each
+calendar year's eligible days that the period holds, rounded half up, at least
+1 when any day is eligible and at most the eligible days. The battery
+discharges at full power through every window hour of each drawn day. A home
+with no battery is unchanged, and a dispatched scenario with no battery home is
+refused. `site_export_limit_kw`, default none, caps each home's export, PV
+excess included, in every step in which its battery exports. It does not
+curtail PV export while the battery exports nothing
+(`tests/unit/config/test_event_enrolment.py`). Enrolment changes no pricing
+yet: a dispatched scenario's events income is still the spare-capacity pricing
+above, measured on the enrolled run, so under the operational baseline a drawn
+day, on which the batteries already discharge at full power, adds next to no
+spare capacity.
+
 **Reliability.** Beside the booked mean, the capacity-at-events breakdown reports
 the capacity available on at least 50% and on at least 90% of event days: the
 ⌈q·n⌉-th largest of the n daily totals A(d), for q = 0.5 and 0.9, the rank

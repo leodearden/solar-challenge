@@ -253,6 +253,11 @@ class BatteryConfig:
             discharges at full power, serving the home first and exporting the rest
             (dispatch.EventDischargeStrategy); () means none. The scenario's events
             configuration sets them: a battery: block has no key for them.
+        site_export_limit_kw: The most the home may export in a step in which this
+            battery exports, PV excess included, a finite number of at least 0; None
+            for no limit. It does not curtail PV export in a step in which the battery
+            exports nothing. The scenario's events configuration sets it with
+            event_discharge, so a battery: block has no key for it.
     """
 
     capacity_kwh: float
@@ -271,9 +276,10 @@ class BatteryConfig:
     soh_floor: float = 0.5
     soh: Optional[float] = None
     event_discharge: tuple[EventDischargeWindow, ...] = ()
+    site_export_limit_kw: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Refuse a dispatch strategy that is no variant, read each number setting and the event windows, then refuse SOC limits out of order."""
+        """Refuse a dispatch strategy that is no variant, read each number setting, the event windows and the site export limit, then refuse SOC limits out of order."""
         _require_dispatch_strategy_variant(self.dispatch_strategy)
         read_field(self, "capacity_kwh", as_finite_float, POSITIVE)
         read_field(self, "max_charge_kw", as_finite_float, _POWER_LIMIT_KW)
@@ -285,6 +291,7 @@ class BatteryConfig:
         read_field(self, "soh_floor", as_finite_float, FRACTION)
         read_field(self, "soh", as_finite_float, FRACTION, optional=True)
         object.__setattr__(self, "event_discharge", as_event_discharge_windows(self.event_discharge, "event_discharge"))
+        read_field(self, "site_export_limit_kw", as_finite_float, NON_NEGATIVE, optional=True)
         _require_soc_limits_in_order(self.min_soc_fraction, self.max_soc_fraction)
 
     @property
@@ -555,6 +562,11 @@ class Battery:
     def max_discharge_kw(self) -> float:
         """The maximum discharging power in kW, the limit discharge() applies."""
         return self._config.max_discharge_kw
+
+    @property
+    def site_export_limit_kw(self) -> Optional[float]:
+        """The most the home may export in kW in a step in which this battery exports, PV excess included; None for no limit."""
+        return self._config.site_export_limit_kw
 
     def charge(self, power_kw: float, duration_minutes: float) -> float:
         """Charge the battery.

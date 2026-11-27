@@ -16,6 +16,7 @@ from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
     GRID_SERVICES_RATE_BANDS,
     DeliveryBaseline,
+    EventParticipation,
     EventWindow,
     FlatGridServices,
     GridServicesAtEvents,
@@ -352,6 +353,32 @@ class TestDeliveryBaseline:
 
 
 # ---------------------------------------------------------------------------
+# EventParticipation: whether the fleet is enrolled in its events (docs/prds/event-dispatch-and-battery-sizing.md)
+# ---------------------------------------------------------------------------
+
+
+class TestEventParticipation:
+    """EventParticipation names whether the fleet only observes its events or is dispatched in them, and its parse refuses any other value."""
+
+    def test_members_are_observed_then_dispatched(self) -> None:
+        assert [participation.value for participation in EventParticipation] == ["observed", "dispatched"]
+
+    def test_parse_returns_the_member_its_value_names(self) -> None:
+        assert EventParticipation.parse("observed", what="x") is EventParticipation.OBSERVED
+        assert EventParticipation.parse("dispatched", what="x") is EventParticipation.DISPATCHED
+
+    def test_parse_returns_a_member_it_is_given(self) -> None:
+        assert EventParticipation.parse(EventParticipation.DISPATCHED, what="x") is EventParticipation.DISPATCHED
+
+    @pytest.mark.parametrize("value", ["enrolled", None, 1])
+    def test_parse_refuses_any_other_value_naming_what_and_the_participations(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            EventParticipation.parse(value, what="x")
+
+        assert str(excinfo.value) == f"x must be one of observed, dispatched, got {value!r}"
+
+
+# ---------------------------------------------------------------------------
 # Step-5: GridServicesRateBand + GridServicesRateBands + module constant
 # ---------------------------------------------------------------------------
 
@@ -650,6 +677,78 @@ class TestGridServicesEventsConfigValidation:
         )
         assert cfg.availability_gbp_per_kw_per_event == 0.0
         assert cfg.utilisation_gbp_per_mwh == 0.0
+
+
+class TestGridServicesEventsConfigEnrolment:
+    """GridServicesEventsConfig holds the fleet's participation in its events, the seed of their days and the site export limit."""
+
+    def test_by_default_the_fleet_observes_with_seed_0_and_no_site_export_limit(self) -> None:
+        cfg = GridServicesEventsConfig()
+
+        assert cfg.participation is EventParticipation.OBSERVED
+        assert cfg.event_day_seed == 0
+        assert cfg.site_export_limit_kw is None
+
+    def test_a_participation_value_is_held_as_the_member_it_names(self) -> None:
+        cfg = GridServicesEventsConfig(participation="dispatched")  # type: ignore[arg-type]
+
+        assert type(cfg.participation) is EventParticipation
+        assert cfg.participation is EventParticipation.DISPATCHED
+
+    def test_the_seed_is_held_as_the_whole_number_it_reads(self) -> None:
+        seed = GridServicesEventsConfig(event_day_seed=7).event_day_seed
+
+        assert seed == 7
+        assert type(seed) is int
+
+    @pytest.mark.parametrize("limit", [3, 0.0])
+    def test_the_site_export_limit_is_held_as_the_float_it_reads(self, limit: float) -> None:
+        held = GridServicesEventsConfig(site_export_limit_kw=limit).site_export_limit_kw
+
+        assert held == float(limit)
+        assert type(held) is float
+
+    def test_an_unknown_participation_is_refused_naming_both_values(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            GridServicesEventsConfig(participation="enrolled")  # type: ignore[arg-type]
+
+        assert str(exc_info.value) == (
+            "GridServicesEventsConfig.participation must be one of observed, dispatched, got 'enrolled'"
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "requirement"),
+        [
+            pytest.param(-1, "at least 0", id="negative"),
+            pytest.param(1.5, "a whole number", id="fraction"),
+            pytest.param(True, "a finite number", id="boolean"),
+            pytest.param("x", "a finite number", id="word"),
+        ],
+    )
+    def test_a_seed_that_is_not_a_whole_number_of_at_least_0_is_refused_naming_it(
+        self, value: object, requirement: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            GridServicesEventsConfig(event_day_seed=value)  # type: ignore[arg-type]
+
+        assert str(exc_info.value) == f"event_day_seed must be {requirement}, got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("value", "requirement"),
+        [
+            pytest.param(-0.1, "at least 0", id="negative"),
+            pytest.param(float("nan"), "a finite number", id="nan"),
+            pytest.param(float("inf"), "a finite number", id="infinity"),
+            pytest.param(True, "a finite number", id="boolean"),
+        ],
+    )
+    def test_a_site_export_limit_that_is_not_a_finite_number_of_at_least_0_is_refused_naming_it(
+        self, value: object, requirement: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            GridServicesEventsConfig(site_export_limit_kw=value)  # type: ignore[arg-type]
+
+        assert str(exc_info.value) == f"site_export_limit_kw must be {requirement}, got {value!r}"
 
 
 # ---------------------------------------------------------------------------

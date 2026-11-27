@@ -82,7 +82,7 @@ def _scenario() -> ScenarioConfig:
 #: Each input type's dotted name, to a factory of a valid instance of it that gives every numeric field a value and
 #: every tuple field one element at least.
 INPUT_TYPES: Mapping[str, Callable[[], object]] = {
-    "solar_challenge.battery.BatteryConfig": lambda: BatteryConfig(capacity_kwh=5.0, soh=0.9),
+    "solar_challenge.battery.BatteryConfig": lambda: BatteryConfig(capacity_kwh=5.0, soh=0.9, site_export_limit_kw=3.0),
     "solar_challenge.community.CommunityBillingConfig": lambda: CommunityBillingConfig(seg_rate_pence_per_kwh=15.0),
     "solar_challenge.config.ScenarioConfig": _scenario,
     "solar_challenge.dispatch.GridChargeConfig": lambda: GridChargeConfig(target_soc_fraction=0.8),
@@ -135,7 +135,7 @@ INPUT_TYPES: Mapping[str, Callable[[], object]] = {
         months=(1,), weekdays=(0,), hours=(17,), events_per_year=12, event_hours=3.0
     ),
     "solar_challenge.gridservices.GridServicesEventsConfig": lambda: GridServicesEventsConfig(
-        availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=2.0
+        availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=2.0, site_export_limit_kw=3.0
     ),
     "solar_challenge.gridservices.FlatGridServices": lambda: FlatGridServices(10.0),
     "solar_challenge.heat_pump.HeatPumpConfig": lambda: HeatPumpConfig("ASHP"),

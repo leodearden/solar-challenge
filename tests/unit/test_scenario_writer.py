@@ -421,6 +421,20 @@ def test_a_battery_with_event_windows_is_refused_naming_the_field_and_why_it_has
     assert BATTERY_BLOCK.outside_grammar["event_discharge"] in str(refused.value)
 
 
+def test_a_battery_with_a_site_export_limit_is_refused_naming_the_field_and_why_it_has_no_key() -> None:
+    """A battery's site export limit has no key, so the writer refuses it rather than writing a battery without it."""
+    home = HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(),
+        battery_config=BatteryConfig(capacity_kwh=10.0, site_export_limit_kw=3.0),
+    )
+
+    with pytest.raises(ValueError, match="site_export_limit_kw") as refused:
+        home_scenario(home, name="Limited battery")
+
+    assert BATTERY_BLOCK.outside_grammar["site_export_limit_kw"] in str(refused.value)
+
+
 _EDINBURGH = Location(55.95, -3.19, altitude=47.0, name="Edinburgh, UK")
 
 

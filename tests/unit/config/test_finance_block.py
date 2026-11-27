@@ -22,6 +22,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
+    EventParticipation,
     EventWindow,
     FlatGridServices,
     GridServicesBand,
@@ -971,7 +972,7 @@ class TestFinanceGridServicesModelBlock:
 _EVENTS_NUMERIC_KEYS = tuple(
     f.name
     for f in dataclasses.fields(GridServicesEventsConfig)
-    if f.name not in {"band", "event_windows", "delivery_baseline"}
+    if f.name not in {"band", "event_windows", "delivery_baseline", "participation"}
 )
 
 
@@ -994,6 +995,9 @@ class TestFinanceConfigParsingGridServices:
         "availability_gbp_per_kw_per_event": 2.5,
         "utilisation_gbp_per_mwh": 80.0,
         "delivery_baseline": "capacity",
+        "participation": "dispatched",
+        "event_day_seed": 7,
+        "site_export_limit_kw": 3.68,
     }
     _EVENTS_FIELDS: dict[str, object] = {
         **_EVENTS_BLOCK,
@@ -1105,7 +1109,10 @@ class TestFinanceConfigParsingGridServices:
         with pytest.raises(ConfigurationError, match="mapping"):
             self._parse_events_block({**self._EVENTS_BLOCK, "event_windows": ["not-a-dict"]})
 
-    @pytest.mark.parametrize("key", ["band", "aggregator_share", "utilisation_factor", "delivery_baseline"])
+    @pytest.mark.parametrize(
+        "key",
+        ["band", "aggregator_share", "utilisation_factor", "delivery_baseline", "participation", "event_day_seed"],
+    )
     def test_null_events_value_is_refused(self, key: str) -> None:
         """A null for an events key whose declared default is not None is refused as GridServicesEventsConfig refuses it, not read as that default."""
         assert construction_refusal(
@@ -1128,6 +1135,38 @@ class TestFinanceConfigParsingGridServices:
         assert (
             "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
             in str(exc_info.value)
+        )
+
+    def test_the_enrolment_keys_parse_to_the_values_they_name(self) -> None:
+        """participation, event_day_seed and site_export_limit_kw parse to the member, the seed and the limit they name."""
+        result = self._parse_events_block(
+            {"participation": "dispatched", "event_day_seed": 7, "site_export_limit_kw": 3.68}
+        )
+
+        assert result is not None
+        assert isinstance(result.grid_services_model, GridServicesEventsConfig)
+        assert result.grid_services_model.participation is EventParticipation.DISPATCHED
+        assert result.grid_services_model.event_day_seed == 7
+        assert result.grid_services_model.site_export_limit_kw == 3.68
+
+    def test_a_block_omitting_the_enrolment_keys_observes_with_seed_0_and_no_site_export_limit(self) -> None:
+        result = self._parse_events_block({"band": "high"})
+
+        assert result is not None
+        assert isinstance(result.grid_services_model, GridServicesEventsConfig)
+        assert result.grid_services_model.participation is EventParticipation.OBSERVED
+        assert result.grid_services_model.event_day_seed == 0
+        assert result.grid_services_model.site_export_limit_kw is None
+
+    def test_an_unknown_participation_is_refused_as_the_events_configuration_refuses_it(self) -> None:
+        assert construction_refusal(
+            lambda: self._parse_events_block({**self._EVENTS_BLOCK, "participation": "enrolled"})
+        ) == self._events_refusal("participation", "enrolled")
+
+    def test_a_null_site_export_limit_parses_to_no_limit(self) -> None:
+        assert self._parse_events_block({**self._EVENTS_BLOCK, "site_export_limit_kw": None}) == FinanceConfig(
+            **self._BASE,
+            grid_services_model=GridServicesEventsConfig(**{**self._EVENTS_FIELDS, "site_export_limit_kw": None}),  # type: ignore[arg-type]
         )
 
     @pytest.mark.parametrize(

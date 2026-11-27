@@ -623,6 +623,10 @@ BATTERY_BLOCK: ComponentBlock[BatteryConfig] = ComponentBlock(
         "event_discharge": (
             "the scenario's events configuration sets a battery's event windows; a battery: block has no key for them"
         ),
+        "site_export_limit_kw": (
+            "the scenario's events configuration sets a battery's site export limit with its event windows; "
+            "a battery: block has no key for it"
+        ),
     }),
     sub_blocks=MappingProxyType({
         "dispatch_strategy": SubBlock(parse_dispatch_strategy_config, _dispatch_strategy_block),
