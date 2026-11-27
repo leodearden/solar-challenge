@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The web's request readers sit below its Flask services (docs/prds/web-request-boundary.md, row G1).
 
-Importing simulation_params, fleet_scenario or builder_form loads none of the service
+Importing simulation_params, fleet_scenario, builder_form or sweep_request loads none of the service
 modules web.database, web.jobs and web.storage, and importing request_boundary loads no
 solar_challenge.web module but the package and itself.
 
@@ -26,6 +26,7 @@ _SERVICE_MODULES = frozenset(
         "solar_challenge.web.simulation_params",
         "solar_challenge.web.fleet_scenario",
         "solar_challenge.web.builder_form",
+        "solar_challenge.web.sweep_request",
     ],
 )
 def test_importing_a_request_reader_loads_no_service_module(reader: str) -> None:

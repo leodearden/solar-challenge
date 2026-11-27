@@ -14,10 +14,9 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.number_fields import Interval, as_whole_number
-from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.fleet_scenario import parse_fleet_form
 from solar_challenge.web.simulation_params import parse_date_range
+from solar_challenge.web.sweep_request import read_sweep_request
 from tests._api_routes import api_routes
 from tests._error_records import error_records
 from tests._fleet_form import valid_distribution_form
@@ -137,7 +136,7 @@ _FLEET_FORM_WITH_A_BATTERY_DISPATCH = {
         pytest.param(
             "/api/simulate/sweep",
             {"steps": 1},
-            partial(as_whole_number, 1, "steps", Interval(2, SWEEP_MAX_STEPS)),
+            partial(read_sweep_request, {"steps": 1}),
             id="sweep-one-step",
         ),
         pytest.param(

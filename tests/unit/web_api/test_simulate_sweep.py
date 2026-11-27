@@ -5,7 +5,6 @@ This module's client submits to a recording double that numbers job ids in submi
 order and takes the real submit_home_job's parameters.
 """
 
-import sys
 from collections.abc import Callable
 from inspect import signature
 from typing import Any
@@ -17,11 +16,14 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
+from solar_challenge.web.sweep_request import read_sweep_request
 from tests._html_page import element_attributes
 
 
@@ -210,13 +212,15 @@ class TestSimulateSweep:
         assert recording_job_manager.submitted_homes == []
 
     def test_min_gte_max_returns_400(self, client: FlaskClient) -> None:
-        """min >= max returns 400."""
+        """min >= max returns 400 naming both."""
         resp = client.post(
             "/api/simulate/sweep",
             json={"min": 10.0, "max": 5.0, "steps": 3},
         )
         assert resp.status_code == 400
-        assert "Min" in resp.get_json()["error"]
+        error = resp.get_json()["error"]
+        assert "min" in error
+        assert "max" in error
 
     def test_min_equals_max_returns_400(self, client: FlaskClient) -> None:
         """min == max returns 400."""
@@ -226,14 +230,17 @@ class TestSimulateSweep:
         )
         assert resp.status_code == 400
 
-    def test_geometric_negative_min_returns_400(self, client: FlaskClient) -> None:
-        """Geometric sweep with min <= 0 returns 400."""
+    def test_geometric_negative_min_returns_400(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        """Geometric sweep with min <= 0 returns 400 naming min, and submits nothing."""
         resp = client.post(
             "/api/simulate/sweep",
             json={"min": -1.0, "max": 10.0, "steps": 3, "mode": "geometric"},
         )
         assert resp.status_code == 400
-        assert "positive" in resp.get_json()["error"]
+        assert "min" in resp.get_json()["error"]
+        assert recording_job_manager.submitted_homes == []
 
     def test_geometric_zero_min_returns_400(self, client: FlaskClient) -> None:
         """Geometric sweep with min=0 returns 400."""
@@ -242,36 +249,6 @@ class TestSimulateSweep:
             json={"min": 0.0, "max": 10.0, "steps": 3, "mode": "geometric"},
         )
         assert resp.status_code == 400
-
-    @pytest.mark.parametrize(
-        "body",
-        [
-            pytest.param(
-                {"min": 1e-10, "max": sys.float_info.max, "steps": 7, "mode": "geometric"},
-                id="geometric-from-a-tiny-min-to-the-largest-float",
-            ),
-            pytest.param(
-                {"min": -sys.float_info.max, "max": sys.float_info.max, "steps": 2, "mode": "linear"},
-                id="linear-from-the-most-negative-to-the-largest-float",
-            ),
-        ],
-    )
-    def test_a_min_and_max_too_far_apart_for_the_points_to_be_computed_are_refused_naming_both(
-        self,
-        client: FlaskClient,
-        recording_job_manager: _RecordingJobManager,
-        body: dict[str, object],
-    ) -> None:
-        """A finite min and max so far apart that computing the points between them overflows a float is a 400 naming both, never a 500, and no point is submitted."""
-        resp = client.post("/api/simulate/sweep", json=body)
-        assert resp.status_code == 400
-        assert resp.get_json() == {
-            "error": (
-                f"min {body['min']!r} and max {body['max']!r} are too far apart to sweep:"
-                " computing the points between them overflows a float"
-            )
-        }
-        assert recording_job_manager.submitted_homes == []
 
     @pytest.mark.parametrize(
         ("base_config", "type_name"),
@@ -307,12 +284,26 @@ class TestSimulateSweep:
     def test_empty_object_body_submits_the_default_sweep(
         self, client: FlaskClient, recording_job_manager: _RecordingJobManager
     ) -> None:
-        """Every field is optional: {} sweeps PV capacity linearly from 1 to 10 kW in 5 steps, one home job per step."""
+        """Every field is optional: {} sweeps PV capacity geometrically over its starting range, 2 to 8 kW, in 5 steps, one home job per step."""
         resp = client.post("/api/simulate/sweep", json={})
         assert resp.status_code == 201
-        default_pv_kw = [1.0, 3.25, 5.5, 7.75, 10.0]
+        default_pv_kw = [2.0, 2.828, 4.0, 5.657, 8.0]
         assert (resp.get_json()["parameter"], resp.get_json()["values"]) == ("pv_capacity_kw", default_pv_kw)
         assert [home.pv_config.capacity_kw for home in recording_job_manager.submitted_homes] == default_pv_kw
+
+    def test_a_body_naming_only_the_battery_sweeps_it_geometrically_from_1_to_13_5_kwh_in_5_steps(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        resp = client.post("/api/simulate/sweep", json={"parameter": "battery_capacity_kwh"})
+        assert resp.status_code == 201
+        default_battery_kwh = [1.0, 1.917, 3.674, 7.043, 13.5]
+        assert (resp.get_json()["parameter"], resp.get_json()["values"]) == (
+            "battery_capacity_kwh",
+            default_battery_kwh,
+        )
+        assert [home.battery_config.capacity_kwh for home in recording_job_manager.submitted_homes] == (
+            default_battery_kwh
+        )
 
 
 class TestSweepParameters:
@@ -388,33 +379,30 @@ class TestSweepParameters:
             assert supported in error
         assert recording_job_manager.submitted_homes == []
 
-    def test_a_later_invalid_point_refuses_the_sweep_before_any_point_is_submitted(
+    def test_a_max_outside_the_parameters_range_is_refused_before_any_point_is_submitted(
         self,
         client: FlaskClient,
         recording_job_manager: _RecordingJobManager,
     ) -> None:
-        """A sweep whose last point exceeds the PV capacity a home accepts gets 400 naming that point, and submits none of its points.
+        """A sweep whose max exceeds the PV capacity a home accepts gets read_sweep_request's own refusal of its range, not a point's, and submits none of its points."""
+        body = {"parameter": "pv_capacity_kw", "min": 5.0, "max": 25.0, "steps": 3}
+        with pytest.raises(ConfigurationError) as refusal:
+            read_sweep_request(body)
 
-        Its earlier points are valid, so a sweep that submitted each point as it validated it would already have started their jobs.
-        """
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 5.0, "max": 25.0, "steps": 3},
-        )
+        response = client.post("/api/simulate/sweep", json=body)
 
-        assert response.status_code == 400
-        assert "pv_capacity_kw=25.0" in response.get_json()["error"]
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
         assert recording_job_manager.submitted_homes == []
 
-    def test_a_base_config_the_home_parser_refuses_is_refused_naming_the_first_point_and_carrying_its_refusal(
+    def test_a_base_config_the_home_parser_refuses_is_refused_naming_base_config_and_carrying_its_refusal(
         self,
         client: FlaskClient,
         recording_job_manager: _RecordingJobManager,
     ) -> None:
-        """A base_config location no preset names refuses the sweep at its first point, with parse_home_config's own refusal, and submits nothing."""
+        """A base_config location no preset names refuses the sweep, named base_config, with parse_home_config's own refusal of the base, and submits nothing."""
         base_config = {"location": "londn"}
         with pytest.raises(ConfigurationError) as refusal:
-            parse_home_config({**with_default_days(base_config, 7), "pv_kw": 1.0})
+            parse_home_config(with_default_days(base_config, 7))
 
         response = client.post(
             "/api/simulate/sweep",
@@ -423,9 +411,103 @@ class TestSweepParameters:
 
         assert (response.status_code, response.get_json()) == (
             400,
-            {"error": f"Invalid config for pv_capacity_kw=1.0: {refusal.value}"},
+            {"error": f"base_config: {refusal.value}"},
         )
         assert recording_job_manager.submitted_homes == []
+
+
+class TestSweepRequestAnswers:
+    """What POST /api/simulate/sweep answers for a sweep request its reader reads or refuses."""
+
+    def test_a_mode_no_sweep_spaces_its_points_by_is_refused_naming_mode_and_each_mode(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        response = client.post("/api/simulate/sweep", json={"min": 1, "max": 4, "steps": 3, "mode": "log"})
+
+        assert response.status_code == 400
+        error = response.get_json()["error"]
+        for named in ("mode", "'log'", "linear", "geometric"):
+            assert named in error
+        assert recording_job_manager.submitted_homes == []
+
+    def test_a_battery_max_above_its_components_range_gets_the_readers_range_refusal(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        body = {"parameter": "battery_capacity_kwh", "min": 0, "max": 200, "steps": 3, "mode": "linear"}
+        with pytest.raises(ConfigurationError) as refusal:
+            read_sweep_request(body)
+
+        response = client.post("/api/simulate/sweep", json=body)
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
+        assert recording_job_manager.submitted_homes == []
+
+    def test_a_body_without_a_mode_sweeps_geometrically(self, client: FlaskClient) -> None:
+        response = client.post("/api/simulate/sweep", json={"min": 1, "max": 4, "steps": 3})
+
+        assert response.status_code == 201
+        assert response.get_json()["values"] == [1.0, 2.0, 4.0]
+
+
+#: The field of a sweep page's base_config that holds each parameter's value, and the fleet component whose range bounds it.
+_FORM_KEY_AND_COMPONENT = {
+    "pv_capacity_kw": ("pv_kw", "pv"),
+    "battery_capacity_kwh": ("battery_kwh", "battery"),
+    "annual_consumption_kwh": ("consumption_kwh", "load"),
+}
+
+#: The base_config the sweep page posts until its user changes one.
+_PAGE_BASE_CONFIG = {"battery_kwh": 5.0, "location": "bristol", "days": 7}
+
+
+class TestSweepPointHomes:
+    """The home each point of a sweep submits: the base_config's home with the parameter at the point's value."""
+
+    @pytest.mark.parametrize("parameter", tuple(_FORM_KEY_AND_COMPONENT))
+    def test_each_points_home_is_the_one_its_form_would_post(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager, parameter: str
+    ) -> None:
+        """Each point's home equals the one parse_home_config reads from the base_config with the parameter's form field at the point's value."""
+        form_key, component = _FORM_KEY_AND_COMPONENT[parameter]
+        value_range = FLEET_COMPONENTS[component].value_range
+
+        response = client.post(
+            "/api/simulate/sweep",
+            json={
+                "parameter": parameter,
+                "min": value_range.low,
+                "max": value_range.high,
+                "steps": 3,
+                "mode": "linear",
+                "base_config": _PAGE_BASE_CONFIG,
+            },
+        )
+
+        assert response.status_code == 201
+        assert recording_job_manager.submitted_homes == [
+            parse_home_config({**_PAGE_BASE_CONFIG, form_key: value})[0] for value in response.get_json()["values"]
+        ]
+
+    def test_a_base_without_a_battery_gives_each_battery_point_a_default_battery(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        """A base_config without a battery, whatever battery power it sends, gives a battery point BatteryConfig's defaults at its capacity, and the 0 kWh point no battery."""
+        response = client.post(
+            "/api/simulate/sweep",
+            json={
+                "parameter": "battery_capacity_kwh",
+                "min": 0,
+                "max": 10,
+                "steps": 2,
+                "mode": "linear",
+                "base_config": {"battery_kwh": 0, "max_charge_kw": 3, "days": 7},
+            },
+        )
+
+        assert response.status_code == 201
+        no_battery, ten_kwh = recording_job_manager.submitted_homes
+        assert no_battery.battery_config is None
+        assert ten_kwh.battery_config == BatteryConfig(capacity_kwh=10.0)
 
 
 def _home_window(home_config: dict[str, Any]) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -508,4 +590,62 @@ class TestSweepWindow:
 
         assert response.status_code == 400
         assert str(refusal.value) in response.get_json()["error"]
+        assert recording_job_manager.submitted_homes == []
+
+
+_POINTS_URL = "/api/simulate/sweep/points"
+
+
+class TestSweepPoints:
+    """POST /api/simulate/sweep/points previews the values POST /api/simulate/sweep runs, reading the same body, and submits nothing."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(
+                {"parameter": "pv_capacity_kw", "min": 1, "max": 9, "steps": 4, "mode": "geometric"},
+                id="geometric-pv",
+            ),
+            pytest.param(
+                {"parameter": "battery_capacity_kwh", "min": 0, "max": 10, "steps": 3, "mode": "linear"},
+                id="linear-battery",
+            ),
+            pytest.param({"parameter": "battery_capacity_kwh"}, id="battery-defaults"),
+        ],
+    )
+    def test_the_points_are_the_parameter_and_values_the_submit_runs(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager, body: dict[str, object]
+    ) -> None:
+        body = {**body, "base_config": _PAGE_BASE_CONFIG}
+
+        points = client.post(_POINTS_URL, json=body)
+        submitted_by_the_points = list(recording_job_manager.submitted_homes)
+        submit = client.post("/api/simulate/sweep", json=body)
+
+        assert (points.status_code, submit.status_code) == (200, 201)
+        assert points.get_json() == {
+            "parameter": submit.get_json()["parameter"],
+            "values": submit.get_json()["values"],
+        }
+        assert submitted_by_the_points == []
+
+    def test_the_points_read_no_base_config(self, client: FlaskClient) -> None:
+        """A base_config the submit would refuse changes nothing the points answer."""
+        body = {"min": 1, "max": 4, "steps": 3}
+
+        with_a_refused_base = client.post(_POINTS_URL, json={**body, "base_config": {"location": "londn"}})
+        without_one = client.post(_POINTS_URL, json=body)
+
+        assert (with_a_refused_base.status_code, with_a_refused_base.get_json()) == (200, without_one.get_json())
+
+    def test_a_sweep_the_reader_refuses_gets_the_same_400_from_both_and_submits_nothing(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        body = {"parameter": "battery_capacity_kwh", "min": 0, "max": 10, "steps": 3, "mode": "geometric"}
+
+        points = client.post(_POINTS_URL, json=body)
+        submit = client.post("/api/simulate/sweep", json=body)
+
+        assert (points.status_code, points.get_json()) == (400, submit.get_json())
+        assert submit.status_code == 400
         assert recording_job_manager.submitted_homes == []

@@ -843,7 +843,7 @@ class TestParseHomeConfigErrorPaths:
     def test_name_holding_a_lone_surrogate_returns_400_carrying_the_refusal_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, url: str, body: dict
     ) -> None:
-        """A home config's name that require_encodable_text refuses is a 400 carrying its refusal, which the sweep prefixes with its point, never a home named with a lone surrogate; nothing is submitted."""
+        """A home config's name that require_encodable_text refuses is a 400 carrying its refusal, which the sweep prefixes with base_config, never a home named with a lone surrogate; nothing is submitted."""
         with pytest.raises(ValueError) as refusal:
             require_encodable_text(chr(0xD800), "name")
 
