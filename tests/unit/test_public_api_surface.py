@@ -1081,8 +1081,10 @@ def test_a_pinned_dataclass_whose_instances_lose_their_dict_prints_breaking(
 # an exported name, a FROZEN_CLOSURE path, a FROZEN_MEMBERS member path, or a
 # FROZEN_CALLS class path plus '.__call__'.  Each value is the id of the task
 # that last changed that path, whose note
-# docs/unreleased/domain-library-consumption/<id>.md exists.  A release
-# empties it.
+# docs/unreleased/domain-library-consumption/<id>.md exists.  The tests below
+# check a path's first change since the release: a later change to a listed
+# path re-points its row to its own task, which writes its own note, and only
+# the FROZEN_* lock's failure message asks for that.  A release empties it.
 # ---------------------------------------------------------------------------
 UNRELEASED: dict[str, int] = {
     "SummaryStatistics": 1702,
@@ -1093,14 +1095,50 @@ UNRELEASED: dict[str, int] = {
 }
 
 
+def _call_path(class_path: str) -> str:
+    """The UNRELEASED spelling of the __call__ a FROZEN_CALLS row pins for *class_path*."""
+    return f"{class_path}.__call__"
+
+
+def _released_paths() -> set[str]:
+    """Every path the released snapshot pins, by its UNRELEASED spelling."""
+    return {
+        *RELEASED_SURFACE,
+        *RELEASED_CLOSURE,
+        *_by_member_path(RELEASED_MEMBERS),
+        *map(_call_path, RELEASED_CALLS),
+    }
+
+
+def _merged_drift(drift_by_table: Mapping[str, Mapping[str, _Drift]]) -> dict[str, _Drift]:
+    """Merge each table's drift, in turn, into one map by path; a path two tables' drifts share fails, naming both tables, since one drift would hide the other."""
+    merged: dict[str, _Drift] = {}
+    table_of: dict[str, str] = {}
+    for table, drifted in drift_by_table.items():
+        shared = [path for path in drifted if path in merged]
+        assert not shared, "Two tables' drifts share a path, so one would hide the other:" + "".join(
+            f"\n  solar_challenge.{path} ({table_of[path]} and {table})" for path in shared
+        )
+        merged.update(drifted)
+        table_of.update(dict.fromkeys(drifted, table))
+    return merged
+
+
 def _changed_since_release() -> dict[str, _Drift]:
     """Each path whose live form differs from the released snapshot's, by its UNRELEASED spelling, each lock's paths in turn."""
-    return {
-        **_export_drift(RELEASED_SURFACE),
-        **_closure_drift(RELEASED_CLOSURE),
-        **_member_drift(_by_member_path(RELEASED_MEMBERS)),
-        **{f"{path}.__call__": drift for path, drift in _call_drift(RELEASED_CALLS).items()},
-    }
+    return _merged_drift(
+        {
+            "RELEASED_SURFACE": _export_drift(RELEASED_SURFACE),
+            "RELEASED_CLOSURE": _closure_drift(RELEASED_CLOSURE),
+            "RELEASED_MEMBERS": _member_drift(_by_member_path(RELEASED_MEMBERS)),
+            "RELEASED_CALLS": {_call_path(path): drift for path, drift in _call_drift(RELEASED_CALLS).items()},
+        }
+    )
+
+
+def _listed_rows(rows: Mapping[str, int]) -> str:
+    """Name each UNRELEASED row of *rows*, each on its own line, with its task."""
+    return "".join(f"\n  solar_challenge.{path} (task {task})" for path, task in rows.items())
 
 
 def test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release() -> None:
@@ -1108,11 +1146,16 @@ def test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_releas
 
     Fails once, naming each changed path UNRELEASED lacks with its released and current
     forms, labelled additive or breaking, then each UNRELEASED path whose form is as
-    released, with its task.
+    released, then each UNRELEASED path that names nothing live or released, each with
+    its task.  A path the snapshot does not pin and that does not drift has no live form
+    either, so the released paths tell the last two apart.
     """
     changed = _changed_since_release()
+    released = _released_paths()
     unlisted = {path: drift for path, drift in changed.items() if path not in UNRELEASED}
-    stale = {path: task for path, task in UNRELEASED.items() if path not in changed}
+    unchanged = {path: task for path, task in UNRELEASED.items() if path not in changed}
+    stale = {path: task for path, task in unchanged.items() if path in released}
+    unknown = {path: task for path, task in unchanged.items() if path not in released}
     problems = []
     if unlisted:
         entries = _drift_entries(unlisted, baseline_label="released", absent_baseline="(not in the release)")
@@ -1126,8 +1169,13 @@ def test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_releas
             "'Tag / release convention' section of docs/domain-library-consumption.md)."
         )
     if stale:
-        entries = "".join(f"\n  solar_challenge.{path} (task {task})" for path, task in stale.items())
-        problems.append(f"UNRELEASED lists paths whose forms are as released; drop each:{entries}")
+        problems.append(f"UNRELEASED lists paths whose forms are as released; drop each:{_listed_rows(stale)}")
+    if unknown:
+        problems.append(
+            "UNRELEASED lists paths that name no exported name, closure class, member or "
+            "pinned __call__, live or released; respell each as a lock's drift report prints "
+            f"it, a FROZEN_CALLS path ending '.__call__':{_listed_rows(unknown)}"
+        )
     assert not problems, "\n".join(problems)
 
 
@@ -1184,6 +1232,56 @@ def test_an_unreleased_path_whose_form_is_as_released_fails_naming_the_entry(
     message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
 
     assert "solar_challenge.calculate_degradation_factor (task 1702)" in [
+        line.strip() for line in message.splitlines()
+    ]
+
+
+def test_an_unreleased_path_that_names_nothing_fails_apart_from_one_whose_form_is_as_released(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    scratch_edit.setitem(UNRELEASED, "calculate_degradation_factor", 1702)
+    scratch_edit.setitem(UNRELEASED, "Battery.max_discharge", 1702)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    lines = [line.strip() for line in message.splitlines()]
+    as_released = lines[lines.index("solar_challenge.calculate_degradation_factor (task 1702)") - 1]
+    names_nothing = lines[lines.index("solar_challenge.Battery.max_discharge (task 1702)") - 1]
+    assert as_released.endswith(":") and names_nothing.endswith(":")
+    assert as_released != names_nothing
+
+
+def test_a_name_new_to_all_since_the_release_prints_its_released_form_as_absent(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def scratch_name(a: int) -> int: ...
+
+    scratch_edit.setattr(solar_challenge, "__all__", [*solar_challenge.__all__, "scratch_name"])
+    scratch_edit.setattr(solar_challenge, "scratch_name", scratch_name, raising=False)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    assert _printed_entry(message, "scratch_name") == [
+        "solar_challenge.scratch_name",
+        "released: (not in the release)",
+        "current:  (a: int) -> int",
+        "change:   additive",
+    ]
+
+
+def test_two_tables_whose_drifts_share_a_path_fail_naming_the_path_and_both_tables() -> None:
+    drift = _Drift(baseline=None, current="(a: int) -> int", additive=True)
+
+    message = _lock_failure(
+        lambda: _merged_drift(
+            {
+                "RELEASED_CLOSURE": {"home.SimulationResults.Inner": drift},
+                "RELEASED_MEMBERS": {"home.SimulationResults.Inner": drift},
+            }
+        )
+    )
+
+    assert "solar_challenge.home.SimulationResults.Inner (RELEASED_CLOSURE and RELEASED_MEMBERS)" in [
         line.strip() for line in message.splitlines()
     ]
 

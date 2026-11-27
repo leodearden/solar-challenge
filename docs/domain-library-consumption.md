@@ -133,8 +133,11 @@ either kind of class's public members, or to the `__call__` a pinned class's own
 body defines, must also edit `FROZEN_SURFACE`, `FROZEN_CLOSURE`, `FROZEN_MEMBERS`
 or `FROZEN_CALLS` in `tests/unit/test_public_api_surface.py`, which fails until it
 does. Such a change also adds each edited path to that file's `UNRELEASED`, with
-the id of the task, and the file fails until the path is listed and the task's
-note file exists.
+the id of the task. The file fails until each path changed since the release is
+listed and the note file of the task its row names exists, so it checks a path's
+first change since the release: a later change to a listed path re-points that
+row to its own task, which writes its own note, and only the `FROZEN_*` lock's
+failure message asks for that.
 
 **Release windows.** A rename or retirement of a frozen name lands only inside
 an open release window: a `### solar-challenge-vX.Y.Z` subsection at the end of
