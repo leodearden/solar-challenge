@@ -22,7 +22,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
-from solar_challenge.number_fields import FRACTION, POSITIVE, as_finite_float, read_field
+from solar_challenge.number_fields import FRACTION, NON_NEGATIVE, POSITIVE, as_finite_float, as_whole_number, read_field
 from solar_challenge.projection import run_cost_recovery, scenario_fleet
 from solar_challenge.scenario_knobs import KNOBS, Knob
 
@@ -147,6 +147,16 @@ class ConfigResult:
         baseline_surplus_per_home_gbp: Project net surplus per home per year at
             the configured own-use rate (baseline_own_use_rate_pence_per_kwh).
             == project_economics.net_surplus_per_home_per_year_gbp.
+        n_homes: The fleet's homes, a whole number of at least 1.
+        year_one_grid_services_income_gbp: The fleet's grid-services income in
+            year 1 (£), the projection's age-0 income: year 1 is the year the
+            outlay is billed for (the projection's age-0 summaries).  A finite
+            number of at least 0.
+
+    ``capex_per_home_gbp`` and ``grid_services_income_per_home_gbp`` divide
+    ``total_capex_gbp`` and ``year_one_grid_services_income_gbp`` by
+    ``n_homes``; under ``capacity_at_events`` pricing the latter is the events
+    income per home.
     """
 
     config: ConfigPoint
@@ -175,6 +185,27 @@ class ConfigResult:
 
     baseline_surplus_per_home_gbp: float
     """Project net surplus per home per year at the configured own-use rate (£/home/year)."""
+
+    n_homes: int
+    """The fleet's homes, at least 1."""
+
+    year_one_grid_services_income_gbp: float
+    """The fleet's grid-services income in year 1, the projection's age-0 income (£)."""
+
+    def __post_init__(self) -> None:
+        """Read n_homes as a whole number of at least 1 and the year-1 income as a finite number of at least 0."""
+        read_field(self, "n_homes", as_whole_number, POSITIVE)
+        read_field(self, "year_one_grid_services_income_gbp", as_finite_float, NON_NEGATIVE)
+
+    @property
+    def capex_per_home_gbp(self) -> float:
+        """The fleet capex per home (£/home)."""
+        return self.total_capex_gbp / self.n_homes
+
+    @property
+    def grid_services_income_per_home_gbp(self) -> float:
+        """The fleet's year-1 grid-services income per home (£/home/year)."""
+        return self.year_one_grid_services_income_gbp / self.n_homes
 
     @property
     def representative_outlay_gbp(self) -> float:
@@ -889,10 +920,12 @@ def _evaluate_config(
         :class:`ConfigResult` with all fields populated.
     """
     finance = _required_finance(point, scenario)
-    run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=simulate)
+    fleet = scenario_fleet(scenario)
+    run = run_cost_recovery(fleet, finance, simulate=simulate)
     solution = run.solution
     econ = run.economics
     baseline_outlay = bill_distribution(run.projection.age0_summaries, finance).representative.total_outlay_gbp
+    _, year_one_income_gbp = run.projection.grid_services_income_gbp[0]
 
     return ConfigResult(
         config=point,
@@ -904,6 +937,8 @@ def _evaluate_config(
         baseline_own_use_rate_pence_per_kwh=finance.own_use_rate_pence_per_kwh,
         baseline_outlay_gbp=baseline_outlay,
         baseline_surplus_per_home_gbp=econ.net_surplus_per_home_per_year_gbp,
+        n_homes=len(fleet.homes),
+        year_one_grid_services_income_gbp=year_one_income_gbp,
     )
 
 
