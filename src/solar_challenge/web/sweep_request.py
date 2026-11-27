@@ -11,7 +11,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec
+from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_knobs import Knob, KnobTarget, knob_named
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits
@@ -102,6 +105,28 @@ class SweepRequest:
     def values(self) -> tuple[float, ...]:
         """The sweep's points, each rounded to _POINT_DECIMALS decimals: the values its preview shows, its jobs run and its chart plots."""
         return tuple(round(value, _POINT_DECIMALS) for value in self.spec.get_values())
+
+    def point_homes(self, base: ScenarioConfig) -> tuple[tuple[float, HomeConfig], ...]:
+        """Each point's value and the home it simulates: *base*'s home with the knob applied at that value, every point built before any is returned.
+
+        Raises:
+            ValueError: For a *base* that stores homes rather than one home, naming it.
+            ConfigurationError: For a point whose scenario construction refuses, as
+                "Invalid config for <knob>=<value>: <refusal>".
+        """
+        if base.home is None:
+            raise ValueError(
+                f"point_homes sweeps a single-home scenario; {base.name!r} stores {len(base.homes)} homes"
+            )
+        return tuple((value, self._home_at(base, value)) for value in self.values())
+
+    def _home_at(self, base: ScenarioConfig, value: float) -> HomeConfig:
+        """The home *base* simulates with the knob at *value*, a refusal naming the point."""
+        knob = self.parameter.knob
+        try:
+            return knob.apply(base, value).simulated_homes()[0]
+        except ConfigurationError as refusal:
+            raise ConfigurationError(f"Invalid config for {knob.name}={value}: {refusal}") from refusal
 
 
 def read_sweep_request(body: Mapping[str, object]) -> SweepRequest:
