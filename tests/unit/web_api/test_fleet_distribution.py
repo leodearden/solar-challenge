@@ -157,10 +157,14 @@ class TestPreviewDistribution:
         assert (run.status_code, run.get_json()) == (preview.status_code, preview.get_json())
 
     def test_a_drawn_value_outside_its_components_range_answers_runs_400(self, client: FlaskClient) -> None:
-        """A normal around 50 kW draws PV no home may hold: the 400 carries refuse_homes_outside_ranges' refusal, as parse_fleet_form raises it."""
-        body = {**valid_distribution_form(), "pv": {"capacity_kw": {"type": "normal", "mean": 50, "std": 1}}}
+        """A normal far above PV's value_range draws PV no home may hold: the 400 carries refuse_homes_outside_ranges' refusal, as parse_fleet_form raises it."""
+        pv_range = FLEET_COMPONENTS["pv"].value_range
+        body = {
+            **valid_distribution_form(),
+            "pv": {"capacity_kw": {"type": "normal", "mean": pv_range.high * 10, "std": 1}},
+        }
         expected = run_refusal(body)
-        assert expected.startswith("pv.capacity_kw must be between 0.5 and 20 for every home, got ")
+        assert expected.startswith(f"pv.capacity_kw must be {pv_range} for every home, got ")
         resp = client.post("/api/fleet/preview-distribution", json=body)
         assert (resp.status_code, resp.get_json()) == (400, {"error": expected})
 

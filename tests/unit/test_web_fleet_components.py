@@ -718,6 +718,11 @@ class TestFleetComponentValues:
             replace(FLEET_COMPONENTS["battery"], absent_value=5.0)
         assert str(exc_info.value).endswith(", got 5.0")
 
+    def test_an_absent_value_the_grammar_refuses_is_refused_naming_absent_value_and_the_value(self) -> None:
+        with pytest.raises(ValueError, match=re.escape("absent_value of fleet component 'battery'")) as exc_info:
+            replace(FLEET_COMPONENTS["battery"], absent_value=-1.0)
+        assert str(exc_info.value).endswith(", got -1.0")
+
     def test_an_absent_value_of_a_component_whose_grammar_key_is_no_presence_field_is_refused_naming_absent_value(
         self,
     ) -> None:

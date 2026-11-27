@@ -171,6 +171,14 @@ class EditorStart:
         return {"type": self.shown, "fixed": self.fixed, "specs": specs}
 
 
+def _asks_for_no_component(block: ComponentBlock[Any], value: float, path: str) -> bool:
+    """Whether *block*'s grammar reads *value*, its presence field's at *path*, as asking for no component; a value the grammar refuses asks for none of either."""
+    try:
+        return not block.asks_for_component(value, path)
+    except ConfigurationError:
+        return False
+
+
 @dataclass(frozen=True)
 class ComponentLimits:
     """A fleet component: the names the form and the scenario grammar give it, the range of a home's value, and what its distribution editor offers and starts at.
@@ -256,7 +264,7 @@ class ComponentLimits:
         if self.absent_value is not None:
             _require(
                 self.grammar_key == self.block.presence
-                and not self.block.asks_for_component(self.absent_value, f"{self.key}.{self.grammar_key}"),
+                and _asks_for_no_component(self.block, self.absent_value, f"{self.key}.{self.grammar_key}"),
                 f"absent_value of {component}",
                 f"be a value of its block's presence field ({self.block.presence}) that asks for no component",
                 self.absent_value,
