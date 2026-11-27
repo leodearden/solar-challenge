@@ -25,6 +25,7 @@ from solar_challenge.finance import (
     bill_distribution,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
+from solar_challenge.gridservices import FlatGridServices, NoGridServices
 from solar_challenge.home import RunPricing, SimulationResults, calculate_summary
 from solar_challenge.optimize import (
     ConfigPoint,
@@ -138,6 +139,8 @@ class TestConfigResult:
             baseline_own_use_rate_pence_per_kwh=15.0,
             baseline_outlay_gbp=450.0,
             baseline_surplus_per_home_gbp=80.0,
+            n_homes=4,
+            year_one_grid_services_income_gbp=120.0,
         )
 
         assert cr.config is config
@@ -154,6 +157,10 @@ class TestConfigResult:
         assert cr.baseline_own_use_rate_pence_per_kwh == pytest.approx(15.0)
         assert cr.baseline_outlay_gbp == pytest.approx(450.0)
         assert cr.baseline_surplus_per_home_gbp == pytest.approx(80.0)
+        assert cr.n_homes == 4
+        assert cr.year_one_grid_services_income_gbp == pytest.approx(120.0)
+        assert cr.capex_per_home_gbp == pytest.approx(10000.0 / 4)
+        assert cr.grid_services_income_per_home_gbp == pytest.approx(120.0 / 4)
 
     def test_an_infeasible_solution_is_read_through(self) -> None:
         """Over an infeasible solution, feasible and binding are the solution's own."""
@@ -167,6 +174,8 @@ class TestConfigResult:
             baseline_own_use_rate_pence_per_kwh=15.0,
             baseline_outlay_gbp=450.0,
             baseline_surplus_per_home_gbp=80.0,
+            n_homes=4,
+            year_one_grid_services_income_gbp=120.0,
         )
         assert cr.feasible is cr.solution.feasible is False
         assert cr.binding == "infeasible_above_retail"
@@ -215,6 +224,8 @@ class TestConfigResult:
             baseline_own_use_rate_pence_per_kwh=15.0,
             baseline_outlay_gbp=450.0,
             baseline_surplus_per_home_gbp=80.0,
+            n_homes=4,
+            year_one_grid_services_income_gbp=120.0,
         )
         assert cr.solution.own_use_rate_pence_per_kwh == pytest.approx(18.5)
 
@@ -750,6 +761,53 @@ class TestRunSweepMultiConfig:
         # pareto_baseline over all results (all feasible here) should match
         expected_pareto = pareto_baseline(list(ranked.results))
         assert set(ranked.pareto_baseline) == set(expected_pareto)
+
+
+class TestPerHomeFigures:
+    """Each ConfigResult gives its capex and its year-1 grid-services income per home."""
+
+    _N_HOMES = 5
+
+    def _ranked_at_two_powers(self, finance: FinanceConfig) -> RankedSweep:
+        """A 5 kWh battery at 2.5 kW and a 10 kWh one at 4 kW, on _N_HOMES homes priced by *finance*."""
+        configs = enumerate_configs(
+            _make_scenario(n_homes=self._N_HOMES, finance=finance),
+            [4.0],
+            [5.0, 10.0],
+            [3.68],
+            battery_kw=[2.5, 4.0],
+        )
+        ranked = run_sweep(configs, simulate=answering_with(_make_fleet_results(n_homes=self._N_HOMES)))
+        assert len(ranked.results) == len(configs)
+        return ranked
+
+    def test_each_results_capex_per_home_is_its_fleet_capex_over_its_homes(self) -> None:
+        ranked = self._ranked_at_two_powers(_interior_finance(self._N_HOMES))
+
+        assert [result.n_homes for result in ranked.results] == [self._N_HOMES] * 2
+        for result in ranked.results:
+            assert result.capex_per_home_gbp == pytest.approx(result.total_capex_gbp / self._N_HOMES)
+
+    def test_a_flat_rates_year_one_income_is_the_rate_on_the_fleets_discharge_power(self) -> None:
+        finance = dataclasses.replace(_interior_finance(self._N_HOMES), grid_services_model=FlatGridServices(12.0))
+
+        ranked = self._ranked_at_two_powers(finance)
+
+        for result in ranked.results:
+            assert result.config.battery_kw is not None
+            assert result.year_one_grid_services_income_gbp == pytest.approx(
+                12.0 * self._N_HOMES * result.config.battery_kw
+            )
+            assert result.grid_services_income_per_home_gbp == pytest.approx(12.0 * result.config.battery_kw)
+
+    def test_no_grid_services_income_is_zero(self) -> None:
+        finance = dataclasses.replace(_interior_finance(self._N_HOMES), grid_services_model=NoGridServices())
+
+        ranked = self._ranked_at_two_powers(finance)
+
+        for result in ranked.results:
+            assert result.year_one_grid_services_income_gbp == 0.0
+            assert result.grid_services_income_per_home_gbp == 0.0
 
 
 # ---------------------------------------------------------------------------

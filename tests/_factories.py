@@ -206,6 +206,8 @@ def make_config_result(
     baseline_own_use_rate_pence_per_kwh: float = 15.0,
     baseline_outlay_gbp: float = 450.0,
     baseline_surplus_per_home_gbp: float = 80.0,
+    n_homes: int = 1,
+    year_one_grid_services_income_gbp: float = 0.0,
 ) -> ConfigResult:
     """Build a synthetic ConfigResult over make_cost_recovery_solution's solution for the solve arguments.
 
@@ -232,6 +234,8 @@ def make_config_result(
         baseline_own_use_rate_pence_per_kwh=baseline_own_use_rate_pence_per_kwh,
         baseline_outlay_gbp=baseline_outlay_gbp,
         baseline_surplus_per_home_gbp=baseline_surplus_per_home_gbp,
+        n_homes=n_homes,
+        year_one_grid_services_income_gbp=year_one_grid_services_income_gbp,
     )
 
 
