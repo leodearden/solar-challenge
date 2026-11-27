@@ -9,6 +9,7 @@ tests/unit/test_board_report.py.
 from __future__ import annotations
 
 import re
+import dataclasses
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
@@ -20,15 +21,19 @@ from typer.testing import CliRunner, Result
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.main import app
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.config import load_scenario
+from solar_challenge.fleet import FleetConfig, FleetResults, default_runner
 from solar_challenge.optimize import SENSITIVITY_BANDS
 from solar_challenge.projection import fewest_simulated_ages
 from solar_challenge.scenario_knobs import KNOBS, knob_named
+from solar_challenge.weather import WeatherCache
 from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli, simulate_reaching_the_sweep
 from tests._cli_stderr_text import stderr_text
 from tests._finance_builders import make_fleet_results, make_home_config
 from tests._fleet_simulate_stand_in import answering_with
 from tests._ranking_report_tables import RANK, TRADE_OFF, config_row, section_under
+from tests._repository_paths import SCENARIOS_DIR
+from tests._synthetic_weather import synthetic_tmy
 from tests.integration._helpers import SCENARIO
 
 
@@ -1020,6 +1025,39 @@ class TestBatteryPowerAndReference:
         assert result.exit_code == 0, result.output
         assert "--battery-kw" in result.output
         assert "--reference" in result.output
+
+
+def test_the_victron_sweep_prints_each_configurations_marginal_columns_against_the_smallest_battery(
+    tmp_path: Path, weather_cache: WeatherCache
+) -> None:
+    """The signal: the Victron board scenario, cut to two 4 kWp homes, swept over four battery sizes and powers on the real engine for one winter day."""
+    document = yaml.safe_load((SCENARIOS_DIR / "bristol-phase1-victron.yaml").read_text(encoding="utf-8"))
+    document["fleet_distribution"]["n_homes"] = 2
+    document["fleet_distribution"]["pv"]["capacity_kw"] = 4.0
+    path = tmp_path / "victron-two-homes.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    weather_cache.put(synthetic_tmy(), "tmy", load_scenario(path).get_location())
+
+    result = invoke_cli(
+        [
+            "optimize", "configs", str(path),
+            "--pv", "4", "--battery", "5.12,10.24,10.24,15.36", "--battery-kw", "2.4,2.4,3.68,3.68",
+            "--inverter", "3.68", "--sensitivity", "", "--start", "2024-01-15", "--end", "2024-01-15",
+        ],
+        dataclasses.replace(default_runner(), parallel=False),
+    )
+
+    assert result.exit_code == 0, result.output
+    rank = section_under(result.stdout, RANK)
+    assert f"{_REFERENCE_LINE}{_SMALL}**" in rank
+    reference = config_row(result.stdout, RANK, _SMALL)
+    assert (reference[_EXTRA_CAPEX], reference[_OUTLAY_CHANGE]) == ("+£0", "+£0.00")
+    header = next(line for line in rank.splitlines() if line.startswith("| Config"))
+    for column in (_EXTRA_CAPEX, _OUTLAY_CHANGE, "Grid Services Income Yr 1 (£/home)", "Pays For Itself"):
+        assert column in header
+    rows = [line for line in rank.splitlines() if line.startswith("| ") and not line.startswith(("| Config", "|--"))]
+    assert rows
+    assert {line.strip("|").split("|")[-1].strip() for line in rows} <= {"yes", "no"}
 
 
 # ---------------------------------------------------------------------------
