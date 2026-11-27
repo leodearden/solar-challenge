@@ -114,7 +114,11 @@ def _measured(
 
 @pytest.fixture(scope="module")
 def weekdays(sizing: ModuleType, tmp_path_factory: pytest.TempPathFactory) -> _Measured:
-    """Two homes over Monday and Tuesday 2024-01-15/16, two eligible weekdays: the draw takes one, and the other baselines it."""
+    """Two homes over Monday and Tuesday 2024-01-15/16, two eligible weekdays: the draw takes one, and the other baselines it.
+
+    It takes about 20 s, and every pytest-xdist worker that runs one of its tests builds it
+    again, so its checks share two tests: one of the sweeps, one of the fleets simulated.
+    """
     return _measured(sizing, tmp_path_factory, date(2024, 1, 15), date(2024, 1, 16), homes=2)
 
 
@@ -188,18 +192,25 @@ def _reference_point(sizing: ModuleType) -> ConfigPoint:
     return ConfigPoint(pv_kwp=sizing.PV_KWP, battery_kwh=kwh, inverter_kw=sizing.INVERTER_KW, battery_kw=kw)
 
 
-def test_each_band_ranks_the_four_configurations_enrolled_and_not(sizing: ModuleType, weekdays: _Measured) -> None:
+def _age_of(request: _Request) -> float:
+    """The projection age request's homes were simulated at: their PV's age in years, which every home of request shares."""
+    ages = {home.pv_config.system_age_years for home in request.fleet.homes}
+    assert len(ages) == 1, ages
+    return ages.pop()
+
+
+def _check_each_band_ranks_the_four_configurations_enrolled_and_not(sizing: ModuleType, measured: _Measured) -> None:
     expected_points = {
         ConfigPoint(pv_kwp=sizing.PV_KWP, battery_kwh=kwh, inverter_kw=sizing.INVERTER_KW, battery_kw=kw)
         for kwh, kw in sizing.BATTERIES
     }
 
-    assert [(sweep.band, sweep.participation) for sweep in weekdays.sweeps] == [
+    assert [(sweep.band, sweep.participation) for sweep in measured.sweeps] == [
         (band, participation)
         for band in GridServicesBand
         for participation in (EventParticipation.DISPATCHED, EventParticipation.OBSERVED)
     ]
-    for sweep in weekdays.sweeps:
+    for sweep in measured.sweeps:
         results = [row.result for row in sweep.rows]
         assert len(results) == 4 and {result.config for result in results} == expected_points, sweep.band
         feasible = [result for result in results if result.feasible]
@@ -207,10 +218,10 @@ def test_each_band_ranks_the_four_configurations_enrolled_and_not(sizing: Module
         assert not any(result.feasible for result in results[len(feasible) :])
 
 
-def test_the_marginal_columns_are_differences_against_the_reference_row(sizing: ModuleType, weekdays: _Measured) -> None:
+def _check_the_marginal_columns_are_differences_against_the_reference_row(sizing: ModuleType, measured: _Measured) -> None:
     reference_point = _reference_point(sizing)
 
-    for sweep in weekdays.sweeps:
+    for sweep in measured.sweeps:
         (own_reference,) = [row.result for row in sweep.rows if row.result.config == reference_point]
         for row in sweep.rows:
             result, reference = row.result, row.reference
@@ -224,11 +235,15 @@ def test_the_marginal_columns_are_differences_against_the_reference_row(sizing: 
         assert (reference_row.extra_capex_per_home_gbp, reference_row.outlay_change_gbp) == (0.0, 0.0)
 
 
-def test_each_configuration_is_simulated_once_per_participation_whatever_the_band(
-    sizing: ModuleType, weekdays: _Measured
+def _check_each_configuration_is_simulated_once_per_participation_whatever_the_band(
+    sizing: ModuleType, measured: _Measured
 ) -> None:
-    """The three bands are priced from the same runs, one configuration at a time, dispatched first."""
-    requests = weekdays.requests
+    """The three bands are priced from the same runs, each age of a configuration simulated once, one configuration at a time, dispatched first.
+
+    Each age is counted by its homes' PV age, not compared as a whole fleet, so a band that
+    reached the homes it simulates would show as an age simulated once per band.
+    """
+    requests = measured.requests
     for index, request in enumerate(requests):
         for later in requests[index + 1 :]:
             assert (request.fleet, request.start, request.end) != (later.fleet, later.start, later.end), request.fleet.name
@@ -237,9 +252,17 @@ def test_each_configuration_is_simulated_once_per_participation_whatever_the_ban
     in_turn = [group for index, group in enumerate(groups) if index == 0 or groups[index - 1] != group]
     assert in_turn == [(dispatched, battery) for dispatched in (True, False) for battery in sizing.BATTERIES]
 
+    ages: dict[tuple[bool, tuple[float, float]], list[float]] = {}
+    for group, request in zip(groups, requests, strict=True):
+        ages.setdefault(group, []).append(_age_of(request))
+    for group, simulated in ages.items():
+        assert len(simulated) == len(set(simulated)), (group, simulated)
+    for battery in sizing.BATTERIES:
+        assert sorted(ages[True, battery]) == sorted(ages[False, battery]), battery
 
-def test_the_bus_identity_closes_on_every_step(weekdays: _Measured) -> None:
-    for home, results in _home_runs(weekdays.requests):
+
+def _check_the_bus_identity_closes_on_every_step(measured: _Measured) -> None:
+    for home, results in _home_runs(measured.requests):
         np.testing.assert_allclose(
             (results.generation + results.grid_import).to_numpy(),
             (results.demand + results.grid_export + results.battery_charge - results.battery_discharge).to_numpy(),
@@ -249,11 +272,11 @@ def test_the_bus_identity_closes_on_every_step(weekdays: _Measured) -> None:
         )
 
 
-def test_battery_export_is_part_of_discharge_and_of_export_and_only_inside_the_drawn_windows(
-    weekdays: _Measured,
+def _check_battery_export_is_part_of_discharge_and_of_export_and_only_inside_the_drawn_windows(
+    measured: _Measured,
 ) -> None:
     exported_days: set[date] = set()
-    for request in weekdays.requests:
+    for request in measured.requests:
         for home, results in _home_runs([request]):
             battery_export = _battery_export(results)
             assert (battery_export <= results.battery_discharge + _TOLERANCE_KW).all(), home.name
@@ -264,15 +287,15 @@ def test_battery_export_is_part_of_discharge_and_of_export_and_only_inside_the_d
                 assert not exporting.any(), home.name
             exported_days |= set(results.grid_export.index[exporting].date)
 
-    enrolled = enrolled_event_windows(_events(weekdays.scenario), weekdays.scenario.window())
+    enrolled = enrolled_event_windows(_events(measured.scenario), measured.scenario.window())
     drawn_days = {day for window in enrolled for day in window.days}
     assert drawn_days
     assert exported_days == drawn_days
 
 
-def test_a_home_exports_at_most_the_site_limit_while_its_battery_exports(weekdays: _Measured) -> None:
+def _check_a_home_exports_at_most_the_site_limit_while_its_battery_exports(measured: _Measured) -> None:
     exports_while_the_battery_exports = pd.concat(
-        [results.grid_export[_battery_export(results) > 0] for _, results in _home_runs(weekdays.requests)]
+        [results.grid_export[_battery_export(results) > 0] for _, results in _home_runs(measured.requests)]
     )
 
     assert not exports_while_the_battery_exports.empty
@@ -280,15 +303,30 @@ def test_a_home_exports_at_most_the_site_limit_while_its_battery_exports(weekday
     assert exports_while_the_battery_exports.max() == pytest.approx(_SITE_EXPORT_LIMIT_KW)
 
 
-def test_pricing_and_simulation_agree_on_the_event_days(weekdays: _Measured) -> None:
+def _check_pricing_and_simulation_agree_on_the_event_days(measured: _Measured) -> None:
     """Pricing refuses a fleet whose batteries carry other days than the draw (gridservices' check), so every sweep priced means they agree."""
-    enrolled = enrolled_event_windows(_events(weekdays.scenario), weekdays.scenario.window())
+    enrolled = enrolled_event_windows(_events(measured.scenario), measured.scenario.window())
     assert enrolled
 
-    for request in weekdays.requests:
+    for request in measured.requests:
         expected = enrolled if _is_dispatched(request) else ()
         for battery in _batteries(request.fleet):
             assert battery.event_discharge == expected, request.fleet.name
+
+
+def test_each_band_ranks_its_sweeps_and_compares_every_row_with_its_own_reference(
+    sizing: ModuleType, weekdays: _Measured
+) -> None:
+    _check_each_band_ranks_the_four_configurations_enrolled_and_not(sizing, weekdays)
+    _check_the_marginal_columns_are_differences_against_the_reference_row(sizing, weekdays)
+
+
+def test_every_fleet_simulated_holds_the_prds_invariants(sizing: ModuleType, weekdays: _Measured) -> None:
+    _check_each_configuration_is_simulated_once_per_participation_whatever_the_band(sizing, weekdays)
+    _check_the_bus_identity_closes_on_every_step(weekdays)
+    _check_battery_export_is_part_of_discharge_and_of_export_and_only_inside_the_drawn_windows(weekdays)
+    _check_a_home_exports_at_most_the_site_limit_while_its_battery_exports(weekdays)
+    _check_pricing_and_simulation_agree_on_the_event_days(weekdays)
 
 
 def _un_enrolled(fleet: FleetConfig) -> tuple[HomeConfig, ...]:
