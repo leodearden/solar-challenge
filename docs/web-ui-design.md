@@ -189,10 +189,12 @@ Visual editor for `ScenarioConfig` YAML files.
 Parameter sweep builder with results visualisation.
 
 **Configuration:**
-- Parameter to sweep: dropdown (pv_capacity_kw, battery_capacity_kwh, annual_consumption_kwh, etc.)
-- Sweep range: min, max, steps inputs
-- Sweep mode: linear / geometric radio
-- Preview: dot plot showing sweep points on a number line
+- Parameter to sweep: a dropdown offering web/sweep_request.py's `SWEEP_PARAMETERS`, one option per row, labelled with the row's label and carrying its starting range. Choosing one starts Min and Max at that range.
+- Sweep mode: a radio per `SweepMode`, with `SweepSpec`'s default (geometric) preselected.
+- Steps: bounded by `SWEEP_MAX_STEPS`.
+- Preview: not computed in the browser. On load and on every change, the page posts its sweep to `POST /api/simulate/sweep/points`, which reads the body as `POST /api/simulate/sweep` does. The page lists the values the server answers, or shows its refusal; e.g. a geometric sweep from 0 shows 'SweepSpec: geometric mode requires min > 0'. A preview request the form has outrun is dropped. Run stays disabled until the server accepts the sweep.
+- The results table's header and the charts' `parameter_label` name the swept parameter by its server label.
+- The page reads its starting values from its rendered options and its checked mode radio, not from `#page-limits`.
 - Base configuration: select from saved configs or configure inline
 - Optional: second sweep dimension for 2D parameter exploration
 
@@ -463,6 +465,8 @@ CREATE TABLE config_presets (
 |--------|----------|-------------|
 | POST | `/api/simulate/home` | Start single home simulation (background) |
 | POST | `/api/simulate/fleet` | Start fleet simulation (background) |
+| POST | `/api/simulate/sweep` | Start a parameter sweep: one home job per sweep point (background) |
+| POST | `/api/simulate/sweep/points` | Preview a sweep's points, read as `/api/simulate/sweep` reads them; submits no job |
 | GET | `/api/jobs/<id>` | Get job status |
 | GET | `/api/jobs/<id>/progress` | SSE stream of job progress |
 | GET | `/api/jobs/<id>/results` | Get completed job results |
