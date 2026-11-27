@@ -21,6 +21,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     build_dispatch_strategy,
     refuse_grid_charging_it_would_ignore,
+    with_event_discharge,
 )
 from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
@@ -82,7 +83,7 @@ class HomeConfig:
 
 
 def _battery_strategy(config: HomeConfig, battery: BatteryConfig) -> DispatchStrategy:
-    """A new instance of battery's dispatch strategy, built for its grid_charging at the home's tariff.
+    """A new instance of battery's dispatch strategy, built for its grid_charging at the home's tariff and wrapped in its event windows.
 
     Raises:
         ConfigurationError: build_dispatch_strategy's refusals: tou_optimized on the tariff's
@@ -93,6 +94,8 @@ def _battery_strategy(config: HomeConfig, battery: BatteryConfig) -> DispatchStr
         battery.dispatch_strategy,
         grid_charging=battery.grid_charging,
         tariff=config.tariff_config,
+        event_discharge=battery.event_discharge,
+        max_discharge_kw=battery.max_discharge_kw,
     )
 
 
@@ -705,9 +708,10 @@ def _dispatch_path(
 ) -> _DispatchPath:
     """How the home dispatches each row, step_minutes long, at its tariff.
 
-    A home with a battery runs strategy when given, else its battery's _battery_strategy. A home
-    with no battery runs none: it only settles each row, and is named after strategy when given,
-    else after self-consumption.
+    A home with a battery runs strategy when given, wrapped in the battery's event_discharge
+    windows as its own strategy is, else its battery's _battery_strategy; either is named for
+    the strategy it runs, wrapped name included. A home with no battery runs none: it only
+    settles each row, and is named after strategy when given, else after self-consumption.
 
     Raises:
         ConfigurationError: strategy is given and would ignore the battery's grid_charging, as
@@ -717,9 +721,9 @@ def _dispatch_path(
         name = strategy.name if strategy is not None else SelfConsumptionStrategyConfig().strategy_type
         return _DispatchPath(name, _settling_timestep(step_minutes))
     if strategy is not None:
-        refuse_grid_charging_it_would_ignore(
-            strategy, grid_charging=config.battery_config.grid_charging, tariff=config.tariff_config
-        )
+        battery = config.battery_config
+        refuse_grid_charging_it_would_ignore(strategy, grid_charging=battery.grid_charging, tariff=config.tariff_config)
+        strategy = with_event_discharge(strategy, battery.event_discharge, max_discharge_kw=battery.max_discharge_kw)
     else:
         strategy = _battery_strategy(config, config.battery_config)
     return _DispatchPath(strategy.name, _strategy_timestep(strategy, config.tariff_config, step_minutes))
@@ -917,9 +921,12 @@ def simulate_home(
             flow.simulate_timestep with config's tariff, so it is offered a
             GridChargeContext exactly when a configured strategy is: with a
             tariff and battery_config.grid_charging, each row's carrying the
-            same useful-charge ceiling. The results' strategy_name is its name.
-            It is refused when battery_config sets grid_charging and its
-            charges_from_the_grid is False.
+            same useful-charge ceiling. It replaces the battery's
+            dispatch_strategy only: the battery's event_discharge windows
+            wrap it as they wrap its own, and the results' strategy_name is
+            then the wrapped name, else its name. It is refused when
+            battery_config sets grid_charging and its charges_from_the_grid
+            is False.
 
     The home's demand is its household's load plus any EV's charging, which
     generate_ev_charging_profile places on the home's tariff, a 'solar' EV
