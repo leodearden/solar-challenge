@@ -1127,6 +1127,7 @@ _PER_WINDOW_FIELD_NAMES = [
     "per_window_avail_p90_kw",
     "per_window_displaced_self_use_kwh_per_event",
     "per_window_displaced_import_gbp_per_year",
+    "per_window_battery_export_kwh_per_event",
 ]
 _FIGURE_FIELD_NAMES = ["annual_income_gbp", *_PER_WINDOW_FIELD_NAMES]
 _REFUSED_FIGURES = [
@@ -1149,6 +1150,7 @@ def _two_window_breakdown() -> GridServicesAtEvents:
         per_window_avail_p90_kw=(0.5, 1.0),
         per_window_displaced_self_use_kwh_per_event=(2.0, 3.0),
         per_window_displaced_import_gbp_per_year=(5.0, 7.5),
+        per_window_battery_export_kwh_per_event=(0.4, 0.6),
     )
 
 
@@ -1160,7 +1162,7 @@ class TestGridServicesAtEvents:
         assert GridServicesAtEvents.__module__ == "solar_challenge.gridservices"
 
     def test_fields_round_trip(self) -> None:
-        """All seven fields survive construction and read back equal to inputs."""
+        """All eight fields survive construction and read back equal to inputs."""
         obj = _two_window_breakdown()
         assert obj.annual_income_gbp == 150.0
         assert obj.per_window_avail_kw == (1.0, 2.0)
@@ -1169,6 +1171,7 @@ class TestGridServicesAtEvents:
         assert obj.per_window_avail_p90_kw == (0.5, 1.0)
         assert obj.per_window_displaced_self_use_kwh_per_event == (2.0, 3.0)
         assert obj.per_window_displaced_import_gbp_per_year == (5.0, 7.5)
+        assert obj.per_window_battery_export_kwh_per_event == (0.4, 0.6)
 
     def test_a_breakdown_built_from_its_three_original_fields_is_refused(self) -> None:
         """The reliability and displaced-self-use figures are required: a breakdown cannot be built without them."""
@@ -1190,9 +1193,21 @@ class TestGridServicesAtEvents:
                 per_window_avail_p90_kw=(1.0,),
                 per_window_displaced_self_use_kwh_per_event=(2.3,),
                 per_window_displaced_import_gbp_per_year=(),
+                per_window_battery_export_kwh_per_event=(0.4,),
             )
         assert "per_window_displaced_import_gbp_per_year" in str(refusal.value)
         assert "()" in str(refusal.value)
+
+    def test_a_breakdown_that_reports_no_displaced_self_use_holds_both_displaced_fields_empty(self) -> None:
+        """Both displaced-self-use fields empty is the breakdown's one 'not reported': it constructs and holds ()."""
+        breakdown = dataclasses.replace(
+            _two_window_breakdown(),
+            per_window_displaced_self_use_kwh_per_event=(),
+            per_window_displaced_import_gbp_per_year=(),
+        )
+
+        assert breakdown.per_window_displaced_self_use_kwh_per_event == ()
+        assert breakdown.per_window_displaced_import_gbp_per_year == ()
 
     @pytest.mark.parametrize("name", _PER_WINDOW_FIELD_NAMES)
     @pytest.mark.parametrize(
@@ -1224,6 +1239,7 @@ class TestGridServicesAtEvents:
                 per_window_avail_p90_kw=(),
                 per_window_displaced_self_use_kwh_per_event=(),
                 per_window_displaced_import_gbp_per_year=(),
+                per_window_battery_export_kwh_per_event=(),
             )
 
     @pytest.mark.parametrize(("name", "bad"), _REFUSED_FIGURES)
@@ -1264,6 +1280,7 @@ class TestGridServicesAtEvents:
             per_window_avail_p90_kw=(0.8,),
             per_window_displaced_self_use_kwh_per_event=(1.5,),
             per_window_displaced_import_gbp_per_year=(3.0,),
+            per_window_battery_export_kwh_per_event=(0.0,),
         )
         assert isinstance(obj.annual_income_gbp, float)
         assert isinstance(obj.per_window_avail_kw, tuple)
@@ -1281,6 +1298,7 @@ class TestGridServicesAtEvents:
             per_window_avail_p90_kw=(0.8,),
             per_window_displaced_self_use_kwh_per_event=(1.5,),
             per_window_displaced_import_gbp_per_year=(3.0,),
+            per_window_battery_export_kwh_per_event=(0.0,),
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             obj.annual_income_gbp = 20.0  # type: ignore[misc]

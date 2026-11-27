@@ -28,6 +28,7 @@ from solar_challenge.gridservices import (
     GridServicesModel,
     NoGridServices,
     drawn_event_days,
+    enrolled_event_windows,
 )
 from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig
@@ -149,6 +150,15 @@ class TestADispatchedScenarioEnrolsEachBatteryHome:
 
         assert _battery(small).event_discharge == expected
         assert _battery(large).event_discharge == expected
+
+    def test_every_battery_home_carries_the_windows_pricing_expects_of_the_period(self) -> None:
+        events = _dispatched(event_windows=self._WINDOWS, event_day_seed=_SEED)
+        scenario = _scenario(_finance(events))
+
+        small, large, _ = scenario.simulated_homes()
+
+        assert _battery(small).event_discharge == enrolled_event_windows(events, scenario.period)
+        assert _battery(large).event_discharge == enrolled_event_windows(events, scenario.period)
 
     def test_every_drawn_day_lies_within_the_period(self) -> None:
         small, _, _ = self._homes()

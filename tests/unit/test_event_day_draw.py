@@ -4,17 +4,28 @@
 The draw counts a window's events in proportion to the share of each calendar year's eligible days the period
 holds, rounded half up and kept between 1 and the eligible days, and picks them with a generator of its own. The
 tests assert those properties, never the dates a seed picks, so they hold whatever stream numpy's generator gives.
+
+gridservices.enrolled_event_windows resolves an events configuration's windows over a period to the
+EventDischargeWindows enrolment gives each battery home and pricing expects them to carry.
 """
 
 import random
 from collections.abc import Iterator
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pytest
 
+from solar_challenge.dispatch import EventDischargeWindow
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.gridservices import DEFAULT_EVENT_WINDOWS, EventWindow, drawn_event_days
+from solar_challenge.gridservices import (
+    DEFAULT_EVENT_WINDOWS,
+    EventWindow,
+    GridServicesEventsConfig,
+    drawn_event_days,
+    enrolled_event_windows,
+)
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._calendar_dates import every_date
 
 WINDOW = DEFAULT_EVENT_WINDOWS[0]
@@ -169,3 +180,49 @@ class TestRefusals:
             drawn_event_days(WINDOW, _YEAR_2024, 0, position=-1)
 
         assert str(exc_info.value) == "position must be at least 0, got -1"
+
+
+_JUNE_WEEKDAY_EVENINGS = EventWindow(
+    months=(6,), weekdays=(0, 1, 2, 3, 4), hours=(17, 18), events_per_year=6, event_hours=2.0
+)
+_JANUARY_WEEKEND_MORNINGS = EventWindow(months=(1,), weekdays=(5, 6), hours=(8,), events_per_year=4, event_hours=1.0)
+
+
+def _period(first: date, last: date, cadence: timedelta = ONE_MINUTE) -> SimulationWindow:
+    return SimulationWindow(first, last, cadence, "Europe/London")
+
+
+class TestTheWindowsAnEnrolledHomeCarries:
+    """enrolled_event_windows gives one EventDischargeWindow per window that draws a day of the period, in window order."""
+
+    _EVENTS = GridServicesEventsConfig(event_windows=(WINDOW, _JANUARY_WEEKEND_MORNINGS), event_day_seed=5)
+    _JANUARY = (date(2024, 1, 1), date(2024, 1, 31))
+
+    def test_each_window_carries_the_days_drawn_at_its_position_in_its_hours(self) -> None:
+        dates = every_date(*self._JANUARY)
+
+        assert enrolled_event_windows(self._EVENTS, _period(*self._JANUARY)) == (
+            EventDischargeWindow(days=drawn_event_days(WINDOW, dates, 5, position=0), hours=WINDOW.hours),
+            EventDischargeWindow(
+                days=drawn_event_days(_JANUARY_WEEKEND_MORNINGS, dates, 5, position=1),
+                hours=_JANUARY_WEEKEND_MORNINGS.hours,
+            ),
+        )
+
+    def test_a_window_with_no_eligible_day_in_the_period_is_omitted(self) -> None:
+        events = GridServicesEventsConfig(event_windows=(_JUNE_WEEKDAY_EVENINGS, WINDOW), event_day_seed=5)
+        dates = every_date(*self._JANUARY)
+
+        assert enrolled_event_windows(events, _period(*self._JANUARY)) == (
+            EventDischargeWindow(days=drawn_event_days(WINDOW, dates, 5, position=1), hours=WINDOW.hours),
+        )
+
+    def test_the_same_arguments_give_equal_windows(self) -> None:
+        assert enrolled_event_windows(self._EVENTS, _period(*self._JANUARY)) == enrolled_event_windows(
+            self._EVENTS, _period(*self._JANUARY)
+        )
+
+    def test_only_the_period_s_dates_are_read(self) -> None:
+        assert enrolled_event_windows(self._EVENTS, _period(*self._JANUARY, timedelta(hours=1))) == (
+            enrolled_event_windows(self._EVENTS, _period(*self._JANUARY))
+        )
