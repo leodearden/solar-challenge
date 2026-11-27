@@ -1,0 +1,7 @@
+{# preview_summary(component) writes the note simulate/fleet.html shows under a fleet component's editor: the
+   fleetSimulator scope's previewSummaries entry for component.key (static/js/fleet-simulator.js), its summary of the
+   homes the last preview built, hidden while it has none. component is one of page_limits.components, and the note is
+   named '<subject> Preview'. Visibility binds :hidden, not x-show, as distribution_editor's controls do. #}
+{% macro preview_summary(component) %}
+<p role="note" aria-label="{{ component.subject }} Preview" x-text="previewSummaries.{{ component.key }}" :hidden="!previewSummaries.{{ component.key }}" class="mt-4 text-sm text-slate-600 dark:text-slate-300"></p>
+{% endmacro %}

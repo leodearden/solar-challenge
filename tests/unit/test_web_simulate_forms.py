@@ -277,7 +277,7 @@ class TestFleetConfigRoute:
     def test_fleet_page_offers_a_preview_button_and_a_preview_summary_under_each_components_card(
         self, client: FlaskClient
     ) -> None:
-        """GET /simulate/fleet renders one Preview button, which calls preview(), and one note per component bound to its entry of previewSummaries."""
+        """GET /simulate/fleet renders one Preview button, which calls preview(), and one note per component bound to its entry of previewSummaries, every note styled alike."""
         page = client.get("/simulate/fleet").get_data(as_text=True)
         assert texts(page).count("Preview") == 1
         assert element_count(page, "button", {"@click": "preview()"}) == 1
@@ -292,9 +292,9 @@ class TestFleetConfigRoute:
                 "aria-label": f"{component.subject} Preview",
                 "x-text": f"previewSummaries.{component.key}",
                 ":hidden": f"!previewSummaries.{component.key}",
-                "class": summary["class"],
+                "class": summaries[0]["class"],
             }
-            for component, summary in zip(FLEET_COMPONENTS.values(), summaries, strict=True)
+            for component in FLEET_COMPONENTS.values()
         ]
 
     def test_fleet_page_offers_the_fleet_run_kinds_default_name_as_its_simulation_name_placeholder(

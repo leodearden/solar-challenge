@@ -3,6 +3,7 @@
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
 {% from "components/macros.html" import card, day_choice_buttons, toggle_switch, range_input %}
 {% from "components/distribution-editor.html" import distribution_editor %}
+{% from "simulate/partials/preview-summary.html" import preview_summary %}
 
 {% block title %}Fleet Simulation{% endblock %}
 
@@ -93,7 +94,7 @@
             body_classes='p-6'
         ) %}
             {{ distribution_editor('pvDist', component, subject=component.subject) }}
-            <p role="note" aria-label="{{ component.subject }} Preview" x-text="previewSummaries.{{ component.key }}" :hidden="!previewSummaries.{{ component.key }}" class="mt-4 text-sm text-slate-600 dark:text-slate-300"></p>
+            {{ preview_summary(component) }}
         {% endcall %}
         {% endwith %}
 
@@ -116,7 +117,7 @@
         ) %}
             <div class="p-6" x-show="batteryEnabled" x-transition>
                 {{ distribution_editor('batteryDist', component, subject=component.subject) }}
-                <p role="note" aria-label="{{ component.subject }} Preview" x-text="previewSummaries.{{ component.key }}" :hidden="!previewSummaries.{{ component.key }}" class="mt-4 text-sm text-slate-600 dark:text-slate-300"></p>
+                {{ preview_summary(component) }}
             </div>
             <div class="p-6 text-sm text-slate-500 dark:text-slate-400" x-show="!batteryEnabled" x-cloak>
                 Battery storage is disabled for this fleet.
@@ -135,7 +136,7 @@
             body_classes='p-6'
         ) %}
             {{ distribution_editor('loadDist', component, subject=component.subject) }}
-            <p role="note" aria-label="{{ component.subject }} Preview" x-text="previewSummaries.{{ component.key }}" :hidden="!previewSummaries.{{ component.key }}" class="mt-4 text-sm text-slate-600 dark:text-slate-300"></p>
+            {{ preview_summary(component) }}
         {% endcall %}
         {% endwith %}
 
