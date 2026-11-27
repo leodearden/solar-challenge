@@ -31,7 +31,9 @@ location:
   name: Bristol, UK
 
 # Full calendar year — board artifact showing the annual time-shift value.
-# Integration tests use a single injected winter day and annualise × 365.
+# A shorter --start/--end window must hold an eligible weekday (a November to
+# February Monday to Friday) with no drawn event: the operational delivery
+# baseline meters each event day against such a day, so one weekday is refused.
 period:
   start_date: "2024-01-01"
   end_date: "2024-12-31"
