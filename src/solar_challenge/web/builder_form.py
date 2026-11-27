@@ -326,6 +326,23 @@ def builder_form_from_yaml(yaml_text: str) -> ImportedForm:
     return builder_form_from_scenario(scenario_yaml_document(yaml_text))
 
 
+def builder_form_from_saved_preset(name: str, config: Mapping[str, Any]) -> ImportedForm:
+    """The builder form the saved fleet preset *name*, whose stored config is *config*, describes, as :func:`builder_form_from_scenario` reads its document.
+
+    The builder saves the scenario document its form describes, which always holds a
+    fleet_distribution block; neither of the builder's former form formats holds one.
+
+    Raises:
+        ConfigurationError: For a config with no fleet_distribution key, naming the preset as
+            saved in the builder's former form format; or as builder_form_from_scenario.
+    """
+    if "fleet_distribution" not in config:
+        raise ConfigurationError(
+            f"Saved preset {name!r} was saved in the builder's former form format and must be saved again"
+        )
+    return builder_form_from_scenario(dict(config))
+
+
 def _read_period(period: tuple[date, date]) -> BlockRead:
     """The builder form's start and end dates: *period*'s days as ISO dates, the default window when the scenario sets none; read_fleet_scenario refuses any other key of the period block."""
     start, end = period

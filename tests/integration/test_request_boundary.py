@@ -30,11 +30,12 @@ from solar_challenge.web.request_boundary import read_string, require_json_objec
 from solar_challenge.web.simulation_params import parse_home_config
 from tests._api_routes import ApiRoute, api_routes
 from tests._cli_stderr_text import stderr_text
+from tests._config_preset_rows import saved_preset_names
 from tests._error_records import error_records
 from tests._fleet_form import valid_distribution_form
 from tests._job_manager_double import autospecced_job_manager
 from tests._raising import raising
-from tests._web_app import app_builder
+from tests._web_app import app_builder, database_of
 
 
 @pytest.fixture
@@ -191,8 +192,13 @@ def _probe_of(route: ApiRoute) -> _RouteProbe:
 
 
 def _saved_presets(client: FlaskClient) -> object:
-    """The home presets and the scenario presets the dashboard lists, so a test can show that a request saved none."""
-    return client.get("/api/presets").get_json(), client.get("/api/scenarios/presets").get_json()
+    """The home presets the dashboard lists and the name of each preset its database holds, so a test can show that a request saved none.
+
+    The saved presets are read from the database, not from the scenario preset menu, which
+    lists the built-ins the builder's reader loads: a probe that replaces that reader would
+    change the menu, not what is saved.
+    """
+    return client.get("/api/presets").get_json(), saved_preset_names(database_of(client.application))
 
 
 def test_no_probe_names_a_route_api_bp_lacks() -> None:
