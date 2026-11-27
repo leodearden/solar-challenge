@@ -265,6 +265,16 @@ class TestTheBatteryPowerKnob:
         with pytest.raises(ConfigurationError, match="max_charge_kw"):
             KNOBS["battery_power_kw"].apply(_fleet(), power)
 
+    @pytest.mark.parametrize("form", _FORMS, ids=["fleet", "single-home"])
+    def test_a_scenario_with_no_battery_home_is_refused_naming_the_knob_and_the_capacity_knob(
+        self, form: Callable[[], ScenarioConfig]
+    ) -> None:
+        """A power sets nothing on a scenario none of whose homes has a battery, so it is refused rather than ignored."""
+        batteryless = KNOBS["battery_capacity_kwh"].apply(form(), 0.0)
+
+        with pytest.raises(ConfigurationError, match=r"battery_power_kw.*no home.*battery_capacity_kwh"):
+            KNOBS["battery_power_kw"].apply(batteryless, 3.68)
+
 
 _ALIAS_FIELDS = {
     "retained_floor": "retained_cash_floor_per_home_per_year_gbp",

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`fleet sweep`, on every sweep path (knob, variable and YAML), exports one CSV per point named after the swept parameter and a summary of every point, and creates no output directory when it refuses its period; on the --param path, each point simulates where its substituted location: block puts it, and a knob sweep reads each placeholder of its document at its default, refusing one without a default; a knob that edits no home is refused, and the help lists the knobs it sweeps."""
+"""`fleet sweep`, on every sweep path (knob, variable and YAML), exports one CSV per point named after the swept parameter and a summary of every point, and creates no output directory when it refuses its period; on the --param path, each point simulates where its substituted location: block puts it, and a knob sweep reads each placeholder of its document at its default, refusing one without a default; a knob that edits no home is refused, as is a battery power sweep of a fleet with no battery, and the help lists the knobs it sweeps."""
 
 from pathlib import Path
 
@@ -231,6 +231,20 @@ def test_a_knob_that_edits_no_home_is_refused_naming_it_and_the_knobs_it_sweeps(
     assert result.exit_code == 1
     assert f"--param '{name}' names the knob '{canonical}', which sets" in refusal
     assert f"and no home's simulation, so every point would simulate the same fleet; {_SWEPT_KNOBS}" in refusal
+    assert not Path("out").exists()
+
+
+def test_a_battery_power_sweep_of_a_fleet_with_no_battery_is_refused_naming_the_capacity_knob() -> None:
+    """battery_power_kw sets only a battery a home has, so over homes with none every point would simulate the same fleet."""
+    result = _sweep_document(
+        {"fleet_distribution": two_home_fleet_distribution()},
+        "--param", "battery_power_kw", "--min", "1", "--max", "2", "--steps", "2", "--mode", "linear",
+    )
+
+    refusal = " ".join(result.stderr.split())
+    assert result.exit_code == 1
+    assert refusal.startswith("Configuration error: battery_power_kw"), refusal
+    assert "battery_capacity_kwh" in refusal
     assert not Path("out").exists()
 
 

@@ -92,6 +92,23 @@ def _with_battery_power(home: HomeConfig, kw: float) -> HomeConfig:
     return replace(home, battery_config=replace(home.battery_config, max_charge_kw=kw, max_discharge_kw=kw))
 
 
+def _with_battery_homes_power(scenario: ScenarioConfig, kw: float) -> ScenarioConfig:
+    """*scenario* with each battery home's battery charging and discharging at up to *kw*.
+
+    Raises:
+        ConfigurationError: If no home of *scenario* has a battery, so the power
+            would set nothing, naming the knob, the scenario and the capacity
+            knob that gives the homes one.
+    """
+    if not any(home.battery_config is not None for home in scenario.simulated_homes()):
+        raise ConfigurationError(
+            f"battery_power_kw sets the power of each home's battery, but no home of scenario "
+            f"'{scenario.name}' has a battery, so it would set nothing; give the homes a battery, "
+            "or set battery_capacity_kwh instead"
+        )
+    return scenario.map_homes(lambda home: _with_battery_power(home, kw))
+
+
 def _with_annual_consumption(home: HomeConfig, kwh: float) -> HomeConfig:
     """*home* with its household consuming *kwh* a year."""
     return replace(home, load_config=replace(home.load_config, annual_consumption_kwh=kwh))
@@ -202,7 +219,7 @@ KNOBS, ALIASES = _registry(
         _home_knob("pv_capacity_kw", _with_pv_capacity),
         _home_knob("inverter_capacity_kw", _with_inverter_capacity),
         _home_knob("battery_capacity_kwh", _with_battery_capacity),
-        _home_knob("battery_power_kw", _with_battery_power),
+        Knob("battery_power_kw", _with_battery_homes_power, target=KnobTarget.HOMES),
         _home_knob("annual_consumption_kwh", _with_annual_consumption),
         _home_knob("degradation_rate_per_year", _with_pv_degradation),
         Knob("seg_tariff_pence_per_kwh", _with_seg_rate, target=KnobTarget.SEG_RATE),
