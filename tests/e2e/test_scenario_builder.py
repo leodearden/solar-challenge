@@ -26,6 +26,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS, days_window, 
 from tests._fleet_form import start_spec
 from tests._repository_paths import SCENARIOS_DIR
 from tests.e2e._alpine_start import open_once_alpine_has_started
+from tests.e2e._animation_frames import delay_animation_frames
 from tests.e2e._css_transitions import finish_the_css_transitions
 from tests.e2e._fetches_handled import (
     record_fetches_started_and_handled,
@@ -1386,10 +1387,13 @@ def _save_under_the_scenario_name(page: Page) -> Response:
     """Click Save, accept the name the Save Scenario dialog offers, the scenario's own or 'My Scenario', and return the answer to the save.
 
     The dialog's own Save button is hidden until the dialog opens, so the one Save button shown is the toolbar's.
+    It waits for the name box to show before pressing Enter into it, since the dialog shows only at the next animation frame and press, unlike click, does not wait for an element to show.
     """
     page.get_by_role("button", name="Save", exact=True).click()
+    save_name = page.locator("#save_name")
+    expect(save_name).to_be_visible()
     with page.expect_response("**/api/scenarios/save") as save:
-        page.locator("#save_name").press("Enter")
+        save_name.press("Enter")
     return save.value
 
 
@@ -1440,3 +1444,13 @@ def test_a_save_the_server_refuses_shows_its_reasons(page: Page, live_server: st
     expect(
         page.get_by_text("Validation errors:", exact=True).locator("..").get_by_role("listitem")
     ).to_have_text(reasons)
+
+
+def test_a_save_is_sent_once_a_late_frame_shows_the_save_scenario_dialog(page: Page, live_server: str) -> None:
+    """With each animation frame a second late, as on a loaded host, the Save Scenario dialog shows only at the next frame; Enter in its name box still sends the save, under the name the dialog offered."""
+    delay_animation_frames(page, 1000)
+    open_builder(page, live_server)
+
+    saved = _save_under_the_scenario_name(page)
+
+    assert (saved.status, saved.request.post_data_json["name"]) == (400, "My Scenario"), saved.text()
