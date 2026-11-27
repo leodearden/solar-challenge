@@ -1043,7 +1043,11 @@ with no battery is unchanged, and a dispatched scenario with no battery home is
 refused. `site_export_limit_kw`, default none, caps each home's export, PV
 excess included, in every step in which its battery exports. It does not
 curtail PV export while the battery exports nothing
-(`tests/unit/config/test_event_enrolment.py`).
+(`tests/unit/config/test_event_enrolment.py`). Enrolment changes no pricing
+yet: a dispatched scenario's events income is still the spare-capacity pricing
+above, measured on the enrolled run, so under the operational baseline a drawn
+day, on which the batteries already discharge at full power, adds next to no
+spare capacity.
 
 **Reliability.** Beside the booked mean, the capacity-at-events breakdown reports
 the capacity available on at least 50% and on at least 90% of event days: the

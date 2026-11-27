@@ -384,10 +384,10 @@ class GridServicesEventsConfig:
             event days with, a whole number of at least 0; read only when the
             fleet is dispatched.
         site_export_limit_kw: The most a home may export in a step in which
-            its battery exports in an event window, PV excess included, a
-            finite number of at least 0, or ``None`` for no limit.  It does
-            not curtail PV export in a step in which the battery exports
-            nothing.
+            its battery exports, PV excess included, a finite number of at
+            least 0, or ``None`` for no limit; read only when the fleet is
+            dispatched.  It does not curtail PV export in a step in which the
+            battery exports nothing.
     """
 
     band: GridServicesBand = GridServicesBand.CENTRAL
