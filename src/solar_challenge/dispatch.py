@@ -276,9 +276,14 @@ def _step_shortfall_kw(generation_kw: float, demand_kw: float) -> float:
     return max(0.0, demand_kw - generation_kw)
 
 
-def _step_max_export_kw(generation_kw: float, demand_kw: float, *, max_discharge_kw: float) -> float:
-    """A step's export limit in kW: the battery's discharge limit, max_discharge_kw, less the step's shortfall, or 0."""
-    return max(0.0, max_discharge_kw - _step_shortfall_kw(generation_kw, demand_kw))
+def _step_max_export_kw(
+    generation_kw: float, demand_kw: float, *, max_discharge_kw: float, site_export_limit_kw: float | None
+) -> float:
+    """A step's export limit in kW: the battery's discharge limit, max_discharge_kw, less the step's shortfall, and no more than any site_export_limit_kw less the step's PV excess, or 0."""
+    discharge_headroom_kw = max(0.0, max_discharge_kw - _step_shortfall_kw(generation_kw, demand_kw))
+    if site_export_limit_kw is None:
+        return discharge_headroom_kw
+    return max(0.0, min(discharge_headroom_kw, site_export_limit_kw - _step_excess_kw(generation_kw, demand_kw)))
 
 
 @dataclass(frozen=True)
@@ -289,8 +294,8 @@ class StepLimits:
         excess_kw: PV beyond demand, the most charge_kw may take.
         shortfall_kw: Demand beyond PV, the most discharge_kw may give.
         max_charge_kw: The battery's charge limit, which PV and grid charging share.
-        max_export_kw: The battery's discharge limit less the step's shortfall, or 0, the most
-            export_kw may send.
+        max_export_kw: The battery's discharge limit less the step's shortfall, and no more than
+            any site export limit less the step's PV excess, or 0, the most export_kw may send.
     """
 
     excess_kw: float
@@ -300,9 +305,15 @@ class StepLimits:
 
     @classmethod
     def for_step(
-        cls, generation_kw: float, demand_kw: float, *, max_charge_kw: float, max_discharge_kw: float
+        cls,
+        generation_kw: float,
+        demand_kw: float,
+        *,
+        max_charge_kw: float,
+        max_discharge_kw: float,
+        site_export_limit_kw: float | None = None,
     ) -> "StepLimits":
-        """The limits of a step at generation_kw and demand_kw, for a battery whose charge limit is max_charge_kw and whose discharge limit is max_discharge_kw.
+        """The limits of a step at generation_kw and demand_kw, for a battery whose charge limit is max_charge_kw and whose discharge limit is max_discharge_kw, at a site whose export limit is site_export_limit_kw, None for none.
 
         Its excess, shortfall and export limit are those the built-in strategies decide from, so a
         decision that asks for all of any of them is within its limit to the last bit.
@@ -311,7 +322,12 @@ class StepLimits:
             excess_kw=_step_excess_kw(generation_kw, demand_kw),
             shortfall_kw=_step_shortfall_kw(generation_kw, demand_kw),
             max_charge_kw=max_charge_kw,
-            max_export_kw=_step_max_export_kw(generation_kw, demand_kw, max_discharge_kw=max_discharge_kw),
+            max_export_kw=_step_max_export_kw(
+                generation_kw,
+                demand_kw,
+                max_discharge_kw=max_discharge_kw,
+                site_export_limit_kw=site_export_limit_kw,
+            ),
         )
 
     def require_admissible(self, decision: DispatchDecision, strategy_name: str) -> None:
@@ -337,7 +353,8 @@ class StepLimits:
                 "export_kw",
                 decision.export_kw,
                 self.max_export_kw,
-                "the discharge limit's headroom after the step's shortfall",
+                "the discharge limit's headroom after the step's shortfall, "
+                "within any site export limit less the step's PV excess",
             ),
         )
         breaches = [
@@ -1194,15 +1211,21 @@ class EventDischargeStrategy(DispatchStrategy):
     It holds no charge back for a window: before one opens, the base runs unchanged. A window
     covers a minute by the date and clock hour of the step's timestamp, read on that
     timestamp's own clock, as TOUOptimizedStrategy reads its peak_hours. Any base can be
-    enrolled. Its max_discharge_kw must equal the battery's Battery.max_discharge_kw for as
-    long as it is used: a battery whose config is replaced by one with a lower limit has a
-    window's export refused by StepLimits.require_admissible.
+    enrolled. Its max_discharge_kw must equal the battery's Battery.max_discharge_kw, and its
+    site_export_limit_kw the battery's BatteryConfig.site_export_limit_kw, for as long as it is
+    used: a battery whose config is replaced by one with a lower limit has a window's export
+    refused by StepLimits.require_admissible.
     """
 
     def __init__(
-        self, base: DispatchStrategy, windows: Sequence[EventDischargeWindow], *, max_discharge_kw: float
+        self,
+        base: DispatchStrategy,
+        windows: Sequence[EventDischargeWindow],
+        *,
+        max_discharge_kw: float,
+        site_export_limit_kw: float | None = None,
     ) -> None:
-        """Wrap base in windows, for a battery whose discharge limit is max_discharge_kw.
+        """Wrap base in windows, for a battery whose discharge limit is max_discharge_kw, at a site whose export limit is site_export_limit_kw.
 
         Args:
             base: The strategy that decides every minute outside the windows.
@@ -1210,10 +1233,14 @@ class EventDischargeStrategy(DispatchStrategy):
             max_discharge_kw: The battery's discharge limit, Battery.max_discharge_kw, read as a
                 finite number greater than 0: decide_action is not given it, and a window exports
                 what it leaves after the step's shortfall.
+            site_export_limit_kw: The battery's BatteryConfig.site_export_limit_kw, the most the
+                home may export in a step in which the battery exports, PV excess included, read
+                as a finite number of at least 0; None for no limit.
 
         Raises:
-            ConfigurationError: If as_event_discharge_windows refuses windows, naming it; or if
-                max_discharge_kw is a bool, not a finite number or not greater than 0, naming it.
+            ConfigurationError: If as_event_discharge_windows refuses windows, naming it; if
+                max_discharge_kw is a bool, not a finite number or not greater than 0, naming it;
+                or if site_export_limit_kw is a bool, not a finite number or below 0, naming it.
         """
         self._base = base
         self._slots = frozenset(
@@ -1223,6 +1250,11 @@ class EventDischargeStrategy(DispatchStrategy):
             for hour in window.hours
         )
         self._max_discharge_kw = as_finite_float(max_discharge_kw, "max_discharge_kw", POSITIVE)
+        self._site_export_limit_kw = (
+            None
+            if site_export_limit_kw is None
+            else as_finite_float(site_export_limit_kw, "site_export_limit_kw", NON_NEGATIVE)
+        )
 
     @property
     def name(self) -> str:
@@ -1245,7 +1277,7 @@ class EventDischargeStrategy(DispatchStrategy):
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
-        """Decide the step: inside a window, no charge, the step's shortfall and the export limit left after it; else the base's decision, given every argument unchanged.
+        """Decide the step: inside a window, no charge, the step's shortfall and the export limit left after it within the site export limit; else the base's decision, given every argument unchanged.
 
         Raises:
             ValueError: If an input is out of the range the sibling strategies refuse.
@@ -1258,7 +1290,12 @@ class EventDischargeStrategy(DispatchStrategy):
                 charge_kw=0.0,
                 discharge_kw=_step_shortfall_kw(generation_kw, demand_kw),
                 grid_charge_kw=0.0,
-                export_kw=_step_max_export_kw(generation_kw, demand_kw, max_discharge_kw=self._max_discharge_kw),
+                export_kw=_step_max_export_kw(
+                    generation_kw,
+                    demand_kw,
+                    max_discharge_kw=self._max_discharge_kw,
+                    site_export_limit_kw=self._site_export_limit_kw,
+                ),
             )
         return self._base.decide_action(
             timestamp=timestamp,
@@ -1272,16 +1309,22 @@ class EventDischargeStrategy(DispatchStrategy):
 
 
 def with_event_discharge(
-    strategy: DispatchStrategy, event_discharge: tuple[EventDischargeWindow, ...], *, max_discharge_kw: float
+    strategy: DispatchStrategy,
+    event_discharge: tuple[EventDischargeWindow, ...],
+    *,
+    max_discharge_kw: float,
+    site_export_limit_kw: float | None = None,
 ) -> DispatchStrategy:
-    """Return strategy wrapped in event_discharge, a battery's event windows, at its discharge limit max_discharge_kw; with no windows, strategy itself.
+    """Return strategy wrapped in event_discharge, a battery's event windows, at its discharge limit max_discharge_kw and its site export limit site_export_limit_kw; with no windows, strategy itself.
 
     Raises:
-        ConfigurationError: If there are windows, as EventDischargeStrategy refuses its windows or limit.
+        ConfigurationError: If there are windows, as EventDischargeStrategy refuses its windows or limits.
     """
     if not event_discharge:
         return strategy
-    return EventDischargeStrategy(strategy, event_discharge, max_discharge_kw=max_discharge_kw)
+    return EventDischargeStrategy(
+        strategy, event_discharge, max_discharge_kw=max_discharge_kw, site_export_limit_kw=site_export_limit_kw
+    )
 
 
 def build_dispatch_strategy(
@@ -1291,12 +1334,14 @@ def build_dispatch_strategy(
     tariff: TariffConfig | None,
     event_discharge: tuple[EventDischargeWindow, ...] = (),
     max_discharge_kw: float | None = None,
+    site_export_limit_kw: float | None = None,
 ) -> DispatchStrategy:
     """Build a new instance of the strategy config configures, for a battery whose grid-charge setting is grid_charging, in a home on tariff.
 
     After every refusal, which judges and names the strategy config configures, the battery's
     event windows, event_discharge, wrap it at the battery's discharge limit, max_discharge_kw,
-    through with_event_discharge; with none, it is returned unwrapped.
+    and its site export limit, site_export_limit_kw, through with_event_discharge; with none,
+    it is returned unwrapped.
 
     Raises:
         ConfigurationError: The strategy's constructor refuses the variant at tariff: a
@@ -1323,7 +1368,9 @@ def build_dispatch_strategy(
     if grid_charging is not None and tariff is not None:
         _require_cheap_minutes_for_grid_charging(strategy.name, tariff)
     if max_discharge_kw is not None:
-        return with_event_discharge(strategy, event_discharge, max_discharge_kw=max_discharge_kw)
+        return with_event_discharge(
+            strategy, event_discharge, max_discharge_kw=max_discharge_kw, site_export_limit_kw=site_export_limit_kw
+        )
     if event_discharge:
         raise ConfigurationError(
             "event_discharge holds event windows, which discharge the battery at its discharge limit, "
