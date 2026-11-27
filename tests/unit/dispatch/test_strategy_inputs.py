@@ -3,7 +3,7 @@
 
 import math
 import re
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -12,6 +12,8 @@ from solar_challenge.dispatch import (
     ChargeWindow,
     DispatchDecision,
     DispatchStrategy,
+    EventDischargeStrategy,
+    EventDischargeWindow,
     PeakShavingStrategy,
     ScheduledChargeStrategy,
     SelfConsumptionStrategy,
@@ -31,6 +33,14 @@ STRATEGIES = [
     pytest.param(
         ScheduledChargeStrategy(SelfConsumptionStrategy(), (WINDOW_OPEN_AT_TIMESTAMP,), LONDON),
         id="scheduled_charge",
+    ),
+    pytest.param(
+        EventDischargeStrategy(
+            SelfConsumptionStrategy(),
+            (EventDischargeWindow(days=(date(2024, 1, 1),), hours=(12,)),),
+            max_discharge_kw=2.5,
+        ),
+        id="event_discharge",
     ),
 ]
 
