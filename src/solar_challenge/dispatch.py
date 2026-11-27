@@ -27,6 +27,7 @@ from solar_challenge.number_fields import (
     POSITIVE,
     Interval,
     as_finite_float,
+    as_list_elements,
     as_whole_numbers,
     read_field,
 )
@@ -1081,6 +1082,61 @@ class PeakShavingStrategy(DispatchStrategy):
                 timestep_minutes=timestep_minutes,
             ),
         )
+
+
+_EVENT_HOURS: Final = Interval(0, 23)
+"""The clock hours an event window covers, as gridservices.EventWindow reads its hours."""
+
+
+def _as_event_days(value: object, field: str) -> tuple[date, ...]:
+    """Return *value*, a list of dates, as the tuple of its elements, each read by _as_event_day as {field}[{i}].
+
+    Raises:
+        ConfigurationError: If *value* is not a list, as as_list_elements reads one, naming
+            *field*; or if _as_event_day refuses an element.
+    """
+    return tuple(
+        _as_event_day(day, f"{field}[{index}]")
+        for index, day in enumerate(as_list_elements(value, field, "a list of dates"))
+    )
+
+
+def _as_event_day(value: object, field: str) -> date:
+    """Return *value* if it is exactly a date: a datetime or pd.Timestamp subclasses date but names a moment, not a day.
+
+    Raises:
+        ConfigurationError: If *value* is not exactly a date, naming *field* and *value*.
+    """
+    if type(value) is not date:
+        raise ConfigurationError.must_be(field, "a date", got=value)
+    return value
+
+
+@dataclass(frozen=True)
+class EventDischargeWindow:
+    """A resolved grid-services event schedule: the battery discharges at full power in every listed hour of every listed day.
+
+    Both are read on the step timestamp's own clock. It holds no months, weekdays or seed: the
+    scenario's events configuration is the schedule's one definition, and resolves it to days.
+
+    Attributes:
+        days: The dates it covers, each exactly a date, at least one.
+        hours: The clock hours it covers on each of its days, whole numbers from 0 to 23, at least one.
+
+    Raises:
+        ConfigurationError: For a field it cannot schedule, naming the field, or the element, and its value.
+    """
+
+    days: tuple[date, ...]
+    hours: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        """Hold days and hours as read, then refuse an empty one, naming it."""
+        object.__setattr__(self, "days", _as_event_days(self.days, "days"))
+        read_field(self, "hours", as_whole_numbers, _EVENT_HOURS)
+        for name, what in (("days", "day"), ("hours", "hour")):
+            if not getattr(self, name):
+                raise ConfigurationError(f"{name} must hold at least one {what}; it is empty")
 
 
 def build_dispatch_strategy(
