@@ -12,21 +12,31 @@ document.addEventListener('alpine:init', () => {
     // The most distinct values a preview summary lists, each with its count of homes
     const MOST_VALUES_LISTED = 8;
 
-    // One home's value as a preview summary writes it: rounded to 2 decimals, in `unit`, or 'unset' for a null
-    function previewValue(value, unit) {
-        return value === null ? 'unset' : `${String(Math.round(value * 100) / 100)} ${unit}`;
+    // One home's value as a preview summary shows it: rounded to 2 decimals, or null for a null
+    function shownValue(value) {
+        return value === null ? null : Math.round(value * 100) / 100;
     }
 
-    // A card's summary of `values`, one per home: each distinct value, ascending, with its count of homes,
-    // or, past MOST_VALUES_LISTED distinct values, the min, median (the lower middle home's) and max
+    // A shown value as a preview summary writes it: in `unit`, or 'unset' for a null
+    function previewValue(value, unit) {
+        return value === null ? 'unset' : `${String(value)} ${unit}`;
+    }
+
+    // A count of homes as a preview summary writes it
+    function homesCount(count) {
+        return count === 1 ? '1 home' : `${count} homes`;
+    }
+
+    // A card's summary of `values`, one per home: each distinct shown value, ascending, with its count of homes,
+    // or, past MOST_VALUES_LISTED distinct shown values, the min, median (the lower middle home's) and max
     function previewSummary(values, unit) {
-        const sorted = [...values].sort((a, b) => (a === null) - (b === null) || a - b);
+        const sorted = values.map(shownValue).sort((a, b) => (a === null) - (b === null) || a - b);
         const counts = new Map();
         for (const value of sorted) {
             counts.set(value, (counts.get(value) || 0) + 1);
         }
         if (counts.size <= MOST_VALUES_LISTED) {
-            return [...counts].map(([value, count]) => `${previewValue(value, unit)} \u00d7 ${count} homes`).join(', ');
+            return [...counts].map(([value, count]) => `${previewValue(value, unit)} \u00d7 ${homesCount(count)}`).join(', ');
         }
         const median = sorted[Math.floor((sorted.length - 1) / 2)];
         return `min ${previewValue(sorted[0], unit)}, median ${previewValue(median, unit)}, `
@@ -49,6 +59,8 @@ document.addEventListener('alpine:init', () => {
         importNotice: '',
         // Each component's summary of the homes the last preview built, by component key
         previewSummaries: {},
+        // The number of the latest preview asked for; the page drops the answer to any other
+        latestPreview: 0,
         simName: '',
 
         /* ---- Period state ---- */
@@ -80,6 +92,13 @@ document.addEventListener('alpine:init', () => {
         segEnabled: false,
         segPreset: 'custom',
         segRatePencePerKwh: 4.0,
+
+        /* A summary describes the form its preview posted, so a change to the form clears it and drops an answer still to come. */
+        init() {
+            this.$watch(() => JSON.stringify(this.buildPayload()), (posted, before) => {
+                if (posted !== before) this._forgetPreview();
+            });
+        },
 
         /* ---- Build payload from current state ---- */
         buildPayload() {
@@ -132,17 +151,22 @@ document.addEventListener('alpine:init', () => {
             return payload;
         },
 
+        /* POST the form, the body buildPayload builds, to `url` */
+        _postFleetForm(url) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(this.buildPayload())
+            });
+        },
+
         /* ---- Simulation submission ---- */
         /* The server refuses a form it cannot run; a refused Run leaves the earlier run's progress and results. */
         async submitFleet() {
             this.submitting = true;
             this.errorMsg = '';
             try {
-                const resp = await fetch('/api/simulate/fleet-from-distribution', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.buildPayload())
-                });
+                const resp = await this._postFleetForm('/api/simulate/fleet-from-distribution');
                 const data = await resp.json();
                 if (resp.ok) {
                     this.submittedJob = data;
@@ -159,15 +183,12 @@ document.addEventListener('alpine:init', () => {
         /* ---- Preview ---- */
         /* Each card's summary of the homes Run builds from the form, or the server's refusal. */
         async preview() {
+            const preview = this._forgetPreview();
             this.errorMsg = '';
-            this.previewSummaries = {};
             try {
-                const resp = await fetch('/api/fleet/preview-distribution', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.buildPayload())
-                });
+                const resp = await this._postFleetForm('/api/fleet/preview-distribution');
                 const data = await resp.json();
+                if (preview !== this.latestPreview) return;
                 if (!resp.ok) {
                     this.errorMsg = data.error || 'Preview failed';
                     return;
@@ -176,19 +197,22 @@ document.addEventListener('alpine:init', () => {
                     Object.entries(data.values).map(([key, values]) => [key, previewSummary(values, components[key].unit)])
                 );
             } catch (e) {
+                if (preview !== this.latestPreview) return;
                 this.errorMsg = 'Preview error: ' + e.message;
             }
+        },
+
+        /* Clear every summary and drop the answer to each preview asked for so far; the number of the next preview */
+        _forgetPreview() {
+            this.previewSummaries = {};
+            return ++this.latestPreview;
         },
 
         /* ---- YAML Export ---- */
         async exportYaml() {
             this.errorMsg = '';
             try {
-                const resp = await fetch('/api/fleet/export-yaml', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.buildPayload())
-                });
+                const resp = await this._postFleetForm('/api/fleet/export-yaml');
                 if (!resp.ok) {
                     const data = await resp.json();
                     this.errorMsg = data.error || 'Export failed';
