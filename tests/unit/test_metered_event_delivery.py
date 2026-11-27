@@ -15,7 +15,7 @@ over the nearest eligible days with no event (TestOperationalMetering, §9 B9).
 import dataclasses
 import warnings
 from collections.abc import Callable, Mapping
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 import numpy as np
@@ -352,6 +352,30 @@ def _metered_home(
     )
 
 
+_LAST_DRAWN_AT_SEED_4 = (date(2024, 1, 22), date(2024, 1, 29), date(2024, 1, 31))
+"""The days the default window draws over January 2024 at event_day_seed 4: the last is January's last day."""
+
+
+def _cut_before_the_window_on(results: SimulationResults, day: date) -> SimulationResults:
+    """*results* without its rows from the first of _WINDOW's hours on *day*, its last date: a simulated day with no row in the window."""
+    index = results.generation.index
+    end = pd.Timestamp(datetime.combine(day, time(min(_WINDOW.hours))), tz=index.tz)
+    assert index[-1].date() == day
+
+    def cut(series: pd.Series) -> pd.Series:
+        return series[series.index < end]
+
+    return dataclasses.replace(
+        results,
+        **{
+            attribute.name: cut(value)
+            for attribute in dataclasses.fields(results)
+            if isinstance(value := getattr(results, attribute.name), pd.Series)
+        },
+        additional_loads={kind: cut(load) for kind, load in results.additional_loads.items()},
+    )
+
+
 class TestCapacityMetering:
     """§9 B8: under the capacity baseline a drawn day delivers the battery homes' in-window discharge over the event's hours, D(d) = Σ_home Σ_{t∈d∩w} discharge(t)·Δt / h."""
 
@@ -402,6 +426,22 @@ class TestCapacityMetering:
         breakdown = compute_grid_services_at_events(fleet, _CAPACITY)
 
         assert breakdown.per_window_battery_export_kwh_per_event == pytest.approx((sum(exported) / len(exported),))
+
+    def test_a_drawn_day_with_no_row_in_the_window_delivers_0_to_the_mean(self) -> None:
+        cfg = dataclasses.replace(_CAPACITY, event_day_seed=4)
+        assert _drawn(cfg) == _LAST_DRAWN_AT_SEED_4
+        first, second, last = _LAST_DRAWN_AT_SEED_4
+        home = _cut_before_the_window_on(
+            _metered_home({(_WINDOW, first): 1.5, (_WINDOW, second): 3.0}, {(_WINDOW, first): 0.5, (_WINDOW, second): 1.0}),
+            last,
+        )
+        assert enrolled_event_windows(cfg, home.window)[0].days == _LAST_DRAWN_AT_SEED_4
+
+        breakdown = compute_grid_services_at_events(_enrolled_fleet(cfg, home), cfg)
+
+        # (1.5 + 3.0 + 0) kW and (1.5 + 3.0 + 0) kWh over the three drawn days: 31 January adds 0, not dropped.
+        assert breakdown.per_window_avail_kw == pytest.approx((1.5,))
+        assert breakdown.per_window_battery_export_kwh_per_event == pytest.approx((1.5,))
 
     def test_no_displaced_self_use_is_reported(self) -> None:
         fleet, _, _ = self._fleet()
@@ -553,6 +593,20 @@ class TestOperationalMetering:
 
         assert breakdown.per_window_avail_kw == (0.0,)
         assert breakdown.annual_income_gbp == 0.0
+
+    def test_a_drawn_day_with_no_row_in_the_window_delivers_0_to_the_mean(self) -> None:
+        cfg = dataclasses.replace(_OPERATIONAL, event_day_seed=4)
+        assert _drawn(cfg) == _LAST_DRAWN_AT_SEED_4
+        first, second, last = _LAST_DRAWN_AT_SEED_4
+        quiet = [day for day in _eligible(_WINDOW, _JANUARY) if day not in _LAST_DRAWN_AT_SEED_4]
+        home = _cut_before_the_window_on(
+            _importing_home(_WINDOW, {**dict.fromkeys(quiet, 0.8), first: 0.0, second: 0.0}, {}), last
+        )
+
+        breakdown = compute_grid_services_at_events(_enrolled_fleet(cfg, home), cfg)
+
+        # 0.8 kW below the quiet days' 0.8 kW on 22 and 29 January, and 0 on the 31st, not dropped: 1.6 / 3.
+        assert breakdown.per_window_avail_kw == pytest.approx((1.6 / 3,))
 
     def test_the_baseline_reads_the_ten_days_the_prd_sets(self) -> None:
         assert OPERATIONAL_BASELINE_DAYS == 10
