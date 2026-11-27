@@ -12,8 +12,11 @@ un-enrolled. It prices each sweep at the low, central and high bands, simulating
 configuration once per participation and pricing the three bands from those runs. By default it
 runs the whole fleet over the scenario's period, all of 2024; --homes N keeps the first N homes
 and their share of the grant. It reads Bristol's TMY from the weather cache committed under
-tests/fixtures/weather_cache, so it runs offline. Each configuration is one cost-recovery
-projection of several fleet-years, run in a process pool unless --no-parallel. It prints each
+tests/fixtures/weather_cache, and refuses a cache that holds no TMY at the scenario's location, so
+it runs offline and puts nothing into the cache. It refuses an events configuration that sets
+its own availability or utilisation rate, since that rate overrides every band's. Each
+configuration is one cost-recovery projection of several fleet-years, run in a process pool
+unless --no-parallel. It prints each
 band's ranking as a markdown table, each configuration against the smallest battery, after the
 library version, commit, homes, period, weather, install and events it was measured on.
 tests/integration/test_battery_sizing_end_to_end.py runs measure offline on a short winter
@@ -41,6 +44,7 @@ from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetRunner, FleetSimulate
 from solar_challenge.gridservices import EventParticipation, GridServicesBand, GridServicesEventsConfig
 from solar_challenge.home import simulate_home
+from solar_challenge.location import Location
 from solar_challenge.optimize import (
     ConfigResult,
     ReferenceComparison,
@@ -138,10 +142,12 @@ class _SimulatedOnce:
 
 
 def _events_of(scenario: ScenarioConfig) -> tuple[FinanceConfig, GridServicesEventsConfig]:
-    """scenario's finance block and the events configuration it prices grid services with.
+    """scenario's finance block and the events configuration it prices grid services with, at each band's rates.
 
     Raises:
-        ConfigurationError: If scenario does not price grid services at events, naming it.
+        ConfigurationError: If scenario does not price grid services at events, or if its events
+            configuration sets a rate of its own, which overrides every band's; naming the
+            scenario, and the rate.
     """
     finance = scenario.finance
     events = None if finance is None else finance.grid_services_model
@@ -150,6 +156,17 @@ def _events_of(scenario: ScenarioConfig) -> tuple[FinanceConfig, GridServicesEve
             f"scenario {scenario.name!r} does not price grid services at events (finance.grid_services_model"
             " of type: capacity_at_events), which the sweep enrols and prices at each band"
         )
+    own_rates = {
+        "availability_gbp_per_kw_per_event": events.availability_gbp_per_kw_per_event,
+        "utilisation_gbp_per_mwh": events.utilisation_gbp_per_mwh,
+    }
+    for rate, value in own_rates.items():
+        if value is not None:
+            raise ConfigurationError(
+                f"scenario {scenario.name!r} sets finance.grid_services_model.{rate} to {value:g}, which overrides"
+                " each band's rate, so the low, central and high bands would price alike; remove it to price the"
+                " sweep at each band's rates"
+            )
     return finance, events
 
 
@@ -157,7 +174,7 @@ def _priced_at(base: ScenarioConfig, participation: EventParticipation, band: Gr
     """base with its events configuration at participation and band, all else as it is.
 
     Raises:
-        ConfigurationError: If base does not price grid services at events, naming it.
+        ConfigurationError: As _events_of refuses base.
     """
     finance, events = _events_of(base)
     pricing = dataclasses.replace(events, participation=participation, band=band)
@@ -185,7 +202,7 @@ def measure(base: ScenarioConfig, *, simulate: FleetSimulate) -> tuple[BandSweep
     sweep.
 
     Raises:
-        ConfigurationError: If base does not price grid services at events, naming it.
+        ConfigurationError: As _events_of refuses base, before it is simulated.
         ValueError: As enumerate_configs and run_sweep refuse base, before it is simulated.
     """
     sweeps: dict[tuple[GridServicesBand, EventParticipation], BandSweep] = {}
@@ -208,6 +225,22 @@ def measure(base: ScenarioConfig, *, simulate: FleetSimulate) -> tuple[BandSweep
         for band in GridServicesBand:
             sweeps[band, participation] = _band_sweep(participation, band, results[band])
     return tuple(sweeps[band, participation] for band in GridServicesBand for participation in PARTICIPATIONS)
+
+
+def _refuse_a_cache_without_the_tmy(cache: WeatherCache, location: Location) -> None:
+    """Refuse cache unless it holds the TMY at location, so the run fetches none from PVGIS and puts none into cache.
+
+    By default cache is the one committed with the tests, which a fetched TMY must not land in.
+
+    Raises:
+        ConfigurationError: If cache holds no TMY at location, naming its directory and location.
+    """
+    if cache.get("tmy", location) is None:
+        raise ConfigurationError(
+            f"the weather cache in {cache.cache_dir} holds no TMY at {location.name} ({location.latitude},"
+            f" {location.longitude}), the scenario's location; this script fetches none from PVGIS, so give"
+            " --cache-dir a cache that holds it"
+        )
 
 
 def _git(*args: str) -> str:
@@ -368,8 +401,8 @@ def _parser() -> argparse.ArgumentParser:
         "--cache-dir",
         type=Path,
         default=COMMITTED_WEATHER_CACHE_DIR,
-        help=f"weather cache holding the TMY at the scenario's location (default: {COMMITTED_WEATHER_CACHE_DIR},"
-        " which holds Bristol's committed PVGIS TMY)",
+        help=f"weather cache holding the TMY at the scenario's location, refused if it holds none (default:"
+        f" {COMMITTED_WEATHER_CACHE_DIR}, which holds Bristol's committed PVGIS TMY)",
     )
     parser.add_argument(
         "--workers", type=_at_least_one, default=None, help="the process pool's workers (default: FleetRunner's own)"
@@ -389,6 +422,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     fleet_homes = len(loaded.homes)
     scenario = first_homes(loaded, fleet_homes if args.homes is None else args.homes)
     cache = WeatherCache(args.cache_dir)
+    _refuse_a_cache_without_the_tmy(cache, scenario.get_location())
     runner = FleetRunner(
         weather=PvgisTmy(cache), home_simulator=simulate_home, parallel=args.parallel, max_workers=args.workers
     )

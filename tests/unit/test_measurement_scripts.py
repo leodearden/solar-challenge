@@ -11,6 +11,7 @@ scripts/measure_grid_charge_forecast.py and scripts/measure_battery_sizing.py.
 """
 
 import dataclasses
+import re
 import statistics
 import warnings
 from collections.abc import Mapping
@@ -29,7 +30,7 @@ from solar_challenge.config import ScenarioConfig, load_config, load_fleet_confi
 from solar_challenge.dispatch import GRID_CHARGE_FORECASTS
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import BillBreakdown, bill_distribution
-from solar_challenge.fleet import FleetRunner
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetRunner
 from solar_challenge.home import SummaryStatistics, simulate_home
 from solar_challenge.location import Location
 from solar_challenge.pv import (
@@ -822,4 +823,39 @@ class TestMeasureBatterySizing:
             battery_sizing.main(
                 ["--scenario", str(_short_life_victron(tmp_path)), "--cache-dir", str(tmp_path), "--homes", "101"]
             )
+
+    def test_main_refuses_a_weather_cache_without_the_tmy_at_the_scenarios_location(
+        self, battery_sizing: ModuleType, tmp_path: Path
+    ) -> None:
+        """So it fetches nothing from PVGIS, and puts nothing into the cache it is given, by default the committed one."""
+        cache_dir = tmp_path / "weather-cache"
+
+        with pytest.raises(ConfigurationError, match=rf"{re.escape(str(cache_dir))}.*\bBristol\b"):
+            battery_sizing.main(
+                [
+                    "--scenario", str(_short_life_victron(tmp_path)),
+                    "--cache-dir", str(cache_dir),
+                    "--homes", "1",
+                    "--start", "2024-01-15",
+                    "--end", "2024-01-16",
+                    "--no-parallel",
+                ]
+            )
+        assert not cache_dir.exists()
+
+    @pytest.mark.parametrize("rate", ["availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh"])
+    def test_measure_refuses_an_events_rate_of_the_scenarios_own_before_it_simulates(
+        self, battery_sizing: ModuleType, tmp_path: Path, rate: str
+    ) -> None:
+        """Such a rate overrides every band's, so the low, central and high tables would print the same figures."""
+        document = yaml.safe_load(_VICTRON_SCENARIO.read_text(encoding="utf-8"))
+        document["finance"]["grid_services_model"][rate] = 1.5
+        path = tmp_path / "victron-own-rate.yaml"
+        path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+        def simulate(fleet: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            raise AssertionError(f"simulated {fleet.name}")
+
+        with pytest.raises(ConfigurationError, match=rf"\bfinance\.grid_services_model\.{rate} to 1\.5\b.*\bband"):
+            battery_sizing.measure(load_scenario(path), simulate=simulate)
 

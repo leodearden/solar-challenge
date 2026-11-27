@@ -39,7 +39,8 @@ subject names it. The commit that adds this document changes no code.
 - **Weather.** PVGIS's TMY at Bristol (51.45, −2.58), scaled to PVGIS's 2005–2020 mean
   annual GHI ([`docs/tmy-irradiation-scaling.md`](tmy-irradiation-scaling.md)), read from
   the weather cache committed under `tests/fixtures/weather_cache`, the script's default
-  `--cache-dir`. The run needs no network.
+  `--cache-dir`. The run needs no network: the script refuses a cache that holds no TMY at
+  the scenario's location, so it never fetches one, nor puts one into the committed cache.
 - **Workers and cost.** A process pool of 10 workers on a shared 32-core host, whose load
   average stood at about 170 to 190 when the run began. It took 1 h 33 min of wall clock,
   52 fleet simulations of 20 homes over the year, each 1 to 2.5 minutes. The largest
@@ -171,8 +172,9 @@ Read off the tables:
 - **The battery inverter is unpriced.** The scenario leaves
   `finance.battery_inverter_cost_per_kw_gbp` at 0, so the 48/5000's extra cost is not in the
   extra capex.
-- **Charge power equals discharge power.** `--battery-kw`, and the `battery_kw` of each
-  sweep point, sets both, so the 48/3000's 1.8 kW charge is not modelled.
+- **Charge power equals discharge power.** `optimize configs --battery-kw`, and the
+  `battery_kw` of each sweep point this script installs, set both, so the 48/3000's 1.8 kW
+  charge is not modelled.
 - **One round-trip efficiency for both inverters.** Every point keeps the scenario's
   0.911 each way; the 48/5000's 96% is not modelled.
 - **One PV size on every home.** The sweep installs 4 kWp everywhere, not the scenario's
@@ -187,7 +189,8 @@ The whole 100-home fleet, from the repository root:
 Scaled from the 20-home run, expect about five times its wall clock, some 8 hours at 10
 workers on a host as loaded, and about five times its peak memory, some 50 GB in the
 script's own process, since it holds one projection's fleets of every home. It reads
-Bristol's TMY from the committed weather cache, so it runs offline. `--homes N` keeps the
+Bristol's TMY from the committed weather cache, and refuses a `--cache-dir` that holds no TMY
+at the scenario's location, so it runs offline. `--homes N` keeps the
 first N homes with their share of the grant, and `--start`/`--end` shorten the period; a
 shortened period must hold an eligible weekday with no drawn event, which the operational
 baseline meters each event day against.
