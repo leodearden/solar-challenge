@@ -29,6 +29,7 @@ from solar_challenge.community import CommunityBillingConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.dispatch import (
     ChargeWindow,
+    EventDischargeWindow,
     GridChargeConfig,
     PeakShavingStrategyConfig,
     TOUOptimizedStrategyConfig,
@@ -93,6 +94,9 @@ INPUT_TYPES: Mapping[str, Callable[[], object]] = {
         duration=timedelta(hours=3),
         target_soc_fraction=0.8,
         allow_discharge=False,
+    ),
+    "solar_challenge.dispatch.EventDischargeWindow": lambda: EventDischargeWindow(
+        days=(date(2024, 1, 15),), hours=(17, 18)
     ),
     "solar_challenge.ev.EVConfig": lambda: EVConfig("7kW"),
     "solar_challenge.finance.FinanceConfig": lambda: FinanceConfig(
