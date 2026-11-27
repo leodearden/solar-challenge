@@ -1027,17 +1027,25 @@ class TestBatteryPowerAndReference:
         assert "--reference" in result.output
 
 
+# The asset life and loan term the Victron signal projects over: its projections simulate only these two ages.
+_SHORT_ASSET_LIFE_YEARS = 2
+
+
 def test_the_victron_sweep_prints_each_configurations_marginal_columns_against_the_smallest_battery(
     tmp_path: Path, weather_cache: WeatherCache
 ) -> None:
     """The signal: the Victron board scenario, cut to two 4 kWp homes, swept over four battery sizes and powers on the real engine for two winter weekdays.
 
     Two days, not one: the scenario meters delivery against the operational
-    baseline, which needs an eligible day without an event.
+    baseline, which needs an eligible day without an event.  A two-year asset
+    life and loan term make each projection simulate two ages, not a 25-year
+    life's five, so the run stays short enough for every verify.
     """
     document = yaml.safe_load((SCENARIOS_DIR / "bristol-phase1-victron.yaml").read_text(encoding="utf-8"))
     document["fleet_distribution"]["n_homes"] = 2
     document["fleet_distribution"]["pv"]["capacity_kw"] = 4.0
+    document["finance"]["asset_life_years"] = _SHORT_ASSET_LIFE_YEARS
+    document["finance"]["loan_term_years"] = _SHORT_ASSET_LIFE_YEARS
     path = tmp_path / "victron-two-homes.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     weather_cache.put(synthetic_tmy(), "tmy", load_scenario(path).get_location())
