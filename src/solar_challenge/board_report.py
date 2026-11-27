@@ -19,6 +19,7 @@ from solar_challenge.finance import (
 from solar_challenge.flex import FlexibilityValueBand, resolve_flex_band
 from solar_challenge.gridservices import (
     DeliveryBaseline,
+    EventParticipation,
     FlatGridServices,
     GridServicesAtEvents,
     GridServicesBand,
@@ -182,8 +183,9 @@ class GridServicesIncome:
     """The capacity-at-events breakdown the income is, under events pricing; None under flat pricing."""
 
     def __post_init__(self) -> None:
-        """Refuse another pricing, a figure out of range, and an income its pricing did not book, in that order."""
+        """Refuse another pricing, a displaced self-use its participation does not report, a figure out of range, and an income its pricing did not book, in that order."""
         self._refuse_another_pricing()
+        self._refuse_a_displaced_self_use_its_participation_does_not_report()
         self._refuse_figures_out_of_range()
         self._refuse_an_income_its_pricing_did_not_book()
 
@@ -203,6 +205,21 @@ class GridServicesIncome:
             raise ValueError(
                 "GridServicesIncome under events pricing carries the capacity-at-events breakdown its income is: "
                 f"got pricing={self.pricing!r} with at_events=None"
+            )
+
+    def _refuse_a_displaced_self_use_its_participation_does_not_report(self) -> None:
+        """Refuse an events breakdown that reports displaced self-use under dispatched participation, or omits it under observed."""
+        if not isinstance(self.pricing, GridServicesEventsConfig) or self.at_events is None:
+            return
+        reported = bool(self.at_events.per_window_displaced_self_use_kwh_per_event)
+        if reported != (self.pricing.participation is EventParticipation.OBSERVED):
+            raise ValueError(
+                "GridServicesIncome's events breakdown reports displaced self-use exactly when its pricing's "
+                "participation is observed, since a dispatched fleet's bills hold the import its events caused: "
+                f"got participation={self.pricing.participation} with per_window_displaced_self_use_kwh_per_event="
+                f"{self.at_events.per_window_displaced_self_use_kwh_per_event!r}, "
+                "per_window_displaced_import_gbp_per_year="
+                f"{self.at_events.per_window_displaced_import_gbp_per_year!r}"
             )
 
     def _refuse_figures_out_of_range(self) -> None:
@@ -350,11 +367,11 @@ class FlexBlock:
 
 
 def _model_line(pricing: FlatGridServices | GridServicesEventsConfig) -> str:
-    """*pricing*'s model as the board reads it: the events model with its band and delivery baseline, or the flat rate."""
+    """*pricing*'s model as the board reads it: the events model with its band, delivery baseline and participation, or the flat rate."""
     if isinstance(pricing, FlatGridServices):
         return f"flat, £{pricing.income_per_kw_per_year_gbp:.1f}/kW-yr"
     baseline = DeliveryBaseline.parse(pricing.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline")
-    return f"capacity at events, {pricing.band} band, {baseline} delivery baseline"
+    return f"capacity at events, {pricing.band} band, {baseline} delivery baseline, {pricing.participation} participation"
 
 
 def _refuse_projections_over_different_asset_lives(sections: Sequence[AssumptionSection]) -> int:
@@ -404,41 +421,74 @@ def _at_events(income: GridServicesIncome) -> GridServicesAtEvents:
     return income.at_events
 
 
-_AT_EVENTS_ROWS: _Rows[GridServicesIncome] = (
-    ("Per-event available capacity", lambda income: _one_window_figure(_at_events(income).per_window_avail_kw, "kW")),
-    (
-        "Capacity on 50% of event days",
-        lambda income: _one_window_figure(_at_events(income).per_window_avail_p50_kw, "kW"),
+def _displaced_figure(per_window: tuple[float, ...], figure: Callable[[tuple[float, ...]], str]) -> str:
+    """*figure* of *per_window*, a displaced self-use field, or "not reported" when the breakdown reports none."""
+    return figure(per_window) if per_window else "not reported"
+
+
+def _at_events_rows(mean_label: str, p50_label: str, p90_label: str) -> _Rows[GridServicesIncome]:
+    """The capacity-at-events breakdown's rows, its delivery figures labelled *mean_label*, *p50_label* and *p90_label*."""
+    return (
+        (mean_label, lambda income: _one_window_figure(_at_events(income).per_window_avail_kw, "kW")),
+        (p50_label, lambda income: _one_window_figure(_at_events(income).per_window_avail_p50_kw, "kW")),
+        (p90_label, lambda income: _one_window_figure(_at_events(income).per_window_avail_p90_kw, "kW")),
+        (
+            "Battery export per event",
+            lambda income: _one_window_figure(_at_events(income).per_window_battery_export_kwh_per_event, "kWh"),
+        ),
+        (
+            "Evening self-use displaced, per event",
+            lambda income: _displaced_figure(
+                _at_events(income).per_window_displaced_self_use_kwh_per_event,
+                lambda per_window: _one_window_figure(per_window, "kWh"),
+            ),
+        ),
+        (
+            "Evening self-use displaced, value per year",
+            lambda income: _displaced_figure(
+                _at_events(income).per_window_displaced_import_gbp_per_year,
+                lambda per_window: f"£{sum(per_window):,.0f}",
+            ),
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _ParticipationReading:
+    """How this window's table reads an events breakdown under one participation."""
+
+    rows: _Rows[GridServicesIncome]
+    """The breakdown's rows, after the fleet income."""
+    note: str
+    """The note under the table that says what the income leaves out or holds."""
+
+
+_PARTICIPATION_READINGS: Mapping[EventParticipation, _ParticipationReading] = {
+    EventParticipation.OBSERVED: _ParticipationReading(
+        _at_events_rows("Per-event available capacity", "Capacity on 50% of event days", "Capacity on 90% of event days"),
+        "*The income is gross of the evening self-use an event displaces, which householders then import; it "
+        "is not netted off. That import is valued at each home's simulated tariff, £0 for a home simulated "
+        "without one.*",
     ),
-    (
-        "Capacity on 90% of event days",
-        lambda income: _one_window_figure(_at_events(income).per_window_avail_p90_kw, "kW"),
+    EventParticipation.DISPATCHED: _ParticipationReading(
+        _at_events_rows("Per-event metered delivery", "Delivery on 50% of event days", "Delivery on 90% of event days"),
+        "*The bills in this report include the import the events caused: the fleet was simulated discharging "
+        "through each drawn event window, so no displaced self-use is reported beside the income.*",
     ),
-    (
-        "Evening self-use displaced, per event",
-        lambda income: _one_window_figure(_at_events(income).per_window_displaced_self_use_kwh_per_event, "kWh"),
-    ),
-    (
-        "Evening self-use displaced, value per year",
-        lambda income: f"£{sum(_at_events(income).per_window_displaced_import_gbp_per_year):,.0f}",
-    ),
-)
-"""Under events pricing, this window's capacity-at-events breakdown, after its fleet income."""
+}
+"""Under events pricing, this window's breakdown rows and note, by the pricing's participation."""
 
 
 def _window_table(grid_services: GridServicesIncome) -> str:
-    """This window's fleet income, then under events pricing its breakdown and the notes that read it."""
-    events = grid_services.at_events
-    rows = _FLEET_INCOME_ROWS if events is None else _FLEET_INCOME_ROWS + _AT_EVENTS_ROWS
-    table = _table("### This window's fleet, the same under every assumption", "Metric", ["Value"], rows, [grid_services])
-    if events is None:
-        return table
-    notes = (
-        "\n*The income is gross of the evening self-use an event displaces, which householders then import; it "
-        "is not netted off. That import is valued at each home's simulated tariff, £0 for a home simulated "
-        "without one.*\n"
-    )
-    if len(events.per_window_avail_kw) > 1:
+    """This window's fleet income, then under events pricing its breakdown and the notes that read it, as its participation reads them."""
+    heading = "### This window's fleet, the same under every assumption"
+    pricing = grid_services.pricing
+    if not isinstance(pricing, GridServicesEventsConfig):
+        return _table(heading, "Metric", ["Value"], _FLEET_INCOME_ROWS, [grid_services])
+    reading = _PARTICIPATION_READINGS[pricing.participation]
+    table = _table(heading, "Metric", ["Value"], _FLEET_INCOME_ROWS + reading.rows, [grid_services])
+    notes = f"\n{reading.note}\n"
+    if len(_at_events(grid_services).per_window_avail_kw) > 1:
         notes += "\n*— is one event window's figure, which does not sum over several windows.*\n"
     return table + notes
 
@@ -528,15 +578,21 @@ def generate_finance_report(
     value, which no mode changes, so it renders once.
 
     The Grid Services Income section names the pricing's model (the events
-    model with its band and delivery baseline, or the flat rate); when the
-    sections carry projections, the income each one booked at year 1 and at
-    its last year, one column per section; and this window's fleet, the same
-    under every assumption, in one table: its annual fleet income and, under
-    events pricing, the per-event available capacity, the capacity on 50% and
-    on 90% of event days and the evening self-use an event displaces, one
-    window's figures, shown for a single window and as — for several, that
-    self-use's value per year, summed over the windows, and a note that the
-    income is gross of it, valued at £0 for a home simulated without a tariff.
+    model with its band, delivery baseline and participation, or the flat
+    rate); when the sections carry projections, the income each one booked at
+    year 1 and at its last year, one column per section; and this window's
+    fleet, the same under every assumption, in one table: its annual fleet
+    income and, under events pricing, the breakdown as its participation reads
+    it.  Observed, that is the per-event available capacity, the capacity on
+    50% and on 90% of event days, the battery export per event and the evening
+    self-use an event displaces, one window's figures, shown for a single
+    window and as — for several, that self-use's value per year, summed over
+    the windows, and a note that the income is gross of it, valued at £0 for a
+    home simulated without a tariff.  Dispatched, it is the per-event metered
+    delivery, the delivery on 50% and on 90% of event days and the battery
+    export per event, read the same way, the displaced self-use rows reading
+    not reported, and a note that the bills include the import the events
+    caused.
 
     The flexibility-value block shows the band's consulting time-shift.  Its
     grid-services row is *grid_services*' income per battery home and per kW
