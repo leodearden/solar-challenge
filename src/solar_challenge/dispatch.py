@@ -273,6 +273,11 @@ def _step_shortfall_kw(generation_kw: float, demand_kw: float) -> float:
     return max(0.0, demand_kw - generation_kw)
 
 
+def _step_max_export_kw(generation_kw: float, demand_kw: float, *, max_discharge_kw: float) -> float:
+    """A step's export limit in kW: the battery's discharge limit, max_discharge_kw, less the step's shortfall, or 0."""
+    return max(0.0, max_discharge_kw - _step_shortfall_kw(generation_kw, demand_kw))
+
+
 @dataclass(frozen=True)
 class StepLimits:
     """What one step's decision may ask of the battery, in kW.
@@ -296,15 +301,14 @@ class StepLimits:
     ) -> "StepLimits":
         """The limits of a step at generation_kw and demand_kw, for a battery whose charge limit is max_charge_kw and whose discharge limit is max_discharge_kw.
 
-        Its excess and shortfall are those the built-in strategies decide from, so a decision that asks
-        for all of either is within its limit to the last bit.
+        Its excess, shortfall and export limit are those the built-in strategies decide from, so a
+        decision that asks for all of any of them is within its limit to the last bit.
         """
-        shortfall_kw = _step_shortfall_kw(generation_kw, demand_kw)
         return cls(
             excess_kw=_step_excess_kw(generation_kw, demand_kw),
-            shortfall_kw=shortfall_kw,
+            shortfall_kw=_step_shortfall_kw(generation_kw, demand_kw),
             max_charge_kw=max_charge_kw,
-            max_export_kw=max(0.0, max_discharge_kw - shortfall_kw),
+            max_export_kw=_step_max_export_kw(generation_kw, demand_kw, max_discharge_kw=max_discharge_kw),
         )
 
     def require_admissible(self, decision: DispatchDecision, strategy_name: str) -> None:
@@ -1137,6 +1141,107 @@ class EventDischargeWindow:
         for name, what in (("days", "day"), ("hours", "hour")):
             if not getattr(self, name):
                 raise ConfigurationError(f"{name} must hold at least one {what}; it is empty")
+
+
+def as_event_discharge_windows(value: object, field: str) -> tuple[EventDischargeWindow, ...]:
+    """Return *value*, a list of EventDischargeWindow, as the tuple of its elements.
+
+    Raises:
+        ConfigurationError: If *value* is not a list, as as_list_elements reads one, naming
+            *field*; or if an element is not an EventDischargeWindow, naming it {field}[{i}].
+    """
+    return tuple(
+        _as_event_discharge_window(window, f"{field}[{index}]")
+        for index, window in enumerate(as_list_elements(value, field, "a list of EventDischargeWindow"))
+    )
+
+
+def _as_event_discharge_window(value: object, field: str) -> EventDischargeWindow:
+    """Return *value* if it is an EventDischargeWindow.
+
+    Raises:
+        ConfigurationError: If it is not, naming *field* and *value*.
+    """
+    if not isinstance(value, EventDischargeWindow):
+        raise ConfigurationError.must_be(field, "an EventDischargeWindow", got=value)
+    return value
+
+
+class EventDischargeStrategy(DispatchStrategy):
+    """In each of its windows it discharges the battery at full power, serving the home first and exporting the rest; at every other minute its base decides.
+
+    It holds no charge back for a window: before one opens, the base runs unchanged. A window
+    covers a minute by the date and clock hour of the step's timestamp, read on that
+    timestamp's own clock, as TOUOptimizedStrategy reads its peak_hours. Any base can be
+    enrolled.
+    """
+
+    def __init__(
+        self, base: DispatchStrategy, windows: Sequence[EventDischargeWindow], *, max_discharge_kw: float
+    ) -> None:
+        """Wrap base in windows, for a battery whose discharge limit is max_discharge_kw.
+
+        Args:
+            base: The strategy that decides every minute outside the windows.
+            windows: The event windows, read by as_event_discharge_windows.
+            max_discharge_kw: The battery's discharge limit, Battery.max_discharge_kw, read as a
+                finite number greater than 0: decide_action is not given it, and a window exports
+                what it leaves after the step's shortfall.
+
+        Raises:
+            ConfigurationError: If as_event_discharge_windows refuses windows, naming it; or if
+                max_discharge_kw is a bool, not a finite number or not greater than 0, naming it.
+        """
+        self._base = base
+        self._windows = as_event_discharge_windows(windows, "windows")
+        self._max_discharge_kw = as_finite_float(max_discharge_kw, "max_discharge_kw", POSITIVE)
+        self._slots = frozenset((day, hour) for window in self._windows for day in window.days for hour in window.hours)
+
+    @property
+    def name(self) -> str:
+        """Return strategy name: its base's, wrapped."""
+        return f"event_discharge({self._base.name})"
+
+    @property
+    def charges_from_the_grid(self) -> bool:
+        """Whether it charges from the grid: as its base does, since a window asks for no grid charge and the base decides every other minute."""
+        return self._base.charges_from_the_grid
+
+    def decide_action(
+        self,
+        timestamp: datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float,
+        *,
+        grid_charge_ctx: Optional[GridChargeContext] = None,
+    ) -> DispatchDecision:
+        """Decide the step: inside a window, no charge, the step's shortfall and the export limit left after it; else the base's decision, given every argument unchanged.
+
+        Raises:
+            ValueError: If an input is out of the range the sibling strategies refuse.
+        """
+        _require_valid_strategy_inputs(
+            generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
+        )
+        if (timestamp.date(), timestamp.hour) in self._slots:
+            return DispatchDecision(
+                charge_kw=0.0,
+                discharge_kw=_step_shortfall_kw(generation_kw, demand_kw),
+                grid_charge_kw=0.0,
+                export_kw=_step_max_export_kw(generation_kw, demand_kw, max_discharge_kw=self._max_discharge_kw),
+            )
+        return self._base.decide_action(
+            timestamp=timestamp,
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery_soc_kwh=battery_soc_kwh,
+            battery_capacity_kwh=battery_capacity_kwh,
+            timestep_minutes=timestep_minutes,
+            grid_charge_ctx=grid_charge_ctx,
+        )
 
 
 def build_dispatch_strategy(
