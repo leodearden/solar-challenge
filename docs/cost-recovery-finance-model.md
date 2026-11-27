@@ -716,7 +716,7 @@ uncapped 0.70 × 5,775 = 4,042.5 kWh/home (§3), so its bills collect
 
 Source: `projection.py:project_economics()`.
 
-The project capex is built up as a 4-term sum:
+The project capex is built up as a 5-term sum:
 
 ```
 total_capex_gbp = curve.fleet_pv_dc_kw × pv_cost_per_kwp_gbp
@@ -724,6 +724,7 @@ total_capex_gbp = curve.fleet_pv_dc_kw × pv_cost_per_kwp_gbp
       roof_fit_cost_gbp
     + battery_kwh × battery_cost_per_kwh_gbp
     + eff_inv_kw × inverter_cost_per_kw_gbp
+    + max_discharge_kw × battery_inverter_cost_per_kw_gbp   (battery homes only)
   ]
 
 financed        = max(total_capex_gbp − grant_gbp, 0)
@@ -739,7 +740,8 @@ annuity(P, r, n) = P × r / (1 − (1 + r)^−n)    (= P / n when r = 0; annuity
 whole modules of the template that the simulator wires (a 3 kWp home wires 2.803 kWp,
 a 5.5 kWp home 5.606 kWp); `spreadsheet_revenue_curve` sets it to `n_homes × pv_kwp`,
 the nameplate its generation is a yield of.  The PV term is linear in kWp, so a fleet
-total prices it.
+total prices it.  The battery inverter is priced on each battery's discharge power,
+`BatteryConfig.max_discharge_kw`, the power an event exports at; its cost defaults to 0.
 
 Raising capex (larger battery or PV) directly raises `annual_debt_svc`, which
 raises `s0` (the surplus deficit at r = 0), which raises `r*` (to compensate),
@@ -933,7 +935,7 @@ figures reported for transparency; no test pins them to specific digits.
 | The bills fund the solve's surplus: n × own-use payment, less opex and the mean debt service (§7.4), per home | **HARD asserted** | On the anchor and under the 0.70 override (`tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_surplus_is_what_the_bills_fund` and `tests/integration/test_cost_recovery_calibration.py::TestOverrideOwnUseCappedAtDemand::test_surplus_is_what_the_bills_fund`): the rate base is the own-use the bills charge (§5) |
 | H2: capex → rate + outlay monotone | **HARD asserted** | Exact by affine algebra |
 | flex → strictly lower rate | **HARD asserted** | Monotone by affine algebra |
-| θ: capex == £775,000, min_dscr ≥ 1.20 | **HARD asserted** | 4-term build-up exact on the spreadsheet column's 550 kWp; covenant floor achievable |
+| θ: capex == £775,000, min_dscr ≥ 1.20 | **HARD asserted** | 5-term build-up exact on the spreadsheet column's 550 kWp; covenant floor achievable |
 | Solved rate ≈ 15 p/kWh (no-flex anchor) | *REPORTED only* | ≈15 p matches only the single-year approximation; the solve spreads 15 years of debt service over the 25-year asset life (§7.4); live value: 12.31 p |
 | Saving ≈ £324 vs baseline (no-flex) | *REPORTED only* | Assumption-dependent (scf ≈ 0.346 vs 0.70; §7.3); live value: £224 |
 
@@ -1310,5 +1312,5 @@ its title, with the extrapolated notice (§4, *Annual basis*).
 | Grid-charge energy | in householder `import_cost_gbp`; no CBS term (§4) | `householder_bill()` |
 | Solve rate-base | `YearPoint.fleet_billed_own_use_kwh` = Σ_homes `home_ledger` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `project_multi_year()` |
 | Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
-| Capex | `fleet_pv_dc_kw×pv_cost + Σ(roof_fit + batt_kwh×batt_cost + eff_inv_kw×inv_cost)` | `project_economics()`, `MultiYearCurve.fleet_pv_dc_kw` |
+| Capex | `fleet_pv_dc_kw×pv_cost + Σ(roof_fit + batt_kwh×batt_cost + eff_inv_kw×inv_cost + max_discharge_kw×batt_inv_cost)` | `project_economics()`, `MultiYearCurve.fleet_pv_dc_kw` |
 | Net surplus | `mean(surplus_y) / n_homes` over 25 yr | `project_economics()` |

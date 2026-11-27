@@ -293,12 +293,13 @@ class ProjectEconomics:
 
     Attributes:
         total_capex_gbp: Total capital expenditure across the fleet (£).
-            4-term build-up: curve.fleet_pv_dc_kw × pv_cost + Σ_home(roof_fit
-            + battery_kwh × battery_cost + eff_inv_kw × inverter_cost).
-            The PV term prices the PV DC the curve's generation came from:
-            Σ wired DC for a physics projection, n_homes × pv_kwp for the
-            spreadsheet curve.  Inverter term is zero when
-            inverter_cost_per_kw_gbp == 0.0 (default).
+            5-term build-up: curve.fleet_pv_dc_kw × pv_cost + Σ_home(roof_fit
+            + battery_kwh × battery_cost + eff_inv_kw × inverter_cost
+            + max_discharge_kw × battery_inverter_cost), the last for battery
+            homes only.  The PV term prices the PV DC the curve's generation
+            came from: Σ wired DC for a physics projection, n_homes × pv_kwp
+            for the spreadsheet curve.  The inverter and battery-inverter terms
+            are zero at their default costs of 0.0.
         grant_gbp: Total grant received by the project (£, passthrough from
             FinanceConfig).
         equity_gbp: Equity portion of the financed amount (£):
@@ -1063,6 +1064,19 @@ def project_multi_year(
 # project_economics — project-level financial appraisal
 # ---------------------------------------------------------------------------
 
+def _home_install_capex_gbp(home: HomeConfig, finance: FinanceConfig) -> float:
+    """The home's roof fit, battery kWh × battery cost, effective inverter kW × inverter cost and battery max_discharge_kw × battery-inverter cost, in £; a home without a battery adds no battery or battery-inverter term."""
+    battery = home.battery_config
+    batt_kwh = 0.0 if battery is None else battery.capacity_kwh
+    battery_inverter_kw = 0.0 if battery is None else battery.max_discharge_kw
+    return (
+        finance.roof_fit_cost_gbp
+        + batt_kwh * finance.battery_cost_per_kwh_gbp
+        + home.pv_config.effective_inverter_capacity_kw * finance.inverter_cost_per_kw_gbp
+        + battery_inverter_kw * finance.battery_inverter_cost_per_kw_gbp
+    )
+
+
 def project_economics(
     curve: MultiYearCurve,
     fleet: ScenarioFleet,
@@ -1077,11 +1091,13 @@ def project_economics(
     1. Read the fleet's homes, a scenario's simulated homes as
        ``scenario_fleet(scenario)`` resolves them, for the roof, battery and
        inverter terms and n_homes.
-    2. Compute total_capex_gbp via the 4-term build-up:
+    2. Compute total_capex_gbp via the 5-term build-up:
        curve.fleet_pv_dc_kw × pv_cost + Σ_home(roof_fit
-       + battery_kwh × battery_cost + eff_inv_kw × inverter_cost).  The PV
-       term prices the PV DC the curve's generation came from.  Inverter term
-       is zero when inverter_cost_per_kw_gbp == 0.0 (the default).
+       + battery_kwh × battery_cost + eff_inv_kw × inverter_cost
+       + max_discharge_kw × battery_inverter_cost), the last for battery
+       homes only.  The PV term prices the PV DC the curve's generation came
+       from.  The inverter and battery-inverter terms are zero at their
+       default costs of 0.0.
     3. financed = max(capex − grant, 0); equity = financed × equity_fraction;
        debt = financed × (1 − equity_fraction).
     4. annual_debt_service via level annuity (annuity_payment).
@@ -1111,22 +1127,12 @@ def project_economics(
     homes = fleet.homes
     n_homes = len(homes)
 
-    # 2. Capex: the curve's PV DC, plus each home's roof, battery and inverter
+    # 2. Capex: the curve's PV DC, plus each home's roof, battery and inverters
     pv_capex_gbp = curve.fleet_pv_dc_kw * finance.pv_cost_per_kwp_gbp
-    roof_battery_inverter_capex_gbp = 0.0
+    home_install_capex_gbp = 0.0
     for home in homes:
-        batt_kwh = (
-            home.battery_config.capacity_kwh
-            if home.battery_config is not None
-            else 0.0
-        )
-        eff_inv_kw = home.pv_config.effective_inverter_capacity_kw
-        roof_battery_inverter_capex_gbp += (
-            finance.roof_fit_cost_gbp
-            + batt_kwh * finance.battery_cost_per_kwh_gbp
-            + eff_inv_kw * finance.inverter_cost_per_kw_gbp
-        )
-    total_capex_gbp = pv_capex_gbp + roof_battery_inverter_capex_gbp
+        home_install_capex_gbp += _home_install_capex_gbp(home, finance)
+    total_capex_gbp = pv_capex_gbp + home_install_capex_gbp
 
     # 3. Grant / equity / debt split
     financed = max(total_capex_gbp - finance.grant_gbp, 0.0)
