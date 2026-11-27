@@ -1,15 +1,23 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for web.sweep_request: the web sweep's parameters and its request reader."""
 
+from datetime import date
+
 import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec
-from solar_challenge.home import run_window
+from solar_challenge.gridservices import EventParticipation, GridServicesEventsConfig
+from solar_challenge.home import HomeConfig, run_window
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_knobs import knob_named
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.simulation_params import parse_home_config
 from solar_challenge.web.sweep_request import (
@@ -204,3 +212,56 @@ def test_a_sweep_request_built_in_code_is_held_to_its_parameters_range() -> None
         SweepRequest(SWEEP_PARAMETERS["pv_capacity_kw"], SweepSpec(5.0, 25.0, 3, SweepMode.LINEAR))
 
     assert str(refusal.value) == "max of a pv_capacity_kw sweep must be between 0.5 and 20, got 25.0"
+
+
+_DISPATCHED_FINANCE = FinanceConfig(
+    standing_charge_pence_per_day=60.0,
+    grid_services_model=GridServicesEventsConfig(participation=EventParticipation.DISPATCHED),
+)
+
+
+class TestPointHomes:
+    """SweepRequest.point_homes: the home each point simulates, the base scenario's with the knob applied."""
+
+    @pytest.mark.parametrize("parameter", tuple(SWEEP_PARAMETERS.values()), ids=tuple(SWEEP_PARAMETERS))
+    def test_each_points_home_is_the_base_with_the_knob_applied_at_its_value(self, parameter: SweepParameter) -> None:
+        sweep = SweepRequest(
+            parameter, SweepSpec(parameter.default_min, parameter.default_max, 3, SweepMode.LINEAR)
+        )
+        base = _single_home_scenario({"battery_kwh": 5.0, "location": "bristol", "days": 7})
+
+        assert sweep.point_homes(base) == tuple(
+            (value, parameter.knob.apply(base, value).simulated_homes()[0]) for value in sweep.values()
+        )
+
+    def test_a_point_the_configs_refuse_is_refused_naming_the_point(self) -> None:
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400, use_stochastic=False),
+            battery_config=BatteryConfig(capacity_kwh=5.0),
+        )
+        base = ScenarioConfig(
+            name="dispatched",
+            period=SimulationWindow(date(2024, 6, 1), date(2024, 6, 7), ONE_MINUTE, "Europe/London"),
+            home=home,
+            finance=_DISPATCHED_FINANCE,
+        )
+        sweep = SweepRequest(SWEEP_PARAMETERS["battery_capacity_kwh"], SweepSpec(0.0, 10.0, 2, SweepMode.LINEAR))
+        with pytest.raises(ConfigurationError) as config_refusal:
+            knob_named("battery_capacity_kwh").apply(base, 0.0)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            sweep.point_homes(base)
+
+        assert str(refusal.value) == f"Invalid config for battery_capacity_kwh=0.0: {config_refusal.value}"
+
+    def test_a_fleet_base_is_refused_naming_the_scenario(self) -> None:
+        home, start, end, _ = parse_home_config({"days": 7})
+        fleet = ScenarioConfig(name="two homes", period=run_window(home.location, start, end), homes=(home, home))
+        sweep = read_sweep_request({})
+
+        with pytest.raises(ValueError) as refusal:
+            sweep.point_homes(fleet)
+
+        assert refusal.type is ValueError
+        assert "'two homes'" in str(refusal.value)
