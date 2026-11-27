@@ -143,7 +143,7 @@ INPUT_TYPES: Mapping[str, Callable[[], object]] = {
         annual_consumption_kwh=3000.0, household_occupants=3, seed=1
     ),
     "solar_challenge.location.Location": lambda: Location(51.45, -2.58, altitude=10.0),
-    "solar_challenge.optimize.ConfigPoint": lambda: ConfigPoint(4.0, 5.0, 3.0),
+    "solar_challenge.optimize.ConfigPoint": lambda: ConfigPoint(4.0, 5.0, 3.0, battery_kw=2.5),
     "solar_challenge.pv.PVConfig": lambda: PVConfig(
         capacity_kw=4.0, module_efficiency=0.2, temperature_coefficient=-0.004, inverter_capacity_kw=4.0
     ),
