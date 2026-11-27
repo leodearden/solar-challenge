@@ -4,24 +4,33 @@
 An observed fleet is priced from the firm spare capacity its own dispatch leaves, as it was before a fleet
 could be enrolled: TestObservedPricesAsBefore pins those figures as literals measured before dispatched
 pricing existed.  Under both participations the breakdown reports the battery export an event's window
-holds (TestBatteryExportPerEvent).
+holds (TestBatteryExportPerEvent).  Pricing refuses a fleet whose battery homes carry other event windows
+than its participation gives them (TestPricingRefusesAMismatchedEnrolment, PRD
+docs/prds/event-dispatch-and-battery-sizing.md §9 B10).
 """
 
 import dataclasses
+from collections.abc import Callable
 from datetime import date, timedelta
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
+    EventParticipation,
     GridServicesEventsConfig,
     compute_grid_services_at_events,
+    drawn_event_days,
+    enrolled_event_windows,
 )
-from solar_challenge.home import SimulationResults
+from solar_challenge.home import HomeConfig, SimulationResults
+from tests._calendar_dates import every_date
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 
 _FIRST_JANUARY_MONDAY = date(2024, 1, 15)
@@ -167,3 +176,133 @@ class TestBatteryExportPerEvent:
         breakdown = compute_grid_services_at_events(fleet, GridServicesEventsConfig())
 
         assert breakdown.per_window_battery_export_kwh_per_event == (0.0,)
+
+
+_JANUARY = (date(2024, 1, 1), date(2024, 1, 31))
+"""January 2024: 23 weekdays, on 3 of which the default window's 12 events a year fall."""
+
+_DISPATCHED = GridServicesEventsConfig(participation=EventParticipation.DISPATCHED)
+_OBSERVED = GridServicesEventsConfig()
+
+_PRICINGS = [
+    pytest.param(compute_grid_services_at_events, id="breakdown"),
+    pytest.param(lambda fleet, cfg: cfg.annual_income_gbp(fleet), id="annual-income"),
+]
+"""Each public pricing of a fleet under an events configuration."""
+
+Pricing = Callable[[FleetResults, GridServicesEventsConfig], object]
+
+
+def _january(**series: pd.Series) -> SimulationResults:
+    """make_sim_results over January 2024, hourly, with *series* in place of its own."""
+    return dataclasses.replace(make_sim_results(days=31, first_day=_JANUARY[0]), **series)
+
+
+_BATTERY_HOMES = (
+    dataclasses.replace(make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)), name="small-battery"),
+    dataclasses.replace(
+        make_home_config(battery_config=BatteryConfig(capacity_kwh=10.0, max_discharge_kw=3.0)), name="large-battery"
+    ),
+)
+_PV_ONLY_HOME = dataclasses.replace(make_home_config(), name="pv-only")
+
+
+def _enrolled(home: HomeConfig, enrolled_under: Optional[GridServicesEventsConfig], sim: SimulationResults) -> HomeConfig:
+    """*home*, its battery carrying the windows enrolled_event_windows gives *enrolled_under* over *sim*'s days, or none when it is None."""
+    battery = home.battery_config
+    assert battery is not None
+    windows = () if enrolled_under is None else enrolled_event_windows(enrolled_under, sim.window)
+    return dataclasses.replace(home, battery_config=dataclasses.replace(battery, event_discharge=windows))
+
+
+def _enrolled_fleet(
+    enrolled_under: Optional[GridServicesEventsConfig], *battery_results: SimulationResults
+) -> FleetResults:
+    """Each of *battery_results* on _BATTERY_HOMES' home at its position, enrolled under *enrolled_under*, then a PV-only home over January."""
+    pv_only = _january()
+    return make_fleet_results_of(
+        [*battery_results, pv_only],
+        homes=[
+            *(_enrolled(home, enrolled_under, sim) for home, sim in zip(_BATTERY_HOMES, battery_results, strict=False)),
+            _PV_ONLY_HOME,
+        ],
+    )
+
+
+def _iso_days(cfg: GridServicesEventsConfig) -> list[str]:
+    """The ISO dates of the days *cfg*'s first window draws over January 2024."""
+    return [day.isoformat() for day in drawn_event_days(cfg.event_windows[0], every_date(*_JANUARY), cfg.event_day_seed, position=0)]
+
+
+class TestPricingRefusesAMismatchedEnrolment:
+    """§9 B10: each pricing refuses a battery home whose event windows its participation would not give it, naming the participation, the home, and the days expected and found."""
+
+    @pytest.mark.parametrize("price", _PRICINGS)
+    def test_a_dispatched_pricing_refuses_a_battery_home_that_is_not_enrolled(self, price: Pricing) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            price(_enrolled_fleet(None, _january(), _january()), _DISPATCHED)
+
+        message = str(refused.value)
+        assert "participation is dispatched" in message
+        assert "home 0 'small-battery'" in message
+        assert all(day in message for day in _iso_days(_DISPATCHED)), message
+        assert "carries no event window" in message
+
+    @pytest.mark.parametrize("price", _PRICINGS)
+    def test_an_observed_pricing_refuses_an_enrolled_battery_home(self, price: Pricing) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            price(_enrolled_fleet(_DISPATCHED, _january(), _january()), _OBSERVED)
+
+        message = str(refused.value)
+        assert "participation is observed" in message
+        assert "home 0 'small-battery'" in message
+        assert "expects no event window" in message
+        assert all(day in message for day in _iso_days(_DISPATCHED)), message
+
+    @pytest.mark.parametrize("price", _PRICINGS)
+    def test_a_dispatched_pricing_refuses_a_home_enrolled_on_other_days(self, price: Pricing) -> None:
+        reseeded = dataclasses.replace(_DISPATCHED, event_day_seed=5)
+        assert _iso_days(reseeded) != _iso_days(_DISPATCHED)
+
+        with pytest.raises(ConfigurationError) as refused:
+            price(_enrolled_fleet(reseeded, _january(), _january()), _DISPATCHED)
+
+        message = str(refused.value)
+        assert "participation is dispatched" in message
+        assert all(day in message for day in [*_iso_days(_DISPATCHED), *_iso_days(reseeded)]), message
+
+    @pytest.mark.parametrize("price", _PRICINGS)
+    def test_a_correctly_enrolled_dispatched_fleet_with_a_pv_only_home_prices(self, price: Pricing) -> None:
+        price(_enrolled_fleet(_DISPATCHED, _january(), _january()), _DISPATCHED)
+
+    @pytest.mark.parametrize("price", _PRICINGS)
+    def test_a_pv_only_home_never_trips_the_check(self, price: Pricing) -> None:
+        price(_enrolled_fleet(_DISPATCHED), _DISPATCHED)
+        price(_enrolled_fleet(_DISPATCHED), _OBSERVED)
+
+    @pytest.mark.parametrize("price", _PRICINGS)
+    def test_an_observed_fleet_with_no_window_prices(self, price: Pricing) -> None:
+        price(_enrolled_fleet(None, _january(), _january()), _OBSERVED)
+
+    def test_an_observed_annual_income_still_reads_no_step_length(self) -> None:
+        index = pd.DatetimeIndex(
+            ["2024-01-15 16:00", "2024-01-15 17:00", "2024-01-15 17:30", "2024-01-15 19:00"], tz="Europe/London"
+        )
+        zeros = pd.Series(0.0, index=index)
+        uneven = SimulationResults(
+            generation=zeros,
+            demand=zeros,
+            self_consumption=zeros,
+            battery_charge=zeros,
+            battery_discharge=zeros,
+            battery_soc=pd.Series(3.5, index=index),
+            grid_import=zeros,
+            grid_export=zeros,
+            import_cost=zeros,
+            export_revenue=zeros,
+            tariff_rate=zeros,
+        )
+        fleet = make_fleet_results_of([uneven], homes=[_enrolled(_BATTERY_HOMES[0], None, _january())])
+
+        # min(2.5 kW, (3.5 − 0.5) kWh / 3 h) = 1.0 kW on its one event day, at £9.972 per kW.
+        assert _OBSERVED.annual_income_gbp(fleet) == pytest.approx(9.972)
