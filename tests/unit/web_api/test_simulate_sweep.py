@@ -290,6 +290,20 @@ class TestSimulateSweep:
         assert (resp.get_json()["parameter"], resp.get_json()["values"]) == ("pv_capacity_kw", default_pv_kw)
         assert [home.pv_config.capacity_kw for home in recording_job_manager.submitted_homes] == default_pv_kw
 
+    def test_a_body_naming_only_the_battery_sweeps_it_geometrically_from_1_to_13_5_kwh_in_5_steps(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        resp = client.post("/api/simulate/sweep", json={"parameter": "battery_capacity_kwh"})
+        assert resp.status_code == 201
+        default_battery_kwh = [1.0, 1.917, 3.674, 7.043, 13.5]
+        assert (resp.get_json()["parameter"], resp.get_json()["values"]) == (
+            "battery_capacity_kwh",
+            default_battery_kwh,
+        )
+        assert [home.battery_config.capacity_kwh for home in recording_job_manager.submitted_homes] == (
+            default_battery_kwh
+        )
+
 
 class TestSweepParameters:
     """What POST /api/simulate/sweep submits for a swept parameter: one home per point, carrying that point's value, or nothing at all when the parameter is unsupported or any of its points is invalid."""
@@ -599,6 +613,7 @@ class TestSweepPoints:
                 {"parameter": "battery_capacity_kwh", "min": 0, "max": 10, "steps": 3, "mode": "linear"},
                 id="linear-battery",
             ),
+            pytest.param({"parameter": "battery_capacity_kwh"}, id="battery-defaults"),
         ],
     )
     def test_the_points_are_the_parameter_and_values_the_submit_runs(

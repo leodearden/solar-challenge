@@ -45,7 +45,7 @@ class TestSweepParameters:
         ("key", "label", "starting_range", "component_key"),
         [
             pytest.param("pv_capacity_kw", "PV Capacity (kW)", (2.0, 8.0), "pv", id="pv"),
-            pytest.param("battery_capacity_kwh", "Battery Capacity (kWh)", (0.0, 13.5), "battery", id="battery"),
+            pytest.param("battery_capacity_kwh", "Battery Capacity (kWh)", (1.0, 13.5), "battery", id="battery"),
             pytest.param("annual_consumption_kwh", "Annual Consumption (kWh)", (2000.0, 5000.0), "load", id="load"),
         ],
     )
@@ -66,6 +66,14 @@ class TestSweepParameters:
         swept = parameter.knob.apply(base, parameter.default_max)
 
         assert parameter.component.value_of(swept.simulated_homes()[0]) == parameter.default_max
+
+    @pytest.mark.parametrize("parameter", tuple(SWEEP_PARAMETERS.values()), ids=tuple(SWEEP_PARAMETERS))
+    def test_a_body_naming_only_the_parameter_sweeps_its_starting_range_in_5_steps_and_the_default_mode(
+        self, parameter: SweepParameter
+    ) -> None:
+        assert read_sweep_request({"parameter": parameter.knob.name}) == SweepRequest(
+            parameter, SweepSpec(parameter.default_min, parameter.default_max, 5)
+        )
 
 
 class TestSweepParameterRefusals:
@@ -103,6 +111,17 @@ class TestSweepParameterRefusals:
 
         assert "default_min" in str(refusal.value)
         assert str(default_min) in str(refusal.value)
+
+    def test_a_starting_range_the_sweep_specs_default_mode_cannot_sweep_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError) as spec_refusal:
+            SweepSpec(0.0, 13.5, 5)
+
+        with pytest.raises(ValueError) as refusal:
+            SweepParameter(knob_named("battery_capacity_kwh"), FLEET_COMPONENTS["battery"], 0.0, 13.5)
+
+        assert refusal.type is ValueError
+        for part in ("battery_capacity_kwh", "default_min", "0.0", str(spec_refusal.value)):
+            assert part in str(refusal.value)
 
 
 def _battery_body(**fields: object) -> dict[str, object]:
