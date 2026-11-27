@@ -7,7 +7,7 @@ EventDischargeStrategy; §9 B4 is the behaviour they pin.
 
 import dataclasses
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -108,6 +108,28 @@ class TestEventDischargeWindow:
 
         assert first == second
         assert hash(first) == hash(second)
+
+    def test_two_windows_listing_the_same_days_and_hours_in_another_order_are_equal_and_hash_equal(self) -> None:
+        first = EventDischargeWindow(days=(date(2024, 1, 15), date(2024, 1, 16)), hours=(17, 18))
+        second = EventDischargeWindow(days=(date(2024, 1, 16), date(2024, 1, 15)), hours=(18, 17))
+
+        assert first == second
+        assert hash(first) == hash(second)
+        assert second.days == (date(2024, 1, 15), date(2024, 1, 16))
+        assert second.hours == (17, 18)
+
+    @pytest.mark.parametrize(
+        ("days", "hours", "field", "repeated"),
+        [
+            pytest.param((date(2024, 1, 15), date(2024, 1, 15)), (17,), "days", "2024-01-15", id="days"),
+            pytest.param((date(2024, 1, 15),), (18, 17, 18), "hours", "18", id="hours"),
+        ],
+    )
+    def test_a_field_that_repeats_an_element_is_refused_naming_it_and_the_element(
+        self, days: tuple[date, ...], hours: tuple[int, ...], field: str, repeated: str
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=rf"^{field} must hold each \w+ once; it repeats {repeated}$"):
+            EventDischargeWindow(days=days, hours=hours)
 
     @pytest.mark.parametrize(
         ("days", "hours", "field"),
@@ -218,6 +240,16 @@ class TestEventDischargeStrategy:
         decision = _decide(strategy, timestamp, generation_kw, demand_kw, grid_charge_ctx)
 
         assert decision == _decide(base, timestamp, generation_kw, demand_kw, grid_charge_ctx)
+
+    def test_a_timestamp_is_read_on_its_own_clock_not_in_utc(self) -> None:
+        strategy = _wrapped(SelfConsumptionStrategy(), EventDischargeWindow(days=(date(2024, 6, 20),), hours=(17,)))
+        expected, _ = _full_power_decision(0.0, 1.0)
+        in_london = datetime(2024, 6, 20, 17, 30, tzinfo=LONDON)
+        in_utc = datetime(2024, 6, 20, 16, 30, tzinfo=timezone.utc)
+        assert in_london == in_utc
+
+        assert _decide(strategy, in_london, 0.0, 1.0, None) == expected
+        assert _decide(strategy, in_utc, 0.0, 1.0, None) == _decide(SelfConsumptionStrategy(), in_utc, 0.0, 1.0, None)
 
     def test_a_naive_timestamp_is_read_on_its_own_clock(self) -> None:
         strategy = _wrapped(SelfConsumptionStrategy())

@@ -14,6 +14,7 @@ strategy it runs in an EventDischargeStrategy, which discharges at full power in
 """
 
 from abc import ABC, abstractmethod
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime, time, timedelta
@@ -1125,9 +1126,11 @@ class EventDischargeWindow:
     Both are read on the step timestamp's own clock. It holds no months, weekdays or seed: the
     scenario's events configuration is the schedule's one definition, and resolves it to days.
 
+    Each field is held sorted, so two windows that cover the same minutes are equal and hash equal.
+
     Attributes:
-        days: The dates it covers, each exactly a date, at least one.
-        hours: The clock hours it covers on each of its days, whole numbers from 0 to 23, at least one.
+        days: The dates it covers, each exactly a date, at least one, none repeated.
+        hours: The clock hours it covers on each of its days, whole numbers from 0 to 23, at least one, none repeated.
 
     Raises:
         ConfigurationError: For a field it cannot schedule, naming the field, or the element, and its value.
@@ -1137,12 +1140,19 @@ class EventDischargeWindow:
     hours: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        """Hold days and hours as read, then refuse an empty one, naming it."""
+        """Read days and hours, refuse an empty one or one that repeats an element, naming it, and hold each sorted."""
         object.__setattr__(self, "days", _as_event_days(self.days, "days"))
         read_field(self, "hours", as_whole_numbers, _EVENT_HOURS)
         for name, what in (("days", "day"), ("hours", "hour")):
-            if not getattr(self, name):
+            values = getattr(self, name)
+            if not values:
                 raise ConfigurationError(f"{name} must hold at least one {what}; it is empty")
+            repeated = sorted(value for value, count in Counter(values).items() if count > 1)
+            if repeated:
+                raise ConfigurationError(
+                    f"{name} must hold each {what} once; it repeats {', '.join(map(str, repeated))}"
+                )
+            object.__setattr__(self, name, tuple(sorted(values)))
 
 
 def as_event_discharge_windows(value: object, field: str) -> tuple[EventDischargeWindow, ...]:
@@ -1175,7 +1185,9 @@ class EventDischargeStrategy(DispatchStrategy):
     It holds no charge back for a window: before one opens, the base runs unchanged. A window
     covers a minute by the date and clock hour of the step's timestamp, read on that
     timestamp's own clock, as TOUOptimizedStrategy reads its peak_hours. Any base can be
-    enrolled.
+    enrolled. Its max_discharge_kw must equal the battery's Battery.max_discharge_kw for as
+    long as it is used: a battery whose config is replaced by one with a lower limit has a
+    window's export refused by StepLimits.require_admissible.
     """
 
     def __init__(
@@ -1251,25 +1263,15 @@ class EventDischargeStrategy(DispatchStrategy):
 
 
 def with_event_discharge(
-    strategy: DispatchStrategy,
-    event_discharge: tuple[EventDischargeWindow, ...],
-    *,
-    max_discharge_kw: float | None,
+    strategy: DispatchStrategy, event_discharge: tuple[EventDischargeWindow, ...], *, max_discharge_kw: float
 ) -> DispatchStrategy:
     """Return strategy wrapped in event_discharge, a battery's event windows, at its discharge limit max_discharge_kw; with no windows, strategy itself.
 
     Raises:
-        ConfigurationError: If there are windows and max_discharge_kw is None, naming both:
-            a window exports at the battery's discharge limit. Else as EventDischargeStrategy
-            refuses its windows or limit.
+        ConfigurationError: If there are windows, as EventDischargeStrategy refuses its windows or limit.
     """
     if not event_discharge:
         return strategy
-    if max_discharge_kw is None:
-        raise ConfigurationError(
-            "event_discharge holds event windows, which discharge the battery at its discharge limit, "
-            "but max_discharge_kw is None; give the battery's max_discharge_kw"
-        )
     return EventDischargeStrategy(strategy, event_discharge, max_discharge_kw=max_discharge_kw)
 
 
@@ -1294,7 +1296,7 @@ def build_dispatch_strategy(
             grid_charging under the strategy built: its variant does not charge from the grid,
             or there is no tariff to find a cheap period in. Last, grid_charging is refused on a
             tariff with no cheap period, the only minutes a variant's strategy grid-charges in.
-            Then with_event_discharge refuses event windows given with no max_discharge_kw.
+            Then event windows given with no max_discharge_kw are refused, naming both.
     """
     strategy: DispatchStrategy
     match config:
@@ -1311,7 +1313,14 @@ def build_dispatch_strategy(
     refuse_grid_charging_it_would_ignore(strategy, grid_charging=grid_charging, tariff=tariff)
     if grid_charging is not None and tariff is not None:
         _require_cheap_minutes_for_grid_charging(strategy.name, tariff)
-    return with_event_discharge(strategy, event_discharge, max_discharge_kw=max_discharge_kw)
+    if max_discharge_kw is not None:
+        return with_event_discharge(strategy, event_discharge, max_discharge_kw=max_discharge_kw)
+    if event_discharge:
+        raise ConfigurationError(
+            "event_discharge holds event windows, which discharge the battery at its discharge limit, "
+            "but max_discharge_kw is None; give the battery's max_discharge_kw"
+        )
+    return strategy
 
 
 def refuse_grid_charging_it_would_ignore(
