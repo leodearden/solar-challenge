@@ -179,7 +179,11 @@ def test_a_field_declaring_a_default_factory_is_built_with_the_factorys_value() 
             id="PVConfig",
         ),
         pytest.param(
-            BATTERY_BLOCK, set(), ("dispatch_strategy", "grid_charging"), {"capacity_kwh": 5.0}, {"efficiency"},
+            BATTERY_BLOCK,
+            {"event_discharge"},
+            ("dispatch_strategy", "grid_charging"),
+            {"capacity_kwh": 5.0},
+            {"efficiency"},
             id="BatteryConfig",
         ),
         pytest.param(LOAD_BLOCK, set(), (), {}, set(), id="LoadConfig"),
@@ -402,6 +406,14 @@ def _home_component(home_key: str, attribute: str) -> Callable[[dict[str, Any]],
         return getattr(parse_home_block({home_key: block}, Location.bristol()), attribute)
 
     return read
+
+
+def test_a_battery_block_has_no_key_for_its_event_windows() -> None:
+    """A battery's event windows are outside the grammar: the scenario's events configuration sets them."""
+    read = _home_component("battery", "battery_config")
+
+    with pytest.raises(ConfigurationError, match=r"unrecognised keys 'event_discharge'"):
+        read({"capacity_kwh": 10.0, "event_discharge": [{"days": ["2024-01-15"], "hours": [17]}]})
 
 
 _PUBLIC_READINGS: tuple[

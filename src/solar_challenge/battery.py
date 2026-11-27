@@ -10,8 +10,10 @@ from solar_challenge.dispatch import (
     STRATEGY_CONFIG_BY_TYPE,
     TARGET_SOC_FRACTION,
     DispatchStrategyConfig,
+    EventDischargeWindow,
     GridChargeConfig,
     SelfConsumptionStrategyConfig,
+    as_event_discharge_windows,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
@@ -247,6 +249,10 @@ class BatteryConfig:
         soh: Optional direct SOH override (0 < soh ≤ 1).  When set, the
             computed calendar+cycle fade is bypassed and ``resolved_soh``
             returns this value directly.
+        event_discharge: The resolved grid-services event windows in which the battery
+            discharges at full power, serving the home first and exporting the rest
+            (dispatch.EventDischargeStrategy); () means none. The scenario's events
+            configuration sets them: a battery: block has no key for them.
     """
 
     capacity_kwh: float
@@ -264,9 +270,10 @@ class BatteryConfig:
     cycle_fade_per_equivalent_full_cycle: float = 5e-5
     soh_floor: float = 0.5
     soh: Optional[float] = None
+    event_discharge: tuple[EventDischargeWindow, ...] = ()
 
     def __post_init__(self) -> None:
-        """Refuse a dispatch strategy that is no variant, read each number setting, then refuse SOC limits out of order."""
+        """Refuse a dispatch strategy that is no variant, read each number setting and the event windows, then refuse SOC limits out of order."""
         _require_dispatch_strategy_variant(self.dispatch_strategy)
         read_field(self, "capacity_kwh", as_finite_float, POSITIVE)
         read_field(self, "max_charge_kw", as_finite_float, _POWER_LIMIT_KW)
@@ -277,6 +284,7 @@ class BatteryConfig:
         read_field(self, "cycle_fade_per_equivalent_full_cycle", as_finite_float, NON_NEGATIVE)
         read_field(self, "soh_floor", as_finite_float, FRACTION)
         read_field(self, "soh", as_finite_float, FRACTION, optional=True)
+        object.__setattr__(self, "event_discharge", as_event_discharge_windows(self.event_discharge, "event_discharge"))
         _require_soc_limits_in_order(self.min_soc_fraction, self.max_soc_fraction)
 
     @property

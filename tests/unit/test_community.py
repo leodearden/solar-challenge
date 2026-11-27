@@ -16,6 +16,7 @@ import dataclasses
 import pickle
 import warnings
 from collections.abc import Callable
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -30,6 +31,7 @@ from solar_challenge.community import (
 )
 from solar_challenge.dispatch import (
     DispatchStrategyConfig,
+    EventDischargeWindow,
     GridChargeConfig,
     PeakShavingStrategyConfig,
     SelfConsumptionStrategyConfig,
@@ -465,6 +467,26 @@ class TestSimulateCommunityBattery:
         assert soc.iloc[0] < soc.iloc[1] < soc.iloc[2], (
             f"Expected rising SOC across steps 0-2, got {soc.iloc[:3].tolist()}"
         )
+
+    def test_a_community_battery_discharges_and_exports_in_its_event_window(
+        self, fleet5: FleetResults, cb_cfg: CommunityConfig
+    ) -> None:
+        """A community battery's event windows wrap its strategy: on a net-surplus step inside one it exports, where un-enrolled it charges."""
+        enrolled = CommunityConfig(
+            community_battery=BatteryConfig(
+                capacity_kwh=10.0,
+                max_charge_kw=30.0,
+                max_discharge_kw=30.0,
+                event_discharge=(EventDischargeWindow(days=(date(2024, 6, 21),), hours=(12,)),),
+            ),
+        )
+
+        result = simulate_community(fleet5, enrolled)
+
+        assert result.battery_discharge.iloc[0] > 0
+        assert result.battery_charge.iloc[0] == 0
+        assert result.grid_export.iloc[0] > 8.0
+        assert simulate_community(fleet5, cb_cfg).battery_charge.iloc[0] > 0
 
     # --- (c) discharges on net-deficit steps, SOC falls ---
 

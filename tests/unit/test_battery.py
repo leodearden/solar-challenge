@@ -5,6 +5,7 @@ import math
 import pickle
 import re
 from collections.abc import Callable
+from datetime import date
 
 import numpy as np
 import pytest
@@ -20,6 +21,7 @@ from solar_challenge.battery import (
 )
 from solar_challenge.dispatch import (
     STRATEGY_CONFIG_BY_TYPE,
+    EventDischargeWindow,
     GridChargeConfig,
     PeakShavingStrategyConfig,
     SelfConsumptionStrategyConfig,
@@ -309,6 +311,37 @@ class TestBatteryConfigGridCharging:
         cfg = BatteryConfig(capacity_kwh=5.0, grid_charging=gc)
         restored = pickle.loads(pickle.dumps(cfg))
         assert restored == cfg
+
+
+class TestBatteryConfigEventDischarge:
+    """A battery's event windows: a tuple of EventDischargeWindow, () when it has none."""
+
+    _WINDOW = EventDischargeWindow(days=(date(2024, 1, 15),), hours=(17, 18))
+
+    def test_a_battery_has_no_event_windows_by_default(self) -> None:
+        assert BatteryConfig(capacity_kwh=10.0).event_discharge == ()
+
+    def test_it_holds_its_event_windows_as_a_tuple(self) -> None:
+        cfg = BatteryConfig(capacity_kwh=10.0, event_discharge=[self._WINDOW])
+
+        assert cfg.event_discharge == (self._WINDOW,)
+        assert isinstance(cfg.event_discharge, tuple)
+
+    def test_an_element_that_is_not_an_event_window_is_refused_naming_it(self) -> None:
+        with pytest.raises(ConfigurationError, match=r"^event_discharge\[0\] must be an EventDischargeWindow, got "):
+            BatteryConfig(capacity_kwh=10.0, event_discharge=((17, 18),))
+
+    def test_a_battery_with_an_event_window_is_hashable_and_equal_to_an_equal_one(self) -> None:
+        first = BatteryConfig(capacity_kwh=10.0, event_discharge=(self._WINDOW,))
+        second = BatteryConfig(capacity_kwh=10.0, event_discharge=[self._WINDOW])
+
+        assert first == second
+        assert hash(first) == hash(second)
+
+    def test_a_battery_with_an_event_window_pickles_to_an_equal_one(self) -> None:
+        cfg = BatteryConfig(capacity_kwh=10.0, event_discharge=(self._WINDOW,))
+
+        assert pickle.loads(pickle.dumps(cfg)) == cfg
 
 
 class TestBatteryAnswersItsGridChargeTarget:

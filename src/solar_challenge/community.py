@@ -70,7 +70,7 @@ def _billing_tariff(billing: CommunityBillingConfig | None) -> TariffConfig | No
 
 
 def _battery_strategy(battery: BatteryConfig, billing: CommunityBillingConfig | None) -> DispatchStrategy:
-    """The strategy the community battery's dispatch_strategy names, built for its grid_charging at the billing tariff.
+    """The strategy the community battery's dispatch_strategy names, built for its grid_charging at the billing tariff and wrapped in its event windows.
 
     Raises
     ------
@@ -85,6 +85,8 @@ def _battery_strategy(battery: BatteryConfig, billing: CommunityBillingConfig | 
         battery.dispatch_strategy,
         grid_charging=battery.grid_charging,
         tariff=_billing_tariff(billing),
+        event_discharge=battery.event_discharge,
+        max_discharge_kw=battery.max_discharge_kw,
     )
 
 
@@ -319,7 +321,8 @@ def simulate_community(
         long, is dispatched in order via
         :func:`~solar_challenge.flow.simulate_timestep` with the strategy the
         battery's ``dispatch_strategy`` names, built by
-        :func:`~solar_challenge.dispatch.build_dispatch_strategy`,
+        :func:`~solar_challenge.dispatch.build_dispatch_strategy`
+        and wrapped in the battery's ``event_discharge`` windows,
         and with ``billing.tariff`` as the step's tariff.  The
         sequential loop is required because SOC is stateful and cannot be
         vectorised.  Per-step outputs (kWh/step) are scaled back to kW by

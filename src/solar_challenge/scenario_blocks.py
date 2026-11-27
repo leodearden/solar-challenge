@@ -619,7 +619,11 @@ BATTERY_BLOCK: ComponentBlock[BatteryConfig] = ComponentBlock(
         "discharge_efficiency", "efficiency", "system_age_years", "calendar_fade_rate_per_year",
         "cycle_fade_per_equivalent_full_cycle", "soh_floor", "soh",
     ),
-    outside_grammar=MappingProxyType({}),
+    outside_grammar=MappingProxyType({
+        "event_discharge": (
+            "the scenario's events configuration sets a battery's event windows; a battery: block has no key for them"
+        ),
+    }),
     sub_blocks=MappingProxyType({
         "dispatch_strategy": SubBlock(parse_dispatch_strategy_config, _dispatch_strategy_block),
         "grid_charging": SubBlock(parse_grid_charge_config, _grid_charging_block),

@@ -2,18 +2,23 @@
 """Tests for build_dispatch_strategy, which builds the strategy each variant of DispatchStrategyConfig configures.
 
 It refuses a grid_charging setting the strategy would ignore: under a variant that does not
-charge from the grid, or with no tariff to find a cheap period in.
+charge from the grid, or with no tariff to find a cheap period in. A battery's event windows
+wrap the strategy it builds, through with_event_discharge.
 """
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime
 from typing import NamedTuple, Optional, get_args
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from solar_challenge.dispatch import (
+    DispatchDecision,
     DispatchStrategy,
     DispatchStrategyConfig,
+    EventDischargeStrategy,
+    EventDischargeWindow,
     GridChargeConfig,
     PeakShavingStrategy,
     PeakShavingStrategyConfig,
@@ -22,6 +27,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
     TOUOptimizedStrategyConfig,
     build_dispatch_strategy,
+    with_event_discharge,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.tariff import TariffConfig
@@ -143,3 +149,86 @@ def test_a_variant_that_charges_from_the_grid_builds_with_grid_charging_on_a_tar
     strategy = build_dispatch_strategy(case.config, grid_charging=_GRID_CHARGING, tariff=TariffConfig.economy_7())
 
     assert isinstance(strategy, case.strategy_class)
+
+
+_LONDON = ZoneInfo("Europe/London")
+
+_EVENT = EventDischargeWindow(days=(date(2024, 1, 15),), hours=(17,))
+"""An event on 2024-01-15 from 17:00 to 18:00."""
+
+
+def _decide_on_a_one_kw_shortfall(strategy: DispatchStrategy, timestamp: datetime) -> DispatchDecision:
+    return strategy.decide_action(
+        timestamp=timestamp,
+        generation_kw=0.0,
+        demand_kw=1.0,
+        battery_soc_kwh=2.5,
+        battery_capacity_kwh=5.0,
+        timestep_minutes=1.0,
+    )
+
+
+@pytest.mark.parametrize("case", _CASES, ids=_ids(_CASES))
+def test_with_no_event_windows_the_built_strategy_is_the_unwrapped_one(case: _Case) -> None:
+    tariff = TariffConfig.economy_7()
+
+    strategy = build_dispatch_strategy(case.config, grid_charging=None, tariff=tariff, event_discharge=())
+
+    assert type(strategy) is case.strategy_class
+    assert strategy.name == build_dispatch_strategy(case.config, grid_charging=None, tariff=tariff).name
+
+
+@pytest.mark.parametrize("case", _CASES, ids=_ids(_CASES))
+def test_event_windows_wrap_the_built_strategy_at_the_batterys_discharge_limit(case: _Case) -> None:
+    tariff = TariffConfig.economy_7()
+    unwrapped = build_dispatch_strategy(case.config, grid_charging=None, tariff=tariff)
+
+    strategy = build_dispatch_strategy(
+        case.config, grid_charging=None, tariff=tariff, event_discharge=(_EVENT,), max_discharge_kw=2.5
+    )
+
+    assert isinstance(strategy, EventDischargeStrategy)
+    assert strategy.name == f"event_discharge({case.config.strategy_type})"
+    in_the_event = _decide_on_a_one_kw_shortfall(strategy, datetime(2024, 1, 15, 17, 30, tzinfo=_LONDON))
+    assert in_the_event.export_kw == 1.5
+    noon = datetime(2024, 1, 15, 12, 0, tzinfo=_LONDON)
+    assert _decide_on_a_one_kw_shortfall(strategy, noon) == _decide_on_a_one_kw_shortfall(unwrapped, noon)
+
+
+@pytest.mark.parametrize("case", _NON_GRID_CHARGING_CASES, ids=_ids(_NON_GRID_CHARGING_CASES))
+def test_a_wrapped_build_refuses_grid_charging_naming_its_base(case: _Case) -> None:
+    with pytest.raises(
+        ConfigurationError, match=f"dispatch strategy '{case.config.strategy_type}' does not charge from the grid"
+    ):
+        build_dispatch_strategy(
+            case.config,
+            grid_charging=_GRID_CHARGING,
+            tariff=TariffConfig.economy_7(),
+            event_discharge=(_EVENT,),
+            max_discharge_kw=2.5,
+        )
+
+
+def test_event_windows_without_a_discharge_limit_are_refused_naming_both() -> None:
+    with pytest.raises(ConfigurationError) as refused:
+        build_dispatch_strategy(
+            SelfConsumptionStrategyConfig(), grid_charging=None, tariff=None, event_discharge=(_EVENT,)
+        )
+
+    for named in ["event_discharge", "max_discharge_kw"]:
+        assert named in str(refused.value), (named, str(refused.value))
+
+
+def test_with_no_event_windows_with_event_discharge_returns_the_strategy_itself() -> None:
+    strategy = SelfConsumptionStrategy()
+
+    assert with_event_discharge(strategy, (), max_discharge_kw=2.5) is strategy
+
+
+def test_with_event_windows_with_event_discharge_wraps_the_strategy() -> None:
+    strategy = TOUOptimizedStrategy([(16, 20)])
+
+    wrapped = with_event_discharge(strategy, (_EVENT,), max_discharge_kw=2.5)
+
+    assert isinstance(wrapped, EventDischargeStrategy)
+    assert wrapped.name == "event_discharge(tou_optimized)"
