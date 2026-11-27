@@ -3,7 +3,6 @@
 
 import re
 from collections.abc import Callable
-from datetime import datetime
 from typing import Any
 
 import pytest
@@ -30,14 +29,13 @@ from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
 from solar_challenge.web.fleet_config import read_form_fleet
 from solar_challenge.web.fleet_scenario import (
-    ImportedFleetForm,
     ParsedFleetForm,
     fleet_form_from_scenario,
-    fleet_form_from_yaml,
     parse_fleet_form,
     scenario_from_fleet_form,
 )
 from solar_challenge.web.request_boundary import read_string, require_encodable_text
+from solar_challenge.web.scenario_import import ImportedForm
 from solar_challenge.web.simulation_params import parse_seg_tariff
 from tests._fleet_form import form_fleet_blocks, valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
@@ -603,21 +601,12 @@ finance:
 """
 
 
-class TestFleetFormFromYaml:
-    """fleet_form_from_yaml reads YAML text as fleet_form_from_scenario reads its document, and refuses text that is not YAML."""
-
-    def test_text_that_does_not_parse_as_yaml_is_refused_naming_the_parsers_error(self) -> None:
-        with pytest.raises(ConfigurationError) as refusal:
-            fleet_form_from_yaml("name: [unclosed")
-        assert str(refusal.value).startswith("Invalid YAML: ")
-
-
 class TestFleetFormFromScenario:
     """The fleet form fleet_form_from_scenario reads from a fleet scenario, the settings it names as not loaded, and its refusals."""
 
     def test_a_fleet_scenario_is_the_fleet_form_it_describes(self) -> None:
         """The scenario a fleet form describes reads back as that form: its distributions as the grammar's own specs, its battery's dispatch as the form's dispatch strategy, and its period as start and end dates."""
-        assert fleet_form_from_scenario(_FLEET_SCENARIO) == ImportedFleetForm(
+        assert fleet_form_from_scenario(_FLEET_SCENARIO) == ImportedForm(
             form=_FLEET_FORM, not_loaded=()
         )
 
@@ -732,7 +721,7 @@ class TestFleetFormFromScenario:
 
         imported = fleet_form_from_scenario(document)
 
-        assert imported == ImportedFleetForm(
+        assert imported == ImportedForm(
             form={**_FLEET_FORM, "battery": {"capacity_kwh": None}}, not_loaded=()
         )
         homes_the_form_runs = parse_fleet_form(imported.form).homes
@@ -743,38 +732,9 @@ class TestFleetFormFromScenario:
         """The fleet page has no location control and runs its fleet at Bristol, so a London scenario loads the rest and names its location."""
         london = {**_FLEET_SCENARIO, "location": location_block(LOCATION_PRESETS["london"])}
 
-        assert fleet_form_from_scenario(london) == ImportedFleetForm(
+        assert fleet_form_from_scenario(london) == ImportedForm(
             form=_FLEET_FORM, not_loaded=("location",)
         )
-
-    def test_a_period_of_midnight_timestamps_loads_as_its_days(self) -> None:
-        """YAML reads `2024-07-01 00:00:00` as a timestamp; at midnight it is that day, which the page's date fields hold as an ISO date."""
-        period = yaml.safe_load("start_date: 2024-07-01 00:00:00\nend_date: 2024-07-10 00:00:00\n")
-        assert isinstance(period["start_date"], datetime), "premise: YAML reads a timestamp"
-
-        assert fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period}) == ImportedFleetForm(
-            form=_FLEET_FORM, not_loaded=()
-        )
-
-    @pytest.mark.parametrize("key", ["start_date", "end_date"])
-    @pytest.mark.parametrize(
-        "value",
-        [
-            pytest.param("2024/07/01", id="slashes"),
-            pytest.param("2024-02-30", id="no-such-day"),
-            pytest.param("", id="empty-string"),
-            pytest.param(20240701, id="number"),
-            pytest.param(None, id="null"),
-        ],
-    )
-    def test_a_period_date_that_is_not_an_iso_date_is_refused_naming_it(
-        self, key: str, value: object
-    ) -> None:
-        """A period date that is neither a YAML date nor an ISO 8601 date string (YYYY-MM-DD) is refused with a ConfigurationError naming it as period.<key> and the value as written; the other date is the round trip's."""
-        period = {**_FLEET_SCENARIO["period"], key: value}
-        with pytest.raises(ConfigurationError) as exc_info:
-            fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
-        assert str(exc_info.value) == f"period.{key} must be an ISO 8601 date (YYYY-MM-DD), got {value!r}"
 
     @pytest.mark.parametrize(
         ("period", "message"),
@@ -896,7 +856,7 @@ class TestFleetFormFromScenario:
         """An n_homes of 3.0 and a seed of 7.0 load as the ints 3 and 7, the fleet they run: random.Random(7.0) draws as random.Random(7) does."""
         imported = fleet_form_from_scenario(_with_fleet_distribution(n_homes=3.0, seed=7.0))
 
-        assert imported == ImportedFleetForm(form=_FLEET_FORM, not_loaded=())
+        assert imported == ImportedForm(form=_FLEET_FORM, not_loaded=())
         assert type(imported.form["n_homes"]) is int
         assert type(imported.form["seed"]) is int
 
@@ -909,7 +869,7 @@ class TestFleetFormFromScenario:
             _with_fleet_distribution(battery={**battery, "capacity_kwh": pool})
         )
 
-        assert imported == ImportedFleetForm(form=_FLEET_FORM, not_loaded=())
+        assert imported == ImportedForm(form=_FLEET_FORM, not_loaded=())
         counts = imported.form["battery"]["capacity_kwh"]["counts"]
         assert [type(count) for count in counts] == [int, int]
 
@@ -917,7 +877,7 @@ class TestFleetFormFromScenario:
         """A pv.capacity_kw written as a fixed spec loads as the number the editor's Fixed Value holds, as the grammar reads it."""
         imported = fleet_form_from_scenario(_with_fleet_distribution(pv={"capacity_kw": {"type": "fixed", "value": 4}}))
 
-        assert imported == ImportedFleetForm(form={**_FLEET_FORM, "pv": {"capacity_kw": 4.0}}, not_loaded=())
+        assert imported == ImportedForm(form={**_FLEET_FORM, "pv": {"capacity_kw": 4.0}}, not_loaded=())
 
     def test_a_normal_without_clamps_loads_with_null_clamps_and_its_form_runs_the_scenarios_fleet(self) -> None:
         """A normal that sets no min or max loads as the grammar's NormalDistribution written back, its clamps null, and the form loaded runs the fleet the scenario describes."""
@@ -973,7 +933,7 @@ class TestFleetFormFromScenario:
         """An Economy 7 tariff loads its type and rates, and names the off-peak start the page has no field for."""
         tariff = {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1, "off_peak_start": "01:00"}
 
-        assert fleet_form_from_scenario({**_FLEET_SCENARIO, "tariff": tariff}) == ImportedFleetForm(
+        assert fleet_form_from_scenario({**_FLEET_SCENARIO, "tariff": tariff}) == ImportedForm(
             form=_FLEET_FORM, not_loaded=("tariff.off_peak_start",)
         )
 
@@ -990,7 +950,7 @@ class TestFleetFormFromScenario:
         """The fleet page has no control for a tou_optimized on its tariff's clock, so the rest loads and the battery's dispatch_strategy is named."""
         battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "dispatch_strategy": dispatch_strategy}
 
-        assert fleet_form_from_scenario(_with_fleet_distribution(battery=battery)) == ImportedFleetForm(
+        assert fleet_form_from_scenario(_with_fleet_distribution(battery=battery)) == ImportedForm(
             form=_without(_FLEET_FORM, "dispatch_strategy"),
             not_loaded=("fleet_distribution.battery.dispatch_strategy",),
         )
@@ -1300,4 +1260,4 @@ class TestFleetFormFromScenario:
             parse_scenario(document)
         read_fleet_scenario(document)
 
-        assert fleet_form_from_scenario(document) == ImportedFleetForm(form=form, not_loaded=not_loaded)
+        assert fleet_form_from_scenario(document) == ImportedForm(form=form, not_loaded=not_loaded)

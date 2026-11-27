@@ -5,14 +5,13 @@ A fleet form is the body fleet-simulator.js's buildPayload() posts; this module 
 fleet page's counterpart of builder_form.py.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date
 from types import MappingProxyType
 from typing import Any
 
 import pandas as pd
-import yaml
 
 from solar_challenge.config import read_fleet_scenario
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
@@ -27,7 +26,6 @@ from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
     FLEET_SIZE_DEFAULT,
     SEED_DEFAULT,
-    ComponentLimits,
     refuse_homes_outside_ranges,
 )
 from solar_challenge.web.fleet_config import (
@@ -43,10 +41,25 @@ from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
 )
 from solar_challenge.web.run_names import is_run_name
+from solar_challenge.web.scenario_import import (
+    BlockRead,
+    ImportedForm,
+    SettingReader,
+    editor_field,
+    fleet_scenario_document,
+    not_loaded,
+    read_as_given,
+    read_blocks,
+    read_component,
+    read_period,
+    read_seg,
+    read_typed_block,
+    required,
+    scenario_yaml_document,
+)
 from solar_challenge.web.simulation_params import (
     DATE_RANGE_KEYS,
     parse_date_range,
-    read_iso_date,
     refuse_reversed_or_overlong_window,
 )
 
@@ -155,33 +168,14 @@ def _document_fleet_distribution(
     return {**distribution, "battery": battery}
 
 
-@dataclass(frozen=True)
-class ImportedFleetForm:
-    """A fleet scenario read as the fleet page's form.
+_PAGE = "fleet page"
 
-    Attributes:
-        form: The fleet form the scenario describes: the body the fleet page posts.
-        not_loaded: The path of each setting of the scenario the form has no control for,
-            in document order; the form leaves them out.
-    """
-
-    form: Mapping[str, Any]
-    not_loaded: tuple[str, ...]
+#: The seg keys the fleet form holds: a preset or a rate.
+_HELD_SEG_KEYS = frozenset({"preset", "rate_pence_per_kwh"})
 
 
-def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
-    """The fleet form the fleet scenario *document* describes, naming the settings of it the form has no control for.
-
-    The document is read as config.read_fleet_scenario reads it, its period first by the page's
-    own stricter rules, and its fleet held to the dashboard's bounds; no home of it is
-    generated. The form holds the name, period, fleet size and seed, each component's field as
-    its editor loads the grammar's reading of it (ComponentLimits.editor_spec), the battery's
-    dispatch strategy, the tariff and the SEG; a setting the scenario leaves out is left out
-    of the form, but an economy tariff's rate, which loads as the PRESET_RATES rate
-    parse_scenario charges it. A setting the form has no control for, or a location other than the page's,
-    is named in not_loaded; one the form needs but cannot hold exactly is refused, since
-    loading it anyway would run another fleet. The form loaded is then read by
-    parse_fleet_form, the import's one generation of homes.
+def fleet_form_from_scenario(document: object) -> ImportedForm:
+    """The fleet form the fleet scenario *document* describes, naming the settings of it the form has no control for, by docs/web-ui-design.md's *Scenario import policy*.
 
     Raises:
         ConfigurationError: For a document that is not a fleet_distribution scenario, a period
@@ -189,179 +183,76 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
         ConfigurationError: From read_fleet_scenario, refuse_a_fleet_the_dashboard_cannot_run or
             parse_fleet_form, for a scenario, fleet or loaded form each refuses.
     """
-    scenario = _fleet_scenario(document)
-    period = _read_period(scenario.get("period"))
+    scenario = fleet_scenario_document(document, _PAGE)
+    period = read_period(scenario.get("period"), _PAGE)
+    if period is not None:
+        refuse_reversed_or_overlong_window(
+            *period, start_field="period.start_date", end_field="period.end_date"
+        )
     read = read_fleet_scenario(scenario)
     refuse_a_fleet_the_dashboard_cannot_run(read.fleet, "fleet_distribution")
-    form, not_loaded = _read_blocks(
+    form, unheld = read_blocks(
         scenario,
         "",
         {
-            "name": _read_name(scenario.get("name")),
-            "period": period,
+            "name": read_as_given("name", scenario.get("name")),
+            "period": _read_period(period),
             "location": _read_location(read.location),
             "fleet_distribution": _read_fleet_distribution(scenario["fleet_distribution"], read.fleet),
             "tariff": _read_tariff(scenario.get("tariff")),
-            "seg": _read_seg(scenario.get("seg")),
+            "seg": read_seg(scenario.get("seg"), _HELD_SEG_KEYS, _PAGE),
         },
     )
     parse_fleet_form(form)
-    return ImportedFleetForm(form=form, not_loaded=not_loaded)
+    return ImportedForm(form=form, not_loaded=unheld)
 
 
-def fleet_form_from_yaml(yaml_text: str) -> ImportedFleetForm:
+def fleet_form_from_yaml(yaml_text: str) -> ImportedForm:
     """The fleet form the fleet scenario YAML *yaml_text* describes, as :func:`fleet_form_from_scenario` reads its document.
 
     Raises:
         ConfigurationError: For text that does not parse as YAML, "Invalid YAML: " and the parser's error.
         ConfigurationError: As fleet_form_from_scenario.
     """
-    try:
-        document = yaml.safe_load(yaml_text)
-    except yaml.YAMLError as exc:
-        raise ConfigurationError(f"Invalid YAML: {exc}") from exc
-    return fleet_form_from_scenario(document)
+    return fleet_form_from_scenario(scenario_yaml_document(yaml_text))
 
 
-#: A scenario block read as its part of the fleet form, and the path of each setting in it
-#: the form does not hold.
-_BlockRead = tuple[dict[str, Any], tuple[str, ...]]
-
-#: Reads a setting the fleet form holds from its value in a scenario and its path there.
-_SettingReader = Callable[[Any, str], Any]
-
-
-def _fleet_scenario(document: object) -> dict[str, Any]:
-    """*document*, which must be a scenario with a fleet_distribution block, the fleet the fleet page holds.
-
-    Raises:
-        ConfigurationError: For a document that is not a mapping or has no fleet_distribution block,
-            or a fleet_distribution block that is not a mapping.
-    """
-    if not isinstance(document, dict):
-        raise ConfigurationError(f"A fleet scenario must be a mapping, got {type(document).__name__}")
-    if "fleet_distribution" not in document:
-        raise ConfigurationError(
-            "The scenario has no fleet_distribution block, the fleet the fleet page loads"
-        )
-    fleet = document["fleet_distribution"]
-    if not isinstance(fleet, dict):
-        raise ConfigurationError(f"fleet_distribution must be a mapping, got {type(fleet).__name__}")
-    return document
-
-
-def _not_loaded(
-    block: Mapping[str, Any], path: str, held: Mapping[str, tuple[str, ...]]
-) -> tuple[str, ...]:
-    """The path of each setting in the *path* block that the fleet form does not hold, in the block's order.
-
-    *held* maps each key of the block the form holds to the paths of the settings within it
-    that the form does not hold.
-    """
-    return tuple(
-        not_loaded
-        for key in block
-        for not_loaded in held.get(key, (child_path(path, key),))
-    )
-
-
-def _read_blocks(block: Mapping[str, Any], path: str, reads: Mapping[str, _BlockRead]) -> _BlockRead:
-    """The *path* block as the fleet form holds it, from the *reads* of its keys the form holds."""
-    form = {setting: value for read_form, _ in reads.values() for setting, value in read_form.items()}
-    held = {key: not_loaded for key, (_, not_loaded) in reads.items()}
-    return form, _not_loaded(block, path, held)
-
-
-def _read_name(name: str | None) -> _BlockRead:
-    """The fleet form's name: the scenario's, which read_fleet_scenario accepted as a string, none when it is absent or null."""
-    if name is None:
-        return {}, ()
-    return {"name": name}, ()
-
-
-def _read_period(period: Any) -> _BlockRead:
-    """The fleet form's start and end dates: the scenario's period, none when it is absent or null.
-
-    Raises:
-        ConfigurationError: For a period that is not a mapping, or a date that is not a day,
-            naming it as period.start_date or period.end_date; or for a window the page
-            cannot run, naming period.start_date and period.end_date.
-    """
+def _read_period(period: tuple[date, date] | None) -> BlockRead:
+    """The fleet form's start and end dates: the *period* read_period read, none when the scenario sets none; read_fleet_scenario refuses any other key of the period block."""
     if period is None:
         return {}, ()
-    if not isinstance(period, Mapping):
-        raise ConfigurationError(f"period must be a mapping, got {type(period).__name__}")
-    start_path, end_path = "period.start_date", "period.end_date"
-    start = _read_day(period.get("start_date"), start_path)
-    end = _read_day(period.get("end_date"), end_path)
-    refuse_reversed_or_overlong_window(start, end, start_field=start_path, end_field=end_path)
-    form = {"start": start.isoformat(), "end": end.isoformat()}
-    return form, _not_loaded(period, "period", {"start_date": (), "end_date": ()})
+    start, end = period
+    return {"start": start.isoformat(), "end": end.isoformat()}, ()
 
 
-def _read_day(value: Any, path: str) -> date:
-    """*value*, a date as YAML reads one or an ISO 8601 date string, as the day it names.
-
-    A YAML timestamp is its day when it is that day's midnight with no time zone.
-
-    Raises:
-        ConfigurationError: For a timestamp with a time of day or a time zone, which the form's
-            date fields cannot hold, or, from read_iso_date, any other value that is not
-            an ISO 8601 date string, a missing one read as None included, naming *path*.
-    """
-    if isinstance(value, datetime):
-        if value.tzinfo is not None or value.time() != time.min:
-            raise ConfigurationError(
-                f"{path} must be a day, got {value!r}: the fleet page's date fields hold "
-                "no time of day or time zone"
-            )
-        return value.date()
-    if isinstance(value, date):
-        return value
-    return read_iso_date(value, path)
-
-
-def _read_location(location: Location) -> _BlockRead:
+def _read_location(location: Location) -> BlockRead:
     """Nothing of the fleet form, which has no location control: a scenario *location*, as read_fleet_scenario reads it, other than the one the form runs at is not loaded."""
     if location == _fleet_form_location({}):
         return {}, ()
     return {}, ("location",)
 
 
-def _read_fleet_distribution(fleet: Mapping[str, Any], parsed: FleetDistributionConfig) -> _BlockRead:
+def _read_fleet_distribution(fleet: Mapping[str, Any], parsed: FleetDistributionConfig) -> BlockRead:
     """The fleet form's fleet size, seed, distributions and dispatch strategy: the scenario's fleet_distribution block *fleet*, as the grammar read it, *parsed*, a seed it leaves out none.
 
     Raises:
         ConfigurationError: From the readers of its distributions and dispatch strategy.
     """
     path = "fleet_distribution"
-    return _read_blocks(
+    return read_blocks(
         fleet,
         path,
         {
             "n_homes": ({"n_homes": parsed.n_homes}, ()),
             "seed": ({} if parsed.seed is None else {"seed": parsed.seed}, ()),
-            "pv": _read_component(fleet, path, FLEET_COMPONENTS["pv"], parsed.pv),
+            "pv": read_component(fleet, path, FLEET_COMPONENTS["pv"], parsed.pv),
             "battery": _read_battery(fleet.get("battery"), child_path(path, "battery"), parsed.battery),
-            "load": _read_component(fleet, path, FLEET_COMPONENTS["load"], parsed.load),
+            "load": read_component(fleet, path, FLEET_COMPONENTS["load"], parsed.load),
         },
     )
 
 
-def _read_component(
-    fleet: Mapping[str, Any], path: str, limits: ComponentLimits, read: ComponentDistribution
-) -> _BlockRead:
-    """The fleet form's *limits* component block of the *path* fleet: its field as its editor loads *read*, the grammar's reading of the block.
-
-    Raises:
-        ConfigurationError: From ComponentLimits.editor_spec, for a field the editor cannot hold.
-    """
-    block_path = child_path(path, limits.key)
-    form = {limits.key: {limits.grammar_key: _editor_field(limits, read, block_path)}}
-    return form, _not_loaded(fleet.get(limits.key) or {}, block_path, {limits.grammar_key: ()})
-
-
-def _read_battery(battery: Any, path: str, read: ComponentDistribution | None) -> _BlockRead:
+def _read_battery(battery: Any, path: str, read: ComponentDistribution | None) -> BlockRead:
     """The fleet form's battery capacity and dispatch strategy: the *path* battery block's, whose grammar reading is *read*, none when it is absent or null.
 
     A dispatch strategy on its tariff's clock loads none, and its path is named not loaded.
@@ -373,32 +264,15 @@ def _read_battery(battery: Any, path: str, read: ComponentDistribution | None) -
     if read is None:
         return {}, ()
     limits = FLEET_COMPONENTS["battery"]
-    capacity = _editor_field(limits, read, path)
+    capacity = editor_field(limits, read, path)
     dispatch, dispatch_not_loaded = _read_dispatch(
         battery.get("dispatch_strategy"), child_path(path, "dispatch_strategy")
     )
     held = {limits.grammar_key: (), "dispatch_strategy": dispatch_not_loaded}
-    return {"battery": {limits.grammar_key: capacity}, **dispatch}, _not_loaded(battery, path, held)
+    return {"battery": {limits.grammar_key: capacity}, **dispatch}, not_loaded(battery, path, held)
 
 
-def _editor_field(limits: ComponentLimits, read: ComponentDistribution, block_path: str) -> object:
-    """The *limits* component's field as its editor loads it from *read*, the grammar's reading of the *block_path* block: its draw, null when the block draws none, the editor's blank Fixed Value."""
-    field_path = child_path(block_path, limits.grammar_key)
-    return limits.editor_spec(read.draws.get(limits.grammar_key), field_path)
-
-
-def _required(value: Any, path: str) -> Any:
-    """*value*, a setting the fleet page always sets.
-
-    Raises:
-        ConfigurationError: When the scenario leaves it out, naming *path*.
-    """
-    if value is None:
-        raise ConfigurationError(f"{path} must be set: the fleet page always sets it")
-    return value
-
-
-def _or_default(default: float) -> _SettingReader:
+def _or_default(default: float) -> SettingReader:
     """A reader of a setting the loaders default: the scenario's value as given, or *default* when the scenario leaves it out."""
 
     def read_or_default(value: Any, path: str) -> Any:
@@ -407,7 +281,7 @@ def _or_default(default: float) -> _SettingReader:
     return read_or_default
 
 
-def _economy_rate_readers(rates: PresetRates) -> Mapping[str, _SettingReader]:
+def _economy_rate_readers(rates: PresetRates) -> Mapping[str, SettingReader]:
     """The readers of an economy tariff's two rates, each filling a rate the scenario leaves out from *rates*, its preset's default rates."""
     return {"peak_rate": _or_default(rates.peak_rate), "off_peak_rate": _or_default(rates.off_peak_rate)}
 
@@ -427,21 +301,21 @@ def _one_peak_window(peak_hours: Any, path: str) -> list[list[Any]]:
 
 
 #: Each tariff type the fleet form holds, with a reader for each setting of it the form holds.
-_FORM_TARIFF_SETTINGS: Mapping[str, Mapping[str, _SettingReader]] = MappingProxyType({
-    "flat_rate": {"rate_per_kwh": _required},
+_FORM_TARIFF_SETTINGS: Mapping[str, Mapping[str, SettingReader]] = MappingProxyType({
+    "flat_rate": {"rate_per_kwh": required(_PAGE)},
     "economy_7": _economy_rate_readers(PRESET_RATES["economy_7"]),
     "economy_10": _economy_rate_readers(PRESET_RATES["economy_10"]),
 })
 
 #: Each dispatch strategy the fleet form holds, with a reader for each setting of it the form holds.
-_FORM_DISPATCH_SETTINGS: Mapping[str, Mapping[str, _SettingReader]] = MappingProxyType({
+_FORM_DISPATCH_SETTINGS: Mapping[str, Mapping[str, SettingReader]] = MappingProxyType({
     "self_consumption": {},
     "tou_optimized": {"peak_hours": _one_peak_window},
-    "peak_shaving": {"import_limit_kw": _required},
+    "peak_shaving": {"import_limit_kw": required(_PAGE)},
 })
 
 
-def _read_tariff(tariff: Any) -> _BlockRead:
+def _read_tariff(tariff: Any) -> BlockRead:
     """The fleet form's tariff: the scenario's tariff block, none when it is absent or null.
 
     Raises:
@@ -449,11 +323,11 @@ def _read_tariff(tariff: Any) -> _BlockRead:
     """
     if tariff is None:
         return {}, ()
-    form_tariff, not_loaded = _read_typed_block(tariff, "tariff", "type", _FORM_TARIFF_SETTINGS)
-    return {"tariff": form_tariff}, not_loaded
+    form_tariff, unheld = read_typed_block(tariff, "tariff", "type", _FORM_TARIFF_SETTINGS, _PAGE)
+    return {"tariff": form_tariff}, unheld
 
 
-def _read_dispatch(dispatch: Any, path: str) -> _BlockRead:
+def _read_dispatch(dispatch: Any, path: str) -> BlockRead:
     """The fleet form's dispatch strategy: the *path* dispatch block, none when it is absent or null.
 
     A tou_optimized on its tariff's clock, which the form has no control for, loads none and
@@ -466,49 +340,13 @@ def _read_dispatch(dispatch: Any, path: str) -> _BlockRead:
         return {}, ()
     if _on_its_tariffs_clock(dispatch, path):
         return {}, (path,)
-    form_dispatch, not_loaded = _read_typed_block(
-        dispatch, path, "strategy_type", _FORM_DISPATCH_SETTINGS
+    form_dispatch, unheld = read_typed_block(
+        dispatch, path, "strategy_type", _FORM_DISPATCH_SETTINGS, _PAGE
     )
-    return {"dispatch_strategy": form_dispatch}, not_loaded
+    return {"dispatch_strategy": form_dispatch}, unheld
 
 
 def _on_its_tariffs_clock(dispatch: dict[str, Any], path: str) -> bool:
     """Whether the *path* dispatch block, one read_fleet_scenario accepted, is tou_optimized on its tariff's clock: it sets no peak_hours."""
     strategy = parse_dispatch_strategy_config(dispatch, block_path=path)
     return isinstance(strategy, TOUOptimizedStrategyConfig) and strategy.peak_hours is None
-
-
-def _read_typed_block(
-    block: Mapping[str, Any],
-    path: str,
-    type_key: str,
-    settings: Mapping[str, Mapping[str, _SettingReader]],
-) -> _BlockRead:
-    """The *path* block, whose *type_key* names its type, as the fleet form holds it: its type and the settings *settings* reads for that type.
-
-    Raises:
-        ConfigurationError: For a type *settings* has no readers for, naming the block's *type_key*,
-            or from a setting's reader.
-    """
-    block_type = block[type_key]
-    readers = settings.get(block_type)
-    if readers is None:
-        raise ConfigurationError(
-            f"{child_path(path, type_key)} must be one the fleet page holds "
-            f"({', '.join(settings)}), got {block_type!r}"
-        )
-    form = {
-        type_key: block_type,
-        **{key: read(block.get(key), child_path(path, key)) for key, read in readers.items()},
-    }
-    return form, _not_loaded(block, path, dict.fromkeys((type_key, *readers), ()))
-
-
-def _read_seg(seg: Any) -> _BlockRead:
-    """The fleet form's SEG: the scenario's seg block as given, none when it is absent or null.
-
-    read_fleet_scenario accepted it, so it names exactly one preset or rate, both of which the form holds.
-    """
-    if seg is None:
-        return {}, ()
-    return {"seg": dict(seg)}, ()

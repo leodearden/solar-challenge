@@ -7,8 +7,9 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.fleet_scenario import ImportedFleetForm, fleet_form_from_yaml
+from solar_challenge.web.fleet_scenario import fleet_form_from_yaml
 from solar_challenge.web.request_boundary import refusal_text
+from solar_challenge.web.scenario_import import ImportedForm
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ def fleet_preset_names_among(files: Mapping[str, Path]) -> tuple[str, ...]:
     return tuple(name for name, path in files.items() if _loads(path))
 
 
-def fleet_preset_form(name: str) -> ImportedFleetForm | None:
+def fleet_preset_form(name: str) -> ImportedForm | None:
     """The fleet form the built-in scenario file *name* describes; None when no built-in scenario file is named *name*.
 
     Raises:
