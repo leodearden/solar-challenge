@@ -1095,7 +1095,7 @@ _EVENT_HOURS: Final = Interval(0, 23)
 """The clock hours an event window covers, as gridservices.EventWindow reads its hours."""
 
 
-def _as_event_days(value: object, field: str) -> tuple[date, ...]:
+def as_event_days(value: object, field: str) -> tuple[date, ...]:
     """Return *value*, a list of dates, as the tuple of its elements, each read by _as_event_day as {field}[{i}].
 
     Raises:
@@ -1141,7 +1141,7 @@ class EventDischargeWindow:
 
     def __post_init__(self) -> None:
         """Read days and hours, and hold each sorted, once _each_once_sorted has judged it."""
-        object.__setattr__(self, "days", _each_once_sorted(_as_event_days(self.days, "days"), "days", "day"))
+        object.__setattr__(self, "days", _each_once_sorted(as_event_days(self.days, "days"), "days", "day"))
         read_field(self, "hours", as_whole_numbers, _EVENT_HOURS)
         object.__setattr__(self, "hours", _each_once_sorted(self.hours, "hours", "hour"))
 

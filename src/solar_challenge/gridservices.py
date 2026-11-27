@@ -32,6 +32,8 @@ Key public symbols:
 * :class:`GridServicesEventsConfig` — frozen dataclass combining band selection,
   event windows, aggregator share, and utilisation factor; its
   :meth:`~GridServicesEventsConfig.annual_income_gbp` prices a simulated fleet.
+* :func:`drawn_event_days` — the seeded draw of the days of a simulated period
+  on which an event window's events fall.
 * :class:`NoGridServices` — frozen pricing value under which a fleet earns no
   grid-services income.
 * :class:`FlatGridServices` — frozen pricing value paying a flat rate per kW of
@@ -51,8 +53,12 @@ Key public symbols:
 
 import math
 import warnings
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, fields
+from datetime import date, timedelta
 from enum import StrEnum
+from fractions import Fraction
 from typing import TYPE_CHECKING, NamedTuple, Optional, TypeAlias, TypeVar
 
 import numpy as np
@@ -60,6 +66,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.dispatch import as_event_days
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     NON_NEGATIVE,
@@ -427,6 +434,75 @@ class GridServicesEventsConfig:
             _EventDayTotals.of(event_days) for event_days in _priced_event_days(fleet_results, self)
         )
         return float(sum(_net_income_per_window_gbp(self, per_window_totals)))
+
+
+# ---------------------------------------------------------------------------
+# The event days a dispatched fleet is enrolled on
+# ---------------------------------------------------------------------------
+
+
+def drawn_event_days(window: EventWindow, days: Iterable[date], seed: int, *, position: int) -> tuple[date, ...]:
+    """The days of *days* on which *window*'s events fall, drawn with *seed* for the window at *position* in its event_windows.
+
+    A day is eligible when its month is one of the window's months and its weekday one
+    of its weekdays, Monday 0, as :meth:`EventWindow.mask` reads them.  The count is the
+    window's events_per_year times the share of each calendar year's eligible days that
+    *days* holds, computed exactly and rounded half up, then at least 1 when any day is
+    eligible and at most the eligible days.  *days* is read as a set of dates, so neither
+    their order nor a repeat changes the draw.
+
+    The same arguments draw the same days, from a generator of the draw's own seeded by
+    *seed* and *position*: no home's random stream, nor either global generator, is read
+    or advanced.
+
+    Returns:
+        The drawn dates, sorted; none when no day of *days* is eligible.
+
+    Raises:
+        ConfigurationError: If an element of *days* is not exactly a date, naming
+            ``days[i]``; or if *seed* or *position* is not a whole number of at least 0,
+            naming it.
+    """
+    eligible = _eligible_days(window, as_event_days(days, "days"))
+    generator = np.random.default_rng(
+        [as_whole_number(seed, "seed", NON_NEGATIVE), as_whole_number(position, "position", NON_NEGATIVE)]
+    )
+    chosen = generator.choice(len(eligible), size=_event_day_count(window, eligible), replace=False)
+    return tuple(sorted(eligible[int(index)] for index in chosen))
+
+
+def _is_eligible(window: EventWindow, day: date) -> bool:
+    """Whether *day*'s month and weekday are among *window*'s."""
+    return day.month in window.months and day.weekday() in window.weekdays
+
+
+def _eligible_days(window: EventWindow, days: tuple[date, ...]) -> tuple[date, ...]:
+    """The distinct days of *days* that *window* is eligible on, sorted."""
+    return tuple(sorted({day for day in days if _is_eligible(window, day)}))
+
+
+def _eligible_day_count_of_year(window: EventWindow, year: int) -> int:
+    """How many days of calendar *year* *window* is eligible on."""
+    first = date(year, 1, 1)
+    return sum(
+        _is_eligible(window, first + timedelta(days=offset))
+        for offset in range((date(year, 12, 31) - first).days + 1)
+    )
+
+
+def _event_day_count(window: EventWindow, eligible: tuple[date, ...]) -> int:
+    """How many of *eligible*, *window*'s distinct eligible days, its events fall on, as :func:`drawn_event_days` counts them."""
+    if not eligible:
+        return 0
+    share = sum(
+        (
+            Fraction(count, _eligible_day_count_of_year(window, year))
+            for year, count in Counter(day.year for day in eligible).items()
+        ),
+        start=Fraction(0),
+    )
+    rounded_half_up = math.floor(window.events_per_year * share + Fraction(1, 2))
+    return min(max(1, rounded_half_up), len(eligible))
 
 
 # ---------------------------------------------------------------------------
