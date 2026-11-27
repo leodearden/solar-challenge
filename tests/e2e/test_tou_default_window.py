@@ -31,7 +31,8 @@ def _choose_tou_dispatch(page: Page) -> None:
 
 
 def _offered_values(select: Locator) -> list[str]:
-    """The value of each option *select* offers, in page order; fails when it offers none, which would leave nothing to send."""
+    """The value of each option *select* offers, in page order, read once *select* is shown, as Enable Tariff shows it only at the next animation frame and a role locator does not match a hidden select; fails when it offers none, which would leave nothing to send."""
+    expect(select).to_be_visible()
     values: list[str] = select.locator("option").evaluate_all("options => options.map(option => option.value)")
     assert values, "the Tariff Type select offers no option, so no tariff type is sent"
     return values
