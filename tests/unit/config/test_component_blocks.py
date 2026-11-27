@@ -180,7 +180,7 @@ def test_a_field_declaring_a_default_factory_is_built_with_the_factorys_value() 
         ),
         pytest.param(
             BATTERY_BLOCK,
-            {"event_discharge"},
+            {"event_discharge", "site_export_limit_kw"},
             ("dispatch_strategy", "grid_charging"),
             {"capacity_kwh": 5.0},
             {"efficiency"},
@@ -414,6 +414,14 @@ def test_a_battery_block_has_no_key_for_its_event_windows() -> None:
 
     with pytest.raises(ConfigurationError, match=r"unrecognised keys 'event_discharge'"):
         read({"capacity_kwh": 10.0, "event_discharge": [{"days": ["2024-01-15"], "hours": [17]}]})
+
+
+def test_a_battery_block_has_no_key_for_its_site_export_limit() -> None:
+    """A battery's site export limit is outside the grammar: the scenario's events configuration sets it with the windows."""
+    read = _home_component("battery", "battery_config")
+
+    with pytest.raises(ConfigurationError, match=r"unrecognised keys 'site_export_limit_kw'"):
+        read({"capacity_kwh": 10.0, "site_export_limit_kw": 3.0})
 
 
 _PUBLIC_READINGS: tuple[

@@ -344,6 +344,37 @@ class TestBatteryConfigEventDischarge:
         assert pickle.loads(pickle.dumps(cfg)) == cfg
 
 
+class TestBatteryConfigSiteExportLimit:
+    """The most a home may export in a step in which its battery exports, PV excess included: None for no limit."""
+
+    def test_a_battery_has_no_site_export_limit_by_default(self) -> None:
+        assert BatteryConfig(capacity_kwh=10.0).site_export_limit_kw is None
+
+    @pytest.mark.parametrize("limit", [3, 0.0])
+    def test_it_holds_its_limit_as_the_float_it_reads(self, limit: float) -> None:
+        held = BatteryConfig(capacity_kwh=10.0, site_export_limit_kw=limit).site_export_limit_kw
+
+        assert held == float(limit)
+        assert type(held) is float
+
+    @pytest.mark.parametrize(
+        ("limit", "requirement"),
+        [
+            pytest.param(-0.5, "at least 0", id="negative"),
+            pytest.param(float("nan"), "a finite number", id="nan"),
+            pytest.param(float("inf"), "a finite number", id="infinity"),
+            pytest.param(True, "a finite number", id="boolean"),
+        ],
+    )
+    def test_a_limit_that_is_not_a_finite_number_of_at_least_0_is_refused_naming_it(
+        self, limit: object, requirement: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=10.0, site_export_limit_kw=limit)  # type: ignore[arg-type]
+
+        assert str(exc_info.value) == f"site_export_limit_kw must be {requirement}, got {limit!r}"
+
+
 class TestBatteryAnswersItsGridChargeTarget:
     """A Battery answers the SOC grid charging fills it to, a fraction of its effective capacity capped at max_soc_kwh, and the charge limit charge() applies."""
 

@@ -19,6 +19,7 @@ from solar_challenge.dispatch import (
     DispatchStrategyConfig,
     EventDischargeWindow,
     PeakShavingStrategyConfig,
+    SelfConsumptionStrategy,
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategy,
     TOUOptimizedStrategyConfig,
@@ -121,3 +122,46 @@ def test_a_strategy_override_is_wrapped_in_the_batterys_windows() -> None:
 
     _assert_exports_only_in_the_event(results)
     assert results.strategy_name == "event_discharge(tou_optimized)"
+
+
+_CLEAR_DAYS_ID = "2024-06-20_to_21-clear"
+_MIDDAY_EVENT = EventDischargeWindow(days=(date(2024, 6, 20),), hours=(10, 11, 12, 13, 14))
+_SITE_EXPORT_LIMIT_KW = 3.0
+"""Above the clear day's PV excess at 10:00 and 11:00, and below that excess plus the battery's 2.5 kW discharge limit."""
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [pytest.param(None, id="its-own-strategy"), pytest.param(SelfConsumptionStrategy(), id="a-strategy-override")],
+)
+def test_while_its_battery_exports_the_home_exports_no_more_than_the_site_export_limit(
+    strategy: Optional[DispatchStrategy],
+) -> None:
+    """docs/prds/event-dispatch-and-battery-sizing.md §9 B7: the battery's site export limit bounds the home's export, PV excess included, whenever the battery exports."""
+    home = home_of_the_runs()
+    battery = home.battery_config
+    assert isinstance(battery, BatteryConfig)
+    home = dataclasses.replace(
+        home,
+        battery_config=dataclasses.replace(
+            battery, event_discharge=(_MIDDAY_EVENT,), site_export_limit_kw=_SITE_EXPORT_LIMIT_KW
+        ),
+    )
+    weather, start, end = RUN_DAYS[_CLEAR_DAYS_ID]
+
+    results = simulate_home(
+        home,
+        pd.Timestamp(start),
+        pd.Timestamp(end),
+        validate_balance=True,
+        weather=weather_for(home, weather),
+        strategy=strategy,
+    )
+
+    export = results.battery_export
+    assert export is not None
+    exporting = export > 0
+    assert exporting.any()
+    assert (results.grid_export[exporting] <= _SITE_EXPORT_LIMIT_KW + 1e-9).all()
+    shortfall = (results.demand - results.generation).clip(lower=0)
+    assert (export[exporting] < battery.max_discharge_kw - shortfall[exporting] - 1e-9).any()

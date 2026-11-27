@@ -488,6 +488,25 @@ class TestSimulateCommunityBattery:
         assert result.grid_export.iloc[0] > 8.0
         assert simulate_community(fleet5, cb_cfg).battery_charge.iloc[0] > 0
 
+    def test_a_community_battery_s_site_export_limit_bounds_the_community_s_export_in_its_event_window(
+        self, fleet5: FleetResults
+    ) -> None:
+        """A 12 kW limit above the first step's 8 kW net surplus leaves the battery 4 kW of export, far below its 30 kW discharge limit."""
+        enrolled = CommunityConfig(
+            community_battery=BatteryConfig(
+                capacity_kwh=10.0,
+                max_charge_kw=30.0,
+                max_discharge_kw=30.0,
+                event_discharge=(EventDischargeWindow(days=(date(2024, 6, 21),), hours=(12,)),),
+                site_export_limit_kw=12.0,
+            ),
+        )
+
+        result = simulate_community(fleet5, enrolled)
+
+        assert result.battery_discharge.iloc[0] > 0
+        assert result.grid_export.iloc[0] <= 12.0 + 1e-9
+
     # --- (c) discharges on net-deficit steps, SOC falls ---
 
     def test_battery_discharges_on_deficit_steps(

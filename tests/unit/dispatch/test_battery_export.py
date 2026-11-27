@@ -14,7 +14,7 @@ import itertools
 import math
 import random
 from collections.abc import Sequence
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
@@ -26,6 +26,8 @@ from solar_challenge.dispatch import (
     ChargeWindow,
     DispatchDecision,
     DispatchStrategy,
+    EventDischargeStrategy,
+    EventDischargeWindow,
     GridChargeConfig,
     PeakShavingStrategy,
     ScheduledChargeStrategy,
@@ -382,3 +384,45 @@ class TestARunThatAsksForNoExportHasNoExportSeries:
     @pytest.mark.parametrize(("dispatch_id", "day_id"), NO_EXPORT_RUNS)
     def test_the_summary_has_no_export(self, dispatch_id: str, day_id: str) -> None:
         assert calculate_summary(_no_export_run(dispatch_id, day_id)).total_battery_export_kwh == 0.0
+
+
+_SITE_EXPORT_LIMIT_KW = 3.0
+_EVENT_HOUR = EventDischargeWindow(days=(date(2024, 1, 15),), hours=(17,))
+_IN_THE_EVENT_HOUR = datetime(2024, 1, 15, 17, 30, tzinfo=_LONDON)
+
+
+def _site_limited_battery() -> Battery:
+    """A 10 kWh battery at 5 kWh, discharging at up to 2.5 kW, at a site that may export at most 3 kW while it exports."""
+    return Battery(
+        BatteryConfig(capacity_kwh=10.0, max_discharge_kw=2.5, site_export_limit_kw=_SITE_EXPORT_LIMIT_KW),
+        initial_soc_kwh=5.0,
+    )
+
+
+class TestASiteExportLimitBindsTheBatterysExport:
+    """docs/prds/event-dispatch-and-battery-sizing.md §5.4, B7 at a step: in a step in which the battery exports, the home exports no more than its battery's site export limit, PV excess included."""
+
+    def test_an_event_hour_with_pv_excess_exports_up_to_the_limit(self) -> None:
+        """2 kW of PV excess leaves the battery 1 kW of the 3 kW limit, less than the 2.5 kW its discharge limit leaves."""
+        strategy = EventDischargeStrategy(
+            SelfConsumptionStrategy(),
+            (_EVENT_HOUR,),
+            max_discharge_kw=2.5,
+            site_export_limit_kw=_SITE_EXPORT_LIMIT_KW,
+        )
+
+        result = simulate_timestep(3.0, 1.0, _site_limited_battery(), 60, _IN_THE_EVENT_HOUR, strategy)
+
+        assert result.battery_export > 0.0
+        assert result.grid_export / 1.0 <= _SITE_EXPORT_LIMIT_KW + 1e-9
+
+    def test_a_strategy_that_asks_the_discharge_limits_whole_headroom_is_refused_before_the_battery_moves(
+        self,
+    ) -> None:
+        battery = _site_limited_battery()
+        unaware_of_the_limit = EventDischargeStrategy(SelfConsumptionStrategy(), (_EVENT_HOUR,), max_discharge_kw=2.5)
+
+        with pytest.raises(ValueError, match=r"export_kw=2\.5 kW is above 1\.0 kW, "):
+            simulate_timestep(3.0, 1.0, battery, 60, _IN_THE_EVENT_HOUR, unaware_of_the_limit)
+
+        assert battery.soc_kwh == 5.0
