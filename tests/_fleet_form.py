@@ -3,11 +3,15 @@
 
 Usage::
 
-    from tests._fleet_form import FLEET_FORM_BLOCKS, valid_distribution_form
+    from tests._fleet_form import FLEET_FORM_BLOCKS, fleet_page_starting_form, start_wire, valid_distribution_form
 
     @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
     def test_a_null_block_is_read_as_absent(key: str) -> None:
         form = {**valid_distribution_form(), key: None}
+
+    def test_the_fleet_page_posts_its_pv_fixed_value(client: FlaskClient) -> None:
+        pv = FLEET_COMPONENTS["pv"]
+        form = {**fleet_page_starting_form(), "pv": {pv.grammar_key: start_wire(pv, SCALAR_FORM)}}
 """
 
 from collections.abc import Mapping
@@ -16,8 +20,8 @@ from typing import Any
 import pytest
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import write_distribution_spec
-from solar_challenge.web.fleet_components import ComponentLimits
+from solar_challenge.fleet_distribution import DistributionType, write_distribution_spec
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits, page_limits
 from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS, read_form_fleet
 
 #: The fleet form's component blocks: the pv, battery and load distributions.
@@ -61,3 +65,24 @@ def start_spec(component: ComponentLimits, name: str) -> Any:
         if isinstance(written, dict) and written["type"] == name
     ]
     return written
+
+
+def start_wire(component: ComponentLimits, editor_type: DistributionType) -> Any:
+    """What *component*'s distribution editor posts for its field with *editor_type* chosen: its start's Fixed Value for the scalar form, else start_spec."""
+    if editor_type.is_scalar_form:
+        return component.start.fixed
+    return start_spec(component, editor_type.name)
+
+
+def fleet_page_starting_form() -> dict[str, Any]:
+    """The fleet form the fleet page starts at: page_limits()'s fleet size, seed and days, and each component's editor at the type its card shows."""
+    limits = page_limits()
+    return {
+        "n_homes": limits.fleet_size_default,
+        "seed": limits.seed_default,
+        "days": limits.default_days,
+        **{
+            component.key: {component.grammar_key: start_spec(component, component.start.shown)}
+            for component in FLEET_COMPONENTS.values()
+        },
+    }
