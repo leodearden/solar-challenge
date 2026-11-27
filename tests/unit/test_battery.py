@@ -338,6 +338,11 @@ class TestBatteryConfigEventDischarge:
         assert first == second
         assert hash(first) == hash(second)
 
+    def test_a_battery_with_an_event_window_pickles_to_an_equal_one(self) -> None:
+        cfg = BatteryConfig(capacity_kwh=10.0, event_discharge=(self._WINDOW,))
+
+        assert pickle.loads(pickle.dumps(cfg)) == cfg
+
 
 class TestBatteryAnswersItsGridChargeTarget:
     """A Battery answers the SOC grid charging fills it to, a fraction of its effective capacity capped at max_soc_kwh, and the charge limit charge() applies."""

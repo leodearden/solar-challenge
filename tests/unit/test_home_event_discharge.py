@@ -69,7 +69,7 @@ def _on_the_runs_clock(index: pd.Index) -> pd.DatetimeIndex:
 
 def _in_the_event(index: pd.Index) -> "pd.Series[bool]":
     local = _on_the_runs_clock(index)
-    inside = (local.date == date(2024, 1, 15)) & local.hour.isin([17, 18])
+    inside = pd.Index(local.date).isin(_EVENT.days) & local.hour.isin(_EVENT.hours)
     return pd.Series(inside, index=index)
 
 
@@ -117,7 +117,7 @@ def test_a_window_the_run_does_not_reach_leaves_every_base_running_as_before(bas
 
 
 def test_a_strategy_override_is_wrapped_in_the_batterys_windows() -> None:
-    results = _run(_home(_HOLDING_FOR_THE_PEAK, _EVENT), TOUOptimizedStrategy([(16, 20)]))
+    results = _run(_home(SelfConsumptionStrategyConfig(), _EVENT), TOUOptimizedStrategy([(16, 20)]))
 
     _assert_exports_only_in_the_event(results)
     assert results.strategy_name == "event_discharge(tou_optimized)"
