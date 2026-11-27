@@ -286,24 +286,26 @@ class ReferenceComparison:
         return self.result.feasible and self.result.representative_outlay_gbp <= self.reference.representative_outlay_gbp
 
 
+def _install_order(point: ConfigPoint) -> tuple[float, float, bool, float, float]:
+    """*point*'s place in install order: pv_kwp, then battery_kwh, then battery_kw (the homes' own power, None, first), then inverter_kw, each ascending."""
+    return (
+        point.pv_kwp,
+        point.battery_kwh,
+        point.battery_kw is not None,
+        0.0 if point.battery_kw is None else point.battery_kw,
+        point.inverter_kw,
+    )
+
+
 def default_reference(points: Sequence[ConfigPoint]) -> ConfigPoint:
-    """The smallest battery at the smallest PV of *points*: least pv_kwp, then battery_kwh, then battery_kw (None first), then inverter_kw.
+    """The smallest battery at the smallest PV of *points*: the first in install order, least pv_kwp, then battery_kwh, then battery_kw (None first), then inverter_kw.
 
     Raises:
         ValueError: When *points* is empty.
     """
     if not points:
         raise ValueError("default_reference: points must be non-empty; received none")
-    return min(
-        points,
-        key=lambda point: (
-            point.pv_kwp,
-            point.battery_kwh,
-            point.battery_kw is not None,
-            0.0 if point.battery_kw is None else point.battery_kw,
-            point.inverter_kw,
-        ),
-    )
+    return min(points, key=_install_order)
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +320,8 @@ class RankedSweep:
     Attributes:
         results: Feasible :class:`ConfigResult` objects sorted ascending by
             ``representative_outlay_gbp`` (deterministic tie-break: surplus
-            desc, pv_kwp asc, battery_kwh asc, inverter_kw asc).
+            desc, pv_kwp asc, battery_kwh asc, battery_kw asc with None
+            first, inverter_kw asc).
         infeasible: :class:`ConfigPoint` objects whose
             ``binding == 'infeasible_above_retail'``, in input order.
         retained_cash_floor_gbp: The retained-cash floor every config's
@@ -878,13 +881,16 @@ def feasible_split(
 def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
     """Sort ConfigResults by the sweep's rank key (pure, stable, no filtering).
 
-    Sort key (five levels, all applied for determinism):
+    Sort key (six levels, all applied for determinism):
 
     1. ``representative_outlay_gbp`` ascending — cheapest householder outlay first.
     2. ``surplus_at_solved_gbp`` **descending** — higher project surplus preferred on tie.
     3. ``config.pv_kwp`` ascending.
     4. ``config.battery_kwh`` ascending.
-    5. ``config.inverter_kw`` ascending.
+    5. ``config.battery_kw`` ascending, the homes' own power (``None``) first.
+    6. ``config.inverter_kw`` ascending.
+
+    Levels 3 to 6 are the install order :func:`default_reference` reads.
 
     Infeasible-binding records (``binding == 'infeasible_above_retail'``) are NOT
     filtered; they appear in the output at their natural sort position.  Use
@@ -899,13 +905,7 @@ def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
     """
     return sorted(
         results,
-        key=lambda r: (
-            r.representative_outlay_gbp,
-            -r.surplus_at_solved_gbp,
-            r.config.pv_kwp,
-            r.config.battery_kwh,
-            r.config.inverter_kw,
-        ),
+        key=lambda r: (r.representative_outlay_gbp, -r.surplus_at_solved_gbp, *_install_order(r.config)),
     )
 
 
@@ -1066,7 +1066,7 @@ def run_sweep(
 
     The feasible configs (``binding != 'infeasible_above_retail'``, split off by
     :func:`feasible_split`) are sorted ascending by ``representative_outlay_gbp``
-    with a deterministic 5-key tie-break (see :func:`rank`).  Infeasible configs
+    with a deterministic tie-break (see :func:`rank`).  Infeasible configs
     are collected as :class:`ConfigPoint` objects preserving input order.  The
     reference configuration's own :class:`ConfigResult`, feasible or not, is
     the sweep's ``reference``, which :meth:`RankedSweep.against_reference`

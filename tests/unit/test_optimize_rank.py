@@ -77,8 +77,21 @@ class TestRank:
         assert result[0].config.battery_kwh == 6.0
         assert result[1].config.battery_kwh == 10.0
 
+    def test_tiebreak_battery_kw_ascending_after_the_homes_own_power(self) -> None:
+        """Level-5 tie-break: config.battery_kw ascending, the homes' own power (None) first, before the inverter."""
+        powers = [3.68, None, 2.4]
+        results = [
+            make_config_result(
+                representative_outlay_gbp=400.0, surplus_at_solved_gbp=100.0,
+                pv_kwp=4.0, battery_kwh=10.24, battery_kw=kw, inverter_kw=3.68 if kw == 2.4 else 5.0,
+            )
+            for kw in powers
+        ]
+
+        assert [r.config.battery_kw for r in rank(results)] == [None, 2.4, 3.68]
+
     def test_tiebreak_inverter_kw_ascending(self) -> None:
-        """Level-5 tie-break: config.inverter_kw ascending."""
+        """Level-6 tie-break: config.inverter_kw ascending."""
         a = make_config_result(
             representative_outlay_gbp=400.0, surplus_at_solved_gbp=100.0,
             pv_kwp=4.0, battery_kwh=6.0, inverter_kw=5.0,
