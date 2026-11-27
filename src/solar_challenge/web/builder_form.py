@@ -2,8 +2,8 @@
 """The scenario builder's form contract: the fleet scenario document a form describes, and why it is refused.
 
 The builder posts the form scenario-builder.js's getFormData() builds: flat general
-fields, the number of homes, and the fleet page's pv, battery and load blocks, each
-component's field the grammar's own spec.  A field the form leaves out, or sends as null
+fields, the number of homes and the fleet page's seed, and the fleet page's pv, battery
+and load blocks, each component's field the grammar's own spec.  A field the form leaves out, or sends as null
 or '' (a cleared input), is left out of the block that carries it, so config.parse_scenario
 reports or defaults it as it would for a hand-written scenario file.  The tariff: and
 seg: blocks carry nothing but their rate, so a form without the import or SEG rate writes
@@ -50,6 +50,7 @@ _RECOGNISED_KEYS = frozenset(
         "location_preset",
         *_CUSTOM_LOCATION_FORM_KEYS.values(),
         "n_homes",
+        "seed",
         "import_rate",
         "seg_rate_pence_per_kwh",
     }
@@ -221,10 +222,10 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
-    """The fleet_distribution: block: the number of homes, then each component block the form sends, as sent."""
-    block: dict[str, Any] = {}
-    if "n_homes" in fields:
-        block["n_homes"] = as_whole_number(fields["n_homes"], "n_homes")
+    """The fleet_distribution: block: the number of homes and the seed, then each component block the form sends, as sent."""
+    block: dict[str, Any] = {
+        key: as_whole_number(fields[key], key) for key in ("n_homes", "seed") if key in fields
+    }
     block.update({key: fields[key] for key in FLEET_COMPONENTS if key in fields})
     return block
 
