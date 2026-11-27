@@ -234,6 +234,67 @@ class ConfigResult:
 
 
 # ---------------------------------------------------------------------------
+# ReferenceComparison — one configuration against the sweep's reference
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReferenceComparison:
+    """One configuration's marginal figures and verdict against a reference configuration.
+
+    Every figure reads through the two results, so it cannot disagree with them.
+
+    Attributes:
+        result: The configuration compared.
+        reference: The configuration it is compared against.
+    """
+
+    result: ConfigResult
+    reference: ConfigResult
+
+    @property
+    def extra_capex_per_home_gbp(self) -> float:
+        """The result's capex per home less the reference's (£/home)."""
+        return self.result.capex_per_home_gbp - self.reference.capex_per_home_gbp
+
+    @property
+    def outlay_change_gbp(self) -> float:
+        """The result's representative outlay at its solved rate less the reference's (£/yr)."""
+        return self.result.representative_outlay_gbp - self.reference.representative_outlay_gbp
+
+    @property
+    def pays_for_itself(self) -> bool:
+        """Whether the result is feasible and its outlay is not above the reference's.
+
+        This is the cost-recovery ranking's verdict (PRD
+        docs/prds/discrete-install-config-sweep.md §6 decision 4): the result
+        recovers its own costs at no higher householder outlay.  It is not a
+        payback or NPV test.
+        """
+        return self.result.feasible and self.result.representative_outlay_gbp <= self.reference.representative_outlay_gbp
+
+
+def default_reference(points: Sequence[ConfigPoint]) -> ConfigPoint:
+    """The smallest battery at the smallest PV of *points*: least pv_kwp, then battery_kwh, then battery_kw (None first), then inverter_kw.
+
+    Raises:
+        ValueError: When *points* is empty.
+    """
+    if not points:
+        raise ValueError("default_reference: points must be non-empty; received none")
+    return min(
+        points,
+        key=lambda point: (
+            point.pv_kwp,
+            point.battery_kwh,
+            point.battery_kw is not None,
+            0.0 if point.battery_kw is None else point.battery_kw,
+            point.inverter_kw,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # RankedSweep — aggregated sweep output
 # ---------------------------------------------------------------------------
 
@@ -266,6 +327,10 @@ class RankedSweep:
             config's own-use is overridden to (``OwnUseBasis.OVERRIDE``), in
             (0, 1] as ``FinanceConfig`` reads it.  It has no default, so a
             sweep built by hand states the assumption it was solved under.
+        reference: The reference configuration's own :class:`ConfigResult`,
+            feasible or not, against which :meth:`against_reference` compares
+            each configuration: one of ``results`` (the same object) or a
+            result whose config is one of ``infeasible``.
     """
 
     results: tuple[ConfigResult, ...]
@@ -286,15 +351,27 @@ class RankedSweep:
     self_consumption_override: Optional[float]
     """The configs' common self_consumption_override, every solve's own-use assumption (None: simulated)."""
 
+    reference: ConfigResult
+    """The reference configuration's own result, one of results or at one of the infeasible points."""
+
     def __post_init__(self) -> None:
-        """Refuse a cheapest_feasible other than results[0].config, and a self_consumption_override FinanceConfig would refuse.
+        """Refuse a cheapest_feasible other than results[0].config, a reference that is not one of the sweep's configurations, and a self_consumption_override FinanceConfig would refuse.
 
         Raises:
             ValueError: If cheapest_feasible is not results[0].config, or not
-                None when results is empty.
+                None when results is empty; or if reference is neither one of
+                results nor a result whose config is one of infeasible.
             ConfigurationError: If self_consumption_override is not None and
                 not a finite number in (0, 1], naming it.
         """
+        if not (
+            any(result is self.reference for result in self.results)
+            or self.reference.config in self.infeasible
+        ):
+            raise ValueError(
+                "reference must be one of results or a result whose config is one of infeasible; "
+                f"got reference.config={self.reference.config!r}"
+            )
         read_field(self, "self_consumption_override", as_finite_float, FRACTION, optional=True)
         if self.results:
             if self.cheapest_feasible is not self.results[0].config:
@@ -309,6 +386,10 @@ class RankedSweep:
                     "cheapest_feasible must be None when results is empty; "
                     f"got {self.cheapest_feasible!r}"
                 )
+
+    def against_reference(self, result: ConfigResult) -> ReferenceComparison:
+        """*result* compared against this sweep's reference."""
+        return ReferenceComparison(result, self.reference)
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +521,8 @@ __all__ = [
     "ConfigPoint",
     "ConfigResult",
     "RankedSweep",
+    "ReferenceComparison",
+    "default_reference",
     "enumerate_configs",
     "iter_configs",
     "run_sweep",
@@ -942,10 +1025,23 @@ def _evaluate_config(
     )
 
 
+def _reference_point(points: Sequence[ConfigPoint], reference: Optional[ConfigPoint]) -> ConfigPoint:
+    """*reference*, or default_reference of *points* when it is None; ValueError naming it and *points* when it is not one of them."""
+    if reference is None:
+        return default_reference(points)
+    if reference not in points:
+        raise ValueError(
+            f"run_sweep: reference {reference!r} is not one of the configs' points: "
+            + ", ".join(repr(point) for point in points)
+        )
+    return reference
+
+
 def run_sweep(
     configs: List[tuple[ConfigPoint, ScenarioConfig]],
     *,
     simulate: FleetSimulate,
+    reference: Optional[ConfigPoint] = None,
 ) -> RankedSweep:
     """Drive a cartesian config grid through cost-recovery evaluation and rank results.
 
@@ -959,7 +1055,10 @@ def run_sweep(
     The feasible configs (``binding != 'infeasible_above_retail'``, split off by
     :func:`feasible_split`) are sorted ascending by ``representative_outlay_gbp``
     with a deterministic 5-key tie-break (see :func:`rank`).  Infeasible configs
-    are collected as :class:`ConfigPoint` objects preserving input order.
+    are collected as :class:`ConfigPoint` objects preserving input order.  The
+    reference configuration's own :class:`ConfigResult`, feasible or not, is
+    the sweep's ``reference``, which :meth:`RankedSweep.against_reference`
+    compares each configuration with; the ranking does not read it.
 
     Args:
         configs: List of ``(ConfigPoint, ScenarioConfig)`` pairs, typically from
@@ -972,6 +1071,10 @@ def run_sweep(
         simulate: The fleet simulator every config's projection runs
             through, such as a :class:`~solar_challenge.fleet.FleetRunner`'s
             ``simulate``.
+        reference: Keyword-only.  The configuration the sweep compares every
+            configuration against, one of *configs*' points; None (the
+            default) takes :func:`default_reference` of them, the smallest
+            battery at the smallest PV.
 
     Returns:
         :class:`RankedSweep` with sorted feasible results, infeasible points,
@@ -980,9 +1083,10 @@ def run_sweep(
 
     Raises:
         ValueError: When *configs* is empty, any scenario's ``finance`` is
-            None, or two configs' finance blocks set different retained-cash
-            floors or different self-consumption overrides; each is refused
-            before any simulation.
+            None, two configs' finance blocks set different retained-cash
+            floors or different self-consumption overrides, or *reference* is
+            not one of the configs' points; each is refused before any
+            simulation.
 
     .. note::
         **Simulation cost** — each config is one projection: at least
@@ -998,6 +1102,7 @@ def run_sweep(
         )
     common_floor = _RETAINED_CASH_FLOOR.common(configs)
     common_override = _SELF_CONSUMPTION_OVERRIDE.common(configs)
+    reference_point = _reference_point([point for point, _ in configs], reference)
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [
@@ -1022,4 +1127,5 @@ def run_sweep(
         cheapest_feasible=cheapest,
         pareto_baseline=pareto,
         self_consumption_override=common_override,
+        reference=next(result for result in all_results if result.config == reference_point),
     )
