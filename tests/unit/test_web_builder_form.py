@@ -949,10 +949,11 @@ class TestBuilderFormFromScenario:
         assert builder_form_errors(imported.form) == ["Scenario name is required."]
 
     def test_a_loaded_form_the_builder_refuses_is_refused_with_its_reasons(self) -> None:
-        """A drawn PV capacity outside its value_range is one only the builder's own check refuses, after every reader has accepted the scenario."""
+        """A drawn PV capacity outside its value_range is one only the builder's own check refuses, after every reader has accepted the scenario; the fleet is seeded, so each read draws the same homes."""
         pv_range = FLEET_COMPONENTS["pv"].value_range
         assert math.isfinite(pv_range.high), "premise: the PV capacity has an upper bound"
-        form = {**accepted_builder_form(), "pv": {"capacity_kw": {"type": "uniform", "min": 1.0, "max": pv_range.high * 10}}}
+        pv = {"capacity_kw": {"type": "uniform", "min": 1.0, "max": pv_range.high * 10}}
+        form = {**accepted_builder_form(), "seed": 1, "pv": pv}
         reasons = builder_form_errors(form)
         assert reasons, "premise: the builder refuses the form"
 
