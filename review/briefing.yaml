@@ -452,6 +452,30 @@ conventions:
       private re-reading red instead of letting it drift
       (docs/prds/one-scenario-reader.md §4.5).
 
+  - rule: >
+      Every entry point that varies a scenario setting by name resolves the name through
+      scenario_knobs (knob_named, KNOBS and ALIASES) and sets it with that knob's apply: the web
+      sweep (web/sweep_request.py), `fleet sweep --param` (cli/fleet.py), and optimize configs'
+      sensitivity axes and install grid (optimize.py, cli/optimize.py). optimize, cli and web
+      map no knob's name to an edit or to another knob's name, in a dict or in a tuple, list or
+      set of pairs; compare nothing with a knob's name written as a string, a branch on a knob
+      comparing the Knob knob_named resolves; construct no Knob; and hold none of the retired
+      apply_knob, _apply_install, _SWEEP_PARAMETER_HOME_KEYS or _SENSITIVITY_ALIAS_MAP. Sweep
+      values come only from fleet_distribution.SweepSpec.get_values(), and SweepMode holds the
+      sweep modes, so web code calls no log, exp, logspace or geomspace of math or numpy,
+      parameter-sweep.js no Math.log or Math.exp, and no module restates 'linear' or
+      'geometric' (tests/unit/test_knob_vocabulary.py; one knob value gives one home at every
+      entry point, tests/integration/test_sweep_knob_entry_points.py).
+    why: >
+      Before S26 five mechanisms varied a named setting, with two default modes and four copies
+      of the point arithmetic, so one entry point could give a knob a meaning another did not
+      (fk-4cc34de4e649; docs/prds/sweep-knob-registry.md §2.1, and its §4.3 K1, K4 and K9 and
+      §5 rows I1 and I2). The vocabulary guard scans the real tree and seeded copies of it, so
+      an entry-point edit that opens a second table, branches on a knob's name, builds its own
+      Knob or spaces its own points through a log or exp fails the verify. Its later editors are S9 ε's 804, which edits the grid-services
+      entry, S18, and a band-valued events knob, each a registry entry rather than a table of
+      its own.
+
   # --- Standing review invariants (recorded per /review-briefing policy) ---
   - rule: >
       TODO-tracking invariant: every real TODO/FIXME/HACK marker (and stub idioms like
