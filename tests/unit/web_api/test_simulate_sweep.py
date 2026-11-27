@@ -580,3 +580,60 @@ class TestSweepWindow:
         assert response.status_code == 400
         assert str(refusal.value) in response.get_json()["error"]
         assert recording_job_manager.submitted_homes == []
+
+
+_POINTS_URL = "/api/simulate/sweep/points"
+
+
+class TestSweepPoints:
+    """POST /api/simulate/sweep/points previews the values POST /api/simulate/sweep runs, reading the same body, and submits nothing."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(
+                {"parameter": "pv_capacity_kw", "min": 1, "max": 9, "steps": 4, "mode": "geometric"},
+                id="geometric-pv",
+            ),
+            pytest.param(
+                {"parameter": "battery_capacity_kwh", "min": 0, "max": 10, "steps": 3, "mode": "linear"},
+                id="linear-battery",
+            ),
+        ],
+    )
+    def test_the_points_are_the_parameter_and_values_the_submit_runs(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager, body: dict[str, object]
+    ) -> None:
+        body = {**body, "base_config": _PAGE_BASE_CONFIG}
+
+        points = client.post(_POINTS_URL, json=body)
+        submitted_by_the_points = list(recording_job_manager.submitted_homes)
+        submit = client.post("/api/simulate/sweep", json=body)
+
+        assert (points.status_code, submit.status_code) == (200, 201)
+        assert points.get_json() == {
+            "parameter": submit.get_json()["parameter"],
+            "values": submit.get_json()["values"],
+        }
+        assert submitted_by_the_points == []
+
+    def test_the_points_read_no_base_config(self, client: FlaskClient) -> None:
+        """A base_config the submit would refuse changes nothing the points answer."""
+        body = {"min": 1, "max": 4, "steps": 3}
+
+        with_a_refused_base = client.post(_POINTS_URL, json={**body, "base_config": {"location": "londn"}})
+        without_one = client.post(_POINTS_URL, json=body)
+
+        assert (with_a_refused_base.status_code, with_a_refused_base.get_json()) == (200, without_one.get_json())
+
+    def test_a_sweep_the_reader_refuses_gets_the_same_400_from_both_and_submits_nothing(
+        self, client: FlaskClient, recording_job_manager: _RecordingJobManager
+    ) -> None:
+        body = {"parameter": "battery_capacity_kwh", "min": 0, "max": 10, "steps": 3, "mode": "geometric"}
+
+        points = client.post(_POINTS_URL, json=body)
+        submit = client.post("/api/simulate/sweep", json=body)
+
+        assert (points.status_code, points.get_json()) == (400, submit.get_json())
+        assert submit.status_code == 400
+        assert recording_job_manager.submitted_homes == []

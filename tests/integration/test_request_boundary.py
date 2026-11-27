@@ -28,6 +28,7 @@ from solar_challenge.web.builder_form import builder_form_from_yaml, scenario_fr
 from solar_challenge.web.fleet_scenario import fleet_form_from_yaml, parse_fleet_form, scenario_from_fleet_form
 from solar_challenge.web.request_boundary import read_string, require_json_object
 from solar_challenge.web.simulation_params import parse_home_config
+from solar_challenge.web.sweep_request import read_sweep_request
 from tests._api_routes import ApiRoute, api_routes
 from tests._cli_stderr_text import stderr_text
 from tests._config_preset_rows import saved_preset_names
@@ -100,6 +101,7 @@ _UNREADABLE_YAML = "a: ["
 _NOT_AN_OBJECT = [1]
 _BUILDER_FORM_AT_ATLANTIS = {"location_preset": "atlantis"}
 _SCENARIO_CONFIG_NOT_AN_OBJECT = [1, 2]
+_A_MODE_NO_SWEEP_HAS = {"mode": "log"}
 
 _ROUTE_PROBES: Mapping[str, _RouteProbe] = {
     "api.simulate_home_api": _RouteProbe(
@@ -154,6 +156,12 @@ _ROUTE_PROBES: Mapping[str, _RouteProbe] = {
         refused={"json": {"base_config": _NOT_AN_OBJECT}},
         refusal=partial(require_json_object, _NOT_AN_OBJECT, "base_config"),
         reader="parse_home_config",
+        reaching={"json": {}},
+    ),
+    "api.simulate_sweep_points": _RouteProbe(
+        refused={"json": _A_MODE_NO_SWEEP_HAS},
+        refusal=partial(read_sweep_request, _A_MODE_NO_SWEEP_HAS),
+        reader="read_sweep_request",
         reaching={"json": {}},
     ),
     "api.scenarios_preview_yaml": _RouteProbe(
