@@ -19,6 +19,8 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
     NormalDistribution,
     ShuffledPoolDistribution,
+    SweepMode,
+    SweepSpec,
     UniformDistribution,
     WeightedDiscreteDistribution,
     parse_fleet_distribution_config,
@@ -38,14 +40,14 @@ from solar_challenge.web.fleet_components import (
     page_limits,
 )
 from solar_challenge.web.storage import RunStorage
-from solar_challenge.web.sweep_request import SWEEP_MAX_STEPS
+from solar_challenge.web.sweep_request import SWEEP_MAX_STEPS, SWEEP_PARAMETERS
 from tests._chart_absences import sweep_reason
 from tests._error_records import error_records
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._fleet_form import fleet_reader_refusal
 from tests._html_labels import labelled_inputs
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
-from tests._html_select_options import option_texts
+from tests._html_select_options import option_texts, options_with_attributes
 from tests._plotly_figure import traces_by_name
 from tests._run_summaries import home_summary
 from tests._web_runs import store_fleet_run, store_home_run
@@ -152,6 +154,32 @@ class TestSweepRoute:
         response = client.get("/scenarios/sweep")
         page = response.get_data(as_text=True)
         assert element_count(page, "select", {"x-model": "parameter"}) == 1
+
+    def test_the_parameter_select_offers_each_sweep_parameter_by_its_label_starting_at_its_range(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/sweep's parameter select offers each SWEEP_PARAMETERS key, in order, labelled with its row's label and carrying its starting range."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+
+        offered = [
+            (attributes.get("value"), text, attributes.get("data-default-min"), attributes.get("data-default-max"))
+            for attributes, text in options_with_attributes(page, {"x-model": "parameter"})
+        ]
+        assert offered == [
+            (key, parameter.label, str(parameter.default_min), str(parameter.default_max))
+            for key, parameter in SWEEP_PARAMETERS.items()
+        ]
+
+    def test_the_sweep_mode_radios_offer_each_sweep_mode_with_sweep_specs_default_checked(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/sweep offers a radio per SweepMode, in its order, in one group, with SweepSpec's default mode checked."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+
+        radios = [attributes for attributes in element_attributes(page, "input") if attributes.get("x-model") == "mode"]
+        assert [(radio.get("value"), radio.get("name"), "checked" in radio) for radio in radios] == [
+            (mode.value, "sweep_mode", mode is SweepSpec.mode) for mode in SweepMode
+        ]
 
     def test_sweep_page_offers_each_location_preset_labelled_with_its_name(
         self, client: FlaskClient

@@ -8,7 +8,7 @@ reads a text: character references decoded and whitespace collapsed.
 
 Usage::
 
-    from tests._html_select_options import option_texts, options_of_each
+    from tests._html_select_options import option_texts, options_of_each, options_with_attributes
 
     page = response.get_data(as_text=True)
     assert option_texts(page, {"x-model": "formData.location"}) == {
@@ -16,6 +16,10 @@ Usage::
         "custom": "Custom coordinates...",
     }
     assert options_of_each(page, {"x-model": "dist.type"})[0] == [("", "Fixed Value"), ("normal", "Normal")]
+    assert options_with_attributes(page, {"x-model": "parameter"})[0] == (
+        {"value": "pv_capacity_kw", "data-default-min": "2.0", "data-default-max": "8.0"},
+        "PV Capacity (kW)",
+    )
 """
 
 from collections.abc import Mapping
@@ -33,14 +37,9 @@ def option_texts(page: str, select: Mapping[str, str]) -> dict[str, str]:
     select carries the attributes, whose names are read in lower case; and, rather than
     keep only one text, when two of its options carry the same value.
     """
-    matching = options_of_each(page, select)
-    if len(matching) != 1:
-        raise ValueError(
-            f"Expected exactly one select carrying {dict(select)!r}, its attribute names in"
-            f" lower case; found {len(matching)}"
-        )
     texts: dict[str, str] = {}
-    for value, text in matching[0]:
+    for attributes, data in _options_of_the_one_select(page, select):
+        value, text = _value_and_text(attributes, data)
         if value in texts:
             raise ValueError(
                 f"Expected each option of the select to carry its own value; {value!r} is on"
@@ -56,11 +55,41 @@ def options_of_each(page: str, select: Mapping[str, str]) -> list[list[tuple[str
     An option with no value attribute submits its text. The attribute names are read in
     lower case; a page with no such select reads [].
     """
+    return [
+        [_value_and_text(attributes, data) for attributes, data in options]
+        for options in _options_of_carrying_selects(page, select)
+    ]
+
+
+def options_with_attributes(page: str, select: Mapping[str, str]) -> list[tuple[dict[str, str | None], str]]:
+    """Each option of the one select element of *page* that carries every one of *select*'s attributes, each with exactly that value, in document order: the option's attributes, keyed by lower-case name, and the text it shows, read as option_texts reads it.
+
+    A valueless attribute reads None. Raises ValueError, rather than guess which select is
+    meant, unless exactly one select carries the attributes, whose names are read in lower case.
+    """
+    return [
+        (attributes, _shown_text(data)) for attributes, data in _options_of_the_one_select(page, select)
+    ]
+
+
+def _options_of_the_one_select(page: str, select: Mapping[str, str]) -> list[_Option]:
+    """The options of the one select element of *page* carrying *select*'s attributes; ValueError unless exactly one does."""
+    matching = _options_of_carrying_selects(page, select)
+    if len(matching) != 1:
+        raise ValueError(
+            f"Expected exactly one select carrying {dict(select)!r}, its attribute names in"
+            f" lower case; found {len(matching)}"
+        )
+    return matching[0]
+
+
+def _options_of_carrying_selects(page: str, select: Mapping[str, str]) -> list[list[_Option]]:
+    """The options of each select element of *page* carrying every one of *select*'s attributes, each with exactly that value, in document order."""
     reader = _SelectReader()
     reader.feed(page)
     reader.close()
     return [
-        [_value_and_text(attributes, data) for attributes, data in options]
+        options
         for carried, options in reader.selects
         if all(carried.get(name) == value for name, value in select.items())
     ]
@@ -68,10 +97,15 @@ def options_of_each(page: str, select: Mapping[str, str]) -> list[list[tuple[str
 
 def _value_and_text(attributes: Mapping[str, str | None], data: list[str]) -> tuple[str, str]:
     """The value an option carrying *attributes* submits and the text its character data *data* shows."""
-    text = " ".join("".join(data).split())
+    text = _shown_text(data)
     if "value" not in attributes:
         return text, text
     return attributes["value"] or "", text
+
+
+def _shown_text(data: list[str]) -> str:
+    """The text an option whose character data is *data* shows: the data joined, its whitespace collapsed."""
+    return " ".join("".join(data).split())
 
 
 class _SelectReader(HTMLParser):

@@ -59,6 +59,7 @@ import pytest
 from playwright.sync_api import BrowserContext, Locator, Page, Request, Route, expect
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+from solar_challenge.web.sweep_request import SWEEP_PARAMETERS
 from tests._server_drawn_badges import server_drawn_classes
 from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._animation_frames import withhold_animation_frames
@@ -178,10 +179,29 @@ def test_base_configuration_group_holds_the_battery_location_and_days_controls(
 # -- Preview updates when inputs change ------------------------------------
 
 
-def test_sweep_preview_updates(page: Page, live_server: str) -> None:
-    """Filling in min=1, max=10, steps=5 previews the five linear sweep values from 1 to 10, listed in the list named "Sweep values"."""
+def _as_the_page_shows(value: float) -> str:
+    """*value* as the page's script shows a number: a whole float without its '.0'."""
+    return str(value).removesuffix(".0")
+
+
+def test_choosing_a_parameter_starts_min_and_max_at_its_starting_range_from_the_server(
+    page: Page, live_server: str
+) -> None:
+    """Choosing Battery as the parameter to sweep starts Min Value and Max Value at the starting range of its SWEEP_PARAMETERS row."""
+    battery = SWEEP_PARAMETERS["battery_capacity_kwh"]
     page.goto(live_server + "/scenarios/sweep")
 
+    page.get_by_role("combobox", name="Parameter to Sweep", exact=True).select_option(label=battery.label)
+
+    expect(page.get_by_label("Min Value", exact=True)).to_have_value(_as_the_page_shows(battery.default_min))
+    expect(page.get_by_label("Max Value", exact=True)).to_have_value(_as_the_page_shows(battery.default_max))
+
+
+def test_sweep_preview_updates(page: Page, live_server: str) -> None:
+    """Choosing Linear and filling in min=1, max=10, steps=5 previews the five linear sweep values from 1 to 10, listed in the list named "Sweep values"."""
+    page.goto(live_server + "/scenarios/sweep")
+
+    page.get_by_role("radio", name="Linear", exact=True).check()
     page.get_by_label("Min Value", exact=True).fill("1")
     page.get_by_label("Max Value", exact=True).fill("10")
     page.get_by_label("Steps", exact=True).fill("5")
@@ -197,8 +217,8 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
 
 
 def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> None:
-    """Filling the form with a 3-point geometric sweep from 1 to 9 and clicking its
-    button returns 201 with the geometric sweep values and one distinct
+    """Filling the form with a 3-point linear sweep from 1 to 9 and clicking its
+    button returns 201 with the linear sweep values and one distinct
     background home-job id per sweep point.
 
     Min, max, steps and mode are all moved off their defaults, so the response's
@@ -209,7 +229,7 @@ def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> 
     page.get_by_label("Min Value", exact=True).fill("1")
     page.get_by_label("Max Value", exact=True).fill("9")
     page.get_by_label("Steps", exact=True).fill("3")
-    page.get_by_role("radio", name="Geometric", exact=True).check()
+    page.get_by_role("radio", name="Linear", exact=True).check()
 
     # Intercept the API call and click the submit button
     with page.expect_response("**/api/simulate/sweep") as response_info:
@@ -219,7 +239,7 @@ def test_sweep_submit_returns_201_with_job_ids(page: Page, live_server: str) -> 
     assert response.status == 201
 
     data = response.json()
-    assert data["values"] == [1.0, 3.0, 9.0]
+    assert data["values"] == [1.0, 5.0, 9.0]
 
     job_ids = data["job_ids"]
     assert len(job_ids) == 3

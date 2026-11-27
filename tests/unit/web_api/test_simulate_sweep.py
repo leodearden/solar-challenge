@@ -19,12 +19,14 @@ from flask.testing import FlaskClient
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
+from solar_challenge.scenario_knobs import KNOBS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sweep_request import read_sweep_request
 from tests._html_page import element_attributes
+from tests._html_select_options import option_texts
 
 
 class _RecordingJobManager:
@@ -89,6 +91,19 @@ def _steps_the_sweep_page_offers(client: FlaskClient) -> tuple[int, int]:
     fewest, most = steps_box["min"], steps_box["max"]
     assert fewest is not None and most is not None
     return int(fewest), int(most)
+
+
+def test_the_sweep_page_offers_exactly_the_parameters_a_sweep_accepts(client: FlaskClient) -> None:
+    """The sweep page's parameter select offers, in order, exactly the knobs POST /api/simulate/sweep accepts; it answers every other knob with 400."""
+    page = client.get("/scenarios/sweep").get_data(as_text=True)
+    offered = list(option_texts(page, {"x-model": "parameter"}))
+    assert offered, "the sweep page offers no parameter"
+
+    answers = {name: client.post("/api/simulate/sweep", json={"parameter": name}).status_code for name in KNOBS}
+
+    assert [name for name in KNOBS if answers[name] == 201] == offered
+    refused = {name: status for name, status in answers.items() if name not in offered}
+    assert refused == dict.fromkeys(refused, 400)
 
 
 class TestSimulateSweep:
