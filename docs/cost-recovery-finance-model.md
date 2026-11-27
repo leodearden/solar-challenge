@@ -1292,6 +1292,15 @@ is refused with a `ValueError` naming it, in both reports
 A report whose bills come from a window other than whole calendar years opens, under
 its title, with the extrapolated notice (§4, *Annual basis*).
 
+`optimize configs`' ranking compares each configuration with a reference configuration,
+which a line above its Cost-Recovery Rank table names with its binding label: by default
+the smallest battery at the smallest PV, or the one `--reference` names. Its *Extra CapEx
+vs Reference* (per home) and *Outlay Change vs Reference* (the representative outlay at
+the solved rate) are the configuration's figure less the reference's. Its *Grid Services
+Income Yr 1* is its own year-1 grid-services income per home, not a difference. It *Pays
+For Itself* when it is feasible and its outlay is not above the reference's. The ranking
+itself is the cost-recovery ranking, which the reference does not change.
+
 ---
 
 ## Summary

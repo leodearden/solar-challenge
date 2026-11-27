@@ -82,9 +82,19 @@ def _fmt_payback(val: "Optional[float]") -> str:
     return "—" if val is None else f"{val:.1f} yr"
 
 
+def _fmt_signed_gbp(value: float, decimals: int) -> str:
+    """Format a signed difference in pounds: '+£1,280' or '-£640' at *decimals* places, a zero as '+£0'."""
+    rounded = round(value, decimals)
+    sign = "-" if rounded < 0 else "+"
+    return f"{sign}£{abs(rounded):,.{decimals}f}"
+
+
 def _config_label(config: "ConfigPoint") -> str:
-    """The board's label for an install *config*: its PV, battery and inverter sizes."""
-    return f"{config.pv_kwp:.1f} kWp / {config.battery_kwh:.1f} kWh / {config.inverter_kw:.1f} kW"
+    """The board's label for an install *config*: its PV, battery (at its power, when set) and inverter sizes."""
+    battery = f"{config.battery_kwh:.1f} kWh"
+    if config.battery_kw is not None:
+        battery += f" at {config.battery_kw:.1f} kW"
+    return f"{config.pv_kwp:.1f} kWp / {battery} / {config.inverter_kw:.1f} kW"
 
 
 @dataclass(frozen=True)
@@ -691,9 +701,15 @@ def generate_config_ranking_report(
     - **Table 1 — Cost-Recovery Rank**: one row per feasible config in
       ``ranked.results``, sorted ascending by ``representative_outlay_gbp``.
       The cheapest feasible config (``results[0]``) is flagged as the
-      RECOMMENDATION.  Infeasible configs (``ranked.infeasible``) appear in a
-      separate section (dims only — economics are not retained for infeasible
-      configs; see :class:`~solar_challenge.optimize.RankedSweep`).
+      RECOMMENDATION.  A line above the table names ``ranked.reference``
+      with its binding label, and four marginal columns end each row, read
+      through ``ranked.against_reference``: the extra capex per home and the
+      outlay change against the reference, the row's own year-1
+      grid-services income per home, and whether it pays for itself.  The
+      reference's row is suffixed " (reference)".  Infeasible configs
+      (``ranked.infeasible``) appear in a separate section (dims only —
+      economics are not retained for infeasible configs; see
+      :class:`~solar_challenge.optimize.RankedSweep`).
     - **Table 2 — Configured-Rate Trade-Off**: one row per feasible config →
       the configured own-use rate it was priced at, the baseline outlay and
       CBS surplus at that rate, and a Pareto flag.  Infeasible configs are
@@ -735,20 +751,31 @@ def generate_config_ranking_report(
         report += _extrapolation_notice(outlay.annualised_from)
         report += grid_charge_forecast_notice(outlay.grid_charge_forecasts)
         report += (
+            "Marginal columns compare each configuration against the reference "
+            f"**{_config_label(ranked.reference.config)}** ({_binding_label(ranked.reference.binding)})\n\n"
+        )
+        report += (
             "| Config | Solved Rate (p/kWh) | Rep Outlay (£) | "
             "Min/Mean/Median/Max (£) | CBS Surplus (£/home/yr) | "
-            "Feasibility | Total CapEx (£) | Min DSCR | Equity IRR | Payback |\n"
+            "Feasibility | Total CapEx (£) | Min DSCR | Equity IRR | Payback | "
+            "Extra CapEx vs Reference (£/home) | Outlay Change vs Reference (£/yr) | "
+            "Grid Services Income Yr 1 (£/home) | Pays For Itself |\n"
         )
         report += (
             "|--------|--------------------:|---------------:|"
             "------------------------|------------------------:|"
-            "------------|----------------:|----------|-----------|----------|\n"
+            "------------|----------------:|----------|-----------|----------|"
+            "----------------------------------:|----------------------------------:|"
+            "-----------------------------------:|-----------------|\n"
         )
         for i, cr in enumerate(ranked.results):
             cp = cr.config
             label = _config_label(cp)
             if i == 0:
                 label += " ★ RECOMMENDATION"
+            if cr is ranked.reference:
+                label += " (reference)"
+            comparison = ranked.against_reference(cr)
             sol = cr.solution
             dist_str = (
                 f"£{sol.outlay.min_gbp:.0f} / £{sol.outlay.mean_gbp:.0f} / "
@@ -765,7 +792,11 @@ def generate_config_ranking_report(
                 f"| £{cr.total_capex_gbp:,.0f} "
                 f"| {_fmt_dscr(cr.min_dscr)} "
                 f"| {_fmt_irr(cr.equity_irr)} "
-                f"| {_fmt_payback(cr.payback_years)} |\n"
+                f"| {_fmt_payback(cr.payback_years)} "
+                f"| {_fmt_signed_gbp(comparison.extra_capex_per_home_gbp, 0)} "
+                f"| {_fmt_signed_gbp(comparison.outlay_change_gbp, 2)} "
+                f"| £{cr.grid_services_income_per_home_gbp:.2f} "
+                f"| {'yes' if comparison.pays_for_itself else 'no'} |\n"
             )
 
     if ranked.infeasible:

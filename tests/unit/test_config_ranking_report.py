@@ -255,12 +255,12 @@ class TestGenerateConfigRankingReportTable1:
         assert row["Equity IRR"] == "n/a", f"'n/a' for NaN IRR not found in the Equity IRR cell:\n{report}"
 
     def test_recommendation_marker_on_cheapest(self) -> None:
-        """The cheapest feasible config (results[0]), and no other, must be flagged '★ RECOMMENDATION' in its Config cell."""
+        """The cheapest feasible config (results[0]), and no other, must be flagged '★ RECOMMENDATION' in its Config cell; it is also make_ranked_sweep's default reference."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            self.CHEAPEST: f"{self.CHEAPEST} ★ RECOMMENDATION",
+            self.CHEAPEST: f"{self.CHEAPEST} ★ RECOMMENDATION (reference)",
             self.SECOND_CHEAPEST: self.SECOND_CHEAPEST,
         }
         shown = config_column(report, "## Cost-Recovery Rank", "Config", expected)
