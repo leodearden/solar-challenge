@@ -13,6 +13,7 @@ from flask import Blueprint, Response, jsonify, render_template
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSummary
+from solar_challenge.fleet_distribution import SweepMode, SweepSpec
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import as_finite_float
@@ -26,7 +27,7 @@ from solar_challenge.web.request_boundary import (
     require_json_object,
 )
 from solar_challenge.web.stored_runs import StoredRunUnreadable
-from solar_challenge.web.sweep_request import SWEEP_MAX_STEPS
+from solar_challenge.web.sweep_request import SWEEP_MAX_STEPS, SWEEP_PARAMETERS
 from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
 bp = Blueprint("scenarios", __name__)
@@ -45,13 +46,16 @@ def builder() -> str:
 
 @bp.route("/sweep")
 def sweep() -> str:
-    """Render the parameter sweep configuration page.
+    """Render the parameter sweep configuration page: an option per SWEEP_PARAMETERS row, carrying the range the page starts at when it is chosen, and a radio per SweepMode, SweepSpec's default checked.
 
     Returns:
         Rendered sweep.html template.
     """
     return str(render_template(
         "scenarios/sweep.html",
+        sweep_parameters=SWEEP_PARAMETERS,
+        sweep_modes=tuple(SweepMode),
+        default_sweep_mode=SweepSpec.mode,
         sweep_max_steps=SWEEP_MAX_STEPS,
         location_presets=LOCATION_PRESETS,
     ))

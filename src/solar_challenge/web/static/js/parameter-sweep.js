@@ -1,11 +1,13 @@
 document.addEventListener('alpine:init', () => {
     Alpine.data('parameterSweep', () => ({
-        // Sweep configuration
-        parameter: 'pv_capacity_kw',
-        minVal: 2.0,
-        maxVal: 8.0,
+        // Sweep configuration; init() starts it at what sweep.html rendered
+        parameter: '',
+        minVal: '',
+        maxVal: '',
         steps: 5,
-        mode: 'linear',
+        mode: '',
+        // The parameters the page offers, as sweep.html renders them: each {value, label, defaultMin, defaultMax}
+        parameters: [],
 
         // Base config
         configMode: 'preset',
@@ -48,15 +50,23 @@ document.addEventListener('alpine:init', () => {
             return values.map(v => Math.round(v * 1000) / 1000);
         },
 
-        // Parameter options
-        parameterOptions: [
-            { value: 'pv_capacity_kw', label: 'PV Capacity (kW)', min: 1, max: 20, defaultMin: 2, defaultMax: 8 },
-            { value: 'battery_capacity_kwh', label: 'Battery Capacity (kWh)', min: 0, max: 50, defaultMin: 0, defaultMax: 13.5 },
-            { value: 'annual_consumption_kwh', label: 'Annual Consumption (kWh)', min: 1000, max: 10000, defaultMin: 2000, defaultMax: 5000 },
-        ],
+        // Start at the parameter options sweep.html rendered, each carrying its starting range, and its checked mode.
+        // Read through $el, not $refs: Alpine runs init() before it registers x-ref or lets x-model write the controls.
+        init() {
+            const select = this.$el.querySelector('#sweep_parameter');
+            this.parameters = Array.from(select.options, option => ({
+                value: option.value,
+                label: option.text,
+                defaultMin: Number(option.dataset.defaultMin),
+                defaultMax: Number(option.dataset.defaultMax),
+            }));
+            this.parameter = select.value;
+            this.mode = this.$el.querySelector('input[name="sweep_mode"]:checked').value;
+            this.onParameterChange();
+        },
 
         get currentParam() {
-            return this.parameterOptions.find(p => p.value === this.parameter) || this.parameterOptions[0];
+            return this.parameters.find(p => p.value === this.parameter) || this.parameters[0];
         },
 
         onParameterChange() {
