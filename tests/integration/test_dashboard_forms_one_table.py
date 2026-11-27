@@ -22,10 +22,17 @@ import yaml
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
-from solar_challenge.fleet_distribution import DistributionType, parse_fleet_distribution_config
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import (
+    DistributionSpec,
+    DistributionType,
+    parse_fleet_distribution_config,
+    write_distribution_spec,
+)
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits
 from tests._builder_form import builder_page_starting_form
 from tests._fleet_form import fleet_page_starting_form, start_wire
+from tests._repository_paths import SCENARIOS_DIR
 from tests._web_app import app_builder
 
 #: The scenario name a user types on the builder before Validate or Save.
@@ -124,3 +131,56 @@ def test_the_start_spec_of_each_type_posted_by_either_page_reads_as_one_fleet(
     )
     validated = client.post("/api/scenarios/validate", json=forms[_BUILDER])
     assert validated.get_json() == {"valid": True, "errors": []}
+
+
+def _bristol_phase1_yaml(**fleet_blocks: Mapping[str, Any]) -> str:
+    """scenarios/bristol-phase1.yaml, which both pages load, with *fleet_blocks* in place of those of its fleet_distribution block."""
+    document = yaml.safe_load((SCENARIOS_DIR / "bristol-phase1.yaml").read_text(encoding="utf-8"))
+    document["fleet_distribution"] = {**document["fleet_distribution"], **fleet_blocks}
+    return yaml.safe_dump(document, sort_keys=False)
+
+
+def _grammar_reading(text: str, component: ComponentLimits) -> DistributionSpec:
+    """The spec the scenario grammar reads for *component*'s field in the fleet_distribution block of the scenario YAML *text*."""
+    fleet = parse_fleet_distribution_config(yaml.safe_load(text)["fleet_distribution"])
+    spec: DistributionSpec = getattr(fleet, component.key).draws[component.grammar_key]
+    return spec
+
+
+@pytest.mark.parametrize(
+    ("component", "spec"),
+    [
+        pytest.param(FLEET_COMPONENTS["pv"], {"type": "fixed", "value": 4}, id="pv-fixed"),
+        pytest.param(
+            FLEET_COMPONENTS["load"], {"type": "normal", "mean": 3400, "std": 800}, id="load-normal-without-clamps"
+        ),
+    ],
+)
+def test_both_pages_load_a_spec_their_editors_hold_as_its_canonical_spec(
+    client: FlaskClient, component: ComponentLimits, spec: Mapping[str, Any]
+) -> None:
+    """E3: a spec an editor holds loads on both pages as the grammar's reading of it, written as the grammar writes it."""
+    text = _bristol_phase1_yaml(**{component.key: {component.grammar_key: spec}})
+    expected = {component.grammar_key: write_distribution_spec(_grammar_reading(text, component))}
+
+    responses = {page.name: page.import_yaml(client, text) for page in (_FLEET_PAGE, _BUILDER)}
+
+    assert {name: response.status_code for name, response in responses.items()} == dict.fromkeys(responses, 200)
+    assert {name: response.get_json()["form"][component.key] for name, response in responses.items()} == dict.fromkeys(
+        responses, expected
+    )
+
+
+def test_both_pages_refuse_a_spec_no_editor_holds_with_the_editors_own_refusal(client: FlaskClient) -> None:
+    """E3: a battery capacity proportional to the PV's, which the battery editor does not hold, is refused on both pages with the editor's refusal."""
+    battery = FLEET_COMPONENTS["battery"]
+    proportional = {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 2.0}
+    text = _bristol_phase1_yaml(battery={battery.grammar_key: proportional})
+    with pytest.raises(ConfigurationError) as refusal:
+        battery.editor_spec(_grammar_reading(text, battery), f"fleet_distribution.{battery.key}.{battery.grammar_key}")
+
+    responses = {page.name: page.import_yaml(client, text) for page in (_FLEET_PAGE, _BUILDER)}
+
+    assert {name: (response.status_code, response.get_json()) for name, response in responses.items()} == dict.fromkeys(
+        responses, (400, {"error": str(refusal.value)})
+    )
