@@ -1,11 +1,13 @@
 document.addEventListener('alpine:init', () => {
     Alpine.data('parameterSweep', () => ({
-        // Sweep configuration
-        parameter: 'pv_capacity_kw',
-        minVal: 2.0,
-        maxVal: 8.0,
+        // Sweep configuration; init() starts it at what sweep.html rendered
+        parameter: '',
+        minVal: '',
+        maxVal: '',
         steps: 5,
-        mode: 'linear',
+        mode: '',
+        // The parameters the page offers, as sweep.html renders them: each {value, label, defaultMin, defaultMax}
+        parameters: [],
 
         // Base config
         configMode: 'preset',
@@ -26,37 +28,77 @@ document.addEventListener('alpine:init', () => {
         submitting: false,
         errorMsg: '',
 
-        // Sweep point preview calculations
-        get previewValues() {
-            const min = parseFloat(this.minVal);
-            const max = parseFloat(this.maxVal);
-            const n = parseInt(this.steps);
-            if (isNaN(min) || isNaN(max) || isNaN(n) || n < 2 || min >= max) return [];
+        // The sweep's points as POST /api/simulate/sweep/points last answered them, or why it refused the sweep
+        previewValues: [],
+        previewRefusal: '',
+        // Whether the server has yet to answer the preview of the sweep the form describes
+        previewing: false,
+        // Aborts the preview request still in flight, whose answer the form has outrun
+        _previewRequest: new AbortController(),
 
-            let values = [];
-            if (this.mode === 'geometric') {
-                const logMin = Math.log(min);
-                const logMax = Math.log(max);
-                for (let i = 0; i < n; i++) {
-                    values.push(Math.exp(logMin + (logMax - logMin) * i / (n - 1)));
-                }
-            } else {
-                for (let i = 0; i < n; i++) {
-                    values.push(min + (max - min) * i / (n - 1));
-                }
-            }
-            return values.map(v => Math.round(v * 1000) / 1000);
+        // The sweep the form describes: the body of both its preview and its submission
+        get sweepBody() {
+            return {
+                parameter: this.parameter,
+                min: parseFloat(this.minVal),
+                max: parseFloat(this.maxVal),
+                steps: parseInt(this.steps),
+                mode: this.mode,
+            };
         },
 
-        // Parameter options
-        parameterOptions: [
-            { value: 'pv_capacity_kw', label: 'PV Capacity (kW)', min: 1, max: 20, defaultMin: 2, defaultMax: 8 },
-            { value: 'battery_capacity_kwh', label: 'Battery Capacity (kWh)', min: 0, max: 50, defaultMin: 0, defaultMax: 13.5 },
-            { value: 'annual_consumption_kwh', label: 'Annual Consumption (kWh)', min: 1000, max: 10000, defaultMin: 2000, defaultMax: 5000 },
-        ],
+        // Start at the parameter options sweep.html rendered, each carrying its starting range, and its checked mode.
+        // Read through $el, not $refs: Alpine runs init() before it registers x-ref or lets x-model write the controls.
+        init() {
+            const select = this.$el.querySelector('#sweep_parameter');
+            this.parameters = Array.from(select.options, option => ({
+                value: option.value,
+                label: option.text,
+                defaultMin: Number(option.dataset.defaultMin),
+                defaultMax: Number(option.dataset.defaultMax),
+            }));
+            this.parameter = select.value;
+            this.mode = this.$el.querySelector('input[name="sweep_mode"]:checked').value;
+            this.onParameterChange();
+            this.$watch('sweepBody', body => this._preview(body));
+            this._preview(this.sweepBody);
+        },
+
+        // Show the points POST /api/simulate/sweep/points answers for body, or its refusal; an answer to a
+        // request a later preview aborted writes nothing
+        async _preview(body) {
+            this._previewRequest.abort();
+            const previewRequest = new AbortController();
+            this._previewRequest = previewRequest;
+            const signal = previewRequest.signal;
+            this.previewing = true;
+            try {
+                const resp = await fetch('/api/simulate/sweep/points', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal,
+                });
+                const data = await resp.json().catch(() => null);
+                if (signal.aborted) return;
+                if (resp.ok) {
+                    this.previewValues = data.values;
+                    this.previewRefusal = '';
+                } else {
+                    this.previewValues = [];
+                    this.previewRefusal = (data && data.error) || 'HTTP ' + resp.status;
+                }
+            } catch (e) {
+                if (signal.aborted) return;
+                this.previewValues = [];
+                this.previewRefusal = e.message;
+            } finally {
+                if (!signal.aborted) this.previewing = false;
+            }
+        },
 
         get currentParam() {
-            return this.parameterOptions.find(p => p.value === this.parameter) || this.parameterOptions[0];
+            return this.parameters.find(p => p.value === this.parameter) || this.parameters[0];
         },
 
         onParameterChange() {
@@ -71,6 +113,7 @@ document.addEventListener('alpine:init', () => {
 
         destroy() {
             this._sweepRequests.abort();
+            this._previewRequest.abort();
         },
 
         // Submit sweep
@@ -79,19 +122,12 @@ document.addEventListener('alpine:init', () => {
             this.errorMsg = '';
             this.sweepResults = [];
             this.sweepCharts = '';
-            this.destroy();
+            this._sweepRequests.abort();
             // Label the table and the charts with the parameter this sweep runs, not one selected while it runs
             const parameterLabel = this.currentParam.label;
             this.sweptParameterLabel = parameterLabel;
 
-            const payload = {
-                parameter: this.parameter,
-                min: parseFloat(this.minVal),
-                max: parseFloat(this.maxVal),
-                steps: parseInt(this.steps),
-                mode: this.mode,
-                base_config: this.baseConfig,
-            };
+            const payload = { ...this.sweepBody, base_config: this.baseConfig };
 
             try {
                 const resp = await fetch('/api/simulate/sweep', {

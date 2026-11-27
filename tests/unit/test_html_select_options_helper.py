@@ -7,7 +7,7 @@ letting a page test that uses it pass vacuously.
 
 import pytest
 
-from tests._html_select_options import option_texts, options_of_each
+from tests._html_select_options import option_texts, options_of_each, options_with_attributes
 
 
 def test_option_texts_keys_the_text_of_each_option_of_the_select_by_its_value() -> None:
@@ -95,3 +95,35 @@ def test_options_of_each_reads_no_selects_when_none_carries_the_attributes() -> 
     page = '<select x-model="other"><option value="x">X</option></select>'
 
     assert options_of_each(page, {"x-model": "dist.type"}) == []
+
+
+def test_options_with_attributes_lists_each_option_of_the_select_as_its_attributes_and_its_text() -> None:
+    page = (
+        '<select x-model="parameter"><option value="pv" data-default-min="2.0">\n  PV &amp; more\n</option>'
+        "<option selected>Load</option></select>"
+        '<select x-model="other"><option value="x" data-default-min="9">X</option></select>'
+    )
+
+    assert options_with_attributes(page, {"x-model": "parameter"}) == [
+        ({"value": "pv", "data-default-min": "2.0"}, "PV & more"),
+        ({"selected": None}, "Load"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        pytest.param(
+            '<select x-model="other"><option value="a">A</option></select>',
+            id="no-select-carries-them",
+        ),
+        pytest.param(
+            '<select x-model="parameter"><option value="a">A</option></select>'
+            '<select x-model="parameter"><option value="b">B</option></select>',
+            id="two-selects-carry-them",
+        ),
+    ],
+)
+def test_options_with_attributes_raises_unless_exactly_one_select_carries_the_attributes(page: str) -> None:
+    with pytest.raises(ValueError, match="exactly one select"):
+        options_with_attributes(page, {"x-model": "parameter"})
