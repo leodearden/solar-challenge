@@ -81,6 +81,17 @@ def _with_battery_capacity(home: HomeConfig, kwh: float) -> HomeConfig:
     return replace(home, battery_config=BatteryConfig(capacity_kwh=kwh))
 
 
+def _with_battery_power(home: HomeConfig, kw: float) -> HomeConfig:
+    """*home* with its battery charging and discharging at up to *kw*, or unchanged without a battery.
+
+    Power without a battery sets nothing: the capacity knob is what gives a home
+    a battery.
+    """
+    if home.battery_config is None:
+        return home
+    return replace(home, battery_config=replace(home.battery_config, max_charge_kw=kw, max_discharge_kw=kw))
+
+
 def _with_annual_consumption(home: HomeConfig, kwh: float) -> HomeConfig:
     """*home* with its household consuming *kwh* a year."""
     return replace(home, load_config=replace(home.load_config, annual_consumption_kwh=kwh))
@@ -191,6 +202,7 @@ KNOBS, ALIASES = _registry(
         _home_knob("pv_capacity_kw", _with_pv_capacity),
         _home_knob("inverter_capacity_kw", _with_inverter_capacity),
         _home_knob("battery_capacity_kwh", _with_battery_capacity),
+        _home_knob("battery_power_kw", _with_battery_power),
         _home_knob("annual_consumption_kwh", _with_annual_consumption),
         _home_knob("degradation_rate_per_year", _with_pv_degradation),
         Knob("seg_tariff_pence_per_kwh", _with_seg_rate, target=KnobTarget.SEG_RATE),
