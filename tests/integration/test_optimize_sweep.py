@@ -214,6 +214,25 @@ class TestConfigResult:
         with pytest.raises(dataclasses.FrozenInstanceError):
             cr.total_capex_gbp = 1.0  # type: ignore[misc]
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            pytest.param("n_homes", 0, id="no-homes"),
+            pytest.param("n_homes", 2.5, id="fractional-homes"),
+            pytest.param("n_homes", True, id="bool-homes"),
+            pytest.param("year_one_grid_services_income_gbp", -1.0, id="negative-income"),
+            pytest.param("year_one_grid_services_income_gbp", math.nan, id="nan-income"),
+            pytest.param("year_one_grid_services_income_gbp", math.inf, id="infinite-income"),
+        ],
+    )
+    def test_a_broken_invariant_raises_a_plain_value_error_naming_the_field_and_value(
+        self, field: str, value: object
+    ) -> None:
+        """A computed result's broken invariant is a defect, so it raises plain ValueError, not ConfigurationError."""
+        with pytest.raises(ValueError, match=f"{field}={value!r}") as raised:
+            make_config_result(**{field: value})  # type: ignore[arg-type]
+        assert not isinstance(raised.value, ConfigurationError)
+
     def test_config_point_accessible(self) -> None:
         """config.pv_kwp / battery_kwh / inverter_kw match the constructed values."""
         cr = make_config_result(pv_kwp=5.0, battery_kwh=10.0, inverter_kw=4.6)

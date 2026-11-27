@@ -12,6 +12,7 @@ docs/prds/discrete-install-config-sweep.md.
 from __future__ import annotations
 
 import itertools
+import math
 from collections import Counter
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -22,7 +23,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
-from solar_challenge.number_fields import FRACTION, NON_NEGATIVE, POSITIVE, as_finite_float, as_whole_number, read_field
+from solar_challenge.number_fields import FRACTION, POSITIVE, as_finite_float, read_field
 from solar_challenge.projection import run_cost_recovery, scenario_fleet
 from solar_challenge.scenario_knobs import KNOBS, Knob
 
@@ -193,9 +194,20 @@ class ConfigResult:
     """The fleet's grid-services income in year 1, the projection's age-0 income (£)."""
 
     def __post_init__(self) -> None:
-        """Read n_homes as a whole number of at least 1 and the year-1 income as a finite number of at least 0."""
-        read_field(self, "n_homes", as_whole_number, POSITIVE)
-        read_field(self, "year_one_grid_services_income_gbp", as_finite_float, NON_NEGATIVE)
+        """Refuse an n_homes that is not a whole number of at least 1, and a year-1 income that is not a finite number of at least 0.
+
+        Raises:
+            ValueError: Naming the field and its value; a computed result's
+                broken invariant is a defect, not a user refusal.
+        """
+        if isinstance(self.n_homes, bool) or not isinstance(self.n_homes, int) or self.n_homes < 1:
+            raise ValueError(f"ConfigResult.n_homes must be a whole number of at least 1; got n_homes={self.n_homes!r}")
+        income = self.year_one_grid_services_income_gbp
+        if not (math.isfinite(income) and income >= 0.0):
+            raise ValueError(
+                "ConfigResult.year_one_grid_services_income_gbp must be a finite number of at least 0; "
+                f"got year_one_grid_services_income_gbp={income!r}"
+            )
 
     @property
     def capex_per_home_gbp(self) -> float:
@@ -267,8 +279,8 @@ class ReferenceComparison:
         """Whether the result is feasible and its outlay is not above the reference's.
 
         This is the cost-recovery ranking's verdict (PRD
-        docs/prds/discrete-install-config-sweep.md §6 decision 4): the result
-        recovers its own costs at no higher householder outlay.  It is not a
+        docs/prds/event-dispatch-and-battery-sizing.md §6 decision 4): the
+        result recovers its own costs at no higher householder outlay.  It is not a
         payback or NPV test.
         """
         return self.result.feasible and self.result.representative_outlay_gbp <= self.reference.representative_outlay_gbp
