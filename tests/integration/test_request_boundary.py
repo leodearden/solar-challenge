@@ -24,7 +24,7 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app as cli_app
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.web import api
-from solar_challenge.web.builder_form import scenario_from_builder_form
+from solar_challenge.web.builder_form import builder_form_from_yaml, scenario_from_builder_form
 from solar_challenge.web.fleet_scenario import fleet_form_from_yaml, parse_fleet_form, scenario_from_fleet_form
 from solar_challenge.web.request_boundary import read_string, require_json_object
 from solar_challenge.web.simulation_params import parse_home_config
@@ -141,6 +141,12 @@ _ROUTE_PROBES: Mapping[str, _RouteProbe] = {
         refused={"data": _UNREADABLE_YAML, "content_type": "text/yaml"},
         refusal=partial(fleet_form_from_yaml, _UNREADABLE_YAML),
         reader="fleet_form_from_yaml",
+        reaching={"data": "a: 1", "content_type": "text/yaml"},
+    ),
+    "api.scenarios_import_yaml": _RouteProbe(
+        refused={"data": _UNREADABLE_YAML, "content_type": "text/yaml"},
+        refusal=partial(builder_form_from_yaml, _UNREADABLE_YAML),
+        reader="builder_form_from_yaml",
         reaching={"data": "a: 1", "content_type": "text/yaml"},
     ),
     "api.simulate_sweep": _RouteProbe(
