@@ -14,13 +14,18 @@ pytest.importorskip("flask")
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import parse_scenario, read_fleet_scenario
-from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, SelfConsumptionStrategyConfig
+from solar_challenge.dispatch import (
+    STRATEGY_CONFIG_BY_TYPE,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
     NormalDistribution,
     parse_fleet_distribution_config,
     write_distribution_spec,
 )
+from solar_challenge.home import simulate_home
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.number_fields import Interval
 from solar_challenge.scenario_blocks import (
@@ -51,6 +56,7 @@ from solar_challenge.web.request_boundary import read_string, require_encodable_
 from solar_challenge.web.scenario_import import FormChoice, ImportedForm, SettingInput
 from solar_challenge.web.simulation_params import parse_seg_tariff
 from tests._fleet_form import form_fleet_blocks, valid_distribution_form
+from tests._synthetic_weather import sunless_weather, weather_for
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {
@@ -957,16 +963,30 @@ class TestFleetFormFromScenario:
             pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, id="peak-hours-null"),
         ],
     )
-    def test_a_battery_dispatching_tou_optimized_on_its_tariffs_clock_is_not_loaded(
+    def test_a_battery_dispatching_tou_optimized_on_its_tariffs_clock_loads_with_the_clock_chosen_and_runs(
         self, dispatch_strategy: dict[str, Any]
     ) -> None:
-        """The fleet page has no control for a tou_optimized on its tariff's clock, so the rest loads and the battery's dispatch_strategy is named."""
+        """The fleet page holds the tariff's clock as a null peak_hours, so the strategy loads with it, every battery home dispatches on its Economy 7 tariff's clock, and a home runs.
+
+        It replaces a test that named such a strategy not loaded: that pinned the control the
+        page lacked, which it now has.
+        """
         battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "dispatch_strategy": dispatch_strategy}
 
-        assert fleet_form_from_scenario(_with_fleet_distribution(battery=battery)) == ImportedForm(
-            form=_without(_FLEET_FORM, "dispatch_strategy"),
-            not_loaded=("fleet_distribution.battery.dispatch_strategy",),
+        imported = fleet_form_from_scenario(_with_fleet_distribution(battery=battery))
+
+        assert imported == ImportedForm(
+            form={**_FLEET_FORM, "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": None}},
+            not_loaded=(),
         )
+        parsed = parse_fleet_form(imported.form)
+        battery_homes = [home for home in parsed.homes if home.battery_config is not None]
+        assert battery_homes
+        assert all(home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig() for home in battery_homes)
+        home = battery_homes[0]
+        day = parsed.start_date
+        results = simulate_home(home, day, day, weather=weather_for(home, sunless_weather(day, temp_air=5.0)))
+        assert len(results.tariff_rate) > 0
 
     def test_an_economy_tariff_that_sets_no_rate_loads_its_preset_rates(self) -> None:
         """An Economy 10 tariff that sets no rate loads the rates the loaders charge it, its PRESET_RATES row."""
