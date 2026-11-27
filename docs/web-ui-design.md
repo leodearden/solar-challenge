@@ -55,7 +55,7 @@ Sidebar (collapsible):
 
 ### Form limits and starting values
 
-Every dashboard form's bounds and starting values render from one value, `page_limits()` in web/fleet_components.py, a `PageLimits`. It holds the fleet size and the Fleet Simulator's size slider; the seed; the simulation window's days, default window, day choices and custom range, and the Scenario Builder's period presets; and the fleet components PV, battery and load, each with its `value_range` and the distribution its editor starts at. It reaches the pages through one channel:
+Every dashboard form's bounds and starting values render from one value, `page_limits()` in web/fleet_components.py, a `PageLimits`. It holds the fleet size and the Fleet Simulator's size slider; the seed; the simulation window's days, default window, day choices and custom range, and the Scenario Builder's period presets; and the fleet components PV, battery and load (`FLEET_COMPONENTS`), each with its `value_range`, the types its distribution editor offers and the distribution that editor starts at. It reaches the pages through one channel:
 
 - A context processor in web/app.py gives every template `page_limits`, from which the templates render their inputs' bounds and choices.
 - base.html writes `page_limits.as_json()` once into each page's `<head>`, as the JSON of `<script type="application/json" id="page-limits">`.
@@ -68,6 +68,8 @@ Each fleet component's `value_range` bounds every home's value, fixed or drawn. 
 - The Scenario Builder's check, `builder_form_errors` (web/builder_form.py), passes the homes `parse_scenario` reads from the builder's document, read in memory, to `refuse_homes_outside_ranges` and lists its refusal.
 
 The Fleet Simulator leaves validation to the server: Run posts the form as entered, and the page shows the server's refusal. The Single Home page also checks its values against the same ranges, read from `#page-limits`, before it sends them.
+
+Each fleet component's editor offers Fixed Value and `fleet_distribution.editor_types` of its field's kind, the kind its block's fleet row gives the field, in the order of fleet_distribution.py's `DISTRIBUTION_TYPES`. Its `start`, an `EditorStart`, is built from fleet_distribution.py's spec objects: one spec of each type the editor offers, and the type the card shows. PV and battery start at shuffled pools, PV 3, 4, 5 and 6 kW in 20, 40, 30 and 10 homes, and battery 0, 5 and 10 kWh in 40, 40 and 20 homes; load starts at a normal of 3,400 ± 800 kWh clamped to 2,000–6,000. `ComponentLimits` checks at construction that a start holds one spec of each editor type, in order, and that each shuffled pool's counts total the default fleet size, `FLEET_SIZE_DEFAULT`. `#page-limits` writes a start as the editor holds it: `{type, fixed, specs: {<type>: <its spec without the type>}}`.
 
 ### 1. Dashboard
 
@@ -127,19 +129,20 @@ Fleet configuration with distribution editors and live preview.
 - Fleet size selector (n_homes: 1 to 10,000; the slider is a 10–500 convenience)
 - Per-component distribution editor cards:
 
-| Component | Distribution Types | Parameters |
-|-----------|-------------------|------------|
-| **PV** | Weighted discrete, Normal, Uniform, Shuffled pool | Type-specific params (see below) |
-| **Battery** | Weighted discrete, Normal, Uniform, Shuffled pool | Same, plus None option for "no battery" |
-| **Load** | Normal, Uniform | Annual consumption distribution |
-| **Heat Pump** | Weighted discrete | Ownership % (ASHP/GSHP/None weights) |
+| Component | Field it posts | Distribution Types |
+|-----------|----------------|--------------------|
+| **PV** | `pv.capacity_kw` | Fixed Value, and the editor's types for the component's field kind |
+| **Battery** | `battery.capacity_kwh` | The same; the card's enable switch leaves the battery block out, a fleet without batteries |
+| **Load** | `load.annual_consumption_kwh` | The same |
 
-**Distribution Parameter Sub-forms:**
-- **Weighted Discrete**: Value + Weight rows (add/remove). Live pie chart preview.
-- **Normal**: Mean, Std, Min, Max sliders. Live bell curve preview.
-- **Uniform**: Min, Max range slider. Live uniform bar preview.
-- **Shuffled Pool**: Value + Count rows (add/remove). Counts must sum to n_homes (validated). Live bar chart preview.
-- **Proportional**: Source field path, multiplier, offset.
+**Distribution Parameter Sub-forms:** templates/components/distribution-editor.html renders each editor type from its `DISTRIBUTION_TYPES` record and names no type itself. A type's panel holds one input per parameter, captioned by the parameter's title. A type with rows holds a list of value rows, each with its paired weight or count (add/remove); a shuffled pool shows its counts' total, which the server holds to n_homes.
+
+**Wire shape:** Both fleet pages post a component as the grammar's own spec: `{pv: {capacity_kw: <spec>}, battery: {capacity_kwh: <spec>} | absent, load: {annual_consumption_kwh: <spec>}}`. A spec is a number, null, or `{type, ...}` with its type's keys, a type's rows as parallel lists, `values` with `weights` or `counts`. static/js/distribution-editor.js's `DistributionEditor.wire` writes it from the editor's state.
+
+- The server reads the blocks with `fleet_config.read_form_fleet`, as a `fleet_distribution:` block's are, at the form's own paths and with nothing invented, so a refusal names the field the page posted, e.g. `pv.capacity_kw`. It then holds the fleet to the dashboard's bounds. A shuffled pool's counts must total the fleet's n_homes, the grammar's rule.
+- A blank optional input posts null, so a normal needs no clamps. A blank battery pool value is a home without a battery, and a blank load value takes the load's default. Every home needs a PV capacity, so a blank PV value, fixed or one a home would draw, is refused naming `pv.capacity_kw` before any home is generated.
+
+**Import:** Import YAML and Load Preset load each component's spec as the grammar reads it, written back in canonical form (`ComponentLimits.editor_spec`), through `DistributionEditor.load`. A fixed spec loads as Fixed Value, a normal without clamps with blank clamps, and a pool's null value as a blank value. Any other type, such as `proportional_to`, is refused, naming its path and the editor's types.
 
 **Live Preview:** Each distribution card shows a Plotly histogram of the expected fleet composition, updating on input change (debounced HTMX call or client-side for simple distributions).
 
@@ -163,6 +166,8 @@ Visual editor for `ScenarioConfig` YAML files.
 - "Load from File" -> file upload
 - "Load Preset" -> built-in scenarios (bristol-phase1, dispatch-comparison, etc.)
 - Schema documentation tooltips on each field
+
+**Fleet distribution:** The builder's PV, battery and load cards are the Fleet Simulator's distribution editors, and start at the fleet page's distributions, `page_limits().components[...].start`. Validate and the YAML preview post the same component blocks as the fleet page, and `builder_form_errors` reads them with `read_form_fleet` at the form's own paths. "Load from File" loads each spec through `DistributionEditor.load` at its path in the file, `fleet_distribution.<component>.<field>`, and refuses a type the editor does not hold, as the fleet import does.
 
 ### 5. Sweep Configuration
 

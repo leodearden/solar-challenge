@@ -12,9 +12,9 @@ Usage::
 
     @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
     def test_a_falsy_pv_block_is_refused_naming_its_type(value: object, type_name: str) -> None:
-        refusal = re.escape(f"pv must be a mapping, got {type_name}")
-        with pytest.raises(ValueError, match=refusal):
-            form_to_fleet_distribution_config({**valid_distribution_form(), "pv": value})
+        refusal = re.escape(f"pv: must be a mapping, got {type_name}")
+        with pytest.raises(ConfigurationError, match=refusal):
+            parse_fleet_form({**valid_distribution_form(), "pv": value})
 """
 
 import pytest

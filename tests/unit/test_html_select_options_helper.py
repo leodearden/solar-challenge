@@ -7,7 +7,7 @@ letting a page test that uses it pass vacuously.
 
 import pytest
 
-from tests._html_select_options import option_texts
+from tests._html_select_options import option_texts, options_of_each
 
 
 def test_option_texts_keys_the_text_of_each_option_of_the_select_by_its_value() -> None:
@@ -76,3 +76,22 @@ def test_a_repeated_option_value_raises_rather_than_keeping_one_text() -> None:
 
     with pytest.raises(ValueError, match="'bristol' is on more than one"):
         option_texts(page, {"id": "location"})
+
+
+def test_options_of_each_lists_each_carrying_selects_options_as_value_and_text_in_document_order() -> None:
+    page = (
+        '<select x-model="dist.type"><option value="">Fixed</option><option>Normal</option></select>'
+        '<select x-model="other"><option value="x">X</option></select>'
+        '<select x-model="dist.type"><option value="b">B</option><option value="a">A</option></select>'
+    )
+
+    assert options_of_each(page, {"x-model": "dist.type"}) == [
+        [("", "Fixed"), ("Normal", "Normal")],
+        [("b", "B"), ("a", "A")],
+    ]
+
+
+def test_options_of_each_reads_no_selects_when_none_carries_the_attributes() -> None:
+    page = '<select x-model="other"><option value="x">X</option></select>'
+
+    assert options_of_each(page, {"x-model": "dist.type"}) == []

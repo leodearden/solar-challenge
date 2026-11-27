@@ -19,7 +19,6 @@ from solar_challenge.number_fields import as_finite_float
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import SweepPoint, sweep_panels
 from solar_challenge.web.dashboard import get_storage
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
     refusal_text,
     refuse_unrecognised_keys,
@@ -36,29 +35,12 @@ bp.register_error_handler(StoredRunUnreadable, answer_stored_run_unreadable)
 
 @bp.route("/builder")
 def builder() -> str:
-    """Render the scenario builder page with dual-pane editor: a card per fleet component, and its script's part of each.
+    """Render the scenario builder page with dual-pane editor: a card per fleet component, each starting at its start in #page-limits.
 
     Returns:
         Rendered builder.html template.
     """
-    return str(render_template(
-        "scenarios/builder.html",
-        script_components=_script_components(),
-        location_presets=LOCATION_PRESETS,
-    ))
-
-
-def _script_components() -> list[dict[str, Any]]:
-    """What static/js/scenario-builder.js reads of each fleet component, in FLEET_COMPONENTS order."""
-    return [
-        {
-            "key": component.key,
-            "fixed_field": component.fixed_field,
-            "grammar_key": component.grammar_key,
-            "dist": component.start.editor_state(),
-        }
-        for component in FLEET_COMPONENTS.values()
-    ]
+    return str(render_template("scenarios/builder.html", location_presets=LOCATION_PRESETS))
 
 
 @bp.route("/sweep")

@@ -26,7 +26,7 @@ from tests._default_pv_pool_fleet import (
 from tests._error_records import error_records
 from tests._falsy_json_values import FALSY_SENT_VALUES
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
-from tests._fleet_form import FLEET_FORM_BLOCKS
+from tests._fleet_form import FLEET_FORM_BLOCKS, FLEET_FORM_COMPONENT_BLOCKS
 from tests._html_page import element_attributes
 from tests._repository_paths import SCENARIOS_DIR
 
@@ -39,20 +39,10 @@ _FLEET_FORM_BODY: dict = {
     "location": "london",
     "start": "2024-07-01",
     "end": "2024-07-03",
-    "pv": {
-        "capacity_kw": {
-            "type": "weighted_discrete",
-            "values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 2}],
-        }
-    },
-    "battery": {
-        "capacity_kwh": {
-            "type": "shuffled_pool",
-            "entries": [{"value": 0, "count": 2}, {"value": 5.0, "count": 2}],
-        }
-    },
+    "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [1.0, 2.0]}},
+    "battery": {"capacity_kwh": {"type": "shuffled_pool", "values": [0.0, 5.0], "counts": [2, 2]}},
     "load": {
-        "annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800, "min": 2000, "max": 6000}
+        "annual_consumption_kwh": {"type": "normal", "mean": 3400.0, "std": 800.0, "min": 2000.0, "max": 6000.0}
     },
     "tariff": {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1},
     "seg": {"rate_pence_per_kwh": 5.5},
@@ -175,12 +165,12 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {**_FLEET_FORM_BODY["battery"], "enabled": False}},
-                "fleet_distribution.battery: unrecognised keys 'enabled'",
+                "battery: unrecognised keys 'enabled'",
                 id="battery-enabled-false",
             ),
             pytest.param(
                 {"n_homes": 5},
-                "fleet_distribution: battery.capacity_kwh: shuffled_pool counts must total n_homes",
+                "the top level: battery.capacity_kwh: shuffled_pool counts must total n_homes",
                 id="battery-pool-short-of-n-homes",
             ),
             pytest.param(
@@ -190,17 +180,17 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {"capacity_kwh": {"type": "uniform"}}},
-                "fleet_distribution.battery.capacity_kwh: requires 'min', 'max'",
+                "battery.capacity_kwh: requires 'min', 'max'",
                 id="battery-uniform-without-its-range",
             ),
             pytest.param(
                 {"pv": {"capacity_kw": {"type": "normal", "mena": 4.0, "std": 1.0}}},
-                "fleet_distribution.pv.capacity_kw: unrecognised keys 'mena'",
+                "pv.capacity_kw: unrecognised keys 'mena'",
                 id="pv-normal-with-a-misspelt-mean",
             ),
             pytest.param(
                 {"pv": {"capacity_kw": {"type": "normal", "mean": True, "std": 1.0}}},
-                "fleet_distribution.pv.capacity_kw",
+                "pv.capacity_kw",
                 id="pv-normal-boolean-mean",
             ),
         ],
@@ -229,13 +219,18 @@ class TestExportFleetYAML:
         value: object,
         type_name: str,
     ) -> None:
-        """A falsy block other than null or "", any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent: only null and "" read as absent. No YAML is written and no job is queued."""
+        """A falsy block other than null or "", any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent, a component block's in the grammar's words: only null and "" read as absent. No YAML is written and no job is queued."""
         body = {**_FLEET_FORM_BODY, key: value}
 
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
-        refusal = (400, {"error": non_mapping_block_refusal(key, type_name)})
+        expected = (
+            f"{key}: must be a mapping, got {type_name}"
+            if key in FLEET_FORM_COMPONENT_BLOCKS
+            else non_mapping_block_refusal(key, type_name)
+        )
+        refusal = (400, {"error": expected})
         assert (export.status_code, export.get_json()) == refusal
         assert (simulate.status_code, simulate.get_json()) == refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
@@ -471,19 +466,20 @@ class TestFleetPresetEndpoint:
     def test_a_fleet_preset_answers_its_form_and_what_was_not_loaded(
         self, client: FlaskClient
     ) -> None:
-        """bristol-phase1 loads its PV pool and SEG rate, and names its random order, which the form has no control for."""
+        """bristol-phase1 loads its PV and battery pools as the grammar's specs, its battery pool's null as null, a home without a battery, and its SEG rate, and names its random order, which the form has no control for."""
         resp = client.get("/api/fleet/presets/bristol-phase1")
 
         assert resp.status_code == 200, resp.get_data(as_text=True)
         answer = resp.get_json()
         assert answer["form"]["pv"]["capacity_kw"] == {
             "type": "shuffled_pool",
-            "entries": [
-                {"value": 3.0, "count": 20},
-                {"value": 4.0, "count": 40},
-                {"value": 5.0, "count": 30},
-                {"value": 6.0, "count": 10},
-            ],
+            "values": [3.0, 4.0, 5.0, 6.0],
+            "counts": [20, 40, 30, 10],
+        }
+        assert answer["form"]["battery"]["capacity_kwh"] == {
+            "type": "shuffled_pool",
+            "values": [None, 5.0, 10.0],
+            "counts": [40, 40, 20],
         }
         assert answer["form"]["seg"] == {"rate_pence_per_kwh": 4.1}
         assert "fleet_distribution.random_order" in answer["not_loaded"]

@@ -4,9 +4,11 @@
 import dataclasses
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import date, timedelta
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,14 +17,24 @@ pytest.importorskip("flask")
 from flask import Flask, render_template_string
 from flask.testing import FlaskClient
 
+import solar_challenge.web
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
+    DISTRIBUTION_TYPES,
+    DistributionSpec,
+    NormalDistribution,
+    ShuffledPoolDistribution,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
+    editor_types,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
+    write_distribution_spec,
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.number_fields import Interval
+from solar_challenge.scenario_blocks import BATTERY_BLOCK, LOAD_BLOCK, PV_BLOCK, ComponentBlock, FieldKind
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
@@ -30,8 +42,10 @@ from solar_challenge.web.fleet_components import (
     MAX_DAYS,
     MAX_FLEET_HOMES,
     MAX_FLEET_SEED,
+    FLEET_SIZE_DEFAULT,
+    SCALAR_FORM,
     ComponentLimits,
-    EditorDistribution,
+    EditorStart,
     PageLimits,
     days_window,
     page_limits,
@@ -40,14 +54,17 @@ from solar_challenge.web.fleet_components import (
     refuse_homes_outside_ranges,
 )
 from tests._css_classes import names_palette
+from tests._html_labels import labelled_inputs
 from tests._html_page import (
     counts_of,
     element_attributes,
     element_count,
     headings,
     script_text_by_id,
+    texts,
     texts_after,
 )
+from tests._html_select_options import options_of_each
 
 #: The pages whose forms render their bounds and starting values from page_limits().
 _FORM_PAGES = ("/simulate/home", "/simulate/fleet", "/scenarios/builder", "/scenarios/sweep")
@@ -66,15 +83,6 @@ def _editor_scopes(page: str) -> list[str | None]:
         attributes["x-data"]
         for attributes in element_attributes(page, "div")
         if (attributes.get("x-data") or "").startswith("distributionEditor(")
-    ]
-
-
-def _number_inputs(page: str, model: str) -> list[Mapping[str, str | None]]:
-    """The attributes of each input of *page* whose x-model.number is *model*, in page order."""
-    return [
-        attributes
-        for attributes in element_attributes(page, "input")
-        if attributes.get("x-model.number") == model
     ]
 
 
@@ -149,28 +157,207 @@ class TestFleetComponents:
             f"{value_range}, got {value!r}"
         )
 
-    def test_editor_state_is_the_distribution_editors_dist_at_fixed_value(self) -> None:
-        """The shape templates/components/distribution-editor.html documents, which each component's start writes into #page-limits and the builder's script reads."""
-        distribution = EditorDistribution(
-            fixed=4.0,
-            mean=4.0,
-            std=1.0,
-            min=2.0,
-            max=8.0,
-            values=((3.0, 20), (5.0, 80)),
-            entries=((3.0, 60), (5.0, 40)),
+    @pytest.mark.parametrize(
+        ("component", "block", "kind"),
+        [
+            pytest.param(FLEET_COMPONENTS["pv"], PV_BLOCK, FieldKind.NUMBER, id="pv"),
+            pytest.param(FLEET_COMPONENTS["battery"], BATTERY_BLOCK, FieldKind.NUMBER, id="battery"),
+            pytest.param(FLEET_COMPONENTS["load"], LOAD_BLOCK, FieldKind.NUMBER, id="load"),
+        ],
+    )
+    def test_each_component_edits_a_number_field_of_its_block_offering_the_number_kinds_editor_types_and_fixed_value(
+        self, component: ComponentLimits, block: ComponentBlock[Any], kind: FieldKind
+    ) -> None:
+        assert component.block is block
+        assert component.field_kind is kind
+        assert component.editor_types == editor_types(kind)
+        assert component.scalar_form is SCALAR_FORM
+
+    def test_the_scalar_form_is_the_tables_fixed_value_record(self) -> None:
+        assert SCALAR_FORM is DISTRIBUTION_TYPES["fixed"]
+        assert SCALAR_FORM.title == "Fixed Value"
+
+    @pytest.mark.parametrize(
+        ("name", "counts_homes"),
+        [
+            pytest.param("shuffled_pool", True, id="shuffled-pool-counts-homes"),
+            pytest.param("weighted_discrete", False, id="weighted-discrete-weighs-values"),
+            pytest.param("normal", False, id="normal-has-no-rows"),
+            pytest.param("uniform", False, id="uniform-has-no-rows"),
+        ],
+    )
+    def test_only_an_editor_type_whose_rows_pair_each_value_with_a_count_counts_homes(
+        self, name: str, counts_homes: bool
+    ) -> None:
+        assert ComponentLimits.counts_homes(DISTRIBUTION_TYPES[name]) is counts_homes
+
+    @pytest.mark.parametrize("spec", [pytest.param(4.0, id="a-number"), pytest.param(None, id="null")])
+    def test_a_start_spec_that_is_not_a_distribution_is_refused_naming_the_specs(self, spec: DistributionSpec) -> None:
+        """No editor type holds a null or a number, so the start would lose that type's slot."""
+        specs = (NormalDistribution(4.0, 1.0), spec)
+        with pytest.raises(ValueError) as exc_info:
+            EditorStart(shown="", fixed=4.0, specs=specs)
+        assert str(exc_info.value) == (
+            f"specs of EditorStart must each be a distribution, which its editor type holds as a mapping, got {specs!r}"
         )
-        component = replace(FLEET_COMPONENTS["pv"], start=distribution)
+
+    @pytest.mark.parametrize(
+        ("key", "shown", "fixed", "specs"),
+        [
+            pytest.param(
+                "pv",
+                "shuffled_pool",
+                4.0,
+                (
+                    WeightedDiscreteDistribution((3.0, 4.0, 5.0, 6.0), (20, 40, 30, 10)),
+                    NormalDistribution(4.0, 1.0, 2.0, 8.0),
+                    UniformDistribution(2.0, 8.0),
+                    ShuffledPoolDistribution((3.0, 4.0, 5.0, 6.0), (20, 40, 30, 10)),
+                ),
+                id="pv",
+            ),
+            pytest.param(
+                "battery",
+                "shuffled_pool",
+                5.0,
+                (
+                    WeightedDiscreteDistribution((0.0, 5.0, 10.0), (40, 40, 20)),
+                    NormalDistribution(5.0, 2.0, 0.0, 15.0),
+                    UniformDistribution(0.0, 15.0),
+                    ShuffledPoolDistribution((0.0, 5.0, 10.0), (40, 40, 20)),
+                ),
+                id="battery",
+            ),
+            pytest.param(
+                "load",
+                "normal",
+                3500,
+                (
+                    WeightedDiscreteDistribution((2900, 3500, 4500), (30, 40, 30)),
+                    NormalDistribution(3400, 800, 2000, 6000),
+                    UniformDistribution(2000, 6000),
+                    ShuffledPoolDistribution((2900, 3500, 4500), (30, 40, 30)),
+                ),
+                id="load",
+            ),
+        ],
+    )
+    def test_each_components_start_is_the_fleet_pages_distribution_as_the_editor_holds_it(
+        self, key: str, shown: str, fixed: float, specs: tuple[DistributionSpec, ...]
+    ) -> None:
+        """Its editor_state() shows *shown*, holds *fixed* at Fixed Value, and holds each editor type's spec as written, without its type, in editor_types order."""
+        component = FLEET_COMPONENTS[key]
+        written = [write_distribution_spec(spec) for spec in specs]
+        assert all(isinstance(each, dict) for each in written)
+        state = component.start.editor_state()
+        assert state == {
+            "type": shown,
+            "fixed": fixed,
+            "specs": {
+                each["type"]: {name: value for name, value in each.items() if name != "type"}
+                for each in written
+                if isinstance(each, dict)
+            },
+        }
+        assert list(state["specs"]) == [each.name for each in component.editor_types]
+
+    def test_editor_state_is_the_distribution_editors_dist(self) -> None:
+        """The shape templates/components/distribution-editor.html documents, which each component's start writes into #page-limits: the type shown, the fixed value, and each type's spec as written, a null clamp as null."""
+        start = EditorStart(
+            shown="",
+            fixed=4.0,
+            specs=(
+                WeightedDiscreteDistribution((3.0, 5.0), (20, 80)),
+                NormalDistribution(4.0, 1.0),
+                UniformDistribution(2.0, 8.0),
+                ShuffledPoolDistribution((3.0, None), (60, 40)),
+            ),
+        )
+        component = replace(FLEET_COMPONENTS["pv"], start=start)
         assert component.start.editor_state() == {
             "type": "",
             "fixed": 4.0,
-            "mean": 4.0,
-            "std": 1.0,
-            "min": 2.0,
-            "max": 8.0,
-            "values": [{"value": 3.0, "weight": 20}, {"value": 5.0, "weight": 80}],
-            "entries": [{"value": 3.0, "count": 60}, {"value": 5.0, "count": 40}],
+            "specs": {
+                "weighted_discrete": {"values": [3.0, 5.0], "weights": [20.0, 80.0]},
+                "normal": {"mean": 4.0, "std": 1.0, "min": None, "max": None},
+                "uniform": {"min": 2.0, "max": 8.0},
+                "shuffled_pool": {"values": [3.0, None], "counts": [60, 40]},
+            },
         }
+
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_start_whose_shuffled_pool_does_not_total_the_default_fleet_size_is_refused_naming_the_component_and_the_counts(
+        self, component: ComponentLimits
+    ) -> None:
+        specs = tuple(
+            ShuffledPoolDistribution((1.0, 2.0), (FLEET_SIZE_DEFAULT, 1))
+            if isinstance(spec, ShuffledPoolDistribution)
+            else spec
+            for spec in component.start.specs
+        )
+        with pytest.raises(ValueError) as exc_info:
+            replace(component, start=replace(component.start, specs=specs))
+        assert str(exc_info.value) == (
+            f"start.specs of fleet component {component.key!r} must hold shuffled pools whose counts "
+            f"total FLEET_SIZE_DEFAULT, {FLEET_SIZE_DEFAULT}, got {(FLEET_SIZE_DEFAULT, 1)!r}"
+        )
+        assert FLEET_SIZE_DEFAULT == 100
+
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            pytest.param(lambda specs: specs[:-1], id="missing-a-type"),
+            pytest.param(lambda specs: (*specs[:-1], UniformDistribution(1.0, 2.0)), id="another-type"),
+            pytest.param(lambda specs: (specs[1], specs[0], *specs[2:]), id="out-of-order"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_start_not_holding_one_spec_of_each_editor_type_in_order_is_refused_naming_the_component_and_the_specs(
+        self,
+        component: ComponentLimits,
+        edit: Callable[[tuple[DistributionSpec, ...]], tuple[DistributionSpec, ...]],
+    ) -> None:
+        specs = edit(component.start.specs)
+        names = ", ".join(each.name for each in component.editor_types)
+        with pytest.raises(ValueError) as exc_info:
+            replace(component, start=replace(component.start, specs=specs))
+        assert str(exc_info.value) == (
+            f"start.specs of fleet component {component.key!r} must be one spec of each of its "
+            f"editor types, in order ({names}), got {specs!r}"
+        )
+
+    @pytest.mark.parametrize("shown", ["fixed", "proportional_to", "bogus"])
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_start_showing_a_type_that_is_no_editor_type_is_refused_naming_the_component_and_the_type(
+        self, component: ComponentLimits, shown: str
+    ) -> None:
+        names = ", ".join(each.name for each in component.editor_types)
+        with pytest.raises(ValueError) as exc_info:
+            replace(component, start=replace(component.start, shown=shown))
+        assert str(exc_info.value) == (
+            f"start.shown of fleet component {component.key!r} must be '' or one of its editor "
+            f"types ({names}), got {shown!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
+    )
+    def test_a_grammar_key_outside_its_blocks_fleet_rows_is_refused_naming_the_component_and_the_key(
+        self, component: ComponentLimits
+    ) -> None:
+        rows = ", ".join(component.block.fleet)
+        with pytest.raises(ValueError) as exc_info:
+            replace(component, grammar_key="bogus_key")
+        assert str(exc_info.value) == (
+            f"grammar_key of fleet component {component.key!r} must be one of its block's fleet "
+            f"rows ({rows}), got 'bogus_key'"
+        )
 
 
 class TestPageLimits:
@@ -274,6 +461,27 @@ class TestPageLimits:
                     },
                     "new_row_value": component.new_row_value,
                     "start": component.start.editor_state(),
+                    "editor_types": [
+                        {
+                            "name": each.name,
+                            "title": each.title,
+                            "parameters": [
+                                {"key": parameter.key, "title": parameter.title, "required": parameter.required}
+                                for parameter in each.parameters
+                            ],
+                            "rows": (
+                                None
+                                if each.rows is None
+                                else {"keys": list(each.rows.keys), "paired_title": each.rows.paired_title}
+                            ),
+                        }
+                        for each in component.editor_types
+                    ],
+                    "scalar_form": {
+                        "name": component.scalar_form.name,
+                        "title": component.scalar_form.title,
+                        "key": component.scalar_form.spec_keys[0],
+                    },
                 }
                 for component in FLEET_COMPONENTS.values()
             ],
@@ -469,20 +677,22 @@ class TestRefuseHomesOutsideRanges:
 
 
 @pytest.mark.parametrize(
-    ("path", "dists"),
+    ("path", "dists", "captioned_with_subject"),
     [
-        pytest.param("/scenarios/builder", ("dists.pv", "dists.battery", "dists.load"), id="builder"),
-        pytest.param("/simulate/fleet", ("pvDist", "batteryDist", "loadDist"), id="fleet"),
+        pytest.param("/scenarios/builder", ("dists.pv", "dists.battery", "dists.load"), False, id="builder"),
+        pytest.param("/simulate/fleet", ("pvDist", "batteryDist", "loadDist"), True, id="fleet"),
     ],
 )
 class TestPagesRenderEachComponentFromTheTable:
     """Each fleet page renders one distribution editor per component, in FLEET_COMPONENTS order, as the table defines it.
 
-    *dists* are the page's Alpine expressions of its cards' distributions, in card order.
+    *dists* are the page's Alpine expressions of its cards' distributions, in card order. The
+    fleet page starts each caption with the component's subject, which the builder's
+    fieldset groups name instead.
     """
 
     def test_each_editor_edits_its_cards_distribution_and_starts_an_added_row_at_its_components_new_row_value(
-        self, client: FlaskClient, path: str, dists: tuple[str, ...]
+        self, client: FlaskClient, path: str, dists: tuple[str, ...], captioned_with_subject: bool
     ) -> None:
         page = client.get(path).get_data(as_text=True)
         assert _editor_scopes(page) == [
@@ -490,40 +700,127 @@ class TestPagesRenderEachComponentFromTheTable:
             for component, dist in zip(FLEET_COMPONENTS.values(), dists, strict=True)
         ]
 
-    def test_each_fixed_value_is_bounded_and_stepped_as_its_component(
-        self, client: FlaskClient, path: str, dists: tuple[str, ...]
+    def test_each_distribution_type_offers_the_scalar_forms_title_then_each_editor_type_in_order(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...], captioned_with_subject: bool
     ) -> None:
         page = client.get(path).get_data(as_text=True)
-        assert [
-            (attributes.get("step"), attributes.get("min"), attributes.get("max"))
-            for attributes in _number_inputs(page, "dist.fixed")
-        ] == [
-            (str(component.step), str(component.value_range.low), str(component.value_range.high))
+        assert options_of_each(page, {"x-model": "dist.type"}) == [
+            [("", component.scalar_form.title), *((each.name, each.title) for each in component.editor_types)]
             for component in FLEET_COMPONENTS.values()
         ]
 
-    def test_each_std_dev_is_bounded_below_at_0_and_no_other_parameter_is_bounded(
-        self, client: FlaskClient, path: str, dists: tuple[str, ...]
+    def test_each_fixed_value_is_captioned_by_the_scalar_forms_title_and_bounded_and_stepped_as_its_component(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...], captioned_with_subject: bool
     ) -> None:
-        """Std Dev's lower bound is the grammar's own rule; Mean, Normal's clamps and Uniform's Min and Max take any number."""
         page = client.get(path).get_data(as_text=True)
         assert [
-            (attributes.get("min"), attributes.get("max")) for attributes in _number_inputs(page, "dist.std")
-        ] == [("0", None)] * len(FLEET_COMPONENTS)
-        assert {
-            (attributes.get("min"), attributes.get("max"))
-            for model in ("dist.mean", "dist.min", "dist.max")
-            for attributes in _number_inputs(page, model)
-        } == {(None, None)}
-
-    def test_each_row_value_steps_as_its_component(
-        self, client: FlaskClient, path: str, dists: tuple[str, ...]
-    ) -> None:
-        """Each editor has two row templates, Weighted Discrete's and Shuffled Pool's, each with one Value input."""
-        page = client.get(path).get_data(as_text=True)
-        assert [attributes.get("step") for attributes in _number_inputs(page, "row.value")] == [
-            str(component.step) for component in FLEET_COMPONENTS.values() for _ in range(2)
+            (caption, attributes.get("step"), attributes.get("min"), attributes.get("max"))
+            for caption, attributes in labelled_inputs(page)
+            if attributes.get("x-model.number") == "dist.fixed"
+        ] == [
+            (
+                _caption(component, component.scalar_form.title, captioned_with_subject),
+                str(component.step),
+                str(component.value_range.low),
+                str(component.value_range.high),
+            )
+            for component in FLEET_COMPONENTS.values()
         ]
+
+    def test_each_editor_type_whose_rows_count_homes_shows_their_total_and_asks_for_counts_and_no_other_does(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...], captioned_with_subject: bool
+    ) -> None:
+        page = client.get(path).get_data(as_text=True)
+        rows_types = [each for component in FLEET_COMPONENTS.values() for each in component.editor_types if each.rows]
+        counted = [each for each in rows_types if ComponentLimits.counts_homes(each)]
+        weighted = [each for each in rows_types if not ComponentLimits.counts_homes(each)]
+        assert counted and weighted
+        hints = ("Total:", "Define exact value-count pairs. Counts should sum to the fleet size.")
+        assert counts_of(texts(page), hints) == dict.fromkeys(hints, len(counted))
+        assert len([text for text in texts(page) if text.endswith("s are auto-normalised.")]) == len(weighted)
+
+    def test_each_editor_types_inputs_are_captioned_by_the_table_and_bound_to_its_spec_in_the_editor(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...], captioned_with_subject: bool
+    ) -> None:
+        """A parameter is unbounded (the server refuses a negative Std Dev, naming it); a row's paired column is at least 0, and a count steps by 1."""
+        page = client.get(path).get_data(as_text=True)
+        assert [
+            (
+                caption,
+                attributes.get("x-model.number"),
+                attributes.get("step"),
+                attributes.get("min"),
+                attributes.get("max"),
+            )
+            for caption, attributes in labelled_inputs(page)
+            if (attributes.get("x-model.number") or "").startswith("dist.specs.")
+        ] == [
+            spec_input
+            for component in FLEET_COMPONENTS.values()
+            for spec_input in _spec_inputs(component, captioned_with_subject)
+        ]
+
+
+def _caption(component: ComponentLimits, title: str, captioned_with_subject: bool) -> str:
+    """The caption a fleet page gives *component*'s input titled *title*: its subject, then the title, on the fleet page."""
+    return f"{component.subject} {title}" if captioned_with_subject else title
+
+
+def _spec_inputs(
+    component: ComponentLimits, captioned_with_subject: bool
+) -> list[tuple[str, str, str, str | None, None]]:
+    """The (caption, binding, step, min, max) of each input of *component*'s editor that edits one of its editor types' specs, in editor_types order: each parameter, then a row's value and paired inputs."""
+    inputs: list[tuple[str, str, str, str | None, None]] = []
+    for each in component.editor_types:
+        spec = f"dist.specs.{each.name}"
+        for parameter in each.parameters:
+            inputs.append((
+                _caption(component, parameter.title, captioned_with_subject),
+                f"{spec}.{parameter.key}",
+                str(component.step),
+                None,
+                None,
+            ))
+        if each.rows is not None:
+            values_key, paired_key = each.rows.keys
+            paired_step = "1" if each.rows.paired_kind is FieldKind.COUNT else "any"
+            inputs.append((
+                _caption(component, "Value", captioned_with_subject),
+                f"{spec}.{values_key}[idx]",
+                str(component.step),
+                None,
+                None,
+            ))
+            inputs.append((
+                _caption(component, each.rows.paired_title, captioned_with_subject),
+                f"{spec}.{paired_key}[idx]",
+                paired_step,
+                "0",
+                None,
+            ))
+    return inputs
+
+
+#: The editor's template and the scripts that build or read a component's spec, under the web package.
+_EDITOR_SOURCES = (
+    "templates/components/distribution-editor.html",
+    "static/js/distribution-editor.js",
+    "static/js/fleet-simulator.js",
+    "static/js/scenario-builder.js",
+)
+
+
+@pytest.mark.parametrize("source", _EDITOR_SOURCES)
+def test_no_editor_source_names_a_distribution_type_the_editor_holds(source: str) -> None:
+    """The editor renders every type from the table and the scripts read them from #page-limits, so none spells a type's name (E4)."""
+    text = (Path(solar_challenge.web.__file__).parent / source).read_text(encoding="utf-8")
+    assert [
+        f"{quote}{name}{quote}"
+        for name, each in DISTRIBUTION_TYPES.items()
+        if each.editable
+        for quote in ("'", '"', "`")
+        if f"{quote}{name}{quote}" in text
+    ] == []
 
 
 class TestPagesHeadEachCardFromTheTable:

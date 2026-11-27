@@ -536,9 +536,10 @@ def test_fleet_load_preset_offers_only_presets_that_fill_the_form(
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 
+# bristol-phase1's battery pool holds null, a home without a battery, which its Value shows blank.
 BRISTOL_PHASE1_ROWS = {
     "PV Capacity": [("3", "20"), ("4", "40"), ("5", "30"), ("6", "10")],
-    "Battery Capacity": [("0", "40"), ("5", "40"), ("10", "20")],
+    "Battery Capacity": [("", "40"), ("5", "40"), ("10", "20")],
 }
 
 

@@ -31,9 +31,8 @@ from solar_challenge.scenario_blocks import (
 )
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
-from solar_challenge.web.builder_form import scenario_from_builder_form
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES, ComponentLimits
 from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
@@ -41,6 +40,7 @@ from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_na
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._error_records import error_records
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._fleet_form import fleet_reader_refusal
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
 from tests._html_select_options import option_texts
 from tests._plotly_figure import traces_by_name
@@ -88,10 +88,8 @@ class TestScenarioBuilderRoute:
         assert "Download YAML" in data
         assert "Save" in data
 
-    def test_the_builder_page_hands_its_script_each_components_keys_and_starting_distribution(
-        self, client: FlaskClient
-    ) -> None:
-        """The second argument is what static/js/scenario-builder.js reads of each component."""
+    def test_the_builder_page_hands_its_script_only_the_section_it_opens_at(self, client: FlaskClient) -> None:
+        """scenarioBuilder takes no components: static/js/scenario-builder.js reads each component's start from #page-limits, as the fleet page's script does."""
         page = client.get("/scenarios/builder").get_data(as_text=True)
         scopes = [attributes.get("x-data") or "" for attributes in element_attributes(page, "div")]
         (x_data,) = [scope for scope in scopes if scope.startswith("scenarioBuilder(")]
@@ -99,17 +97,7 @@ class TestScenarioBuilderRoute:
             arguments = json.loads("[" + x_data.removeprefix("scenarioBuilder(").removesuffix(")") + "]")
         except json.JSONDecodeError as exc:
             pytest.fail(f"x-data={x_data!r} does not pass scenarioBuilder JSON arguments: {exc}")
-        assert arguments[1:] == [
-            [
-                {
-                    "key": component.key,
-                    "fixed_field": component.fixed_field,
-                    "grammar_key": component.grammar_key,
-                    "dist": component.start.editor_state(),
-                }
-                for component in FLEET_COMPONENTS.values()
-            ]
-        ]
+        assert [type(argument) for argument in arguments] == [str]
 
     def test_builder_offers_each_location_preset_labelled_with_its_name(
         self, client: FlaskClient
@@ -200,24 +188,15 @@ class TestOldScenarioApiPaths:
         assert client.open(path, method=method).status_code == 404
 
 
-def _validation_with_pv_pool(
-    client: FlaskClient, entries: list[dict[str, float]], **form_changes: Any
-) -> Any:
-    """POST /api/scenarios/validate's answer to the default builder form with its PV a shuffled pool of *entries*, in place of its fixed capacity, and with *form_changes* over it."""
-    form = {
-        key: value
-        for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
-        if key != "pv_capacity_kw"
-    }
-    response = client.post(
-        "/api/scenarios/validate",
-        json={
-            **form,
-            "pv_distribution_type": "shuffled_pool",
-            "pv_sp_entries": entries,
-            **form_changes,
-        },
-    )
+def _form_with_pv_pool(values: list[float], counts: list[int], **form_changes: Any) -> dict[str, Any]:
+    """The default builder form with its PV a shuffled pool of *values*, each given to its count of *counts* homes, in place of its fixed capacity, and with *form_changes* over it."""
+    pool = {"type": "shuffled_pool", "values": values, "counts": counts}
+    return {**TestBuilderScenarioYaml._DEFAULT_FORM, "pv": {"capacity_kw": pool}, **form_changes}
+
+
+def _validation_with_pv_pool(client: FlaskClient, values: list[float], counts: list[int], **form_changes: Any) -> Any:
+    """POST /api/scenarios/validate's answer to _form_with_pv_pool's form."""
+    response = client.post("/api/scenarios/validate", json=_form_with_pv_pool(values, counts, **form_changes))
     assert response.status_code == 200
     return response.get_json()
 
@@ -269,57 +248,42 @@ class TestScenarioAPI:
         assert data["errors"] == []
 
     @pytest.mark.parametrize(
-        ("without", "changes", "error_text"),
+        ("changes", "error_text"),
         [
             pytest.param(
-                ("pv_capacity_kw",),
-                {"pv_distribution_type": "uniform", "pv_min": 8, "pv_max": 2},
+                {"pv": {"capacity_kw": {"type": "uniform", "min": 8, "max": 2}}},
                 "min cannot be greater than max",
                 id="PV uniform min above max",
             ),
             pytest.param(
-                ("pv_capacity_kw",),
-                {"pv_distribution_type": "normal", "pv_mean": 4},
-                "fleet_distribution.pv.capacity_kw: requires 'std'",
+                {"pv": {"capacity_kw": {"type": "normal", "mean": 4}}},
+                "pv.capacity_kw: requires 'std'",
                 id="PV normal without its std",
             ),
             pytest.param(
-                ("battery_capacity_kwh",),
-                {
-                    "battery_distribution_type": "weighted_discrete",
-                    "battery_wd_values": [{"value": 0, "weight": 0}, {"value": 5, "weight": 0}],
-                },
+                {"battery": {"capacity_kwh": {"type": "weighted_discrete", "values": [0, 5], "weights": [0, 0]}}},
                 "weights cannot all be zero",
                 id="battery weights all zero",
             ),
-            pytest.param((), {"seg_rate_pence_per_kwh": -1}, "seg", id="negative SEG rate"),
+            pytest.param({"seg_rate_pence_per_kwh": -1}, "seg", id="negative SEG rate"),
+            pytest.param({"import_rate": -0.1}, "rate_per_kwh must be at least 0", id="negative import rate"),
+            pytest.param({"end_date": ""}, "end_date", id="cleared end date"),
             pytest.param(
-                (), {"import_rate": -0.1}, "rate_per_kwh must be at least 0", id="negative import rate"
-            ),
-            pytest.param((), {"end_date": ""}, "end_date", id="cleared end date"),
-            pytest.param(
-                (),
                 {"location_preset": "custom", "latitude": 95, "longitude": -2.2, "altitude": 38.0},
                 "latitude must be between -90 and 90",
                 id="custom latitude out of range",
             ),
-            pytest.param((), {"export_rate": 0.15}, "export_rate", id="unread export_rate"),
+            pytest.param({"export_rate": 0.15}, "export_rate", id="unread export_rate"),
         ],
     )
     def test_validate_reports_what_the_scenario_readers_reject(
         self,
         client: FlaskClient,
-        without: tuple[str, ...],
         changes: dict[str, Any],
         error_text: str,
     ) -> None:
-        """The default builder form, *without* those fields and with *changes*, is invalid for the reason a scenario reader gives."""
-        form = {
-            key: value
-            for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
-            if key not in without
-        }
-        form.update(changes)
+        """The default builder form with *changes* is invalid for the reason a scenario reader gives."""
+        form = {**TestBuilderScenarioYaml._DEFAULT_FORM, **changes}
 
         response = client.post("/api/scenarios/validate", json=form)
 
@@ -334,9 +298,7 @@ class TestScenarioAPI:
         """P15: the default form with its PV a normal around 50 kW, which every home draws above the pv component's range, is invalid, naming pv.capacity_kw and the range."""
         form = {
             **TestBuilderScenarioYaml._DEFAULT_FORM,
-            "pv_distribution_type": "normal",
-            "pv_mean": 50,
-            "pv_std": 1,
+            "pv": {"capacity_kw": {"type": "normal", "mean": 50, "std": 1}},
         }
 
         response = client.post("/api/scenarios/validate", json=form)
@@ -355,23 +317,15 @@ class TestScenarioAPI:
         """A PV pool of 90 values for 100 homes is the one fault in a form that validates with a pool of 100.
 
         The builder's default PV pool used to hold those 90 values.  The fault is reported in
-        the loader's words, naming the pool, n_homes and the pool's size.
+        read_form_fleet's words, naming the pool at the form's path, n_homes and the pool's size.
         """
+        values = [3.0, 4.0, 5.0]
+        refusal = fleet_reader_refusal(_form_with_pv_pool(values, [20, 40, 30]))
 
-        def validation_with_pv_pool_counts(counts: tuple[int, int, int]) -> Any:
-            entries = [
-                {"value": value, "count": count}
-                for value, count in zip((3.0, 4.0, 5.0), counts)
-            ]
-            return _validation_with_pv_pool(client, entries)
-
-        assert validation_with_pv_pool_counts((20, 40, 40)) == {"valid": True, "errors": []}
-        assert validation_with_pv_pool_counts((20, 40, 30)) == {
-            "valid": False,
-            "errors": [
-                "fleet_distribution: pv.capacity_kw: shuffled_pool counts must total n_homes (100), got 90"
-            ],
-        }
+        assert _validation_with_pv_pool(client, values, [20, 40, 40]) == {"valid": True, "errors": []}
+        assert _validation_with_pv_pool(client, values, [20, 40, 30]) == {"valid": False, "errors": [refusal]}
+        assert refusal.removeprefix("the top level: ").startswith("pv.capacity_kw: ")
+        assert "n_homes (100), got 90" in refusal
 
     def test_validate_answers_the_readers_refusal_of_a_seg_block_without_a_temp_directory(
         self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -404,7 +358,7 @@ class TestScenarioAPI:
         """Test POST /api/scenarios/validate with invalid PV capacity."""
         response = client.post(
             "/api/scenarios/validate",
-            json={"name": "Test", "pv_capacity_kw": 999},
+            json={"name": "Test", "pv": {"capacity_kw": 999}},
         )
         assert response.status_code == 200
         data = response.get_json()
@@ -429,38 +383,17 @@ class TestScenarioAPI:
             "errors": [f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."],
         }
 
-    def test_validate_refuses_only_a_shuffled_pool_too_large_for_a_dashboard_fleet(
+    def test_validate_refuses_a_shuffled_pool_whose_counts_far_exceed_the_fleets_homes_naming_their_total_and_n_homes(
         self, client: FlaskClient
     ) -> None:
-        """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more with the fleet loader's refusal, which holds a pool to the fleet's homes, naming pv.capacity_kw.
+        """E7: a pool of 10**12 values for 10 homes is refused with read_form_fleet's one refusal, which holds the counts to n_homes before any value of the pool is built, naming pv.capacity_kw at the form's path, the counts' total and n_homes; a pool of 10 values for those homes validates."""
+        form = _form_with_pv_pool([4.0], [10**12], n_homes=10)
+        refusal = fleet_reader_refusal(form)
 
-        The form's fleet has that many homes, since a pool holds one value per home.  The pool
-        sent is at most one value over the limit, never a count such as finding
-        fk-9dd1d9389dd2's 10**12: if the bound regressed, validate would build every value
-        of the pool.
-        """
-        at_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES}]
-        above_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES + 1}]
-        fleet_block = scenario_from_builder_form(
-            {
-                **TestBuilderScenarioYaml._DEFAULT_FORM,
-                "n_homes": MAX_FLEET_HOMES,
-                "pv_distribution_type": "shuffled_pool",
-                "pv_sp_entries": above_limit,
-            }
-        )["fleet_distribution"]
-        with pytest.raises(ConfigurationError) as loader_refusal:
-            parse_fleet_distribution_config(fleet_block)
-
-        assert _validation_with_pv_pool(client, at_limit, n_homes=MAX_FLEET_HOMES) == {
-            "valid": True,
-            "errors": [],
-        }
-        assert _validation_with_pv_pool(client, above_limit, n_homes=MAX_FLEET_HOMES) == {
-            "valid": False,
-            "errors": [str(loader_refusal.value)],
-        }
-        assert "pv.capacity_kw" in str(loader_refusal.value)
+        assert _validation_with_pv_pool(client, [4.0], [10], n_homes=10) == {"valid": True, "errors": []}
+        assert _validation_with_pv_pool(client, [4.0], [10**12], n_homes=10) == {"valid": False, "errors": [refusal]}
+        assert refusal.removeprefix("the top level: ").startswith("pv.capacity_kw: ")
+        assert f"n_homes (10), got {10**12}" in refusal
 
     def test_validate_accepts_each_fixed_value_the_builder_page_allows_and_refuses_one_beyond_it(
         self, client: FlaskClient
@@ -473,25 +406,26 @@ class TestScenarioAPI:
             if attributes.get("x-model.number") == "dist.fixed"
         ]
 
-        def validation_with(field: str, value: float) -> Any:
+        def validation_with(component: ComponentLimits, value: float) -> Any:
             response = client.post(
                 "/api/scenarios/validate",
-                json={**TestBuilderScenarioYaml._DEFAULT_FORM, field: value},
+                json={**TestBuilderScenarioYaml._DEFAULT_FORM, component.key: {component.grammar_key: value}},
             )
             assert response.status_code == 200
             return response.get_json()
 
         for component, (served_min, served_max) in zip(FLEET_COMPONENTS.values(), bounds, strict=True):
             low, high = float(served_min), float(served_max)
+            field = f"{component.key}.{component.grammar_key}"
             for value in (low, high):
-                answer = validation_with(component.fixed_field, value)
+                answer = validation_with(component, value)
                 assert answer == {"valid": True, "errors": []}, (
-                    f"{component.fixed_field} {value!r}, which the page allows, was refused: {answer}"
+                    f"{field} {value!r}, which the page allows, was refused: {answer}"
                 )
             for value in (math.nextafter(low, -math.inf), math.nextafter(high, math.inf)):
-                answer = validation_with(component.fixed_field, value)
+                answer = validation_with(component, value)
                 assert answer["valid"] is False, (
-                    f"{component.fixed_field} {value!r}, beyond what the page allows, was accepted: {answer}"
+                    f"{field} {value!r}, beyond what the page allows, was accepted: {answer}"
                 )
 
     def test_list_presets(self, client: FlaskClient) -> None:
@@ -803,14 +737,14 @@ class TestBuilderScenarioYaml:
         "n_homes": 100,
         "import_rate": 0.245,
         "seg_rate_pence_per_kwh": "",
-        "pv_capacity_kw": 4,
-        "battery_capacity_kwh": 5,
-        "annual_consumption_kwh": 3500,
+        "pv": {"capacity_kw": 4},
+        "battery": {"capacity_kwh": 5},
+        "load": {"annual_consumption_kwh": 3500},
     }
-    """The form scenario-builder.js's getFormData() sends on page load, given a name.
+    """A form scenario-builder.js's getFormData() sends, given a name, with each component at its Fixed Value.
 
     tests/e2e/test_scenario_builder.py::test_default_form_previews_yaml_the_fleet_loader_loads
-    pins the real payload this mirrors.
+    pins the real payload's shape.
     """
 
     def test_default_form_yaml_loads_through_load_fleet_config(
@@ -838,69 +772,47 @@ class TestBuilderScenarioYaml:
         assert document["seg"] is None
 
     @pytest.mark.parametrize(
-        ("distribution_fields", "expected"),
+        ("spec", "expected"),
         [
             pytest.param(
-                {"distribution_type": "normal", "mean": 5, "std": 2, "min": 0, "max": 13.5},
+                {"type": "normal", "mean": 5, "std": 2, "min": 0, "max": 13.5},
                 NormalDistribution(5.0, 2.0, min=0.0, max=13.5),
                 id="normal",
             ),
             pytest.param(
-                {"distribution_type": "uniform", "mean": 5, "std": 2, "min": 2, "max": 8},
+                {"type": "uniform", "min": 2, "max": 8},
                 UniformDistribution(2.0, 8.0),
                 id="uniform",
             ),
             pytest.param(
-                {
-                    "distribution_type": "weighted_discrete",
-                    "wd_values": [{"value": 3, "weight": 20}, {"value": 4, "weight": 40}],
-                },
+                {"type": "weighted_discrete", "values": [3, 4], "weights": [20, 40]},
                 WeightedDiscreteDistribution((3.0, 4.0), (20.0, 40.0)),
                 id="weighted_discrete",
             ),
             pytest.param(
-                {
-                    "distribution_type": "shuffled_pool",
-                    "sp_entries": [{"value": 3, "count": 50}, {"value": 4, "count": 50}],
-                },
+                {"type": "shuffled_pool", "values": [3, 4], "counts": [50, 50]},
                 ShuffledPoolDistribution((3.0, 4.0), (50, 50)),
                 id="shuffled_pool",
             ),
         ],
     )
     @pytest.mark.parametrize(
-        ("component", "fixed_field", "grammar_key"),
-        [
-            pytest.param("pv", "pv_capacity_kw", "capacity_kw", id="pv"),
-            pytest.param("battery", "battery_capacity_kwh", "capacity_kwh", id="battery"),
-            pytest.param(
-                "load", "annual_consumption_kwh", "annual_consumption_kwh", id="load"
-            ),
-        ],
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
     )
     def test_each_distribution_the_form_offers_reaches_the_loader(
         self,
         client: FlaskClient,
-        component: str,
-        fixed_field: str,
-        grammar_key: str,
-        distribution_fields: dict[str, Any],
+        component: ComponentLimits,
+        spec: dict[str, Any],
         expected: object,
     ) -> None:
-        """A component sent as a distribution, in the keys getFormData() sends, is read back as that distribution.
-
-        The form keys are the component's prefix on each of *distribution_fields*,
-        and the component's fixed field is not sent.
-        """
-        form = {key: value for key, value in self._DEFAULT_FORM.items() if key != fixed_field}
-        form.update(
-            {f"{component}_{suffix}": value for suffix, value in distribution_fields.items()}
-        )
+        """A component sent as a distribution, in the grammar's spelling getFormData() sends it in, is read back as that distribution."""
+        form = {**self._DEFAULT_FORM, component.key: {component.grammar_key: spec}}
 
         _, document = _preview_document(client, form)
 
         fleet_distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-        assert getattr(fleet_distribution, component).draws[grammar_key] == expected
+        assert getattr(fleet_distribution, component.key).draws[component.grammar_key] == expected
 
     @pytest.mark.parametrize(
         "rate",
