@@ -184,3 +184,22 @@ def test_both_pages_refuse_a_spec_no_editor_holds_with_the_editors_own_refusal(c
     assert {name: (response.status_code, response.get_json()) for name, response in responses.items()} == dict.fromkeys(
         responses, (400, {"error": str(refusal.value)})
     )
+
+
+@pytest.mark.parametrize("component", [pytest.param(each, id=each.key) for each in FLEET_COMPONENTS.values()])
+def test_both_pages_refuse_a_drawn_value_outside_its_components_range_with_one_message(
+    client: FlaskClient, component: ComponentLimits
+) -> None:
+    """L2: a normal drawn far above a component's value_range is refused on both pages with one message, which names the range."""
+    high = component.value_range.high
+    far_above = {"type": "normal", "mean": 2 * high, "std": high / 100}
+
+    exported = client.post(
+        "/api/fleet/export-yaml", json=_with_component(_FLEET_PAGE.starting_form(), component, far_above)
+    )
+    validated = client.post("/api/scenarios/validate", json=_with_component(_BUILDER.starting_form(), component, far_above))
+
+    assert exported.status_code == 400, exported.get_data(as_text=True)
+    error = exported.get_json()["error"]
+    assert validated.get_json()["errors"] == [error]
+    assert error.startswith(f"{component.key}.{component.grammar_key} must be {component.value_range} for every home")
