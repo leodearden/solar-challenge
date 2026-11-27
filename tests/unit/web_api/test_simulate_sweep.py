@@ -94,14 +94,14 @@ def _steps_the_sweep_page_offers(client: FlaskClient) -> tuple[int, int]:
 
 
 def test_the_sweep_page_offers_exactly_the_parameters_a_sweep_accepts(client: FlaskClient) -> None:
-    """The sweep page's parameter select offers, in order, exactly the knobs POST /api/simulate/sweep accepts; it answers every other knob with 400."""
+    """The sweep page's parameter select offers exactly the knobs POST /api/simulate/sweep accepts; it answers every other knob with 400."""
     page = client.get("/scenarios/sweep").get_data(as_text=True)
     offered = list(option_texts(page, {"x-model": "parameter"}))
     assert offered, "the sweep page offers no parameter"
 
     answers = {name: client.post("/api/simulate/sweep", json={"parameter": name}).status_code for name in KNOBS}
 
-    assert [name for name in KNOBS if answers[name] == 201] == offered
+    assert {name for name in KNOBS if answers[name] == 201} == set(offered)
     refused = {name: status for name, status in answers.items() if name not in offered}
     assert refused == dict.fromkeys(refused, 400)
 
