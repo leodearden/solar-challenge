@@ -23,6 +23,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
+from solar_challenge.web.sweep_request import read_sweep_request
 from tests._html_page import element_attributes
 
 
@@ -383,16 +384,14 @@ class TestSweepParameters:
         client: FlaskClient,
         recording_job_manager: _RecordingJobManager,
     ) -> None:
-        """A sweep whose max exceeds the PV capacity a home accepts gets 400 naming the parameter and the range's high bound, and submits none of its points."""
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "pv_capacity_kw", "min": 5.0, "max": 25.0, "steps": 3},
-        )
+        """A sweep whose max exceeds the PV capacity a home accepts gets read_sweep_request's own refusal of its range, not a point's, and submits none of its points."""
+        body = {"parameter": "pv_capacity_kw", "min": 5.0, "max": 25.0, "steps": 3}
+        with pytest.raises(ConfigurationError) as refusal:
+            read_sweep_request(body)
 
-        assert response.status_code == 400
-        error = response.get_json()["error"]
-        assert "pv_capacity_kw" in error
-        assert "20" in error
+        response = client.post("/api/simulate/sweep", json=body)
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
         assert recording_job_manager.submitted_homes == []
 
     def test_a_base_config_the_home_parser_refuses_is_refused_naming_base_config_and_carrying_its_refusal(
@@ -431,18 +430,16 @@ class TestSweepRequestAnswers:
             assert named in error
         assert recording_job_manager.submitted_homes == []
 
-    def test_a_battery_max_above_its_components_range_is_refused_naming_the_knob_and_the_range(
+    def test_a_battery_max_above_its_components_range_gets_the_readers_range_refusal(
         self, client: FlaskClient, recording_job_manager: _RecordingJobManager
     ) -> None:
-        response = client.post(
-            "/api/simulate/sweep",
-            json={"parameter": "battery_capacity_kwh", "min": 0, "max": 200, "steps": 3, "mode": "linear"},
-        )
+        body = {"parameter": "battery_capacity_kwh", "min": 0, "max": 200, "steps": 3, "mode": "linear"}
+        with pytest.raises(ConfigurationError) as refusal:
+            read_sweep_request(body)
 
-        assert response.status_code == 400
-        error = response.get_json()["error"]
-        for named in ("battery_capacity_kwh", "0", "100"):
-            assert named in error
+        response = client.post("/api/simulate/sweep", json=body)
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
         assert recording_job_manager.submitted_homes == []
 
     def test_a_body_without_a_mode_sweeps_geometrically(self, client: FlaskClient) -> None:
