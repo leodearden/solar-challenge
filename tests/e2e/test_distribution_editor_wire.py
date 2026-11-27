@@ -2,10 +2,11 @@
 """End-to-end tests of the wire both fleet pages post for a component (E5): the grammar's own spec, as #page-limits starts it.
 
 The fleet page's run (aborted, so no job reaches the live server's JobManager) and the
-builder's Validate both post the PV card as write_distribution_spec of its component's start
-spec of the type chosen, or its Fixed Value's number, and the two pages post the same spec.
-A blanked input posts null: Normal's Max is then left out of the clamp, and a battery pool's
-value is then a home without a battery.
+builder's Validate both post every card as write_distribution_spec of its component's start
+spec of the type chosen, or its Fixed Value's number. Each type any card offers is chosen in
+every card that offers it, and both pages are held to that one expected value, so the two
+pages post the same spec. A blanked input posts null: Normal's Max is then left out of the
+clamp, and a battery pool's value is then a home without a battery.
 """
 
 from collections.abc import Callable
@@ -14,9 +15,9 @@ from typing import Any, NamedTuple
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
-from solar_challenge.fleet_distribution import DISTRIBUTION_TYPES
-from solar_challenge.web.fleet_components import ComponentLimits, page_limits
-from tests._fleet_form import start_spec
+from solar_challenge.fleet_distribution import DISTRIBUTION_TYPES, DistributionType
+from solar_challenge.web.fleet_components import SCALAR_FORM, ComponentLimits, page_limits
+from tests._fleet_form import start_spec, start_wire
 from tests.e2e._scenario_builder_page import open_builder
 
 _COMPONENTS = page_limits().components
@@ -78,24 +79,38 @@ def _choose(page: Page, editor: _FleetPageEditor, component: ComponentLimits, ti
     editor.control(page, component, "combobox", "Distribution Type").select_option(label=title)
 
 
-@pytest.mark.parametrize(
-    ("title", "spec"),
-    [
-        pytest.param(_PV.scalar_form.title, _PV.start.fixed, id=_PV.scalar_form.name),
-        *(pytest.param(each.title, start_spec(_PV, each.name), id=each.name) for each in _PV.editor_types),
-    ],
-)
-def test_each_pv_editor_type_posts_its_start_spec_as_the_grammar_writes_it_on_both_pages(
-    page: Page, live_server: str, title: str, spec: Any
-) -> None:
-    """Choosing *title* in the PV card posts pv.capacity_kw as *spec*, the start's spec of that type written, on the fleet page and on the builder alike."""
-    posted = {}
-    for name, editor in (("fleet", _FLEET_PAGE), ("builder", _BUILDER)):
-        editor.open(page, live_server)
-        _choose(page, editor, _PV, title)
-        posted[name] = editor.posted(page)["pv"]
+def _cards_offering(editor_type: DistributionType) -> list[ComponentLimits]:
+    """The components whose card offers *editor_type*: every one for Fixed Value, else those whose editor types hold it."""
+    return [
+        component
+        for component in _COMPONENTS.values()
+        if editor_type.is_scalar_form or editor_type in component.editor_types
+    ]
 
-    assert posted == {"fleet": {"capacity_kw": spec}, "builder": {"capacity_kw": spec}}
+
+#: Every type some card offers: Fixed Value, then the DISTRIBUTION_TYPES records some card's editor types hold, in table order.
+_OFFERED_TYPES = [
+    SCALAR_FORM,
+    *(each for each in DISTRIBUTION_TYPES.values() if not each.is_scalar_form and _cards_offering(each)),
+]
+
+
+@pytest.mark.parametrize("editor_type", [pytest.param(each, id=each.name) for each in _OFFERED_TYPES])
+@pytest.mark.parametrize("editor", _PAGES)
+def test_choosing_a_type_in_every_card_that_offers_it_posts_each_cards_start_wire_of_it(
+    page: Page, live_server: str, editor: _FleetPageEditor, editor_type: DistributionType
+) -> None:
+    """Choosing *editor_type* in each card that offers it posts each such card's field as start_wire of its component and that type."""
+    offering = _cards_offering(editor_type)
+    editor.open(page, live_server)
+    for component in offering:
+        _choose(page, editor, component, editor_type.title)
+
+    posted = editor.posted(page)
+
+    assert {component.key: posted[component.key] for component in offering} == {
+        component.key: {component.grammar_key: start_wire(component, editor_type)} for component in offering
+    }
 
 
 @pytest.mark.parametrize("editor", _PAGES)
