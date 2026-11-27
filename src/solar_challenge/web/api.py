@@ -11,7 +11,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import date
-from typing import Any
+from typing import Any, get_args
 
 import pandas as pd
 from flask import Blueprint, Response, jsonify, request, url_for
@@ -38,6 +38,7 @@ from solar_challenge.web.fleet_scenario import (
 )
 from solar_challenge.web.presets import (
     PresetNameTaken,
+    PresetSource,
     PresetType,
     SavedPresetUnreadable,
     home_preset_named,
@@ -900,6 +901,10 @@ def scenarios_import_yaml() -> tuple[Response, int]:
     return _loaded_form_answer(builder_form_from_yaml(yaml_text))
 
 
+#: The sources of the scenario builder's presets: the built-in scenario files, then the saved fleet presets.
+_PRESET_SOURCES: tuple[PresetSource, ...] = get_args(PresetSource)
+
+
 @api_bp.route("/scenarios/presets", methods=["GET"])
 def scenarios_list_presets() -> tuple[Response, int]:
     """List the built-in scenario files the builder loads, then the saved fleet presets, each by name.
@@ -910,8 +915,9 @@ def scenarios_list_presets() -> tuple[Response, int]:
     Returns:
         JSON with the ``presets`` array, HTTP 200.
     """
+    builtin: PresetSource = "builtin"
     presets: list[dict[str, Any]] = [
-        {"name": name, "source": "builtin"} for name in builtin_scenarios_loaded_by(builder_form_from_yaml)
+        {"name": name, "source": builtin} for name in builtin_scenarios_loaded_by(builder_form_from_yaml)
     ]
     presets.extend(saved_fleet_presets(get_database()))
     return jsonify({"presets": presets}), 200
@@ -930,7 +936,7 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
         home preset's name is not found; HTTP 500, with the fault logged, for a saved preset
         that cannot be read.
     """
-    source = read_one_of(request.args.get("source"), ("builtin", "saved"), "source")
+    source = read_one_of(request.args.get("source"), _PRESET_SOURCES, "source")
     if source == "builtin":
         imported = builtin_scenario_form(name, builder_form_from_yaml)
     else:
