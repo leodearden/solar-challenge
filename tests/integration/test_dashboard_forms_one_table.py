@@ -92,6 +92,9 @@ _BUILDER = _FleetPage(
     import_path="/api/scenarios/import-yaml",
 )
 
+#: Both pages, each as a parameter named after it.
+_PAGES = [pytest.param(page, id=page.name) for page in (_FLEET_PAGE, _BUILDER)]
+
 #: Each component with each type its distribution editor offers: Fixed Value, then its editor types.
 _EDITED = [
     pytest.param(component, editor_type, id=f"{component.key}-{editor_type.name}")
@@ -203,3 +206,41 @@ def test_both_pages_refuse_a_drawn_value_outside_its_components_range_with_one_m
     error = exported.get_json()["error"]
     assert validated.get_json()["errors"] == [error]
     assert error.startswith(f"{component.key}.{component.grammar_key} must be {component.value_range} for every home")
+
+
+@pytest.mark.parametrize(("component", "editor_type"), _EDITED)
+@pytest.mark.parametrize("page", _PAGES)
+def test_an_export_imported_on_its_own_page_loads_every_setting_and_exports_the_same_scenario(
+    client: FlaskClient, page: _FleetPage, component: ComponentLimits, editor_type: DistributionType
+) -> None:
+    """A page's export of a component's start spec of a type imports on that page with every setting and the spec posted, and exports the same scenario again."""
+    wire = start_wire(component, editor_type)
+    text = page.export(client, _with_component(page.starting_form(), component, wire))
+
+    imported = page.import_yaml(client, text)
+
+    assert imported.status_code == 200, imported.get_data(as_text=True)
+    loaded = imported.get_json()
+    assert loaded["not_loaded"] == []
+    assert loaded["form"][component.key] == {component.grammar_key: wire}
+    assert yaml.safe_load(page.export(client, loaded["form"])) == yaml.safe_load(text)
+
+
+@pytest.mark.parametrize(
+    ("exporting", "importing"),
+    [
+        pytest.param(_FLEET_PAGE, _BUILDER, id="fleet-to-builder"),
+        pytest.param(_BUILDER, _FLEET_PAGE, id="builder-to-fleet"),
+    ],
+)
+def test_each_pages_export_loads_on_the_other_page_with_the_same_component_blocks(
+    client: FlaskClient, exporting: _FleetPage, importing: _FleetPage
+) -> None:
+    """A scenario one page exports from its starting form loads on the other with the same component blocks."""
+    form = exporting.starting_form()
+
+    imported = importing.import_yaml(client, exporting.export(client, form))
+
+    assert imported.status_code == 200, imported.get_data(as_text=True)
+    loaded = imported.get_json()["form"]
+    assert {key: loaded[key] for key in FLEET_COMPONENTS} == {key: form[key] for key in FLEET_COMPONENTS}
