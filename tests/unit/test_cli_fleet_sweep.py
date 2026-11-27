@@ -33,7 +33,7 @@ _SUMMARY_COLUMNS = [
 
 _SWEPT_KNOBS = (
     "the knobs fleet sweep sweeps, each with its aliases: pv_capacity_kw, inverter_capacity_kw, "
-    "battery_capacity_kwh, annual_consumption_kwh, degradation_rate_per_year (degradation)"
+    "battery_capacity_kwh, battery_power_kw, annual_consumption_kwh, degradation_rate_per_year (degradation)"
 )
 
 _JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
