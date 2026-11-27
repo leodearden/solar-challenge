@@ -52,11 +52,11 @@ def _expand_sidebar_group(page: Page, group_label: str) -> None:
 
 
 def _click_sidebar_link(page: Page, link_text: str) -> None:
-    """Click a visible link inside the desktop sidebar."""
-    sidebar = _desktop_sidebar(page)
-    link = sidebar.locator("a", has_text=link_text)
-    link.first.click()
-    page.wait_for_load_state("domcontentloaded")
+    """Click a link inside the desktop sidebar and return once the page it opens has loaded its DOM."""
+    link = _desktop_sidebar(page).locator("a", has_text=link_text).first
+    target = link.evaluate("link => link.href")
+    link.click()
+    page.wait_for_url(target, wait_until="domcontentloaded")
 
 
 # ── Sidebar link navigation ───────────────────────────────────────────
