@@ -26,7 +26,7 @@ from solar_challenge.web.builder_form import builder_form_errors, scenario_from_
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
 from solar_challenge.web.dashboard import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.field_tree import field_tree
-from solar_challenge.web.fleet_config import sample_distribution
+from solar_challenge.web.fleet_components import fleet_component_values
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
     ImportedFleetForm,
@@ -329,22 +329,18 @@ def get_preset(name: str) -> tuple[Response, int]:
 
 @api_bp.route("/fleet/preview-distribution", methods=["POST"])
 def preview_distribution() -> tuple[Response, int]:
-    """Generate sample data for distribution histogram preview.
+    """Preview the homes a fleet form builds, as Run builds them.
 
-    Expects a JSON body with ``type``, ``params``, and an optional ``n_samples``
-    from 1 to MAX_FLEET_HOMES (default 100).
+    Expects the fleet form POST /api/simulate/fleet-from-distribution takes, read by
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
 
     Returns:
-        JSON with ``samples`` array, HTTP 200 on success; or the ``error``,
-        HTTP 400, when sample_distribution refuses the type, params or n_samples.
+        JSON with ``homes``, the number of homes, and ``values``, each component's value
+        of each home in home order (fleet_component_values), HTTP 200 on success; or the
+        ``error``, HTTP 400, that parse_fleet_form raises.
     """
-    data = request_json_object()
-    dist_type = data.get("type", "normal")
-    params = data.get("params", {})
-    n_samples = data.get("n_samples", 100)
-
-    samples = sample_distribution(dist_type, params, n_samples)
-    return jsonify({"samples": samples}), 200
+    fleet = parse_fleet_form(request_json_object())
+    return jsonify({"homes": len(fleet.homes), "values": fleet_component_values(fleet.homes)}), 200
 
 @api_bp.route("/simulate/fleet-from-distribution", methods=["POST"])
 def simulate_fleet_from_distribution() -> tuple[Response, int]:
