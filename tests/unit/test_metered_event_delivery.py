@@ -6,11 +6,14 @@ could be enrolled: TestObservedPricesAsBefore pins those figures as literals mea
 pricing existed.  Under both participations the breakdown reports the battery export an event's window
 holds (TestBatteryExportPerEvent).  Pricing refuses a fleet whose battery homes carry other event windows
 than its participation gives them (TestPricingRefusesAMismatchedEnrolment, PRD
-docs/prds/event-dispatch-and-battery-sizing.md §9 B10).
+docs/prds/event-dispatch-and-battery-sizing.md §9 B10).  A dispatched fleet is priced from the delivery
+metered on its drawn event days: under the capacity baseline, its battery homes' whole in-window discharge
+(TestCapacityMetering, §9 B8).
 """
 
 import dataclasses
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Mapping
 from datetime import date, timedelta
 from typing import Optional
 
@@ -24,6 +27,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
     EventParticipation,
+    EventWindow,
     GridServicesEventsConfig,
     compute_grid_services_at_events,
     drawn_event_days,
@@ -306,3 +310,144 @@ class TestPricingRefusesAMismatchedEnrolment:
 
         # min(2.5 kW, (3.5 − 0.5) kWh / 3 h) = 1.0 kW on its one event day, at £9.972 per kW.
         assert _OBSERVED.annual_income_gbp(fleet) == pytest.approx(9.972)
+
+
+_CAPACITY = GridServicesEventsConfig(participation=EventParticipation.DISPATCHED, delivery_baseline="capacity")
+_CENTRAL_GBP_PER_KW = (1.00 * 12 + 0.6 * 3 * 0.060 * 12) * 0.75
+"""The default window's central rates per kW booked: availability £1.00 × 12 events, utilisation 0.6 × 3 h × £0.060/kWh × 12, net of the 25% aggregator share; £9.972."""
+
+_JANUARY_WEEKEND_MORNINGS = EventWindow(months=(1,), weekdays=(5, 6), hours=(8,), events_per_year=4, event_hours=1.0)
+
+
+def _drawn(cfg: GridServicesEventsConfig, position: int = 0) -> tuple[date, ...]:
+    """The days *cfg*'s window at *position* draws over January 2024."""
+    return drawn_event_days(cfg.event_windows[position], every_date(*_JANUARY), cfg.event_day_seed, position=position)
+
+
+def _kw_series(
+    kw_by_window_day: Mapping[tuple[EventWindow, date], float], *, elsewhere_kw: float
+) -> pd.Series:
+    """January 2024, hourly: each (window, day)'s kW on that day's rows in the window, *elsewhere_kw* in every other row."""
+    index = _january().generation.index
+    values = np.full(len(index), elsewhere_kw)
+    dates = index.date
+    for (window, day), kw in kw_by_window_day.items():
+        values[window.mask(index).to_numpy() & (dates == day)] = kw
+    return pd.Series(values, index=index)
+
+
+def _metered_home(
+    discharge_kw: Mapping[tuple[EventWindow, date], float],
+    export_kw: Mapping[tuple[EventWindow, date], float] | None = None,
+) -> SimulationResults:
+    """January 2024's results of a battery home discharging *discharge_kw* and exporting *export_kw* in the windows' rows of their days, and 7.0 kW and 6.0 kW in every other row, which no metering may count."""
+    return _january(
+        battery_discharge=_kw_series(discharge_kw, elsewhere_kw=7.0),
+        battery_export=_kw_series(export_kw or {}, elsewhere_kw=6.0),
+    )
+
+
+def _ranked(values: list[float], percent: int) -> float:
+    """The ⌈percent·n / 100⌉-th largest of *values*."""
+    return sorted(values, reverse=True)[-(-percent * len(values) // 100) - 1]
+
+
+class TestCapacityMetering:
+    """§9 B8: under the capacity baseline a drawn day delivers the battery homes' in-window discharge over the event's hours, D(d) = Σ_home Σ_{t∈d∩w} discharge(t)·Δt / h."""
+
+    def _fleet(self) -> tuple[FleetResults, list[float], list[float]]:
+        """Two battery homes discharging a_k = 1 + k/2 and b_k = (k + 1)/4 kW, and exporting k/10 and 0.2 kW, through drawn day k's window; and each D(d_k) = a_k + b_k and in-window export 3·(k/10 + 0.2) kWh."""
+        days = _drawn(_CAPACITY)
+        assert len(days) >= 3
+        home_a = _metered_home(
+            {(_WINDOW, day): 1.0 + k / 2 for k, day in enumerate(days)},
+            {(_WINDOW, day): k / 10 for k, day in enumerate(days)},
+        )
+        home_b = _metered_home(
+            {(_WINDOW, day): (k + 1) / 4 for k, day in enumerate(days)},
+            {(_WINDOW, day): 0.2 for day in days},
+        )
+        delivered = [(1.0 + k / 2) + (k + 1) / 4 for k in range(len(days))]
+        exported = [3 * (k / 10 + 0.2) for k in range(len(days))]
+        return _enrolled_fleet(_CAPACITY, home_a, home_b), delivered, exported
+
+    def test_the_booked_delivery_is_the_mean_over_the_drawn_days(self) -> None:
+        fleet, delivered, _ = self._fleet()
+
+        breakdown = compute_grid_services_at_events(fleet, _CAPACITY)
+
+        assert breakdown.per_window_avail_kw == pytest.approx((sum(delivered) / len(delivered),))
+
+    def test_its_reliability_figures_rank_the_drawn_days_deliveries(self) -> None:
+        fleet, delivered, _ = self._fleet()
+
+        breakdown = compute_grid_services_at_events(fleet, _CAPACITY)
+
+        assert breakdown.per_window_avail_p50_kw == pytest.approx((_ranked(delivered, 50),))
+        assert breakdown.per_window_avail_p90_kw == pytest.approx((_ranked(delivered, 90),))
+
+    def test_the_income_books_the_mean_delivery_at_the_central_rates(self) -> None:
+        fleet, delivered, _ = self._fleet()
+
+        breakdown = compute_grid_services_at_events(fleet, _CAPACITY)
+
+        assert breakdown.annual_income_gbp == pytest.approx(sum(delivered) / len(delivered) * _CENTRAL_GBP_PER_KW)
+        assert breakdown.annual_income_gbp == _CAPACITY.annual_income_gbp(fleet)
+        assert sum(breakdown.per_window_income_gbp) == breakdown.annual_income_gbp
+
+    def test_the_battery_export_per_event_is_the_mean_in_window_export_on_the_drawn_days(self) -> None:
+        fleet, _, exported = self._fleet()
+
+        breakdown = compute_grid_services_at_events(fleet, _CAPACITY)
+
+        assert breakdown.per_window_battery_export_kwh_per_event == pytest.approx((sum(exported) / len(exported),))
+
+    def test_no_displaced_self_use_is_reported(self) -> None:
+        fleet, _, _ = self._fleet()
+
+        breakdown = compute_grid_services_at_events(fleet, _CAPACITY)
+
+        assert breakdown.per_window_displaced_self_use_kwh_per_event == ()
+        assert breakdown.per_window_displaced_import_gbp_per_year == ()
+
+    def test_each_window_is_metered_on_the_days_drawn_at_its_own_position(self) -> None:
+        cfg = dataclasses.replace(_CAPACITY, event_windows=(_WINDOW, _JANUARY_WEEKEND_MORNINGS))
+        evenings, mornings = _drawn(cfg, 0), _drawn(cfg, 1)
+        assert evenings and mornings
+        home = _metered_home(
+            {
+                **{(_WINDOW, day): 1.0 + k for k, day in enumerate(evenings)},
+                **{(_JANUARY_WEEKEND_MORNINGS, day): 2.0 + k for k, day in enumerate(mornings)},
+            }
+        )
+
+        breakdown = compute_grid_services_at_events(_enrolled_fleet(cfg, home), cfg)
+
+        assert breakdown.per_window_avail_kw == pytest.approx(
+            (
+                sum(1.0 + k for k in range(len(evenings))) / len(evenings),
+                sum(2.0 + k for k in range(len(mornings))) / len(mornings),
+            )
+        )
+
+    def test_a_window_that_draws_no_day_prices_0_and_warns_once_naming_it_to_the_caller(self) -> None:
+        june = EventWindow(months=(6,), weekdays=(0, 1, 2, 3, 4), hours=(17,), events_per_year=6, event_hours=1.0)
+        cfg = dataclasses.replace(_CAPACITY, event_windows=(june,))
+        fleet = _enrolled_fleet(cfg, _metered_home({}), _metered_home({}))
+        assert fleet.home_configs[0].battery_config is not None
+        assert fleet.home_configs[0].battery_config.event_discharge == ()
+
+        with warnings.catch_warnings(record=True) as breakdown_warnings:
+            warnings.simplefilter("always")
+            breakdown = compute_grid_services_at_events(fleet, cfg)
+        with warnings.catch_warnings(record=True) as income_warnings:
+            warnings.simplefilter("always")
+            income = cfg.annual_income_gbp(fleet)
+
+        assert breakdown.per_window_avail_kw == (0.0,)
+        assert breakdown.annual_income_gbp == income == 0.0
+        for record in (breakdown_warnings, income_warnings):
+            texts = [(str(w.message), w.filename) for w in record if issubclass(w.category, UserWarning)]
+            assert len(texts) == 1, texts
+            assert "months=(6,)" in texts[0][0]
+            assert texts[0][1] == __file__
