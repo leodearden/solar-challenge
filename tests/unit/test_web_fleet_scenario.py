@@ -52,8 +52,9 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
+from solar_challenge.web.form_choices import FormChoice, SettingInput
 from solar_challenge.web.request_boundary import read_string, require_encodable_text
-from solar_challenge.web.scenario_import import FormChoice, ImportedForm, SettingInput
+from solar_challenge.web.scenario_import import ImportedForm
 from solar_challenge.web.simulation_params import parse_seg_tariff
 from tests._fleet_form import form_fleet_blocks, valid_distribution_form
 from tests._synthetic_weather import sunless_weather, weather_for

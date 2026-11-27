@@ -42,17 +42,19 @@ from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
 )
 from solar_challenge.web.run_names import is_run_name
-from solar_challenge.web.scenario_import import (
+from solar_challenge.web.form_choices import (
     RATE_STEP,
     RATE_WITHIN,
-    BlockRead,
     FormChoice,
     FormSetting,
-    ImportedForm,
     SettingInput,
+    flat_rate_choice,
+)
+from solar_challenge.web.scenario_import import (
+    BlockRead,
+    ImportedForm,
     SettingReader,
     editor_field,
-    flat_rate_choice,
     fleet_scenario_document,
     not_loaded,
     read_as_given,
@@ -386,7 +388,9 @@ def _read_tariff(tariff: Any) -> BlockRead:
     """
     if tariff is None:
         return {}, ()
-    form_tariff, unheld = read_typed_block(tariff, "tariff", "type", FLEET_FORM_TARIFFS, _PAGE)
+    form_tariff, unheld = read_typed_block(
+        tariff, "tariff", "type", [choice.held_type() for choice in FLEET_FORM_TARIFFS], _PAGE
+    )
     return {"tariff": form_tariff}, unheld
 
 
@@ -399,6 +403,6 @@ def _read_dispatch(dispatch: Any, path: str) -> BlockRead:
     if dispatch is None:
         return {}, ()
     form_dispatch, unheld = read_typed_block(
-        dispatch, path, "strategy_type", FLEET_FORM_DISPATCH, _PAGE
+        dispatch, path, "strategy_type", [choice.held_type() for choice in FLEET_FORM_DISPATCH], _PAGE
     )
     return {"dispatch_strategy": form_dispatch}, unheld

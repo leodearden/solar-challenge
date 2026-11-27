@@ -39,12 +39,12 @@ from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
     require_json_object,
 )
+from solar_challenge.web.form_choices import flat_rate_choice
 from solar_challenge.web.scenario_import import (
     BlockRead,
-    FormChoice,
+    HeldType,
     ImportedForm,
     fleet_scenario_document,
-    flat_rate_choice,
     not_loaded,
     read_as_given,
     read_blocks,
@@ -277,8 +277,9 @@ _PAGE = "builder"
 #: The seg keys the builder form holds: a rate, its seg_rate_pence_per_kwh.
 _HELD_SEG_KEYS = frozenset({"rate_pence_per_kwh"})
 
-#: The tariff the builder form holds: a flat rate, its import_rate.
-_BUILDER_TARIFFS: tuple[FormChoice, ...] = (flat_rate_choice(_PAGE),)
+#: The tariff the builder form holds, as its import reads it: a flat rate, its import_rate,
+#: whose input builder.html draws itself.
+_BUILDER_TARIFFS: tuple[HeldType, ...] = (flat_rate_choice(_PAGE).held_type(),)
 
 
 def builder_form_from_scenario(document: object) -> ImportedForm:

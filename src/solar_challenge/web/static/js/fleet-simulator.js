@@ -50,7 +50,7 @@ document.addEventListener('alpine:init', () => {
         return DistributionEditor.load(dist, (block || {})[component.grammar_key], component, path);
     }
 
-    // How the form holds, posts and loads a setting of each input kind, scenario_import.SettingInput's values
+    // How the form holds, posts and loads a setting of each input kind, form_choices.SettingInput's values
     const SETTING_INPUTS = {
         number: {
             held: (start) => start,

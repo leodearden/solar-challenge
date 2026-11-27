@@ -21,7 +21,7 @@ from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_scenario import FLEET_FORM_DISPATCH, FLEET_FORM_TARIFFS
-from solar_challenge.web.scenario_import import FormChoice, SettingInput
+from solar_challenge.web.form_choices import FormChoice, SettingInput
 from solar_challenge.web.stored_runs import RUN_KINDS
 from tests._html_page import (
     counts_of,
