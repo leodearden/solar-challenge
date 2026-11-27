@@ -82,7 +82,7 @@ def _scenario() -> ScenarioConfig:
 #: Each input type's dotted name, to a factory of a valid instance of it that gives every numeric field a value and
 #: every tuple field one element at least.
 INPUT_TYPES: Mapping[str, Callable[[], object]] = {
-    "solar_challenge.battery.BatteryConfig": lambda: BatteryConfig(capacity_kwh=5.0, soh=0.9),
+    "solar_challenge.battery.BatteryConfig": lambda: BatteryConfig(capacity_kwh=5.0, soh=0.9, site_export_limit_kw=3.0),
     "solar_challenge.community.CommunityBillingConfig": lambda: CommunityBillingConfig(seg_rate_pence_per_kwh=15.0),
     "solar_challenge.config.ScenarioConfig": _scenario,
     "solar_challenge.dispatch.GridChargeConfig": lambda: GridChargeConfig(target_soc_fraction=0.8),

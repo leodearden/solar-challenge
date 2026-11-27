@@ -83,7 +83,7 @@ class HomeConfig:
 
 
 def _battery_strategy(config: HomeConfig, battery: BatteryConfig) -> DispatchStrategy:
-    """A new instance of battery's dispatch strategy, built for its grid_charging at the home's tariff and wrapped in its event windows.
+    """A new instance of battery's dispatch strategy, built for its grid_charging at the home's tariff and wrapped in its event windows and its site export limit.
 
     Raises:
         ConfigurationError: build_dispatch_strategy's refusals: tou_optimized on the tariff's
@@ -96,6 +96,7 @@ def _battery_strategy(config: HomeConfig, battery: BatteryConfig) -> DispatchStr
         tariff=config.tariff_config,
         event_discharge=battery.event_discharge,
         max_discharge_kw=battery.max_discharge_kw,
+        site_export_limit_kw=battery.site_export_limit_kw,
     )
 
 
@@ -709,7 +710,7 @@ def _dispatch_path(
     """How the home dispatches each row, step_minutes long, at its tariff.
 
     A home with a battery runs strategy when given, wrapped in the battery's event_discharge
-    windows as its own strategy is, else its battery's _battery_strategy; either is named for
+    windows and its site export limit as its own strategy is, else its battery's _battery_strategy; either is named for
     the strategy it runs, wrapped name included. A home with no battery runs none: it only
     settles each row, and is named after strategy when given, else after self-consumption.
 
@@ -723,7 +724,12 @@ def _dispatch_path(
     if strategy is not None:
         battery = config.battery_config
         refuse_grid_charging_it_would_ignore(strategy, grid_charging=battery.grid_charging, tariff=config.tariff_config)
-        strategy = with_event_discharge(strategy, battery.event_discharge, max_discharge_kw=battery.max_discharge_kw)
+        strategy = with_event_discharge(
+            strategy,
+            battery.event_discharge,
+            max_discharge_kw=battery.max_discharge_kw,
+            site_export_limit_kw=battery.site_export_limit_kw,
+        )
     else:
         strategy = _battery_strategy(config, config.battery_config)
     return _DispatchPath(strategy.name, _strategy_timestep(strategy, config.tariff_config, step_minutes))
@@ -923,7 +929,7 @@ def simulate_home(
             tariff and battery_config.grid_charging, each row's carrying the
             same useful-charge ceiling. It replaces the battery's
             dispatch_strategy only: the battery's event_discharge windows
-            wrap it as they wrap its own, and the results' strategy_name is
+            and its site export limit wrap it as they wrap its own, and the results' strategy_name is
             then the wrapped name, else its name. It is refused when
             battery_config sets grid_charging and its charges_from_the_grid
             is False.

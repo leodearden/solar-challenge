@@ -335,8 +335,8 @@ def simulate_timestep(
             is built, if useful_charge_ceiling_kwh is neither None nor finite and at least 0,
             naming it; then if the strategy's decision asks for more than the step allows
             (StepLimits.require_admissible), an export beyond the headroom the battery's discharge
-            limit leaves after the shortfall included, naming the strategy and each power above
-            its limit.
+            limit leaves after the shortfall, or beyond what the battery's site export limit leaves
+            after the step's PV excess, included, naming the strategy and each power above its limit.
             These checks run before any battery moves energy. Then, after any battery has moved,
             if a flow the step computes is not a finite number at least 0 (an energy beyond a
             float, or one its battery reports), naming each such flow and its value
@@ -380,6 +380,7 @@ def simulate_timestep(
         demand_kw,
         max_charge_kw=battery.max_charge_kw,
         max_discharge_kw=battery.max_discharge_kw,
+        site_export_limit_kw=battery.site_export_limit_kw,
     ).require_admissible(decision, strategy.name)
 
     exchange = _execute(decision, battery, timestep_minutes)
