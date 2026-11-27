@@ -37,6 +37,8 @@ Key public symbols:
 * :func:`enrolled_event_windows` — the event windows a dispatched fleet's
   battery homes are enrolled in over a simulated period, and pricing expects
   them to carry.
+* :data:`OPERATIONAL_BASELINE_DAYS` — how many eligible days with no event a
+  dispatched fleet's operational delivery is baselined on.
 * :class:`NoGridServices` — frozen pricing value under which a fleet earns no
   grid-services income.
 * :class:`FlatGridServices` — frozen pricing value paying a flat rate per kW of
@@ -818,9 +820,10 @@ def _displaced_self_use(event_days: _PerHomeEventDays) -> _DisplacedSelfUse:
 def _home_window_days(sim: "SimulationResults", window: EventWindow) -> pd.DataFrame:
     """One home's rows in *window*, grouped by local date, indexed by date in date order.
 
-    Columns: discharge_kwh, the battery discharge over the day's rows (kWh); and
+    Columns: discharge_kwh, the battery discharge over the day's rows (kWh);
     export_kwh, the battery export over them (kWh), 0 for a home whose results hold
-    no ``battery_export``.  It reads the index's step length.
+    no ``battery_export``; and net_import_kw, the mean of grid_import − grid_export
+    over them (kW).  It reads the index's step length.
 
     Raises:
         ValueError: If the home's index has no step length (:attr:`SimulationResults.window`).
@@ -834,10 +837,15 @@ def _home_window_days(sim: "SimulationResults", window: EventWindow) -> pd.DataF
             {
                 "discharge_kwh": sim.battery_discharge.to_numpy(dtype=float)[rows] * step_hours,
                 "export_kwh": export_kw * step_hours,
+                "net_import_kw": (sim.grid_import.to_numpy(dtype=float) - sim.grid_export.to_numpy(dtype=float))[rows],
             }
         )
         .groupby(index[rows].date)
-        .agg(discharge_kwh=("discharge_kwh", "sum"), export_kwh=("export_kwh", "sum"))
+        .agg(
+            discharge_kwh=("discharge_kwh", "sum"),
+            export_kwh=("export_kwh", "sum"),
+            net_import_kw=("net_import_kw", "mean"),
+        )
     )
 
 
@@ -850,8 +858,15 @@ def _battery_export_kwh_per_event(
     return _mean_or_zero(tuple(fleet_kwh.tolist()))
 
 
-def _metered_window(window: EventWindow, homes: list[tuple[tuple[date, ...], "SimulationResults"]]) -> _EventDayTotals:
-    """*window*'s capacity delivery metered on each of its drawn days, over *homes*, each battery home's drawn days in the window and its results.
+OPERATIONAL_BASELINE_DAYS: int = 10
+"""How many eligible days with no event the operational baseline averages, nearest a drawn day; docs/cost-recovery-finance-model.md §8.1 gives its provenance."""
+
+_DrawnHomes: TypeAlias = list[tuple[tuple[date, ...], "SimulationResults"]]
+"""Each battery home's drawn days in one event window, and its results."""
+
+
+def _capacity_window(window: EventWindow, homes: _DrawnHomes) -> _EventDayTotals:
+    """*window*'s capacity delivery metered on each of its drawn days, over *homes*.
 
     A home delivers its in-window discharge over the event's hours on each of its
     drawn days, 0 on one with no in-window row; the fleet's D(d) sums the homes on
@@ -867,19 +882,65 @@ def _metered_window(window: EventWindow, homes: list[tuple[tuple[date, ...], "Si
     return _EventDayTotals(window=window, days=tuple(totals.index), avail_kw=tuple(totals.tolist()))
 
 
+def _baseline_days(candidates: list[date], day: date) -> list[date]:
+    """The OPERATIONAL_BASELINE_DAYS of *candidates*, sorted, nearest before *day*, completed with the nearest after it when fewer precede it; all of them when there are fewer."""
+    before = [candidate for candidate in candidates if candidate < day][-OPERATIONAL_BASELINE_DAYS:]
+    after = [candidate for candidate in candidates if candidate > day]
+    return before + after[: OPERATIONAL_BASELINE_DAYS - len(before)]
+
+
+def _operational_window(window: EventWindow, homes: _DrawnHomes, event_days: frozenset[date]) -> _EventDayTotals:
+    """*window*'s operational delivery metered on each of its drawn days, over *homes*.
+
+    N(d) sums the homes' mean in-window net import on each date the window enters, a
+    home lacking a date adding 0.  The baseline candidates are those dates *window*
+    is eligible on that are none of *event_days*, every window's drawn days, and
+    B(d) is N's mean over :func:`_baseline_days` of them.  A drawn day delivers
+    ``max(0, B(d) − N(d))``, 0 on one with no in-window row.
+
+    Raises:
+        ConfigurationError: If the window draws a day but no candidate is left to
+            baseline it on, naming the window and the operational baseline.
+    """
+    net_import = _fleet_day_totals([_home_window_days(sim, window) for _, sim in homes], "net_import_kw")
+    drawn = sorted({day for days, _ in homes for day in days})
+    candidates = [day for day in net_import.index if _is_eligible(window, day) and day not in event_days]
+    if drawn and not candidates:
+        raise ConfigurationError(
+            f"The operational delivery baseline meters event window months={window.months}, "
+            f"weekdays={window.weekdays}, hours={window.hours} against its eligible days with no event, "
+            "but every eligible day the fleet simulates is a drawn event day: simulate more days, "
+            "or measure delivery against the capacity delivery baseline"
+        )
+    delivered = [
+        max(0.0, float(net_import[_baseline_days(candidates, day)].mean()) - float(net_import[day]))
+        if day in net_import.index
+        else 0.0
+        for day in drawn
+    ]
+    return _EventDayTotals(window=window, days=tuple(drawn), avail_kw=tuple(delivered))
+
+
 def _metered_totals(
-    battery_homes: list[tuple["SimulationResults", BatteryConfig]], cfg: GridServicesEventsConfig
+    battery_homes: list[tuple["SimulationResults", BatteryConfig]],
+    cfg: GridServicesEventsConfig,
+    baseline: DeliveryBaseline,
 ) -> tuple[_EventDayTotals, ...]:
-    """Each of *cfg*'s windows' delivery metered on its drawn days over *battery_homes*, in window order.
+    """Each of *cfg*'s windows' delivery metered on its drawn days over *battery_homes* under *baseline*, in window order.
 
     Each home's drawn days are :func:`_drawn_days_by_window` over its results' days,
     the days it was enrolled on.
     """
     homes = [(_drawn_days_by_window(cfg, sim.window), sim) for sim, _ in battery_homes]
-    return tuple(
-        _metered_window(window, [(drawn[position], sim) for drawn, sim in homes])
-        for position, window in enumerate(cfg.event_windows)
-    )
+    event_days = frozenset(day for drawn, _ in homes for days in drawn for day in days)
+    per_window = [
+        (window, [(drawn[position], sim) for drawn, sim in homes]) for position, window in enumerate(cfg.event_windows)
+    ]
+    match baseline:
+        case DeliveryBaseline.CAPACITY:
+            return tuple(_capacity_window(window, drawn_homes) for window, drawn_homes in per_window)
+        case DeliveryBaseline.OPERATIONAL:
+            return tuple(_operational_window(window, drawn_homes, event_days) for window, drawn_homes in per_window)
 
 
 def _per_home_event_days(
@@ -1213,9 +1274,9 @@ def _priced_windows(fleet_results: "FleetResults", cfg: "GridServicesEventsConfi
         cfg.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline"
     )
     match cfg.participation:
-        case EventParticipation.DISPATCHED if baseline is DeliveryBaseline.CAPACITY:
-            priced = _PricedWindows(battery_homes, _metered_totals(battery_homes, cfg), None)
-        case _:
+        case EventParticipation.DISPATCHED:
+            priced = _PricedWindows(battery_homes, _metered_totals(battery_homes, cfg, baseline), None)
+        case EventParticipation.OBSERVED:
             event_days = _per_home_event_days(battery_homes, cfg.event_windows, baseline)
             priced = _PricedWindows(battery_homes, tuple(map(_EventDayTotals.of, event_days)), event_days)
     _warn_unpriced_windows(battery_homes, priced.totals)
@@ -1272,7 +1333,11 @@ def compute_grid_services_at_events(
       each day the window's rows enter;
     * dispatched — the delivery metered on each of the window's drawn days, the
       days :func:`enrolled_event_windows` enrolled the battery homes on.  Under
-      the capacity baseline, ``D(d) = Σ_home Σ_{t∈d∩w} discharge(t)·Δt / h``.
+      the capacity baseline, ``D(d) = Σ_home Σ_{t∈d∩w} discharge(t)·Δt / h``;
+      under the operational baseline, ``D(d) = max(0, B(d) − N(d))``, where
+      ``N(d) = Σ_home mean_{t∈d∩w}(grid_import − grid_export)`` and ``B(d)`` is
+      N's mean over the :data:`OPERATIONAL_BASELINE_DAYS` eligible days with no
+      event of any window nearest before *d*, completed with the nearest after.
 
     **Rate resolution** (override precedence):
 
@@ -1332,7 +1397,9 @@ def compute_grid_services_at_events(
             than *cfg.participation* gives it: none when observed, and
             :func:`enrolled_event_windows` over the home's simulated days when
             dispatched.  The message names the participation, the home's position
-            and name, and the days expected and found.
+            and name, and the days expected and found.  Or if, dispatched under the
+            operational baseline, a window draws a day but the fleet simulates no
+            eligible day without an event to baseline it on, naming the window.
         ValueError: If a battery home's index has no step length to read its
             displaced self-use at (:attr:`SimulationResults.window` refuses it:
             its rows are not evenly spaced, or it has one row and no
