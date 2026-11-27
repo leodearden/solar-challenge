@@ -8,13 +8,15 @@ expensive minutes of each tariff its Tariff Type select offers: Economy 10's che
 the form starts it, picks Time-of-Use dispatch, turns the tariff on, and sends the form at
 each tariff type the select offers: /simulate/home's Run Simulation is answered 201, and
 /simulate/fleet's Export YAML, which builds the homes its Run would without starting a job,
-200.
+200. A further test reads the home form's tariff types while each animation frame comes late,
+as on a loaded host, because Enable Tariff shows the Tariff Type select only at the next frame.
 """
 
 from typing import Any
 
 from playwright.sync_api import Locator, Page, expect
 
+from tests.e2e._animation_frames import delay_animation_frames
 from tests.e2e._home_form import open_tab, submit_two_day_run
 
 
@@ -29,7 +31,8 @@ def _choose_tou_dispatch(page: Page) -> None:
 
 
 def _offered_values(select: Locator) -> list[str]:
-    """The value of each option *select* offers, in page order; fails when it offers none, which would leave nothing to send."""
+    """The value of each option *select* offers, in page order, read once *select* is shown, as Enable Tariff shows it only at the next animation frame and a role locator does not match a hidden select; fails when it offers none, which would leave nothing to send."""
+    expect(select).to_be_visible()
     values: list[str] = select.locator("option").evaluate_all("options => options.map(option => option.value)")
     assert values, "the Tariff Type select offers no option, so no tariff type is sent"
     return values
@@ -67,6 +70,17 @@ def test_the_home_forms_default_peak_window_builds_under_each_tariff_type_it_off
             refused[offered] = response.text()
 
     assert refused == {}, f"/api/simulate/home refused the form's default peak window on: {refused}"
+
+
+def test_the_home_forms_offered_tariff_types_are_read_once_a_late_frame_shows_its_tariff_type_select(
+    page: Page, live_server: str
+) -> None:
+    delay_animation_frames(page, 1000)
+    page.goto(live_server + "/simulate/home")
+    open_tab(page, "Tariff")
+    _switch_on(page, "Enable Tariff")
+    tariff_type = page.get_by_role("combobox", name="Tariff Type", exact=True)
+    _offered_values(tariff_type)
 
 
 def test_the_fleet_forms_default_peak_window_builds_under_each_tariff_type_it_offers(
