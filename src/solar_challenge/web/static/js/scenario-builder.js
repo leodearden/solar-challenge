@@ -203,23 +203,11 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
+        // The form the page posts, the one applyForm sets: each of FORM_FIELDS, the CUSTOM_COORDINATES for a custom
+        // location, and each component's block
         getFormData() {
-            const data = {
-                name: this.name,
-                description: this.description,
-                start_date: this.start_date,
-                end_date: this.end_date,
-                location_preset: this.location_preset,
-                n_homes: this.n_homes,
-                seed: this.seed,
-                import_rate: this.import_rate,
-                seg_rate_pence_per_kwh: this.seg_rate_pence_per_kwh,
-            };
-            if (this.location_preset === 'custom') {
-                data.latitude = this.latitude;
-                data.longitude = this.longitude;
-                data.altitude = this.altitude;
-            }
+            const fields = this.location_preset === 'custom' ? [...FORM_FIELDS, ...CUSTOM_COORDINATES] : FORM_FIELDS;
+            const data = Object.fromEntries(fields.map((field) => [field, this[field]]));
             for (const component of components) {
                 data[component.key] = { [component.grammar_key]: DistributionEditor.wire(this.dists[component.key]) };
             }
