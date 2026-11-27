@@ -37,7 +37,7 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimi
 from solar_challenge.web.form_choices import flat_rate_choice
 from tests._alpine_component_arguments import component_arguments
 from tests._builder_form import builder_page_starting_form
-from tests._fleet_form import fleet_page_starting_form, start_wire
+from tests._fleet_form import fleet_page_starting_form, start_of, start_wire
 from tests._html_page import element_attributes, script_text_by_id
 from tests._html_select_options import options_of_each
 from tests._repository_paths import SCENARIOS_DIR
@@ -55,30 +55,37 @@ def client(tmp_path: Path, closes_at_teardown: ExitStack) -> FlaskClient:
     return app.test_client()
 
 
-def _export_on_the_fleet_page(client: FlaskClient, form: Mapping[str, Any]) -> str:
-    """The YAML text POST /api/fleet/export-yaml downloads for the fleet page's *form*."""
-    response = client.post("/api/fleet/export-yaml", json=form)
-    assert response.status_code == 200, response.get_data(as_text=True)
+#: Where the builder validates its form, answering {valid, errors}.
+_VALIDATE_PATH = "/api/scenarios/validate"
+
+
+def _downloaded_yaml(response: TestResponse) -> str:
+    """The scenario YAML text *response* downloads."""
     return response.get_data(as_text=True)
 
 
-def _preview_on_the_builder(client: FlaskClient, form: Mapping[str, Any]) -> str:
-    """The YAML text POST /api/scenarios/preview-yaml answers for the builder's *form*."""
-    response = client.post("/api/scenarios/preview-yaml", json=form)
-    assert response.status_code == 200, response.get_data(as_text=True)
+def _previewed_yaml(response: TestResponse) -> str:
+    """The scenario YAML text of *response*'s {yaml} answer."""
     text: str = response.get_json()["yaml"]
     return text
 
 
 @dataclass(frozen=True)
 class _FleetPage:
-    """A page that edits a fleet: its name, its path, the form it starts at, how it exports that form as scenario YAML, and where it imports one."""
+    """A page that edits a fleet: its name, its path, the form it starts at, where it exports that form as scenario YAML and how its answer holds the text, and where it imports one."""
 
     name: str
     path: str
     starting_form: Callable[[], dict[str, Any]]
-    export: Callable[[FlaskClient, Mapping[str, Any]], str]
+    export_path: str
+    exported_yaml: Callable[[TestResponse], str]
     import_path: str
+
+    def export(self, client: FlaskClient, form: Mapping[str, Any]) -> str:
+        """The scenario YAML text this page exports for *form*, which it accepts."""
+        response = client.post(self.export_path, json=form)
+        assert response.status_code == 200, response.get_data(as_text=True)
+        return self.exported_yaml(response)
 
     def import_yaml(self, client: FlaskClient, text: str) -> TestResponse:
         """This page's answer to importing the scenario YAML *text*."""
@@ -89,14 +96,16 @@ _FLEET_PAGE = _FleetPage(
     name="fleet",
     path="/simulate/fleet",
     starting_form=fleet_page_starting_form,
-    export=_export_on_the_fleet_page,
+    export_path="/api/fleet/export-yaml",
+    exported_yaml=_downloaded_yaml,
     import_path="/api/fleet/import-yaml",
 )
 _BUILDER = _FleetPage(
     name="builder",
     path="/scenarios/builder",
     starting_form=partial(builder_page_starting_form, _BUILDER_SCENARIO_NAME),
-    export=_preview_on_the_builder,
+    export_path="/api/scenarios/preview-yaml",
+    exported_yaml=_previewed_yaml,
     import_path="/api/scenarios/import-yaml",
 )
 
@@ -116,13 +125,6 @@ def _with_component(form: Mapping[str, Any], component: ComponentLimits, spec: A
     return {**form, component.key: {component.grammar_key: spec}}
 
 
-def _start_of(component: ComponentLimits, editor_type: DistributionType) -> object:
-    """The spec *component*'s editor starts at for *editor_type*: its start's Fixed Value for the scalar form, else its start spec of that type."""
-    if editor_type.is_scalar_form:
-        return component.start.fixed
-    return component.start.specs[component.editor_types.index(editor_type)]
-
-
 @pytest.mark.parametrize(("component", "editor_type"), _EDITED)
 def test_the_start_spec_of_each_type_posted_by_either_page_reads_as_one_fleet(
     client: FlaskClient, component: ComponentLimits, editor_type: DistributionType
@@ -137,10 +139,10 @@ def test_the_start_spec_of_each_type_posted_by_either_page_reads_as_one_fleet(
     }
 
     assert fleets[_FLEET_PAGE.name] == fleets[_BUILDER.name]
-    assert getattr(fleets[_FLEET_PAGE.name], component.key).draws[component.grammar_key] == _start_of(
+    assert getattr(fleets[_FLEET_PAGE.name], component.key).draws[component.grammar_key] == start_of(
         component, editor_type
     )
-    validated = client.post("/api/scenarios/validate", json=forms[_BUILDER])
+    validated = client.post(_VALIDATE_PATH, json=forms[_BUILDER])
     assert validated.get_json() == {"valid": True, "errors": []}
 
 
@@ -206,9 +208,9 @@ def test_both_pages_refuse_a_drawn_value_outside_its_components_range_with_one_m
     far_above = {"type": "normal", "mean": 2 * high, "std": high / 100}
 
     exported = client.post(
-        "/api/fleet/export-yaml", json=_with_component(_FLEET_PAGE.starting_form(), component, far_above)
+        _FLEET_PAGE.export_path, json=_with_component(_FLEET_PAGE.starting_form(), component, far_above)
     )
-    validated = client.post("/api/scenarios/validate", json=_with_component(_BUILDER.starting_form(), component, far_above))
+    validated = client.post(_VALIDATE_PATH, json=_with_component(_BUILDER.starting_form(), component, far_above))
 
     assert exported.status_code == 400, exported.get_data(as_text=True)
     error = exported.get_json()["error"]
@@ -333,7 +335,7 @@ def test_both_fleet_pages_bound_each_fixed_value_by_its_components_value_range(c
 
 def test_the_fleet_page_and_the_builder_start_their_flat_rate_at_flat_rate_start(client: FlaskClient) -> None:
     """V3: the flat-rate tariff the fleet page's script posts at its starts, and the builder's starting import rate, export one tariff at flat_rate_start."""
-    flat_rate_type = flat_rate_choice(_FLEET_PAGE.name).type
+    flat_rate_type = flat_rate_choice("fleet page").type
     tariff_choices = component_arguments(_page(client, _FLEET_PAGE.path), "fleetSimulator")[0]
     (flat_rate,) = [choice for choice in tariff_choices if choice["type"] == flat_rate_type]
     posted_tariff = {"type": flat_rate_type, **{setting["key"]: setting["start"] for setting in flat_rate["settings"]}}

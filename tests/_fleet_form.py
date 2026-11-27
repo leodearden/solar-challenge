@@ -20,8 +20,13 @@ from typing import Any
 import pytest
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import DistributionType, write_distribution_spec
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits, page_limits
+from solar_challenge.fleet_distribution import (
+    DISTRIBUTION_TYPES,
+    DistributionSpec,
+    DistributionType,
+    write_distribution_spec,
+)
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, SCALAR_FORM, ComponentLimits, page_limits
 from solar_challenge.web.fleet_config import FLEET_DISTRIBUTION_FORM_KEYS, read_form_fleet
 
 #: The fleet form's component blocks: the pv, battery and load distributions.
@@ -57,32 +62,41 @@ def fleet_reader_refusal(form: Mapping[str, Any]) -> str:
     return str(refusal.value)
 
 
-def start_spec(component: ComponentLimits, name: str) -> Any:
-    """*component*'s start spec of the editor type named *name*, written as the grammar reads it."""
-    (written,) = [
-        written
-        for written in (write_distribution_spec(spec) for spec in component.start.specs)
-        if isinstance(written, dict) and written["type"] == name
-    ]
-    return written
+def start_of(component: ComponentLimits, editor_type: DistributionType) -> DistributionSpec:
+    """The spec *component*'s distribution editor starts at with *editor_type* chosen: its start's Fixed Value for the scalar form, else its start spec of that type."""
+    if editor_type.is_scalar_form:
+        return component.start.fixed
+    return component.start.specs[component.editor_types.index(editor_type)]
 
 
 def start_wire(component: ComponentLimits, editor_type: DistributionType) -> Any:
-    """What *component*'s distribution editor posts for its field with *editor_type* chosen: its start's Fixed Value for the scalar form, else start_spec."""
-    if editor_type.is_scalar_form:
-        return component.start.fixed
-    return start_spec(component, editor_type.name)
+    """What *component*'s distribution editor posts for its field with *editor_type* chosen: start_of, written as the grammar reads it."""
+    return write_distribution_spec(start_of(component, editor_type))
+
+
+def start_spec(component: ComponentLimits, name: str) -> Any:
+    """*component*'s start spec of the editor type named *name*, written as the grammar reads it: start_wire of that type."""
+    return start_wire(component, DISTRIBUTION_TYPES[name])
+
+
+def starting_component_blocks() -> dict[str, Any]:
+    """The component blocks both fleet pages start at: each component's field as start_wire of the type its card shows, Fixed Value for ''."""
+    return {
+        component.key: {
+            component.grammar_key: start_wire(
+                component, SCALAR_FORM if component.start.shown == "" else DISTRIBUTION_TYPES[component.start.shown]
+            )
+        }
+        for component in FLEET_COMPONENTS.values()
+    }
 
 
 def fleet_page_starting_form() -> dict[str, Any]:
-    """The fleet form the fleet page starts at: page_limits()'s fleet size, seed and days, and each component's editor at the type its card shows."""
+    """The fleet form the fleet page starts at: page_limits()'s fleet size, seed and days, and starting_component_blocks."""
     limits = page_limits()
     return {
         "n_homes": limits.fleet_size_default,
         "seed": limits.seed_default,
         "days": limits.default_days,
-        **{
-            component.key: {component.grammar_key: start_spec(component, component.start.shown)}
-            for component in FLEET_COMPONENTS.values()
-        },
+        **starting_component_blocks(),
     }

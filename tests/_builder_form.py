@@ -14,9 +14,9 @@ Usage::
 
 from typing import Any
 
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, page_limits
+from solar_challenge.web.fleet_components import page_limits
 from solar_challenge.web.request_boundary import WEB_DEFAULT_LOCATION
-from tests._fleet_form import start_spec
+from tests._fleet_form import starting_component_blocks
 
 
 def accepted_builder_form() -> dict[str, Any]:
@@ -39,7 +39,7 @@ def builder_page_starting_form(name: str) -> dict[str, Any]:
     """The builder form getFormData() posts when the page opens, named *name* as a user names it before Validate or Save.
 
     It holds page_limits()'s default window, fleet size, seed and flat_rate_start, the preset
-    location the page starts at, and each component's editor at the type its card shows. Every
+    location the page starts at, and starting_component_blocks. Every
     call builds a new form, nested blocks included, so a test may change its own in place.
     """
     limits = page_limits()
@@ -54,8 +54,5 @@ def builder_page_starting_form(name: str) -> dict[str, Any]:
         "seed": limits.seed_default,
         "import_rate": limits.flat_rate_start,
         "seg_rate_pence_per_kwh": "",
-        **{
-            component.key: {component.grammar_key: start_spec(component, component.start.shown)}
-            for component in FLEET_COMPONENTS.values()
-        },
+        **starting_component_blocks(),
     }
