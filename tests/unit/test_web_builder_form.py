@@ -5,19 +5,33 @@ import math
 import re
 import tempfile
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 pytest.importorskip("flask")
 
-from solar_challenge.config import parse_scenario, period_window
+from solar_challenge.config import parse_scenario, period_window, read_fleet_scenario
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import DistributionSpec, parse_fleet_distribution_config, write_distribution_spec
+from solar_challenge.fleet_distribution import (
+    DistributionSpec,
+    NormalDistribution,
+    parse_fleet_distribution_config,
+    write_distribution_spec,
+)
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.scenario_blocks import parse_seg_rate
+from solar_challenge.scenario_writer import location_block
 from solar_challenge.web import builder_form
-from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
+from solar_challenge.web.builder_form import (
+    builder_form_errors,
+    builder_form_from_scenario,
+    builder_form_from_yaml,
+    scenario_from_builder_form,
+)
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
     FLEET_SIZE_DEFAULT,
@@ -29,6 +43,7 @@ from solar_challenge.web.fleet_scenario import parse_fleet_form
 from tests._builder_form import accepted_builder_form
 from tests._error_records import error_records
 from tests._fleet_form import fleet_reader_refusal, valid_distribution_form
+from tests._repository_paths import SCENARIOS_DIR
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS, whole_number_forms
 
@@ -699,3 +714,256 @@ class TestBuilderFormSeed:
         form = {**accepted_builder_form(), "seed": getattr(page_limits().seed, bound)}
 
         assert builder_form_errors(form) == []
+
+
+def _scenario_file(stem: str) -> dict[str, Any]:
+    """The committed scenario file scenarios/<stem>.yaml, as yaml.safe_load reads it: a new document on every call."""
+    document = yaml.safe_load((SCENARIOS_DIR / f"{stem}.yaml").read_text(encoding="utf-8"))
+    assert isinstance(document, dict)
+    return document
+
+
+def _bristol_phase1(**fleet_blocks: Any) -> dict[str, Any]:
+    """scenarios/bristol-phase1.yaml with *fleet_blocks* in place of those of its fleet_distribution block."""
+    document = _scenario_file("bristol-phase1")
+    document["fleet_distribution"].update(fleet_blocks)
+    return document
+
+
+def _refusal(document: object) -> str:
+    """The str() of builder_form_from_scenario's refusal of *document*; the calling test fails if it loads."""
+    with pytest.raises(ConfigurationError) as refusal:
+        builder_form_from_scenario(document)
+    return str(refusal.value)
+
+
+_PERIOD = {"start_date": "2024-06-01", "end_date": "2024-06-07"}
+
+#: Builder forms of each shape the round trip covers, each in the canonical form an import writes back.
+_ROUND_TRIP_FORMS = [
+    pytest.param(
+        {
+            "name": "Rows",
+            "description": "A fleet drawn from rows",
+            **_PERIOD,
+            "location_preset": "bristol",
+            "n_homes": 3,
+            "seed": 7,
+            "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [1.0, 3.0]}},
+            "battery": {"capacity_kwh": {"type": "shuffled_pool", "values": [0.0, 5.0], "counts": [1, 2]}},
+            "load": {
+                "annual_consumption_kwh": {"type": "normal", "mean": 3400.0, "std": 800.0, "min": 2000.0, "max": 6000.0}
+            },
+            "import_rate": 0.28,
+            "seg_rate_pence_per_kwh": 4.5,
+        },
+        id="distribution-rows",
+    ),
+    pytest.param(
+        {
+            "name": "Fixed",
+            **_PERIOD,
+            "location_preset": "custom",
+            "latitude": 52.2,
+            "longitude": 0.12,
+            "altitude": 20.0,
+            "n_homes": 2,
+            "pv": {"capacity_kw": 4.0},
+            "battery": {"capacity_kwh": {"type": "uniform", "min": 3.0, "max": 10.0}},
+            "load": {"annual_consumption_kwh": 3500.0},
+        },
+        id="fixed-values-and-uniform-at-a-custom-location",
+    ),
+    pytest.param(
+        {
+            "name": "Nulls",
+            **_PERIOD,
+            "location_preset": "london",
+            "n_homes": 3,
+            "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0, "min": None, "max": None}},
+            "battery": {"capacity_kwh": {"type": "shuffled_pool", "values": [None, 5.0], "counts": [1, 2]}},
+            "load": {"annual_consumption_kwh": None},
+        },
+        id="null-clamps-and-a-null-pool-value",
+    ),
+]
+
+
+class TestBuilderFormFromScenario:
+    """The builder form builder_form_from_scenario reads from a fleet scenario, the settings it names as not loaded, and its refusals."""
+
+    def test_bristol_phase1_loads_what_the_builder_holds_and_names_the_rest(self) -> None:
+        """The built-in loads its name, the default window as ISO days (it sets no period), its location as the Bristol preset, its fleet and its SEG rate; it sets no tariff, so the form has no import rate."""
+        assert page_limits().default_window == (date(2024, 1, 1), date(2024, 12, 31)), "premise: the default window"
+
+        imported = builder_form_from_scenario(_scenario_file("bristol-phase1"))
+
+        assert imported.form == {
+            "name": "Bristol Phase 1",
+            "start_date": "2024-01-01",
+            "end_date": "2024-12-31",
+            "location_preset": "bristol",
+            "n_homes": 100,
+            "seed": 42,
+            "pv": {
+                "capacity_kw": {"type": "shuffled_pool", "values": [3.0, 4.0, 5.0, 6.0], "counts": [20, 40, 30, 10]}
+            },
+            "battery": {
+                "capacity_kwh": {"type": "shuffled_pool", "values": [None, 5.0, 10.0], "counts": [40, 40, 20]}
+            },
+            "load": {
+                "annual_consumption_kwh": {"type": "normal", "mean": 3400.0, "std": 800.0, "min": 2000.0, "max": 6000.0}
+            },
+            "seg_rate_pence_per_kwh": 4.1,
+        }
+        assert imported.not_loaded == (
+            "fleet_distribution.random_order",
+            "fleet_distribution.pv.azimuth",
+            "fleet_distribution.pv.tilt",
+            "finance",
+        )
+        assert builder_form_errors(imported.form) == []
+
+    def test_an_economy_7_scenario_is_refused_naming_its_tariff_type_and_the_one_type_the_builder_holds(self) -> None:
+        assert _refusal(_scenario_file("bristol-phase1-flex")) == (
+            "tariff.type must be one the builder holds (flat_rate), got 'economy_7'"
+        )
+
+    def test_a_seg_preset_is_refused_naming_it(self) -> None:
+        document = {**_scenario_file("bristol-phase1"), "seg": {"preset": "Octopus"}}
+
+        assert "seg.preset" in _refusal(document)
+
+    def test_a_battery_dispatch_strategy_loads_the_battery_and_is_named_not_loaded(self) -> None:
+        battery = {"capacity_kwh": 5.0, "dispatch_strategy": {"strategy_type": "self_consumption"}}
+
+        imported = builder_form_from_scenario(_bristol_phase1(battery=battery))
+
+        assert imported.form["battery"] == {"capacity_kwh": 5.0}
+        assert "fleet_distribution.battery.dispatch_strategy" in imported.not_loaded
+
+    @pytest.mark.parametrize("preset", list(LOCATION_PRESETS))
+    def test_a_location_equal_to_a_preset_loads_as_that_presets_key(self, preset: str) -> None:
+        document = {**_scenario_file("bristol-phase1"), "location": location_block(LOCATION_PRESETS[preset])}
+
+        imported = builder_form_from_scenario(document)
+
+        assert imported.form["location_preset"] == preset
+        assert not {"latitude", "longitude", "altitude"} & set(imported.form)
+        assert not [path for path in imported.not_loaded if path.startswith("location")]
+
+    def test_any_other_location_loads_as_custom_coordinates_and_names_its_other_keys(self) -> None:
+        location = {"latitude": 52.2, "longitude": 0.12, "altitude": 20.0, "timezone": "Europe/London", "name": "Cambridge"}
+        document = {**_scenario_file("bristol-phase1"), "location": location}
+
+        imported = builder_form_from_scenario(document)
+
+        assert {key: imported.form[key] for key in ("location_preset", "latitude", "longitude", "altitude")} == {
+            "location_preset": "custom",
+            "latitude": 52.2,
+            "longitude": 0.12,
+            "altitude": 20.0,
+        }
+        assert imported.not_loaded[:2] == ("location.timezone", "location.name")
+
+    def test_a_description_is_held(self) -> None:
+        document = {**_scenario_file("bristol-phase1"), "description": "The first hundred homes"}
+
+        assert builder_form_from_scenario(document).form["description"] == "The first hundred homes"
+
+    def test_a_scenario_without_a_seed_loads_no_seed(self) -> None:
+        document = _scenario_file("bristol-phase1")
+        del document["fleet_distribution"]["seed"]
+
+        assert "seed" not in builder_form_from_scenario(document).form
+
+    def test_a_scenario_without_a_battery_loads_a_null_battery_capacity(self) -> None:
+        """The builder always posts a battery block, and a null capacity is a home without a battery, so the form runs the homes the scenario does."""
+        document = _scenario_file("bristol-phase1")
+        del document["fleet_distribution"]["battery"]
+
+        imported = builder_form_from_scenario(document)
+
+        assert imported.form["battery"] == {"capacity_kwh": None}
+        homes = parse_scenario(scenario_from_builder_form(imported.form)).simulated_homes()
+        assert all(home.battery_config is None for home in homes)
+
+    def test_a_flat_rate_tariff_loads_as_the_import_rate_and_names_a_key_it_does_not_hold(self) -> None:
+        tariff = {"type": "flat_rate", "rate_per_kwh": 0.3, "name": "Flat"}
+        document = {**_scenario_file("bristol-phase1"), "tariff": tariff}
+
+        imported = builder_form_from_scenario(document)
+
+        assert imported.form["import_rate"] == 0.3
+        assert "tariff" not in imported.form
+        assert "tariff.name" in imported.not_loaded
+
+    def test_a_fixed_spec_loads_as_its_number(self) -> None:
+        imported = builder_form_from_scenario(_bristol_phase1(pv={"capacity_kw": {"type": "fixed", "value": 4}}))
+
+        assert imported.form["pv"] == {"capacity_kw": 4.0}
+
+    def test_a_normal_without_clamps_loads_with_null_clamps(self) -> None:
+        load = {"annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800}}
+
+        imported = builder_form_from_scenario(_bristol_phase1(load=load))
+
+        assert imported.form["load"] == {"annual_consumption_kwh": write_distribution_spec(NormalDistribution(3400, 800))}
+        assert imported.form["load"]["annual_consumption_kwh"]["min"] is None
+
+    def test_a_distribution_the_editor_does_not_offer_is_refused_naming_its_path_and_the_editors_types(self) -> None:
+        battery = {"capacity_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 2.0}}
+        offered = ", ".join(each.name for each in FLEET_COMPONENTS["battery"].editor_types)
+
+        message = _refusal(_bristol_phase1(battery=battery))
+
+        assert "fleet_distribution.battery.capacity_kwh" in message
+        assert "'proportional_to'" in message
+        assert offered in message
+
+    @pytest.mark.parametrize("form", _ROUND_TRIP_FORMS)
+    def test_a_builder_form_imports_back_from_the_scenario_it_describes(self, form: dict[str, Any]) -> None:
+        assert builder_form_errors(form) == [], "premise: the builder accepts the form"
+        document = scenario_from_builder_form(form)
+
+        imported = builder_form_from_scenario(document)
+
+        assert imported.not_loaded == ()
+        assert scenario_from_builder_form(imported.form) == document
+
+    def test_a_document_the_reader_refuses_is_refused_with_the_readers_message_before_its_tariff_is_read(self) -> None:
+        document = {**_scenario_file("bristol-phase1"), "finanse": {}, "tariff": {"type": "economy_7"}}
+        with pytest.raises(ConfigurationError) as reader_refusal:
+            read_fleet_scenario(document)
+
+        assert _refusal(document) == str(reader_refusal.value)
+
+    def test_a_scenario_without_a_name_loads_with_no_name(self) -> None:
+        """The fleet page exports no name when its form's name cannot name a run, so a nameless scenario loads, and Validate and Save still ask for the name."""
+        document = _scenario_file("bristol-phase1")
+        del document["name"]
+
+        imported = builder_form_from_scenario(document)
+
+        assert "name" not in imported.form
+        assert builder_form_errors(imported.form) == ["Scenario name is required."]
+
+    def test_a_loaded_form_the_builder_refuses_is_refused_with_its_reasons(self) -> None:
+        """A drawn PV capacity outside its value_range is one only the builder's own check refuses, after every reader has accepted the scenario."""
+        pv_range = FLEET_COMPONENTS["pv"].value_range
+        assert math.isfinite(pv_range.high), "premise: the PV capacity has an upper bound"
+        form = {**accepted_builder_form(), "pv": {"capacity_kw": {"type": "uniform", "min": 1.0, "max": pv_range.high * 10}}}
+        reasons = builder_form_errors(form)
+        assert reasons, "premise: the builder refuses the form"
+
+        assert _refusal(scenario_from_builder_form(form)) == "; ".join(reasons)
+
+    def test_text_that_does_not_parse_as_yaml_is_refused_naming_the_parsers_error(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            builder_form_from_yaml("name: [unclosed")
+        assert str(refusal.value).startswith("Invalid YAML: ")
+
+    def test_yaml_text_loads_as_its_document_does(self) -> None:
+        yaml_text = (SCENARIOS_DIR / "bristol-phase1.yaml").read_text(encoding="utf-8")
+
+        assert builder_form_from_yaml(yaml_text) == builder_form_from_scenario(_scenario_file("bristol-phase1"))

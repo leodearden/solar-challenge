@@ -2,6 +2,7 @@
 """Tests for solar_challenge.web.scenario_import, the import rules the fleet page and the scenario builder share."""
 
 import dataclasses
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
@@ -16,7 +17,9 @@ from solar_challenge.fleet_distribution import (
     parse_fleet_distribution_config,
     write_distribution_spec,
 )
+from solar_challenge.web.builder_form import builder_form_from_scenario
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.fleet_scenario import fleet_form_from_scenario
 from solar_challenge.web.scenario_import import (
     ImportedForm,
     not_loaded,
@@ -29,8 +32,22 @@ from solar_challenge.web.scenario_import import (
     scenario_yaml_document,
 )
 from solar_challenge.web.simulation_params import read_iso_date
+from tests._repository_paths import SCENARIOS_DIR
 
 _PAGES = [pytest.param("fleet page", id="fleet-page"), pytest.param("builder", id="builder")]
+
+#: Each page's import of a fleet scenario document as its form.
+_IMPORTERS = [
+    pytest.param(fleet_form_from_scenario, id="fleet-page"),
+    pytest.param(builder_form_from_scenario, id="builder"),
+]
+
+
+def _bristol_phase1(**fleet_blocks: Any) -> dict[str, Any]:
+    """scenarios/bristol-phase1.yaml, which both pages load, with *fleet_blocks* in place of those of its fleet_distribution block."""
+    document = yaml.safe_load((SCENARIOS_DIR / "bristol-phase1.yaml").read_text(encoding="utf-8"))
+    document["fleet_distribution"].update(fleet_blocks)
+    return document
 
 
 def _pv_read(fleet: dict[str, Any]) -> tuple[Any, ...]:
@@ -262,3 +279,37 @@ class TestReadTypedBlock:
             read_typed_block({"type": "flat_rate"}, "tariff", "type", settings, page)
 
         assert str(refusal.value) == f"tariff.rate_per_kwh must be set: the {page} always sets it"
+
+
+class TestBothPagesImportByOnePolicy:
+    """The rules both pages' imports share load or refuse a scenario alike on each page."""
+
+    @pytest.mark.parametrize("importer", _IMPORTERS)
+    def test_random_order_is_named_not_loaded(self, importer: Callable[[object], ImportedForm]) -> None:
+        assert "fleet_distribution.random_order" in importer(_bristol_phase1()).not_loaded
+
+    @pytest.mark.parametrize("importer", _IMPORTERS)
+    def test_a_fixed_spec_loads_as_its_number(self, importer: Callable[[object], ImportedForm]) -> None:
+        imported = importer(_bristol_phase1(pv={"capacity_kw": {"type": "fixed", "value": 4}}))
+
+        assert imported.form["pv"] == {"capacity_kw": 4.0}
+
+    @pytest.mark.parametrize("importer", _IMPORTERS)
+    def test_a_normal_without_clamps_loads_with_null_clamps(self, importer: Callable[[object], ImportedForm]) -> None:
+        load = {"annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800}}
+
+        imported = importer(_bristol_phase1(load=load))
+
+        assert imported.form["load"] == {"annual_consumption_kwh": write_distribution_spec(NormalDistribution(3400, 800))}
+
+    def test_a_distribution_the_editor_does_not_offer_is_refused_alike_by_both_pages(self) -> None:
+        battery = {"capacity_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 2.0}}
+        refusals = []
+        for importer in (fleet_form_from_scenario, builder_form_from_scenario):
+            with pytest.raises(ConfigurationError) as refusal:
+                importer(_bristol_phase1(battery=battery))
+            refusals.append(str(refusal.value))
+
+        fleet_refusal, builder_refusal = refusals
+        assert builder_refusal == fleet_refusal
+        assert "fleet_distribution.battery.capacity_kwh" in fleet_refusal
