@@ -9,6 +9,30 @@ document.addEventListener('alpine:init', () => {
         return { [components[key].grammar_key]: DistributionEditor.wire(dist) };
     }
 
+    // The most distinct values a preview summary lists, each with its count of homes
+    const MOST_VALUES_LISTED = 8;
+
+    // One home's value as a preview summary writes it: rounded to 2 decimals, in `unit`, or 'unset' for a null
+    function previewValue(value, unit) {
+        return value === null ? 'unset' : `${String(Math.round(value * 100) / 100)} ${unit}`;
+    }
+
+    // A card's summary of `values`, one per home: each distinct value, ascending, with its count of homes,
+    // or, past MOST_VALUES_LISTED distinct values, the min, median (the lower middle home's) and max
+    function previewSummary(values, unit) {
+        const sorted = [...values].sort((a, b) => (a === null) - (b === null) || a - b);
+        const counts = new Map();
+        for (const value of sorted) {
+            counts.set(value, (counts.get(value) || 0) + 1);
+        }
+        if (counts.size <= MOST_VALUES_LISTED) {
+            return [...counts].map(([value, count]) => `${previewValue(value, unit)} \u00d7 ${count} homes`).join(', ');
+        }
+        const median = sorted[Math.floor((sorted.length - 1) / 2)];
+        return `min ${previewValue(sorted[0], unit)}, median ${previewValue(median, unit)}, `
+            + `max ${previewValue(sorted[sorted.length - 1], unit)}`;
+    }
+
     // A new dist showing the spec `block`, a form's block for component `key`, holds, over `dist`
     function loadedDist(key, dist, block) {
         const component = components[key];
@@ -23,6 +47,8 @@ document.addEventListener('alpine:init', () => {
         submittedJob: null,
         errorMsg: '',
         importNotice: '',
+        // Each component's summary of the homes the last preview built, by component key
+        previewSummaries: {},
         simName: '',
 
         /* ---- Period state ---- */
@@ -127,6 +153,30 @@ document.addEventListener('alpine:init', () => {
                 this.errorMsg = 'Network error: ' + e.message;
             } finally {
                 this.submitting = false;
+            }
+        },
+
+        /* ---- Preview ---- */
+        /* Each card's summary of the homes Run builds from the form, or the server's refusal. */
+        async preview() {
+            this.errorMsg = '';
+            this.previewSummaries = {};
+            try {
+                const resp = await fetch('/api/fleet/preview-distribution', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.buildPayload())
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    this.errorMsg = data.error || 'Preview failed';
+                    return;
+                }
+                this.previewSummaries = Object.fromEntries(
+                    Object.entries(data.values).map(([key, values]) => [key, previewSummary(values, components[key].unit)])
+                );
+            } catch (e) {
+                this.errorMsg = 'Preview error: ' + e.message;
             }
         },
 
