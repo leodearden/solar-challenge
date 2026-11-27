@@ -4,9 +4,8 @@ load, and serves each vendored one with the bytes its integrity attribute names.
 
 A script from another origin is a fetch the page depends on every time it loads, and a
 failed fetch breaks the page. base.html, the layout every page extends, loads Alpine,
-without which no page renders its UI. The scenario builder loads js-yaml, without which
-its Upload YAML reports 'jsyaml is not defined'. The results and compare pages load
-plotly.js, without which they draw no chart.
+without which no page renders its UI. The results and compare pages load plotly.js,
+without which they draw no chart.
 
 So the app serves each script from one of three sources:
 - its own scripts, under static/js/, which need no integrity attribute;

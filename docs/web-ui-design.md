@@ -172,12 +172,17 @@ Visual editor for `ScenarioConfig` YAML files.
 
 **Actions:**
 - "Validate" -> runs `ScenarioConfig` parsing, shows errors inline with field highlighting
-- "Save YAML" / "Download YAML" -> export
-- "Load from File" -> file upload
-- "Load Preset" -> built-in scenarios (bristol-phase1, dispatch-comparison, etc.)
+- "Download YAML" -> export
+- "Upload YAML" -> file upload, imported on the server (POST /api/scenarios/import-yaml)
+- "Load Preset" -> the built-in scenarios the builder loads, then the saved fleet presets (GET /api/scenarios/presets/<name>?source=builtin|saved)
+- "Save" -> a saved fleet preset (POST /api/scenarios/save)
 - Schema documentation tooltips on each field
 
-**Fleet distribution:** The builder's PV, battery and load cards are the Fleet Simulator's distribution editors, and start at the fleet page's distributions, `page_limits().components[...].start`. Validate and the YAML preview post the same component blocks as the fleet page, and `builder_form_errors` reads them with `read_form_fleet` at the form's own paths. "Load from File" loads each spec through `DistributionEditor.load` at its path in the file, `fleet_distribution.<component>.<field>`, and refuses a type the editor does not hold, as the fleet import does.
+**Import:** Upload YAML and Load Preset import the scenario on the server, under the *Scenario import policy* above, through `builder_form_from_scenario`. A refused scenario leaves every field as it was, and the preview says why; a loaded one sets the form, and a status notice names the settings it did not load. Load Preset lists only the built-in scenarios the builder loads (`builtin_scenarios_loaded_by(builder_form_from_yaml)`), and a saved preset and a built-in may share a name, so each item names its source.
+
+**Save:** Save validates the form as Validate does and answers a refused form with HTTP 400 and the `errors` Validate lists, which the page shows. An accepted form is stored as the scenario document `scenario_from_builder_form` builds, so a saved preset reloads through the same import as a file. A preset saved in the builder's former form format, which holds no `fleet_distribution:` block, is refused by name and must be saved again.
+
+**Fleet distribution:** The builder's PV, battery and load cards are the Fleet Simulator's distribution editors, and start at the fleet page's distributions, `page_limits().components[...].start`. Its seed starts at the fleet page's, `page_limits().seed_default`, within `page_limits().seed`. Validate and the YAML preview post the same component blocks as the fleet page, and `builder_form_errors` reads them with `read_form_fleet` at the form's own paths. An import loads each spec as the grammar reads it, in canonical form (`ComponentLimits.editor_spec`), through `DistributionEditor.load` at its path in the file, `fleet_distribution.<component>.<field>`; a type the editor does not hold is refused, as the fleet import refuses it.
 
 ### 5. Sweep Configuration
 

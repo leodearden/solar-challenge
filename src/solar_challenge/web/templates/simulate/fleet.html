@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
-{% from "components/macros.html" import card, day_choice_buttons, toggle_switch, range_input %}
+{% from "components/macros.html" import card, day_choice_buttons, import_notice, toggle_switch, range_input %}
 {% from "components/distribution-editor.html" import distribution_editor %}
 {% from "simulate/partials/preview-summary.html" import preview_summary %}
 
@@ -409,12 +409,7 @@
         </div>
     </template>
 
-    <!-- The settings of an imported or preset scenario the form has no control for -->
-    <template x-if="importNotice">
-        <div role="status" class="mb-6 px-4 py-3 rounded-lg text-sm font-medium border-l-4 bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-400 border-sky-500">
-            <span x-text="importNotice"></span>
-        </div>
-    </template>
+    {{ import_notice('importNotice') }}
 
     <!-- Results section: progress tracker appears after submission -->
     <div id="results-section" class="mt-6">
