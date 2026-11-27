@@ -10,7 +10,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
@@ -30,6 +30,7 @@ import pandas as pd
 import yaml
 
 from solar_challenge.community import CommunityConfig
+from solar_challenge.dispatch import EventDischargeWindow
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig
@@ -43,7 +44,12 @@ from solar_challenge.fleet_distribution import (
     parse_fleet_distribution_config,
     swept_parameter_path,
 )
-from solar_challenge.gridservices import GridServicesBand
+from solar_challenge.gridservices import (
+    EventParticipation,
+    GridServicesBand,
+    GridServicesEventsConfig,
+    drawn_event_days,
+)
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.number_fields import as_finite_float, as_finite_floats
@@ -121,7 +127,10 @@ class ScenarioConfig:
         home: Single home configuration (for single-home simulation)
         seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional), read
             as SEGTariff reads its rate; a home whose own seg_tariff sets another rate is refused
-        finance: Financial appraisal parameters (None for no financial analysis)
+        finance: Financial appraisal parameters (None for no financial analysis); when its
+            grid_services_model is a GridServicesEventsConfig whose participation is
+            dispatched, a home must have a battery, and simulated_homes enrols each
+            battery home in the configuration's event windows
         flex_band: The grid-services uncertainty band a finance run reports flexibility in,
             held as the GridServicesBand it names (None for none)
     """
@@ -151,6 +160,7 @@ class ScenarioConfig:
         self._refuse_a_home_seg_rate_other_than_the_scenarios()
         self._refuse_a_period_this_scenario_cannot_simulate()
         self._read_the_flex_band()
+        self._refuse_dispatched_events_without_a_battery_home()
 
     @property
     def is_fleet(self) -> bool:
@@ -162,14 +172,19 @@ class ScenarioConfig:
         return self.location if self.location is not None else Location.bristol()
 
     def simulated_homes(self) -> tuple[HomeConfig, ...]:
-        """The homes this scenario simulates, in order; one with no SEG tariff of its own exports at the scenario's rate."""
-        tariff = self._seg_tariff()
-        if tariff is None:
-            return self._stored_homes()
-        return tuple(
-            home if home.seg_tariff is not None else replace(home, seg_tariff=tariff)
-            for home in self._stored_homes()
-        )
+        """The homes this scenario simulates, in order.
+
+        One with no SEG tariff of its own exports at the scenario's rate. When the events
+        configuration is dispatched, each battery home carries the same windows, the days
+        drawn_event_days draws over the period, and the configuration's site export limit;
+        a home with no battery is unchanged.
+        """
+        homes = self._homes_at_the_seg_rate()
+        events = self._dispatched_events()
+        if events is None:
+            return homes
+        windows = _event_discharge(events, self.period)
+        return tuple(_enrolled(home, windows, events.site_export_limit_kw) for home in homes)
 
     def map_homes(self, transform: Callable[[HomeConfig], HomeConfig]) -> "ScenarioConfig":
         """This scenario in the same form, *transform* applied to each stored home, and checked as construction checks."""
@@ -236,6 +251,35 @@ class ScenarioConfig:
         """The homes as stored: (home,) in the single-home form, else homes, in order."""
         return (self.home,) if self.home is not None else self.homes
 
+    def _homes_at_the_seg_rate(self) -> tuple[HomeConfig, ...]:
+        """The stored homes, each with no SEG tariff of its own given the scenario's rate when it sets one."""
+        tariff = self._seg_tariff()
+        if tariff is None:
+            return self._stored_homes()
+        return tuple(
+            home if home.seg_tariff is not None else replace(home, seg_tariff=tariff)
+            for home in self._stored_homes()
+        )
+
+    def _dispatched_events(self) -> Optional[GridServicesEventsConfig]:
+        """The finance's grid_services_model when it is a GridServicesEventsConfig whose participation is dispatched, else None."""
+        model = None if self.finance is None else self.finance.grid_services_model
+        if isinstance(model, GridServicesEventsConfig) and model.participation is EventParticipation.DISPATCHED:
+            return model
+        return None
+
+    def _refuse_dispatched_events_without_a_battery_home(self) -> None:
+        """Raise ConfigurationError, naming the scenario, when its events configuration is dispatched but none of its homes has a battery."""
+        if self._dispatched_events() is None:
+            return
+        if any(home.battery_config is not None for home in self._stored_homes()):
+            return
+        raise ConfigurationError(
+            f"Scenario '{self.name}': finance.grid_services_model.participation is dispatched, but none of "
+            "its homes has a battery to discharge in an event; set participation to observed, or give a "
+            "home a battery"
+        )
+
     def _seg_tariff(self) -> Optional[SEGTariff]:
         """The tariff a home with none of its own exports at: the scenario's rate, unnamed; None when the scenario sets no rate."""
         if self.seg_tariff_pence_per_kwh is None:
@@ -275,6 +319,28 @@ class ScenarioConfig:
                 f"{home.seg_tariff.rate_pence_per_kwh}p/kWh but scenario '{self.name}' sets "
                 f"seg_tariff_pence_per_kwh={rate}p/kWh. Set only one, or use matching rates."
             )
+
+
+def _event_discharge(events: GridServicesEventsConfig, period: SimulationWindow) -> tuple[EventDischargeWindow, ...]:
+    """One EventDischargeWindow per window of *events* that draws a day of *period*: the days drawn_event_days draws with the events' seed at the window's position, in the window's hours."""
+    dates = tuple(period.first_day + timedelta(days=offset) for offset in range(period.days))
+    drawn = (
+        (window, drawn_event_days(window, dates, events.event_day_seed, position=position))
+        for position, window in enumerate(events.event_windows)
+    )
+    return tuple(EventDischargeWindow(days=days, hours=window.hours) for window, days in drawn if days)
+
+
+def _enrolled(
+    home: HomeConfig, windows: tuple[EventDischargeWindow, ...], site_export_limit_kw: Optional[float]
+) -> HomeConfig:
+    """*home* with its battery discharging in *windows* within *site_export_limit_kw*; a home with no battery as it is."""
+    battery = home.battery_config
+    if battery is None:
+        return home
+    return replace(
+        home, battery_config=replace(battery, event_discharge=windows, site_export_limit_kw=site_export_limit_kw)
+    )
 
 
 _PERIOD_BLOCK_KEYS: frozenset[str] = frozenset({"start_date", "end_date"})
