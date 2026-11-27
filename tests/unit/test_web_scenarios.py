@@ -13,6 +13,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge import web
 from solar_challenge.config import load_fleet_config
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
@@ -30,12 +31,19 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES, ComponentLimits
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
+    MAX_DAYS,
+    MAX_FLEET_HOMES,
+    ComponentLimits,
+    page_limits,
+)
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._error_records import error_records
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._fleet_form import fleet_reader_refusal
+from tests._html_labels import labelled_inputs
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
 from tests._html_select_options import option_texts
 from tests._plotly_figure import traces_by_name
@@ -103,6 +111,49 @@ class TestScenarioBuilderRoute:
             **{key: preset.name for key, preset in LOCATION_PRESETS.items()},
             "custom": "Custom Location",
         }
+
+    def test_the_builder_offers_a_seed_input_bounded_as_the_dashboard_bounds_a_fleets_seed(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/builder labels one number input Seed, stepping by whole numbers between page_limits().seed's low and high."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        seed = page_limits().seed
+
+        assert [
+            {key: attributes.get(key) for key in ("type", "step", "min", "max")}
+            for caption, attributes in labelled_inputs(page)
+            if caption == "Seed"
+        ] == [{"type": "number", "step": "1", "min": str(seed.low), "max": str(seed.high)}]
+
+    def test_the_builder_loads_no_script_from_the_js_yaml_vendor_directory(self, client: FlaskClient) -> None:
+        """The builder imports a scenario on the server, so GET /scenarios/builder loads no script under static/vendor/js-yaml."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+
+        sources = [attributes.get("src") or "" for attributes in element_attributes(page, "script")]
+
+        assert sources, "the builder page loads no script at all, so this check would pass vacuously"
+        assert [src for src in sources if "/static/vendor/js-yaml/" in src] == []
+
+    def test_the_web_package_vendors_no_js_yaml(self) -> None:
+        """static/vendor/js-yaml is gone from the web package: no page parses YAML in the browser."""
+        assert not (Path(web.__file__).parent / "static" / "vendor" / "js-yaml").exists()
+
+    def test_no_page_script_or_template_names_js_yaml(self) -> None:
+        """No file under the web package's static/js or templates names jsyaml or js-yaml."""
+        package = Path(web.__file__).parent
+        files = [
+            path
+            for directory in (package / "static" / "js", package / "templates")
+            for path in sorted(directory.rglob("*"))
+            if path.is_file()
+        ]
+
+        assert files, "read no page script or template, so this check would pass vacuously"
+        assert [
+            str(path.relative_to(package))
+            for path in files
+            if "jsyaml" in (text := path.read_text(encoding="utf-8")) or "js-yaml" in text
+        ] == []
 
 
 class TestSweepRoute:
@@ -441,6 +492,7 @@ class TestBuilderScenarioYaml:
         "end_date": "2024-12-31",
         "location_preset": "bristol",
         "n_homes": 100,
+        "seed": 42,
         "import_rate": 0.245,
         "seg_rate_pence_per_kwh": "",
         "pv": {"capacity_kw": 4},

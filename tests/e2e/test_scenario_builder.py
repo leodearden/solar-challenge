@@ -1,10 +1,12 @@
 """End-to-end tests for the Scenario Builder page (/scenarios/builder)."""
 
 import re
+import uuid
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import yaml
@@ -16,17 +18,21 @@ from solar_challenge.config import load_fleet_config
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, days_window
+from solar_challenge.web.builder_form import builder_form_from_scenario, builder_form_from_yaml, scenario_from_builder_form
+from solar_challenge.web.builtin_scenarios import builtin_scenario_files
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, days_window, page_limits
 from tests._fleet_form import start_spec
+from tests._repository_paths import SCENARIOS_DIR
 from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._css_transitions import finish_the_css_transitions
 from tests.e2e._fetches_handled import (
     record_fetches_started_and_handled,
     wait_until_the_page_has_handled_every_fetch_it_started,
 )
-from tests.e2e._scenario_builder_page import open_builder, upload_scenario
+from tests.e2e._scenario_builder_page import load_preset, open_builder, upload_scenario
 
 
 # ── Page loading ─────────────────────────────────────────────────────
@@ -863,7 +869,7 @@ def test_on_a_phone_a_cards_second_row_starts_each_column_where_its_first_row_do
 def test_default_form_previews_yaml_the_fleet_loader_loads(
     page: Page, live_server: str, tmp_path: Path
 ) -> None:
-    """The YAML previewed for the builder's default form loads through load_fleet_config, its PV the start's shuffled pool, and has no SEG.
+    """The YAML previewed for the builder's default form loads through load_fleet_config, its PV the start's shuffled pool and its seed the fleet form's start, and has no SEG.
 
     The page previews its default form as soon as it opens, so this pins the real
     payload of getFormData(), which
@@ -882,6 +888,8 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
         zip(pool["values"], pool["counts"], strict=True)
     )
     assert yaml.safe_load(yaml_text)["seg"] is None
+    assert response.request.post_data_json["seed"] == page_limits().seed_default
+    assert yaml.safe_load(yaml_text)["fleet_distribution"]["seed"] == page_limits().seed_default
 
 
 def _form_previewed_after(page: Page, action: Callable[[], None]) -> dict[str, Any]:
@@ -1108,7 +1116,7 @@ def test_uploading_a_builder_yaml_restores_the_form_that_emits_it(
 ) -> None:
     """Uploading the YAML the builder previews for *form* sets the form to one that previews the same scenario.
 
-    The location is custom: a preset location reloads as 'custom', the same place under no preset name.
+    The location is custom; a preset location reloads as its preset, as Load Preset of bristol-phase1 shows.
     """
     yaml_text = page.request.post(
         live_server + "/api/scenarios/preview-yaml", data=form, fail_on_status_code=True
@@ -1141,14 +1149,21 @@ _LOCATION_WITHOUT_ALTITUDE_YAML = yaml.safe_dump(
 def test_uploading_a_scenario_whose_location_omits_altitude_previews_that_scenario(
     page: Page, live_server: str, tmp_path: Path
 ) -> None:
-    """The builder previews an uploaded scenario without altitude: parse_location_block defaults it.
+    """The builder loads an uploaded scenario without altitude at the altitude parse_location_block defaults it to, and previews that scenario with it.
 
-    It does not refuse the form, which the upload has already set.
+    The server reads the location as the scenario readers read it, so the form's Altitude (m)
+    holds the default and the preview writes it.
     """
     preview = _preview_after_uploading(page, live_server, tmp_path, _LOCATION_WITHOUT_ALTITUDE_YAML)
 
+    uploaded = yaml.safe_load(_LOCATION_WITHOUT_ALTITUDE_YAML)
+    location = uploaded["location"]
+    default_altitude = parse_location_block(location).altitude
     assert preview.status == 200, preview.text()
-    assert yaml.safe_load(preview.json()["yaml"]) == yaml.safe_load(_LOCATION_WITHOUT_ALTITUDE_YAML)
+    assert yaml.safe_load(preview.json()["yaml"]) == {
+        **uploaded,
+        "location": {**location, "altitude": default_altitude},
+    }
 
 
 @pytest.mark.parametrize("key", ["Enter", "Space"])
@@ -1233,6 +1248,50 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
     assert _form_sent_on_validate(page) == form_before_upload
 
 
+def test_uploading_a_scenario_whose_tariff_the_builder_does_not_hold_leaves_the_form_and_shows_the_servers_refusal(
+    page: Page, live_server: str
+) -> None:
+    """Uploading scenarios/bristol-phase1-flex.yaml, whose Economy 7 tariff the builder has no control for, leaves every field as it was, and the preview shows the server's refusal, naming tariff.type."""
+    form_before_upload = open_builder(page, live_server).request.post_data_json
+
+    with page.expect_response("**/api/scenarios/import-yaml") as answer:
+        page.set_input_files('input[type="file"]', SCENARIOS_DIR / "bristol-phase1-flex.yaml")
+
+    assert answer.value.status == 400, answer.value.text()
+    refusal = answer.value.json()["error"]
+    assert "tariff.type" in refusal
+    expect(page.locator("pre")).to_have_text("# bristol-phase1-flex.yaml was not loaded: " + refusal)
+    assert _form_sent_on_validate(page) == form_before_upload
+
+
+_DISPATCH_STRATEGY_YAML = yaml.safe_dump(
+    {
+        "name": "Battery with a dispatch strategy",
+        "fleet_distribution": {
+            "n_homes": 12,
+            "pv": {"capacity_kw": 4.0},
+            "battery": {"capacity_kwh": 5.0, "dispatch_strategy": {"strategy_type": "self_consumption"}},
+            "load": {"annual_consumption_kwh": 3100},
+        },
+    }
+)
+"""A fleet scenario whose battery sets a dispatch strategy, a setting the builder has no control for."""
+
+
+def test_uploading_a_scenario_whose_battery_sets_a_dispatch_strategy_loads_it_and_names_the_strategy_not_loaded(
+    page: Page, live_server: str, tmp_path: Path
+) -> None:
+    """Upload YAML loads a scenario whose battery sets a dispatch strategy, and the status notice names fleet_distribution.battery.dispatch_strategy as not loaded."""
+    open_builder(page, live_server)
+
+    with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
+        upload_scenario(page, tmp_path / "scenario.yaml", _DISPATCH_STRATEGY_YAML)
+
+    expect(page.get_by_role("status")).to_contain_text("fleet_distribution.battery.dispatch_strategy")
+    sent = after_upload.value.request.post_data_json
+    assert (sent["name"], _spec_sent(sent, _CARDS[1])) == ("Battery with a dispatch strategy", 5)
+
+
 def test_full_year_sets_the_period_to_the_default_window(page: Page, live_server: str) -> None:
     """Full Year, after 1 Week moved the period, fills Start Date and End Date with timebase's default window."""
     open_builder(page, live_server)
@@ -1247,3 +1306,126 @@ def test_full_year_sets_the_period_to_the_default_window(page: Page, live_server
     page.get_by_role("button", name="Full Year", exact=True).click()
     expect(start).to_have_value(DEFAULT_FIRST_DAY.isoformat())
     expect(end).to_have_value(DEFAULT_LAST_DAY.isoformat())
+
+
+# ── Load Preset and Save ─────────────────────────────────────────────
+
+
+_BRISTOL_PHASE1_NOT_LOADED = (
+    "fleet_distribution.random_order",
+    "fleet_distribution.pv.azimuth",
+    "fleet_distribution.pv.tilt",
+    "finance",
+)
+"""The settings of scenarios/bristol-phase1.yaml the builder has no control for."""
+
+
+def test_load_preset_of_bristol_phase1_sets_the_form_validate_sends_and_names_the_settings_it_did_not_load(
+    page: Page, live_server: str
+) -> None:
+    """Load Preset 'bristol-phase1 (built-in)' sets the form to the scenario's distributions, seed, default period and Bristol, which Validate sends, and the status notice names the four settings not loaded."""
+    open_builder(page, live_server)
+
+    lookup = load_preset(page, "bristol-phase1 (built-in)")
+
+    assert lookup.status == 200, lookup.text()
+    expect(page.get_by_role("textbox", name="Scenario Name", exact=True)).to_have_value("Bristol Phase 1")
+    for setting in _BRISTOL_PHASE1_NOT_LOADED:
+        expect(page.get_by_role("status")).to_contain_text(setting)
+    sent = _form_sent_on_validate(page)
+    fleet = yaml.safe_load((SCENARIOS_DIR / "bristol-phase1.yaml").read_text(encoding="utf-8"))["fleet_distribution"]
+    assert {card.key: _spec_sent(sent, card) for card in _CARDS} == {
+        card.key: fleet[card.key][card.grammar_key] for card in _CARDS
+    }
+    assert str(sent["seed"]) == "42"
+    assert {key: sent[key] for key in ("start_date", "end_date", "location_preset")} == {
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31",
+        "location_preset": "bristol",
+    }
+
+
+def _source_of(lookup: Response) -> list[str]:
+    """The source query parameter of the preset lookup *lookup* answers."""
+    return parse_qs(urlsplit(lookup.url).query).get("source", [])
+
+
+def test_a_saved_preset_named_after_a_builtin_is_listed_beside_it_and_each_loads_its_own(
+    page: Page,
+    live_server: str,
+    fleet_preset_saved_under_a_builtin_scenario_name: dict[str, Any],
+) -> None:
+    """Load Preset lists a saved preset named after a built-in scenario beside it, and choosing either loads that one.
+
+    It asserts the lookup each choice makes and the form each answers, not the form it fills.
+    """
+    saved = fleet_preset_saved_under_a_builtin_scenario_name
+    open_builder(page, live_server)
+
+    saved_lookup = load_preset(page, saved["name"])
+    builtin_lookup = load_preset(page, f"{saved['name']} (built-in)")
+
+    assert (_source_of(saved_lookup), _source_of(builtin_lookup)) == (["saved"], ["builtin"])
+    builtin_text = builtin_scenario_files()[saved["name"]].read_text(encoding="utf-8")
+    assert (saved_lookup.json()["form"], builtin_lookup.json()["form"]) == (
+        dict(builder_form_from_scenario(scenario_from_builder_form(saved["form"])).form),
+        dict(builder_form_from_yaml(builtin_text).form),
+    )
+
+
+def _save_under_the_scenario_name(page: Page) -> Response:
+    """Click Save, accept the name the Save Scenario dialog offers, the scenario's own or 'My Scenario', and return the answer to the save.
+
+    The dialog's own Save button is hidden until the dialog opens, so the one Save button shown is the toolbar's.
+    """
+    page.get_by_role("button", name="Save", exact=True).click()
+    with page.expect_response("**/api/scenarios/save") as save:
+        page.locator("#save_name").press("Enter")
+    return save.value
+
+
+def test_a_scenario_saved_from_the_builder_is_listed_in_load_preset_without_a_reload(
+    page: Page, live_server: str
+) -> None:
+    """Once Save has saved the named scenario, Load Preset lists it under the name it was saved as; no reload is needed."""
+    name = f"Saved without reload {uuid.uuid4().hex[:8]}"
+    open_builder(page, live_server)
+    page.get_by_role("textbox", name="Scenario Name", exact=True).fill(name)
+
+    saved = _save_under_the_scenario_name(page)
+
+    assert saved.status == 201, saved.text()
+    page.get_by_role("button", name="Load Preset", exact=True).click()
+    expect(page.get_by_role("button", name=name, exact=True)).to_be_visible()
+
+
+def test_a_saved_preset_reloads_to_a_form_whose_validate_sends_what_was_saved(page: Page, live_server: str) -> None:
+    """A scenario saved with a name and a seed of its own, chosen from Load Preset on a freshly opened builder, sets the form Validate then sends to the one the builder saved."""
+    name = f"Saved and reloaded {uuid.uuid4().hex[:8]}"
+    open_builder(page, live_server)
+    page.get_by_role("textbox", name="Scenario Name", exact=True).fill(name)
+    _open_section(page, "Fleet Distribution")
+    page.get_by_role("spinbutton", name="Seed", exact=True).fill("7")
+    saved = _save_under_the_scenario_name(page)
+    assert saved.status == 201, saved.text()
+
+    open_builder(page, live_server)
+    lookup = load_preset(page, name)
+
+    assert lookup.status == 200, lookup.text()
+    expect(page.get_by_role("textbox", name="Scenario Name", exact=True)).to_have_value(name)
+    assert _form_sent_on_validate(page) == saved.request.post_data_json["config"]
+
+
+def test_a_save_the_server_refuses_shows_its_reasons(page: Page, live_server: str) -> None:
+    """Saving a scenario with no name, which the server refuses, shows each reason its answer gives under Validation errors."""
+    open_builder(page, live_server)
+
+    saved = _save_under_the_scenario_name(page)
+
+    assert saved.status == 400, saved.text()
+    reasons = saved.json()["errors"]
+    assert "Scenario name is required." in reasons
+    expect(
+        page.get_by_text("Validation errors:", exact=True).locator("..").get_by_role("listitem")
+    ).to_have_text(reasons)

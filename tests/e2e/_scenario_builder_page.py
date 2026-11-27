@@ -2,6 +2,7 @@
 """Drive the Scenario Builder page at /scenarios/builder through its UI."""
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Page, Response
 
@@ -24,3 +25,20 @@ def upload_scenario(page: Page, path: Path, yaml_text: str) -> None:
     """
     path.write_text(yaml_text, encoding="utf-8")
     page.set_input_files('input[type="file"]', path)
+
+
+def is_preset_lookup(response: Response) -> bool:
+    """Whether *response* answers the lookup of one scenario preset, whatever its query, rather than the list of them."""
+    return urlsplit(response.url).path.startswith("/api/scenarios/presets/")
+
+
+def load_preset(page: Page, label: str) -> Response:
+    """Open Load Preset, choose its item named *label*, and return the answer to the lookup that choice makes.
+
+    Choosing an item closes the menu, so a later Load Preset click reopens it.
+    """
+    page.get_by_role("button", name="Load Preset", exact=True).click()
+    item = page.get_by_role("button", name=label, exact=True)
+    with page.expect_response(is_preset_lookup) as lookup:
+        item.click()
+    return lookup.value
