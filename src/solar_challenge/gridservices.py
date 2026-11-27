@@ -433,6 +433,11 @@ class GridServicesEventsConfig:
         priced on the same path without the displaced self-use that breakdown
         also reports, so it reads no step length of the fleet's indices and
         refuses no displaced self-use below 0.
+
+        Raises:
+            ConfigurationError: If a battery home carries other event windows than
+                this configuration's participation gives it, as
+                :func:`compute_grid_services_at_events` refuses it.
         """
         per_window_totals = tuple(
             _EventDayTotals.of(event_days) for event_days in _priced_event_days(fleet_results, self)
@@ -1089,10 +1094,52 @@ def _warn_unobserved_windows(
         )
 
 
+def _described_windows(windows: tuple[EventDischargeWindow, ...]) -> str:
+    """*windows* in words: each window's days as ISO dates at its hours, or no event window."""
+    if not windows:
+        return "no event window"
+    return "; ".join(
+        f"{', '.join(day.isoformat() for day in window.days)} at hours {', '.join(map(str, window.hours))}"
+        for window in windows
+    )
+
+
+def _refuse_event_windows_the_participation_does_not_give(
+    fleet_results: "FleetResults", cfg: "GridServicesEventsConfig"
+) -> None:
+    """Refuse the first battery home of *fleet_results* whose battery carries other event windows than *cfg*'s participation gives it.
+
+    An observed fleet's battery homes carry none, which reads no step length; a
+    dispatched fleet's carry :func:`enrolled_event_windows` over their results' days.
+
+    Raises:
+        ConfigurationError: Naming the participation, the home's position and name,
+            and the windows expected and found, as ISO dates at their hours.
+    """
+    observed = cfg.participation is EventParticipation.OBSERVED
+    for position, (sim, home) in enumerate(
+        zip(fleet_results.per_home_results, fleet_results.home_configs, strict=True)
+    ):
+        if home.battery_config is None:
+            continue
+        expected = () if observed else enrolled_event_windows(cfg, sim.window)
+        found = home.battery_config.event_discharge
+        if found != expected:
+            raise ConfigurationError(
+                f"GridServicesEventsConfig.participation is {cfg.participation}, so pricing expects each battery "
+                f"home to carry {'no event window' if observed else 'the event windows enrolment gives over its simulated days'}, "
+                "as pricing and enrolment must agree on the event days "
+                "(docs/prds/event-dispatch-and-battery-sizing.md §5.5): "
+                f"home {position} {home.name!r} expects {_described_windows(expected)} "
+                f"and carries {_described_windows(found)}"
+            )
+
+
 def _priced_event_days(
     fleet_results: "FleetResults", cfg: "GridServicesEventsConfig"
 ) -> tuple[_PerHomeEventDays, ...]:
-    """Each of *cfg*'s event windows' battery-home event days under *cfg*'s delivery baseline, in window order, warning of each window no battery home's index enters (:func:`_warn_unobserved_windows`)."""
+    """Each of *cfg*'s event windows' battery-home event days under *cfg*'s delivery baseline, in window order, once :func:`_refuse_event_windows_the_participation_does_not_give` has checked the fleet, warning of each window no battery home's index enters (:func:`_warn_unobserved_windows`)."""
+    _refuse_event_windows_the_participation_does_not_give(fleet_results, cfg)
     battery_homes = _battery_homes(fleet_results)
     baseline = DeliveryBaseline.parse(
         cfg.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline"
@@ -1197,6 +1244,11 @@ def compute_grid_services_at_events(
           event's window holds, the mean over the window's event days.
 
     Raises:
+        ConfigurationError: If a battery home's battery carries other event windows
+            than *cfg.participation* gives it: none when observed, and
+            :func:`enrolled_event_windows` over the home's simulated days when
+            dispatched.  The message names the participation, the home's position
+            and name, and the days expected and found.
         ValueError: If a battery home's index has no step length to read its
             displaced self-use at (:attr:`SimulationResults.window` refuses it:
             its rows are not evenly spaced, or it has one row and no
