@@ -37,8 +37,8 @@ from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._fleet_form import (
     FLEET_FORM_BLOCKS,
     FLEET_FORM_COMPONENT_BLOCKS,
+    fleet_page_starting_form,
     form_fleet_blocks,
-    start_spec,
     valid_distribution_form,
 )
 from tests._home_payload import VALID_HOME_PAYLOAD
@@ -74,20 +74,6 @@ REQUIRED_BLOCK_DISTRIBUTIONS = {"pv": "'pv'"}
 
 #: The fleet form's other blocks, which a fleet can do without.
 OPTIONAL_BLOCKS = tuple(key for key in FLEET_FORM_BLOCKS if key not in REQUIRED_BLOCK_DISTRIBUTIONS)
-
-
-def fleet_page_starting_form() -> dict[str, Any]:
-    """The fleet form the fleet page starts at: page_limits()'s fleet size, seed and days, and each component's editor at the type its card shows."""
-    limits = page_limits()
-    return {
-        "n_homes": limits.fleet_size_default,
-        "seed": limits.seed_default,
-        "days": limits.default_days,
-        **{
-            component.key: {component.grammar_key: start_spec(component, component.start.shown)}
-            for component in FLEET_COMPONENTS.values()
-        },
-    }
 
 
 def run_refusal(form: dict[str, Any]) -> str:

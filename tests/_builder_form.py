@@ -3,13 +3,20 @@
 
 Usage::
 
-    from tests._builder_form import accepted_builder_form
+    from tests._builder_form import accepted_builder_form, builder_page_starting_form
 
     def test_a_named_form_is_accepted() -> None:
         assert builder_form_errors(accepted_builder_form()) == []
+
+    def test_the_builder_page_starts_at_a_form_it_accepts() -> None:
+        assert builder_form_errors(builder_page_starting_form("Opened")) == []
 """
 
 from typing import Any
+
+from solar_challenge.web.fleet_components import page_limits
+from solar_challenge.web.request_boundary import WEB_DEFAULT_LOCATION
+from tests._fleet_form import starting_component_blocks
 
 
 def accepted_builder_form() -> dict[str, Any]:
@@ -25,4 +32,27 @@ def accepted_builder_form() -> dict[str, Any]:
         "n_homes": 1,
         "pv": {"capacity_kw": 4},
         "battery": {"capacity_kwh": 5},
+    }
+
+
+def builder_page_starting_form(name: str) -> dict[str, Any]:
+    """The builder form getFormData() posts when the page opens, named *name* as a user names it before Validate or Save.
+
+    It holds page_limits()'s default window, fleet size, seed and flat_rate_start, the preset
+    location the page starts at, and starting_component_blocks. Every
+    call builds a new form, nested blocks included, so a test may change its own in place.
+    """
+    limits = page_limits()
+    first_day, last_day = limits.default_window
+    return {
+        "name": name,
+        "description": "",
+        "start_date": first_day.isoformat(),
+        "end_date": last_day.isoformat(),
+        "location_preset": WEB_DEFAULT_LOCATION,
+        "n_homes": limits.fleet_size_default,
+        "seed": limits.seed_default,
+        "import_rate": limits.flat_rate_start,
+        "seg_rate_pence_per_kwh": "",
+        **starting_component_blocks(),
     }
