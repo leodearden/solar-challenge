@@ -52,11 +52,11 @@ def _expand_sidebar_group(page: Page, group_label: str) -> None:
 
 
 def _click_sidebar_link(page: Page, link_text: str) -> None:
-    """Click a visible link inside the desktop sidebar."""
-    sidebar = _desktop_sidebar(page)
-    link = sidebar.locator("a", has_text=link_text)
-    link.first.click()
-    page.wait_for_load_state("domcontentloaded")
+    """Click a link inside the desktop sidebar and return once the page it opens has loaded its DOM."""
+    link = _desktop_sidebar(page).locator("a", has_text=link_text).first
+    target = link.evaluate("link => link.href")
+    link.click()
+    page.wait_for_url(lambda url: url == target, wait_until="domcontentloaded")
 
 
 # ── Sidebar link navigation ───────────────────────────────────────────
@@ -126,6 +126,39 @@ def test_sidebar_history_link(page: Page, live_server: str) -> None:
     _click_sidebar_link(page, "Runs")
 
     assert "/history/runs" in page.url
+
+
+# Defers each desktop-sidebar link's navigation by one second after its click, so on any
+# host whose click returns within that second the navigation starts after the click has
+# returned. A click that outlasts the second catches the navigation in its own auto-wait,
+# so a green run on a loaded host does not show the helper waits for the page it opens.
+_DEFER_SIDEBAR_LINK_NAVIGATION = """
+window.addEventListener(
+    "click",
+    (event) => {
+        if (!event.isTrusted) return;
+        const link = event.target.closest("a");
+        if (!link || link.closest("aside") !== document.querySelector("aside")) return;
+        event.preventDefault();
+        setTimeout(() => location.assign(link.href), 1000);
+    },
+    true,
+);
+"""
+
+
+def test_click_sidebar_link_waits_for_a_navigation_that_starts_after_the_click_returns(
+    page: Page, live_server: str
+) -> None:
+    """`_click_sidebar_link` returns on the page the link opens, even when that page's navigation starts after the click returns."""
+    page.add_init_script(_DEFER_SIDEBAR_LINK_NAVIGATION)
+    page.goto(live_server + "/")
+    page.wait_for_load_state("domcontentloaded")
+
+    _expand_sidebar_group(page, "Simulate")
+    _click_sidebar_link(page, "Fleet")
+
+    assert "/simulate/fleet" in page.url
 
 
 def test_sidebar_shows_the_group_of_the_current_page_open(page: Page, live_server: str) -> None:
