@@ -1004,7 +1004,8 @@ This directional property is hard-asserted in
 
 Under a `GridServicesEventsConfig` as `grid_services_model` the income is §4's
 capacity-at-events term, priced at each projection age from that age's simulated
-fleet: £9.97 per kW of firm spare capacity per year in the central band (§4).
+fleet: £9.97 per kW per year in the central band (§4), of firm spare capacity
+when the fleet is observed and of metered delivery when it is dispatched.
 
 **Firm capacity per event day.** An event day of window w is a local calendar
 date holding at least one of w's timesteps. Per battery home and event day d,
@@ -1043,18 +1044,58 @@ with no battery is unchanged, and a dispatched scenario with no battery home is
 refused. `site_export_limit_kw`, default none, caps each home's export, PV
 excess included, in every step in which its battery exports. It does not
 curtail PV export while the battery exports nothing
-(`tests/unit/config/test_event_enrolment.py`). Enrolment changes no pricing
-yet: a dispatched scenario's events income is still the spare-capacity pricing
-above, measured on the enrolled run, so under the operational baseline a drawn
-day, on which the batteries already discharge at full power, adds next to no
-spare capacity.
+(`tests/unit/config/test_event_enrolment.py`). Pricing reads the participation
+too: a dispatched scenario's income is the delivery metered from the enrolled
+run, below, not the spare capacity it leaves.
+
+**Metered delivery (dispatched).** `grid_services_model.participation` also
+says how the income is priced. `"observed"`, the default, prices the firm spare
+capacity above. `"dispatched"` prices the delivery metered on each drawn day of
+the enrolled run. Before either, pricing refuses, with a `ConfigurationError`,
+a fleet whose battery homes carry other event windows than its participation
+gives them: none when observed, and `gridservices.enrolled_event_windows` over
+the home's simulated days when dispatched. The message names the participation,
+the home, and the days expected and found, as ISO dates at their hours. Per
+event window w and drawn day d, with Δt the step length and `h = event_hours`:
+
+```
+capacity:     D(d) = Σ_home Σ_{t∈d∩w} discharge(t) · Δt / h
+operational:  N(d) = Σ_home mean_{t∈d∩w}(import(t) − export(t))   a home lacking d adds 0
+              B(d) = mean of N over the OPERATIONAL_BASELINE_DAYS = 10 days w is
+                     eligible on with no event of any window, nearest before d,
+                     completed with the nearest after d when fewer precede it
+              D(d) = max(0, B(d) − N(d))
+booked_w     = mean over w's drawn days d of D(d)      the figure §4 prices
+```
+
+A drawn day with no row in the window delivers 0. A window that draws no day of
+the simulated days prices £0 and warns, as a window the index never enters
+does. Under the operational baseline, a window that draws a day but leaves no
+eligible day without an event to baseline it on is refused with a
+`ConfigurationError` naming the window: simulate more days, or meter against the
+capacity baseline. The 50% and 90% figures are D's, by the rank rule below.
+`gridservices.OPERATIONAL_BASELINE_DAYS`, the ten, is the simulator's reading
+of a DFS-style historical baseline, the mean of recent like days. The product
+text that would fix it has not been read
+(docs/prds/event-dispatch-and-battery-sizing.md §12 question 1), and the
+rate-calibration gate, task 1708, reads it. Displaced self-use is not reported
+under dispatched: the same run's bills already hold the import the events
+caused, and its event export earns each home's SEG rate there. Each projection
+age is an enrolled run of its aged fleet, priced from its own run. Under both
+participations the breakdown reports `per_window_battery_export_kwh_per_event`:
+per window, the battery homes' battery export in its rows, summed over homes on
+each event day and averaged over the event days (kWh), 0 for a fleet whose
+batteries export nothing
+(`tests/unit/test_metered_event_delivery.py`;
+`tests/integration/test_dispatched_events_income.py`).
 
 **Reliability.** Beside the booked mean, the capacity-at-events breakdown reports
 the capacity available on at least 50% and on at least 90% of event days: the
-⌈q·n⌉-th largest of the n daily totals A(d), for q = 0.5 and 0.9, the rank
-rounded up, never to the nearest. It is not an interpolated percentile: on daily
-totals (1.0, 2.0) kW the 90% figure is 1.0 kW, where numpy's linear 10th
-percentile, 1.1 kW, is available on only half the days. The 90% figure never
+⌈q·n⌉-th largest of the n daily totals A(d), or D(d) when dispatched, for
+q = 0.5 and 0.9, the rank rounded up, never to the nearest. It is not an
+interpolated percentile: on daily totals (1.0, 2.0) kW the 90% figure is
+1.0 kW, where numpy's linear 10th percentile, 1.1 kW, is available on only half
+the days. The 90% figure never
 exceeds the 50% figure. For a fleet whose homes share one simulated index, as
 a `FleetRunner.simulate` fan-out's do, the season minimum, the 0.5.0 tag's figure, never exceeds
 the 90% figure either (`tests/unit/test_gridservices.py::TestReliabilityRank`).
@@ -1080,24 +1121,29 @@ decision 15, §11).
 **Where the income renders.** Whenever the scenario's pricing books grid
 services, flat or at events, with or without `--flex-band`, the finance report
 renders a Grid Services Income section after Project Economics (§9). Its model
-line names the model: for events pricing its band and its delivery baseline, for
-flat pricing its rate. When the run projects (`--project` or `--cost-recovery`),
-a table gives, per mode, the income the projection booked at year 1 and at
+line names the model: for events pricing its band, its delivery baseline and its
+participation, for flat pricing its rate. When the run projects (`--project`
+or `--cost-recovery`), a table gives, per mode, the income the projection booked at year 1 and at
 year N: the first and last entries of `FleetProjection.grid_services_income_gbp`,
 which holds the income priced at every simulated age, ascending, and whose first
 and last entries are the seed ages 0 and N − 1. A table of this window's fleet
 follows, the same under every assumption: the annual fleet income and, under
-events pricing, the per-event available capacity, the two reliability rows and
-the per-event displaced row for a single event window, and — for several, since
-summed over windows they describe no set of event days; the value-per-year row
-sums the windows. A note says the income is gross of the displaced self-use, and
-that a home without a tariff values it at £0. The flexibility-value block's
+events pricing, the per-event available capacity, the two reliability rows, the
+battery export per event and the per-event displaced row for a single event
+window, and — for several, since summed over windows they describe no set of
+event days; the value-per-year row sums the windows. A note says the income is
+gross of the displaced self-use, and that a home without a tariff values it at
+£0. Under dispatched participation the delivery rows read *Per-event metered
+delivery* and *Delivery on 50%* and *on 90% of event days*, the two displaced
+rows read *not reported*, and the note says instead that the bills in the report
+include the import the events caused. The flexibility-value block's
 grid-services row (`--flex-band`) is that booked income per battery home and per
 kW of battery discharge, under a headline of the band's time-shift plus it; a
 scenario that prices no grid services shows the band's consulting figure there,
 labelled not booked (docs/flexibility-buildability.md §1)
 (`tests/unit/test_gridservices.py::TestDisplacedEveningSelfUse`;
-`tests/unit/test_board_report_grid_services.py`, the several-window rule in
+`tests/unit/test_board_report_grid_services.py`, the dispatched rows in
+`tests/unit/test_board_report_grid_services.py::TestGridServicesIncomeSection::test_a_dispatched_breakdown_renders_its_metered_delivery_and_reports_no_displaced_self_use`, the several-window rule in
 `tests/unit/test_board_report_grid_services.py::TestGridServicesIncomeSection::test_with_several_event_windows_no_per_window_figure_is_summed`;
 `tests/integration/test_grid_services_events.py::test_b10_finance_run_renders_the_booked_grid_services_income_with_the_economics`,
 `tests/integration/test_grid_services_events.py::test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement`).
@@ -1200,7 +1246,7 @@ run projects (§8.1). Under the board scenario's events pricing over 25 years:
 ```markdown
 ## Grid Services Income
 
-Model: **capacity at events, central band, operational delivery baseline**
+Model: **capacity at events, central band, operational delivery baseline, observed participation**
 
 ### Booked by the projection (£ a year)
 
@@ -1215,6 +1261,8 @@ Model: **capacity at events, central band, operational delivery baseline**
 |---|---|
 | Annual fleet income | £{annual_income_gbp:,.0f} |
 | Per-event available capacity | {kW:.1f} kW |
+| ... | ... |
+| Battery export per event | {kWh:.1f} kWh |
 | ... | ... |
 ```
 
