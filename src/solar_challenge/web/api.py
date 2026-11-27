@@ -23,11 +23,10 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
-from solar_challenge.web.builtin_scenarios import builtin_scenario_files
+from solar_challenge.web.builtin_scenarios import builtin_scenario_files, builtin_scenario_form
 from solar_challenge.web.dashboard import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_components import fleet_component_values
-from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
     fleet_form_from_yaml,
     parse_fleet_form,
@@ -415,10 +414,10 @@ def fleet_preset(name: str) -> tuple[Response, int]:
         The answer of :func:`_loaded_form_answer` for the preset's form; or the
         ``error``: HTTP 400 for a built-in scenario file the fleet form cannot load, which
         the Load Preset menu does not offer
-        (:func:`~solar_challenge.web.fleet_presets.fleet_preset_names`); HTTP 404 when no
+        (:func:`~solar_challenge.web.builtin_scenarios.builtin_scenarios_loaded_by`); HTTP 404 when no
         built-in scenario file is named *name*.
     """
-    imported = fleet_preset_form(name)
+    imported = builtin_scenario_form(name, fleet_form_from_yaml)
     if imported is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return _loaded_form_answer(imported)
