@@ -59,9 +59,9 @@ from solar_challenge.web.run_names import read_run_name
 from solar_challenge.web.scenario_import import ImportedForm
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
-from solar_challenge.web.sweep_request import SweepRequest, read_sweep_request
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
+from solar_challenge.web.sweep_request import SweepRequest, read_sweep_request
 from solar_challenge.web.text_options import read_one_of
 from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
@@ -486,6 +486,17 @@ def simulate_sweep() -> tuple[Response, int]:
         "values": [value for value, _ in points],
         "job_ids": job_ids,
     }), 201
+
+
+@api_bp.route("/simulate/sweep/points", methods=["POST"])
+def simulate_sweep_points() -> tuple[Response, int]:
+    """Preview the values POST /api/simulate/sweep would run for the same body, read by the same reader; it builds no home and submits no job.
+
+    Returns:
+        JSON with parameter and values, HTTP 200; HTTP 400 for read_sweep_request's refusals.
+    """
+    sweep = read_sweep_request(request_json_object())
+    return jsonify({"parameter": sweep.parameter.knob.name, "values": list(sweep.values())}), 200
 
 
 def _sweep_base(base_config: Mapping[str, Any], sweep: SweepRequest) -> ScenarioConfig:
