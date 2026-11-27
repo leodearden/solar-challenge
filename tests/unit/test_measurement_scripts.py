@@ -3,13 +3,15 @@
 
 docs/pv-inverter-string-matching.md, docs/tmy-irradiation-scaling.md,
 docs/pv-system-losses.md, docs/scheduled-charge-windows.md,
-docs/grid-charge-forecast.md and review/briefing.yaml's key_decisions say to
-re-measure their figures with scripts/measure_mppt_window.py,
-scripts/measure_tmy_irradiation.py, scripts/measure_pv_performance_ratio.py,
-scripts/measure_charge_window_bills.py and scripts/measure_grid_charge_forecast.py.
+docs/grid-charge-forecast.md, docs/battery-sizing-with-events.md and
+review/briefing.yaml's key_decisions say to re-measure their figures with
+scripts/measure_mppt_window.py, scripts/measure_tmy_irradiation.py,
+scripts/measure_pv_performance_ratio.py, scripts/measure_charge_window_bills.py,
+scripts/measure_grid_charge_forecast.py and scripts/measure_battery_sizing.py.
 """
 
 import dataclasses
+import re
 import statistics
 import warnings
 from collections.abc import Mapping
@@ -20,14 +22,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 from pvlib.modelchain import ModelChain
 
 import solar_challenge
-from solar_challenge.config import load_config, load_fleet_config
+from solar_challenge.config import ScenarioConfig, load_config, load_fleet_config, load_scenario
 from solar_challenge.dispatch import GRID_CHARGE_FORECASTS
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import BillBreakdown, bill_distribution
-from solar_challenge.fleet import FleetRunner
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetRunner
 from solar_challenge.home import SummaryStatistics, simulate_home
 from solar_challenge.location import Location
 from solar_challenge.pv import (
@@ -52,6 +55,8 @@ from solar_challenge.weather import (
 )
 from tests import _synthetic_weather
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._committed_weather_cache import COMMITTED_WEATHER_CACHE_DIR
+from tests._markdown_tables import table_rows
 from tests._repository_paths import SCENARIOS_DIR
 from tests._scripts import load_script
 from tests._seeded_tmy import ClearJuneDays
@@ -715,3 +720,142 @@ class TestMeasureGridChargeForecast:
         ]
         refused = {arm.forecast: arm.householder_bill for arm in forecast_arms}["perfect_foresight"]
         assert refused.reason in report
+
+
+_VICTRON_SCENARIO = SCENARIOS_DIR / "bristol-phase1-victron.yaml"
+
+
+@pytest.fixture(scope="module")
+def battery_sizing() -> ModuleType:
+    """scripts/measure_battery_sizing.py."""
+    return load_script("measure_battery_sizing")
+
+
+@pytest.fixture(scope="module")
+def victron() -> ScenarioConfig:
+    """The Victron board scenario, its 100 homes over 2024, as the script reads it by default."""
+    return load_scenario(_VICTRON_SCENARIO)
+
+
+def _short_life_victron(directory: Path) -> Path:
+    """A copy of the Victron scenario in directory on a two-year asset life and loan term, as ε's Victron signal runs it."""
+    document = yaml.safe_load(_VICTRON_SCENARIO.read_text(encoding="utf-8"))
+    document["finance"]["asset_life_years"] = 2
+    document["finance"]["loan_term_years"] = 2
+    path = directory / "victron-short-life.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    return path
+
+
+class TestMeasureBatterySizing:
+    """measure_battery_sizing prices the Victron sweep enrolled and not at each band (scripts/measure_battery_sizing.py, docs/battery-sizing-with-events.md)."""
+
+    def test_first_homes_keeps_the_scenarios_first_n_homes_and_scales_its_grant_to_their_share(
+        self, battery_sizing: ModuleType, victron: ScenarioConfig
+    ) -> None:
+        """The grant is the one project total in FinanceConfig, so a cut of the fleet carries its homes' share of it."""
+        assert victron.finance is not None
+
+        cut = battery_sizing.first_homes(victron, 20)
+
+        assert cut.homes == victron.homes[:20]
+        assert cut.finance is not None
+        assert cut.finance.grant_gbp == victron.finance.grant_gbp * 20 / 100
+        assert dataclasses.replace(cut.finance, grant_gbp=victron.finance.grant_gbp) == victron.finance
+        assert cut.period == victron.period
+        assert dataclasses.replace(cut, homes=victron.homes, finance=victron.finance) == victron
+
+    def test_first_homes_of_the_whole_fleet_is_the_scenario_itself(
+        self, battery_sizing: ModuleType, victron: ScenarioConfig
+    ) -> None:
+        assert battery_sizing.first_homes(victron, len(victron.homes)) == victron
+
+    @pytest.mark.parametrize("count", [0, 101])
+    def test_first_homes_refuses_a_count_outside_the_fleet(
+        self, battery_sizing: ModuleType, victron: ScenarioConfig, count: int
+    ) -> None:
+        with pytest.raises(ValueError, match=rf"\b{count}\b.*\b100 homes\b"):
+            battery_sizing.first_homes(victron, count)
+
+    def test_by_default_the_script_reads_the_committed_bristol_tmy(self, battery_sizing: ModuleType) -> None:
+        """The script cannot import tests/, so it names the committed cache itself; this pins the two to one directory."""
+        assert battery_sizing.COMMITTED_WEATHER_CACHE_DIR == COMMITTED_WEATHER_CACHE_DIR
+
+    def test_main_prints_one_ranked_table_per_band_and_what_it_was_measured_on_offline(
+        self, battery_sizing: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """One home over two winter weekdays, on a two-year life so each projection simulates two ages; the cache holds synthetic weather at the scenario's location, so main fetches nothing."""
+        scenario_path = _short_life_victron(tmp_path)
+        cache_dir = tmp_path / "weather-cache"
+        WeatherCache(cache_dir).put(_synthetic_weather.synthetic_tmy(), "tmy", load_scenario(scenario_path).get_location())
+
+        battery_sizing.main(
+            [
+                "--scenario", str(scenario_path),
+                "--cache-dir", str(cache_dir),
+                "--homes", "1",
+                "--start", "2024-01-15",
+                "--end", "2024-01-16",
+                "--no-parallel",
+            ]
+        )
+        report = capsys.readouterr().out
+
+        lines = report.splitlines()
+        assert solar_challenge.__version__ in report
+        assert sum(line.startswith("Commit: ") for line in lines) == 1
+        assert any("first 1 of 100 homes" in line and "£2,500" in line for line in lines), report
+        assert any("2024-01-15 to 2024-01-16" in line for line in lines), report
+        reference_kwh, reference_kw = (f"{figure:g}" for figure in battery_sizing.BATTERIES[0])
+        for heading in ("### Low band", "### Central band", "### High band"):
+            header, *rows = table_rows(report, heading)
+            assert len(rows) == 8, heading
+            cells = [dict(zip(header, row, strict=True)) for row in rows]
+            assert [row["Participation"] for row in cells] == ["dispatched"] * 4 + ["observed"] * 4, heading
+            assert {row["Pays for itself"] for row in cells} <= {"yes", "no"}, heading
+            references = [
+                row for row in cells if (row["Battery kWh"], row["Battery kW"]) == (reference_kwh, reference_kw)
+            ]
+            assert [row["Extra capex/home £"] for row in references] == ["+£0", "+£0"], heading
+
+    def test_main_refuses_a_homes_count_beyond_the_fleet(self, battery_sizing: ModuleType, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"\b101\b.*\b100 homes\b"):
+            battery_sizing.main(
+                ["--scenario", str(_short_life_victron(tmp_path)), "--cache-dir", str(tmp_path), "--homes", "101"]
+            )
+
+    def test_main_refuses_a_weather_cache_without_the_tmy_at_the_scenarios_location(
+        self, battery_sizing: ModuleType, tmp_path: Path
+    ) -> None:
+        """So it fetches nothing from PVGIS, and puts nothing into the cache it is given, by default the committed one."""
+        cache_dir = tmp_path / "weather-cache"
+
+        with pytest.raises(ConfigurationError, match=rf"{re.escape(str(cache_dir))}.*\bBristol\b"):
+            battery_sizing.main(
+                [
+                    "--scenario", str(_short_life_victron(tmp_path)),
+                    "--cache-dir", str(cache_dir),
+                    "--homes", "1",
+                    "--start", "2024-01-15",
+                    "--end", "2024-01-16",
+                    "--no-parallel",
+                ]
+            )
+        assert not cache_dir.exists()
+
+    @pytest.mark.parametrize("rate", ["availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh"])
+    def test_measure_refuses_an_events_rate_of_the_scenarios_own_before_it_simulates(
+        self, battery_sizing: ModuleType, tmp_path: Path, rate: str
+    ) -> None:
+        """Such a rate overrides every band's, so the low, central and high tables would print the same figures."""
+        document = yaml.safe_load(_VICTRON_SCENARIO.read_text(encoding="utf-8"))
+        document["finance"]["grid_services_model"][rate] = 1.5
+        path = tmp_path / "victron-own-rate.yaml"
+        path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+        def simulate(fleet: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            raise AssertionError(f"simulated {fleet.name}")
+
+        with pytest.raises(ConfigurationError, match=rf"\bfinance\.grid_services_model\.{rate} to 1\.5\b.*\bband"):
+            battery_sizing.measure(load_scenario(path), simulate=simulate)
+
