@@ -192,7 +192,7 @@ Parameter sweep builder with results visualisation.
 - Parameter to sweep: a dropdown offering web/sweep_request.py's `SWEEP_PARAMETERS`, one option per row, labelled with the row's label and carrying its starting range. Choosing one starts Min and Max at that range.
 - Sweep mode: a radio per `SweepMode`, with `SweepSpec`'s default (geometric) preselected.
 - Steps: bounded by `SWEEP_MAX_STEPS`.
-- Preview: not computed in the browser. On load and on every change, the page posts its sweep to `POST /api/simulate/sweep/points`, which reads the body as `POST /api/simulate/sweep` does. The page lists the values the server answers, or shows its refusal; e.g. a geometric sweep from 0 shows 'SweepSpec: geometric mode requires min > 0'. A preview request the form has outrun is dropped. Run stays disabled until the server accepts the sweep.
+- Preview: not computed in the browser. On load and on every change, the page posts its sweep to `POST /api/simulate/sweep/points`, which reads the body as `POST /api/simulate/sweep` does. The page lists the values the server answers, or shows its refusal; e.g. a geometric sweep from 0 shows `SweepSpec`'s refusal. A preview request the form has outrun is dropped. Run stays disabled until the server has accepted the preview of the sweep the form holds, including while a changed sweep's preview is unanswered.
 - The results table's header and the charts' `parameter_label` name the swept parameter by its server label.
 - The page reads its starting values from its rendered options and its checked mode radio, not from `#page-limits`.
 - Base configuration: select from saved configs or configure inline
