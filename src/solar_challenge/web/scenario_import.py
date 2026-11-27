@@ -3,22 +3,26 @@
 
 The fleet page (fleet_scenario.py) and the scenario builder (builder_form.py) each read a
 scenario with these readers, declaring what their own form holds as the reads they give
-read_blocks.  Each reader that refuses names the setting and the *page* it refuses it for.
+read_blocks, and each typed block it holds, a tariff or a dispatch strategy, as the
+FormChoice of each type it offers.  Each reader that refuses names the setting and the
+*page* it refuses it for.
 docs/web-ui-design.md, *Scenario import policy*, says what loads, what is named not
 loaded and what is refused.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
+from enum import Enum
 from typing import Any
 
 import yaml
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import ComponentDistribution, FleetDistributionConfig
+from solar_challenge.number_fields import Interval
 from solar_challenge.scenario_blocks import child_path
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits, page_limits
 from solar_challenge.web.simulation_params import read_iso_date
 
 
@@ -164,31 +168,119 @@ def required(page: str) -> SettingReader:
     return read_required
 
 
+class SettingInput(Enum):
+    """How a page's form shows and holds a FormSetting."""
+
+    #: One number input, holding the setting's value.
+    NUMBER = "number"
+    #: A choice of the tariff's clock, held as null, or one [start, end] window of whole
+    #: hours, each in its own number input.
+    CLOCK_OR_WINDOW = "clock_or_window"
+
+
+@dataclass(frozen=True)
+class FormSetting:
+    """A setting of a typed block that a page's form holds for one of its types.
+
+    Attributes:
+        key: The setting's key in the block.
+        title: Its input's caption.
+        within: The values its input offers, either end included; for a CLOCK_OR_WINDOW
+            setting, each hour's.
+        step: Its input's step; for a CLOCK_OR_WINDOW setting, each hour's.
+        start: The value the form starts at; for a CLOCK_OR_WINDOW setting, the one window
+            its custom window starts at.
+        read: Reads the setting from its value in a scenario and its path there.
+        input: How the form shows and holds it.
+    """
+
+    key: str
+    title: str
+    within: Interval
+    step: float
+    start: Any
+    read: SettingReader
+    input: SettingInput = SettingInput.NUMBER
+
+
+@dataclass(frozen=True)
+class FormChoice:
+    """A type a page's form offers for a typed block, a tariff or a dispatch strategy, with the settings it holds for it.
+
+    Attributes:
+        type: The type, as the block's type key names it.
+        title: Its option's text.
+        settings: The settings of that type the form holds, in the order it shows them.
+    """
+
+    type: str
+    title: str
+    settings: tuple[FormSetting, ...]
+
+    def as_json(self) -> dict[str, Any]:
+        """This choice as the page's script reads it, holding only dicts, lists, text and numbers: its type, and each setting's key, input and start, a tuple written as a list."""
+        return {
+            "type": self.type,
+            "settings": [
+                {"key": setting.key, "input": setting.input.value, "start": _json_value(setting.start)}
+                for setting in self.settings
+            ],
+        }
+
+    def starting_block(self, type_key: str) -> dict[str, Any]:
+        """The block the form posts for this choice at its starts, its type under *type_key*."""
+        return {type_key: self.type, **{setting.key: setting.start for setting in self.settings}}
+
+
+def _json_value(value: Any) -> Any:
+    """*value* with each tuple or list in it, at any depth, written as a list."""
+    if isinstance(value, tuple | list):
+        return [_json_value(each) for each in value]
+    return value
+
+
+#: The rates, in £/kWh, a form's tariff rate input offers, and its step.
+RATE_WITHIN = Interval(0, 2)
+RATE_STEP = 0.01
+
+
+def flat_rate_choice(page: str) -> FormChoice:
+    """The flat-rate tariff as the *page*'s form holds it: its rate, which starts at page_limits().flat_rate_start and which the page always sets."""
+    rate = FormSetting(
+        "rate_per_kwh", "Rate (£/kWh)", RATE_WITHIN, RATE_STEP, page_limits().flat_rate_start, required(page)
+    )
+    return FormChoice("flat_rate", "Flat Rate", (rate,))
+
+
 def read_typed_block(
     block: Mapping[str, Any],
     path: str,
     type_key: str,
-    settings: Mapping[str, Mapping[str, SettingReader]],
+    choices: Sequence[FormChoice],
     page: str,
 ) -> BlockRead:
-    """The *path* block, whose *type_key* names its type, as the *page*'s form holds it: its type and the settings *settings* reads for that type.
+    """The *path* block, whose *type_key* names its type, as the *page*'s form holds it: its type and each setting the choice of that type holds, read by that setting's reader.
 
     Raises:
-        ConfigurationError: For a type *settings* has no readers for, naming the block's
+        ConfigurationError: For a type none of *choices* offers, naming the block's
             *type_key*, the page and the types it holds, or from a setting's reader.
     """
     block_type = block[type_key]
-    readers = settings.get(block_type)
-    if readers is None:
+    choice = next((each for each in choices if each.type == block_type), None)
+    if choice is None:
         raise ConfigurationError(
             f"{child_path(path, type_key)} must be one the {page} holds "
-            f"({', '.join(settings)}), got {block_type!r}"
+            f"({', '.join(each.type for each in choices)}), got {block_type!r}"
         )
     form = {
         type_key: block_type,
-        **{key: read(block.get(key), child_path(path, key)) for key, read in readers.items()},
+        **{
+            setting.key: setting.read(block.get(setting.key), child_path(path, setting.key))
+            for setting in choice.settings
+        },
     }
-    return form, not_loaded(block, path, dict.fromkeys((type_key, *readers), ()))
+    held_keys = (type_key, *(setting.key for setting in choice.settings))
+    return form, not_loaded(block, path, dict.fromkeys(held_keys, ()))
 
 
 def read_seg(seg: Any, held: frozenset[str], page: str) -> BlockRead:
