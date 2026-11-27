@@ -9,6 +9,8 @@ It also defines the configuration a battery names its strategy and its grid
 charging with: the variants of DispatchStrategyConfig, and GridChargeConfig;
 build_dispatch_strategy builds the strategy a variant configures, and
 refuse_grid_charging_it_would_ignore refuses grid charging a strategy would ignore.
+A battery's grid-services event windows, each an EventDischargeWindow, wrap the
+strategy it runs in an EventDischargeStrategy, which discharges at full power in them.
 """
 
 from abc import ABC, abstractmethod
@@ -1244,13 +1246,42 @@ class EventDischargeStrategy(DispatchStrategy):
         )
 
 
+def with_event_discharge(
+    strategy: DispatchStrategy,
+    event_discharge: tuple[EventDischargeWindow, ...],
+    *,
+    max_discharge_kw: float | None,
+) -> DispatchStrategy:
+    """Return strategy wrapped in event_discharge, a battery's event windows, at its discharge limit max_discharge_kw; with no windows, strategy itself.
+
+    Raises:
+        ConfigurationError: If there are windows and max_discharge_kw is None, naming both:
+            a window exports at the battery's discharge limit. Else as EventDischargeStrategy
+            refuses its windows or limit.
+    """
+    if not event_discharge:
+        return strategy
+    if max_discharge_kw is None:
+        raise ConfigurationError(
+            "event_discharge holds event windows, which discharge the battery at its discharge limit, "
+            "but max_discharge_kw is None; give the battery's max_discharge_kw"
+        )
+    return EventDischargeStrategy(strategy, event_discharge, max_discharge_kw=max_discharge_kw)
+
+
 def build_dispatch_strategy(
     config: DispatchStrategyConfig,
     *,
     grid_charging: GridChargeConfig | None,
     tariff: TariffConfig | None,
+    event_discharge: tuple[EventDischargeWindow, ...] = (),
+    max_discharge_kw: float | None = None,
 ) -> DispatchStrategy:
     """Build a new instance of the strategy config configures, for a battery whose grid-charge setting is grid_charging, in a home on tariff.
+
+    After every refusal, which judges and names the strategy config configures, the battery's
+    event windows, event_discharge, wrap it at the battery's discharge limit, max_discharge_kw,
+    through with_event_discharge; with none, it is returned unwrapped.
 
     Raises:
         ConfigurationError: The strategy's constructor refuses the variant at tariff: a
@@ -1259,6 +1290,7 @@ def build_dispatch_strategy(
             grid_charging under the strategy built: its variant does not charge from the grid,
             or there is no tariff to find a cheap period in. Last, grid_charging is refused on a
             tariff with no cheap period, the only minutes a variant's strategy grid-charges in.
+            Then with_event_discharge refuses event windows given with no max_discharge_kw.
     """
     strategy: DispatchStrategy
     match config:
@@ -1275,7 +1307,7 @@ def build_dispatch_strategy(
     refuse_grid_charging_it_would_ignore(strategy, grid_charging=grid_charging, tariff=tariff)
     if grid_charging is not None and tariff is not None:
         _require_cheap_minutes_for_grid_charging(strategy.name, tariff)
-    return strategy
+    return with_event_discharge(strategy, event_discharge, max_discharge_kw=max_discharge_kw)
 
 
 def refuse_grid_charging_it_would_ignore(
