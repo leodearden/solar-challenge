@@ -23,6 +23,7 @@ from solar_challenge.web.fleet_components import (
     FLEET_SIZE_DEFAULT,
     MAX_FLEET_HOMES,
     ComponentLimits,
+    page_limits,
 )
 from solar_challenge.web.fleet_scenario import parse_fleet_form
 from tests._builder_form import accepted_builder_form
@@ -664,3 +665,37 @@ class TestBuilderFormErrors:
 
         assert builder_form_errors({**accepted_builder_form(), "seg_rate_pence_per_kwh": -1}) == [str(seg_refusal.value)]
 
+
+
+class TestBuilderFormSeed:
+    """The builder holds the fleet page's seed, bounded as the fleet page bounds it, by page_limits().seed."""
+
+    @pytest.mark.parametrize("seed", [pytest.param("7", id="text"), pytest.param(7, id="int"), pytest.param(7.0, id="whole-float")])
+    def test_a_seed_is_written_after_n_homes_as_the_whole_number_it_reads_as(self, seed: object) -> None:
+        """A seed is read by as_whole_number, as n_homes is, and written after it."""
+        written = _written_fleet({**accepted_builder_form(), "seed": seed})
+
+        assert written["seed"] == 7
+        assert type(written["seed"]) is int
+        assert list(written)[:2] == ["n_homes", "seed"]
+
+    @pytest.mark.parametrize("seed", [pytest.param("", id="cleared"), pytest.param(None, id="null")])
+    def test_a_seed_sent_cleared_or_null_writes_no_seed(self, seed: object) -> None:
+        assert "seed" not in _written_fleet({**accepted_builder_form(), "seed": seed})
+
+    def test_a_seed_beyond_the_page_limit_is_refused_as_the_fleet_reader_refuses_it(self) -> None:
+        """The one fleet reason is read_form_fleet's refusal of the same blocks, naming the seed and its bound."""
+        seed = page_limits().seed
+        form = {**accepted_builder_form(), "seed": seed.high + 1}
+
+        errors = builder_form_errors(form)
+
+        assert errors == [fleet_reader_refusal(form)]
+        assert "seed" in errors[0]
+        assert f"{seed.high}" in errors[0].replace(",", "")
+
+    @pytest.mark.parametrize("bound", ["low", "high"])
+    def test_a_seed_at_the_page_limit_is_accepted(self, bound: str) -> None:
+        form = {**accepted_builder_form(), "seed": getattr(page_limits().seed, bound)}
+
+        assert builder_form_errors(form) == []
