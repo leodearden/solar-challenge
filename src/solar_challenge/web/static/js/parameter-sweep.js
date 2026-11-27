@@ -31,6 +31,8 @@ document.addEventListener('alpine:init', () => {
         // The sweep's points as POST /api/simulate/sweep/points last answered them, or why it refused the sweep
         previewValues: [],
         previewRefusal: '',
+        // Whether the server has yet to answer the preview of the sweep the form describes
+        previewing: false,
         // Aborts the preview request still in flight, whose answer the form has outrun
         _previewRequest: new AbortController(),
 
@@ -69,6 +71,7 @@ document.addEventListener('alpine:init', () => {
             const previewRequest = new AbortController();
             this._previewRequest = previewRequest;
             const signal = previewRequest.signal;
+            this.previewing = true;
             try {
                 const resp = await fetch('/api/simulate/sweep/points', {
                     method: 'POST',
@@ -89,6 +92,8 @@ document.addEventListener('alpine:init', () => {
                 if (signal.aborted) return;
                 this.previewValues = [];
                 this.previewRefusal = e.message;
+            } finally {
+                if (!signal.aborted) this.previewing = false;
             }
         },
 

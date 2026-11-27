@@ -7,8 +7,9 @@ Battery (kWh), Location and Days controls, that choosing a parameter starts
 Min and Max at the server's starting range for it, that the preview lists, in
 the list named "Sweep values", the values the server's points endpoint answers,
 or shows its refusal, and drops a preview request the form has outrun, that
-submitting a sweep filled into the form returns one background job per sweep
-point, and detects Bug B1 (Alpine race condition with external JS).
+Run stays disabled until the server answers the preview of a changed sweep,
+that submitting a sweep filled into the form returns one background job per
+sweep point, and detects Bug B1 (Alpine race condition with external JS).
 
 Also verifies that each sweep point's row shows how its own job ended, that
 its status badge takes the classes the server draws for that status, that the
@@ -309,6 +310,52 @@ def test_a_preview_request_still_unanswered_when_the_form_changes_is_dropped(
     finally:
         while held_points_requests:
             held_points_requests.pop().abort()
+
+
+class _PointsRequestsHeldUntilReleased:
+    """The page's requests to the points endpoint, each held unanswered until the test releases them to the live server."""
+
+    def __init__(self) -> None:
+        self._held: list[Route] = []
+        self._released = False
+
+    def handle(self, route: Route) -> None:
+        """Send the request on to the live server once the test has released the requests, else hold it."""
+        if self._released:
+            route.continue_()
+        else:
+            self._held.append(route)
+
+    def release(self) -> None:
+        """Send each held request, and every one to come, on to the live server, since a request page.expect_request has seen can reach handle only later."""
+        self._released = True
+        while self._held:
+            self._held.pop().continue_()
+
+
+def test_run_stays_disabled_while_the_preview_of_a_changed_sweep_is_unanswered(
+    page: Page, live_server: str
+) -> None:
+    """Once the opening preview is accepted, a change to Max disables Run until the server answers the changed sweep's preview, and Run is enabled again once it accepts it."""
+    run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
+    with page.expect_response(_POINTS_URL):
+        page.goto(live_server + "/scenarios/sweep")
+    expect(run).to_be_enabled()
+
+    points_requests = _PointsRequestsHeldUntilReleased()
+    page.route(_POINTS_URL, points_requests.handle)
+    try:
+        with page.expect_request(_POINTS_URL):
+            page.get_by_label("Max Value", exact=True).fill("9")
+        expect(run).to_be_disabled()
+
+        with page.expect_response(
+            lambda response: _is_the_points_url(response.url) and response.status == 200
+        ):
+            points_requests.release()
+    finally:
+        points_requests.release()
+    expect(run).to_be_enabled()
 
 
 # -- Sweep submission: one background home job per sweep point ------------
