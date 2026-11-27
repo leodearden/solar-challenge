@@ -14,6 +14,9 @@ Key public symbols:
   vocabulary, whose :meth:`~GridServicesBand.parse` refuses any other value.
 * :class:`DeliveryBaseline` — the one operational / capacity delivery-baseline
   vocabulary, whose :meth:`~DeliveryBaseline.parse` refuses any other value.
+* :class:`EventParticipation` — the one observed / dispatched vocabulary of the
+  fleet's part in its events, whose :meth:`~EventParticipation.parse` refuses
+  any other value.
 * :class:`GridServicesRateBand` — frozen dataclass holding per-event availability
   and utilisation rates, and a flat rate per kW of battery discharge power per
   year, for one uncertainty band.
@@ -75,7 +78,7 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# GridServicesBand + DeliveryBaseline: the word-valued fields' vocabularies
+# GridServicesBand + DeliveryBaseline + EventParticipation: the word-valued fields' vocabularies
 # ---------------------------------------------------------------------------
 
 
@@ -123,6 +126,18 @@ class DeliveryBaseline(StrEnum):
     @classmethod
     def parse(cls, value: object, *, what: str) -> "DeliveryBaseline":
         """Return the baseline *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, what=what)
+
+
+class EventParticipation(StrEnum):
+    """The fleet's part in its events: observed, it runs its own dispatch and is priced from the spare capacity it leaves; dispatched, it is enrolled, each battery home discharging at full power through each drawn event window."""
+
+    OBSERVED = "observed"
+    DISPATCHED = "dispatched"
+
+    @classmethod
+    def parse(cls, value: object, *, what: str) -> "EventParticipation":
+        """Return the participation *value* names, refusing any other value as :func:`_member_named` does."""
         return _member_named(cls, value, what=what)
 
 
@@ -355,6 +370,17 @@ class GridServicesEventsConfig:
         delivery_baseline: How an event's delivery is measured, a
             :class:`DeliveryBaseline` value (``"operational"`` or
             ``"capacity"``).
+        participation: The fleet's part in its events, held as the
+            :class:`EventParticipation` it names; its value string
+            (``"observed"`` or ``"dispatched"``) is read as that member.
+        event_day_seed: The seed :func:`drawn_event_days` draws each window's
+            event days with, a whole number of at least 0; read only when the
+            fleet is dispatched.
+        site_export_limit_kw: The most a home may export in a step in which
+            its battery exports in an event window, PV excess included, a
+            finite number of at least 0, or ``None`` for no limit.  It does
+            not curtail PV export in a step in which the battery exports
+            nothing.
     """
 
     band: GridServicesBand = GridServicesBand.CENTRAL
@@ -364,15 +390,25 @@ class GridServicesEventsConfig:
     availability_gbp_per_kw_per_event: Optional[float] = None
     utilisation_gbp_per_mwh: Optional[float] = None
     delivery_baseline: str = "operational"
+    participation: EventParticipation = EventParticipation.OBSERVED
+    event_day_seed: int = 0
+    site_export_limit_kw: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Read the numbers through number_fields, holding the floats read, and hold the band as the member it names, then refuse an unknown band, an unknown delivery baseline or no event windows, raising ConfigurationError."""
+        """Read the numbers through number_fields in declaration order, holding what they read, and hold the band and the participation as the members they name, then refuse an unknown band, delivery baseline or participation, or no event windows, raising ConfigurationError."""
         read_field(self, "aggregator_share", as_finite_float, Interval(0, 1, high_open=True))
         read_field(self, "utilisation_factor", as_finite_float, UNIT_INTERVAL)
         read_field(self, "availability_gbp_per_kw_per_event", as_finite_float, NON_NEGATIVE, optional=True)
         read_field(self, "utilisation_gbp_per_mwh", as_finite_float, NON_NEGATIVE, optional=True)
+        read_field(self, "event_day_seed", as_whole_number, NON_NEGATIVE)
+        read_field(self, "site_export_limit_kw", as_finite_float, NON_NEGATIVE, optional=True)
         object.__setattr__(self, "band", GridServicesBand.parse(self.band, what="GridServicesEventsConfig.band"))
         DeliveryBaseline.parse(self.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline")
+        object.__setattr__(
+            self,
+            "participation",
+            EventParticipation.parse(self.participation, what="GridServicesEventsConfig.participation"),
+        )
         if not self.event_windows:
             raise ConfigurationError(
                 "GridServicesEventsConfig.event_windows must be a non-empty tuple"

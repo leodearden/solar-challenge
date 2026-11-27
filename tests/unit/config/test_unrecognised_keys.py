@@ -1315,6 +1315,9 @@ class TestScenarioFileBlockKeys:
             "availability_gbp_per_kw_per_event": 2.5,
             "utilisation_gbp_per_mwh": 80.0,
             "delivery_baseline": "capacity",
+            "participation": "observed",
+            "event_day_seed": 4,
+            "site_export_limit_kw": 3.5,
         }
         finance: dict[str, Any] = {
             "standing_charge_pence_per_day": 70.0,

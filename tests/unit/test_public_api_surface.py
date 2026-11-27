@@ -138,7 +138,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "GridServicesRateBands": "dataclass[eq, frozen, match_args] (low: GridServicesRateBand, central: GridServicesRateBand, high: GridServicesRateBand) -> None",
     "resolve_grid_services_rate_band": "(band: GridServicesBand) -> GridServicesRateBand",
     "EventWindow": "dataclass[eq, frozen, match_args] (months: tuple[int, ...], weekdays: tuple[int, ...], hours: tuple[int, ...], events_per_year: int, event_hours: float) -> None",
-    "GridServicesEventsConfig": "dataclass[eq, frozen, match_args] (band: GridServicesBand = <GridServicesBand.CENTRAL: 'central'>, event_windows: tuple[EventWindow, ...] = (EventWindow(months=(11, 12, 1, 2), weekdays=(0, 1, 2, 3, 4), hours=(16, 17, 18), events_per_year=12, event_hours=3.0),), aggregator_share: float = 0.25, utilisation_factor: float = 0.6, availability_gbp_per_kw_per_event: float | None = None, utilisation_gbp_per_mwh: float | None = None, delivery_baseline: str = 'operational') -> None",
+    "GridServicesEventsConfig": "dataclass[eq, frozen, match_args] (band: GridServicesBand = <GridServicesBand.CENTRAL: 'central'>, event_windows: tuple[EventWindow, ...] = (EventWindow(months=(11, 12, 1, 2), weekdays=(0, 1, 2, 3, 4), hours=(16, 17, 18), events_per_year=12, event_hours=3.0),), aggregator_share: float = 0.25, utilisation_factor: float = 0.6, availability_gbp_per_kw_per_event: float | None = None, utilisation_gbp_per_mwh: float | None = None, delivery_baseline: str = 'operational', participation: EventParticipation = <EventParticipation.OBSERVED: 'observed'>, event_day_seed: int = 0, site_export_limit_kw: float | None = None) -> None",
     "GridServicesAtEvents": "dataclass[eq, frozen, match_args] (annual_income_gbp: float, per_window_avail_kw: tuple[float, ...], per_window_income_gbp: tuple[float, ...], per_window_avail_p50_kw: tuple[float, ...], per_window_avail_p90_kw: tuple[float, ...], per_window_displaced_self_use_kwh_per_event: tuple[float, ...], per_window_displaced_import_gbp_per_year: tuple[float, ...]) -> None",
     "compute_fleet_spare_capacity_kw": "(fleet_results: FleetResults, windows: tuple[EventWindow, ...], delivery_baseline: str = 'operational') -> tuple[float, ...]",
     "compute_grid_services_at_events": "(fleet_results: FleetResults, cfg: GridServicesEventsConfig) -> GridServicesAtEvents",
@@ -245,6 +245,7 @@ FROZEN_CLOSURE: dict[str, str] = {
     "ev.EVChargerType": "SLOW='3.6kW', FAST='7kW', RAPID='22kW'",
     "ev.EVConfig": "dataclass[eq, frozen, match_args] (charger_type: EVChargerType, arrival_hour: int = 18, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: SmartChargingMode = <SmartChargingMode.NONE: 'none'>, name: str = '') -> None",
     "ev.SmartChargingMode": "NONE='none', SOLAR='solar', OFF_PEAK='off_peak'",
+    "gridservices.EventParticipation": "OBSERVED='observed', DISPATCHED='dispatched'",
     "heat_pump.HeatPumpConfig": "dataclass[eq, frozen, match_args] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
     "home.HomeConfig": "dataclass[eq, frozen, match_args] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, seg_tariff: SEGTariff | None = None) -> None",
     "home.RunPricing": "dataclass[eq, frozen, match_args] (import_tariff_mean_rate_gbp_per_kwh: float | None, seg_rate_pence_per_kwh: float | None) -> None",
@@ -497,6 +498,9 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     "ev.SmartChargingMode": {
         "parse": "classmethod (cls, value: object, *, field: str) -> SmartChargingMode",
+    },
+    "gridservices.EventParticipation": {
+        "parse": "classmethod (cls, value: object, *, what: str) -> EventParticipation",
     },
     "heat_pump.HeatPumpConfig": {
         "default_ashp": "classmethod (cls) -> HeatPumpConfig",
@@ -1095,6 +1099,9 @@ UNRELEASED: dict[str, int] = {
     "Battery.max_discharge_kw": 1702,
     "BatteryConfig": 1703,
     "dispatch.EventDischargeWindow": 1703,
+    "GridServicesEventsConfig": 1704,
+    "gridservices.EventParticipation": 1704,
+    "gridservices.EventParticipation.parse": 1704,
 }
 
 

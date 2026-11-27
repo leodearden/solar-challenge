@@ -135,7 +135,7 @@ INPUT_TYPES: Mapping[str, Callable[[], object]] = {
         months=(1,), weekdays=(0,), hours=(17,), events_per_year=12, event_hours=3.0
     ),
     "solar_challenge.gridservices.GridServicesEventsConfig": lambda: GridServicesEventsConfig(
-        availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=2.0
+        availability_gbp_per_kw_per_event=1.0, utilisation_gbp_per_mwh=2.0, site_export_limit_kw=3.0
     ),
     "solar_challenge.gridservices.FlatGridServices": lambda: FlatGridServices(10.0),
     "solar_challenge.heat_pump.HeatPumpConfig": lambda: HeatPumpConfig("ASHP"),
