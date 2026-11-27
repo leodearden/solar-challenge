@@ -728,15 +728,16 @@ class TestFleetFormFromScenario:
     def test_a_null_battery_capacity_loads_as_null(self, capacity_kwh: object) -> None:
         """A battery capacity of null, written as the capacity or as a fixed distribution's value, loads as null, the editor's blank Fixed Value, as a null among a pool's values does: the form runs no battery, as the scenario does."""
         battery = _FLEET_SCENARIO["fleet_distribution"]["battery"]
+        document = _with_fleet_distribution(battery={**battery, "capacity_kwh": capacity_kwh})
 
-        imported = fleet_form_from_scenario(
-            _with_fleet_distribution(battery={**battery, "capacity_kwh": capacity_kwh})
-        )
+        imported = fleet_form_from_scenario(document)
 
         assert imported == ImportedFleetForm(
             form={**_FLEET_FORM, "battery": {"capacity_kwh": None}}, not_loaded=()
         )
-        assert all(home.battery_config is None for home in parse_fleet_form(imported.form).homes)
+        homes_the_form_runs = parse_fleet_form(imported.form).homes
+        assert homes_the_form_runs == read_fleet_scenario(document).scenario().simulated_homes()
+        assert all(home.battery_config is None for home in homes_the_form_runs)
 
     def test_a_location_other_than_bristol_is_not_loaded(self) -> None:
         """The fleet page has no location control and runs its fleet at Bristol, so a London scenario loads the rest and names its location."""
