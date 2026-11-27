@@ -1,6 +1,7 @@
 """Tests for scenario_writer: configs written as scenario YAML that config.py's loaders read back."""
 
 import dataclasses
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -14,6 +15,7 @@ from solar_challenge.config import (
     load_scenarios,
 )
 from solar_challenge.dispatch import (
+    EventDischargeWindow,
     GridChargeConfig,
     PeakShavingStrategyConfig,
     SelfConsumptionStrategyConfig,
@@ -402,6 +404,21 @@ def test_every_pv_field_the_grammar_has_no_key_for_is_named_in_one_refusal() -> 
         home_scenario(home, name="Custom pvlib")
 
     assert [field for field in PV_BLOCK.outside_grammar if field not in str(refused.value)] == []
+
+
+def test_a_battery_with_event_windows_is_refused_naming_the_field_and_why_it_has_no_key() -> None:
+    """A battery's event windows have no key, so the writer refuses them rather than writing a battery without them."""
+    window = EventDischargeWindow(days=(date(2024, 1, 15),), hours=(17, 18))
+    home = HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(),
+        battery_config=BatteryConfig(capacity_kwh=10.0, event_discharge=(window,)),
+    )
+
+    with pytest.raises(ValueError, match="event_discharge") as refused:
+        home_scenario(home, name="Event battery")
+
+    assert BATTERY_BLOCK.outside_grammar["event_discharge"] in str(refused.value)
 
 
 _EDINBURGH = Location(55.95, -3.19, altitude=47.0, name="Edinburgh, UK")
