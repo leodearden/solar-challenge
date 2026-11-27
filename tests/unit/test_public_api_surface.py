@@ -11,6 +11,9 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
   docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
   current forms, labels each additive or breaking, and says what each kind needs.
+- Changes since the last release: UNRELEASED lists each path whose form differs from
+  the released snapshot, tests/_released_surface.py, with the task that last changed it;
+  each task it names has its release note; and the snapshot is of the package's version.
 - Name resolution: every exported name resolves to its typed import, the object the
   package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
   names, and an unknown name raises AttributeError; and each EXPECTED_KIND name resolves
@@ -40,6 +43,14 @@ import pytest
 import solar_challenge
 import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
+from tests._release_notes import CONSUMPTION_DOC, note_path
+from tests._released_surface import (
+    RELEASED_CALLS,
+    RELEASED_CLOSURE,
+    RELEASED_MEMBERS,
+    RELEASED_SURFACE,
+    RELEASED_VERSION,
+)
 from tests._surface_forms import (
     is_additive_change,
     is_additive_member_change,
@@ -207,17 +218,8 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
     so its current form is printed ready to paste; a pinned name __all__ lacks is listed
     last, breaking, its current form reading (not in __all__).
     """
-    current_forms = {
-        name: surface_form(getattr(solar_challenge, name))
-        for name in solar_challenge.__all__
-    }
-    drifted = _drifted(
-        FROZEN_SURFACE,
-        current_forms,
-        absent="(not in __all__)",
-        is_additive=lambda name, row: is_additive_change(row, getattr(solar_challenge, name)),
-    )
-    assert not drifted, _drift_message("FROZEN_SURFACE", FROZEN_SURFACE, drifted)
+    drifted = _export_drift(FROZEN_SURFACE)
+    assert not drifted, _drift_message("FROZEN_SURFACE", drifted)
 
 
 # ---------------------------------------------------------------------------
@@ -279,14 +281,8 @@ def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
     form names any longer is listed last, breaking, its current form reading (not named
     by the frozen surface).
     """
-    current = {path: surface_form(cls) for path, cls in _closure_classes().items()}
-    drifted = _drifted(
-        FROZEN_CLOSURE,
-        current,
-        absent="(not named by the frozen surface)",
-        is_additive=lambda path, row: is_additive_change(row, _closure_classes()[path]),
-    )
-    assert not drifted, _drift_message("FROZEN_CLOSURE", FROZEN_CLOSURE, drifted)
+    drifted = _closure_drift(FROZEN_CLOSURE)
+    assert not drifted, _drift_message("FROZEN_CLOSURE", drifted)
 
 
 # ---------------------------------------------------------------------------
@@ -565,19 +561,8 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
     additive, its current form printed ready to paste; a removed member is breaking, its
     current form reading (removed).
     """
-    pinned = _pinned_classes()
-    forms_by_class = {path: member_forms(cls) for path, cls in pinned.items()}
-    members = _by_member_path(
-        {path: {name: (pinned[path], name) for name in forms} for path, forms in forms_by_class.items()}
-    )
-    frozen = _by_member_path(FROZEN_MEMBERS)
-    drifted = _drifted(
-        frozen,
-        _by_member_path(forms_by_class),
-        absent="(removed)",
-        is_additive=lambda path, row: is_additive_member_change(row, *members[path]),
-    )
-    assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
+    drifted = _member_drift(_by_member_path(FROZEN_MEMBERS))
+    assert not drifted, _drift_message("FROZEN_MEMBERS", drifted)
 
 
 # ---------------------------------------------------------------------------
@@ -601,14 +586,8 @@ def test_every_pinned_class_call_matches_frozen_calls() -> None:
     forms, labelled additive or breaking; a pinned path whose class no longer defines a
     __call__ of its own is listed last, breaking.
     """
-    calls = {path: vars(cls)["__call__"] for path, cls in _pinned_classes().items() if "__call__" in vars(cls)}
-    drifted = _drifted(
-        FROZEN_CALLS,
-        {path: surface_form(call) for path, call in calls.items()},
-        absent="(no __call__ of its own)",
-        is_additive=lambda path, row: is_additive_change(row, calls[path]),
-    )
-    assert not drifted, _drift_message("FROZEN_CALLS", FROZEN_CALLS, drifted)
+    drifted = _call_drift(FROZEN_CALLS)
+    assert not drifted, _drift_message("FROZEN_CALLS", drifted)
 
 
 _STDLIB_BASES: tuple[type, ...] = (
@@ -746,63 +725,129 @@ def test_every_pinned_dataclass_is_frozen() -> None:
 
 @dataclasses.dataclass(frozen=True)
 class _Drift:
-    """A drifted path's current form, and whether its change from the frozen form is additive."""
+    """A drifted path's form in the compared table, None if the table has no row for it, its current form, and whether its change from the table's form is additive."""
 
+    baseline: str | None
     current: str
     additive: bool
 
 
-def _drift_message(
-    table: str, frozen: Mapping[str, str], drifted: Mapping[str, _Drift]
-) -> str:
-    """Name each path of *drifted* with its frozen and current forms and its change, additive or breaking, then say what each kind of change needs.
+def _drift_entries(drifted: Mapping[str, _Drift], *, baseline_label: str, absent_baseline: str) -> str:
+    """Name each path of *drifted*, each on its own line, then its baseline form under *baseline_label*, its current form and its change, additive or breaking; a path with no baseline form reads *absent_baseline*."""
+    labels = (baseline_label, "current", "change")
+    width = max(len(label) for label in labels) + 2
 
-    *frozen* holds the forms of the table named *table*, keyed by the same paths.
-    """
-    symbols = "".join(
+    def line(label: str, value: str) -> str:
+        return f"\n    {f'{label}:':<{width}}{value}"
+
+    return "".join(
         f"\n  solar_challenge.{path}"
-        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
-        f"\n    current: {drift.current}"
-        f"\n    change:  {'additive' if drift.additive else 'breaking'}"
+        + line(baseline_label, absent_baseline if drift.baseline is None else drift.baseline)
+        + line("current", drift.current)
+        + line("change", "additive" if drift.additive else "breaking")
         for path, drift in drifted.items()
     )
+
+
+def _drift_message(table: str, drifted: Mapping[str, _Drift]) -> str:
+    """Name each path of *drifted* with its form in the table named *table*, its current form and its change, additive or breaking, then say what each kind of change needs."""
+    symbols = _drift_entries(drifted, baseline_label="frozen", absent_baseline=f"(absent from {table})")
     return (
         f"Surface forms differ from {table}:{symbols}\n"
         "Each change to the frozen public API (review/briefing.yaml) is labelled above. An "
         "additive change needs its release note, docs/unreleased/domain-library-consumption/"
         "<task id>.md ('Changes merged since the last tag', in the 'Tag / release convention' "
         "section of docs/domain-library-consumption.md), landed in the same commit as the "
-        f"{table} edit. A breaking one lands only with a version bump under that section "
+        f"{table} edit, with an UNRELEASED row in tests/unit/test_public_api_surface.py "
+        "naming each changed path and that task. A breaking one lands only with a version "
+        "bump under that section "
         "(review/briefing.yaml's frozen-API convention)."
     )
 
 
 def _drifted(
-    frozen: Mapping[str, str],
+    baseline: Mapping[str, str],
     current: Mapping[str, str],
     *,
     absent: str,
     is_additive: Callable[[str, str], bool],
 ) -> dict[str, _Drift]:
-    """Map each path whose current form is not its frozen one to its _Drift.
+    """Map each path whose current form is not its *baseline* one to its _Drift.
 
-    *current*'s paths come first, in its order, then each frozen path *current* lacks,
+    *current*'s paths come first, in its order, then each baseline path *current* lacks,
     whose current form reads *absent*.  A path only *current* holds is additive and one
-    only *frozen* holds breaking; a changed path is additive only if
-    is_additive(path, its frozen form) holds.
+    only *baseline* holds breaking; a changed path is additive only if
+    is_additive(path, its baseline form) holds.
     """
 
     def additive(path: str) -> bool:
-        if path not in frozen:
+        if path not in baseline:
             return True
-        return path in current and is_additive(path, frozen[path])
+        return path in current and is_additive(path, baseline[path])
 
-    missing = [path for path in frozen if path not in current]
+    missing = [path for path in baseline if path not in current]
     return {
-        path: _Drift(current.get(path, absent), additive(path))
+        path: _Drift(baseline.get(path), current.get(path, absent), additive(path))
         for path in [*current, *missing]
-        if current.get(path) != frozen.get(path)
+        if current.get(path) != baseline.get(path)
     }
+
+
+# ---------------------------------------------------------------------------
+# Each lock's drift from a table: the paths whose live form differs from the
+# table's row, the lock's own table or any other table of the same paths
+# ---------------------------------------------------------------------------
+
+
+def _export_drift(table: Mapping[str, str]) -> dict[str, _Drift]:
+    """Each name of __all__, or of *table*, whose surface form differs from *table*'s, a table keyed as FROZEN_SURFACE is; a name *table* lists and __all__ lacks reads (not in __all__)."""
+    current_forms = {
+        name: surface_form(getattr(solar_challenge, name))
+        for name in solar_challenge.__all__
+    }
+    return _drifted(
+        table,
+        current_forms,
+        absent="(not in __all__)",
+        is_additive=lambda name, row: is_additive_change(row, getattr(solar_challenge, name)),
+    )
+
+
+def _closure_drift(table: Mapping[str, str]) -> dict[str, _Drift]:
+    """Each class outside __all__ that the frozen surface names, or that *table* lists, whose surface form differs from *table*'s, a table keyed as FROZEN_CLOSURE is; a path no form names any longer reads (not named by the frozen surface)."""
+    current = {path: surface_form(cls) for path, cls in _closure_classes().items()}
+    return _drifted(
+        table,
+        current,
+        absent="(not named by the frozen surface)",
+        is_additive=lambda path, row: is_additive_change(row, _closure_classes()[path]),
+    )
+
+
+def _member_drift(table: Mapping[str, str]) -> dict[str, _Drift]:
+    """Each pinned class's public member, or member path *table* lists, whose form differs from *table*'s, a table keyed by member path as _by_member_path spells it; a removed member reads (removed)."""
+    pinned = _pinned_classes()
+    forms_by_class = {path: member_forms(cls) for path, cls in pinned.items()}
+    members = _by_member_path(
+        {path: {name: (pinned[path], name) for name in forms} for path, forms in forms_by_class.items()}
+    )
+    return _drifted(
+        table,
+        _by_member_path(forms_by_class),
+        absent="(removed)",
+        is_additive=lambda path, row: is_additive_member_change(row, *members[path]),
+    )
+
+
+def _call_drift(table: Mapping[str, str]) -> dict[str, _Drift]:
+    """Each pinned class whose own body defines __call__, or class path *table* lists, whose __call__ form differs from *table*'s, a table keyed as FROZEN_CALLS is; a path whose class defines no __call__ of its own reads so."""
+    calls = {path: vars(cls)["__call__"] for path, cls in _pinned_classes().items() if "__call__" in vars(cls)}
+    return _drifted(
+        table,
+        {path: surface_form(call) for path, call in calls.items()},
+        absent="(no __call__ of its own)",
+        is_additive=lambda path, row: is_additive_change(row, calls[path]),
+    )
 
 
 @pytest.fixture
@@ -1020,6 +1065,283 @@ def test_a_pinned_dataclass_whose_instances_lose_their_dict_prints_breaking(
         f"current: {FROZEN_SURFACE['SEGTariff'].replace('match_args]', 'match_args, slots]')}",
         "change:  breaking",
     ]
+
+
+# ===========================================================================
+# Changes since the last release: each path whose form differs from the
+# released snapshot, with the task whose release note describes it
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# The paths whose forms have changed since the last release, each with the
+# task that last changed it
+#
+# Each key is a path as the drift report prints it, less 'solar_challenge.':
+# an exported name, a FROZEN_CLOSURE path, a FROZEN_MEMBERS member path, or a
+# FROZEN_CALLS class path plus '.__call__'.  Each value is the id of the task
+# that last changed that path, whose note
+# docs/unreleased/domain-library-consumption/<id>.md exists.  The tests below
+# check a path's first change since the release: a later change to a listed
+# path re-points its row to its own task, which writes its own note, and only
+# the FROZEN_* lock's failure message asks for that.  A release empties it.
+# ---------------------------------------------------------------------------
+UNRELEASED: dict[str, int] = {
+    "SummaryStatistics": 1702,
+    "DispatchDecision": 1702,
+    "EnergyFlowResult": 1702,
+    "home.SimulationResults": 1702,
+    "Battery.max_discharge_kw": 1702,
+}
+
+
+def _call_path(class_path: str) -> str:
+    """The UNRELEASED spelling of the __call__ a FROZEN_CALLS row pins for *class_path*."""
+    return f"{class_path}.__call__"
+
+
+def _released_paths() -> set[str]:
+    """Every path the released snapshot pins, by its UNRELEASED spelling."""
+    return {
+        *RELEASED_SURFACE,
+        *RELEASED_CLOSURE,
+        *_by_member_path(RELEASED_MEMBERS),
+        *map(_call_path, RELEASED_CALLS),
+    }
+
+
+def _merged_drift(drift_by_table: Mapping[str, Mapping[str, _Drift]]) -> dict[str, _Drift]:
+    """Merge each table's drift, in turn, into one map by path; a path two tables' drifts share fails, naming both tables, since one drift would hide the other."""
+    merged: dict[str, _Drift] = {}
+    table_of: dict[str, str] = {}
+    for table, drifted in drift_by_table.items():
+        shared = [path for path in drifted if path in merged]
+        assert not shared, "Two tables' drifts share a path, so one would hide the other:" + "".join(
+            f"\n  solar_challenge.{path} ({table_of[path]} and {table})" for path in shared
+        )
+        merged.update(drifted)
+        table_of.update(dict.fromkeys(drifted, table))
+    return merged
+
+
+def _changed_since_release() -> dict[str, _Drift]:
+    """Each path whose live form differs from the released snapshot's, by its UNRELEASED spelling, each lock's paths in turn."""
+    return _merged_drift(
+        {
+            "RELEASED_SURFACE": _export_drift(RELEASED_SURFACE),
+            "RELEASED_CLOSURE": _closure_drift(RELEASED_CLOSURE),
+            "RELEASED_MEMBERS": _member_drift(_by_member_path(RELEASED_MEMBERS)),
+            "RELEASED_CALLS": {_call_path(path): drift for path, drift in _call_drift(RELEASED_CALLS).items()},
+        }
+    )
+
+
+def _listed_rows(rows: Mapping[str, int]) -> str:
+    """Name each UNRELEASED row of *rows*, each on its own line, with its task."""
+    return "".join(f"\n  solar_challenge.{path} (task {task})" for path, task in rows.items())
+
+
+def test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release() -> None:
+    """UNRELEASED lists each path whose form differs from the released snapshot, and no other.
+
+    Fails once, naming each changed path UNRELEASED lacks with its released and current
+    forms, labelled additive or breaking, then each UNRELEASED path whose form is as
+    released, then each UNRELEASED path that names nothing live or released, each with
+    its task.  A path the snapshot does not pin and that does not drift has no live form
+    either, so the released paths tell the last two apart.
+    """
+    changed = _changed_since_release()
+    released = _released_paths()
+    unlisted = {path: drift for path, drift in changed.items() if path not in UNRELEASED}
+    unchanged = {path: task for path, task in UNRELEASED.items() if path not in changed}
+    stale = {path: task for path, task in unchanged.items() if path in released}
+    unknown = {path: task for path, task in unchanged.items() if path not in released}
+    problems = []
+    if unlisted:
+        entries = _drift_entries(unlisted, baseline_label="released", absent_baseline="(not in the release)")
+        problems.append(
+            "Surface forms differ from the released snapshot, tests/_released_surface.py, at "
+            f"paths UNRELEASED does not list:{entries}\n"
+            "Add an UNRELEASED row for each, mapping its path to the id of the task that "
+            "changed it, and write that task's note, "
+            "docs/unreleased/domain-library-consumption/<task id>.md, in the same commit. A "
+            "breaking one lands only inside an open release window ('Release windows', in the "
+            "'Tag / release convention' section of docs/domain-library-consumption.md)."
+        )
+    if stale:
+        problems.append(f"UNRELEASED lists paths whose forms are as released; drop each:{_listed_rows(stale)}")
+    if unknown:
+        problems.append(
+            "UNRELEASED lists paths that name no exported name, closure class, member or "
+            "pinned __call__, live or released; respell each as a lock's drift report prints "
+            f"it, a FROZEN_CALLS path ending '.__call__':{_listed_rows(unknown)}"
+        )
+    assert not problems, "\n".join(problems)
+
+
+def test_every_task_unreleased_names_has_its_release_note(project_root: Path) -> None:
+    """Each task UNRELEASED names has its note file under *project_root*; a file-existence check that reads no note."""
+    missing = [
+        f"{note_path(CONSUMPTION_DOC, task)} (for solar_challenge.{path})"
+        for path, task in UNRELEASED.items()
+        if not (project_root / note_path(CONSUMPTION_DOC, task)).is_file()
+    ]
+    assert not missing, (
+        f"UNRELEASED names tasks whose release notes do not exist: {missing}. Each task "
+        "UNRELEASED names writes its note in the commit that adds its row ('Changes merged "
+        "since the last tag', in docs/domain-library-consumption.md); a release that empties "
+        "UNRELEASED deletes the notes it folds."
+    )
+
+
+def test_the_released_snapshot_is_of_the_package_version() -> None:
+    """RELEASED_VERSION is the package's version, so a version bump that keeps the old snapshot fails."""
+    assert RELEASED_VERSION == solar_challenge.__version__, (
+        f"The released snapshot, tests/_released_surface.py, is of {RELEASED_VERSION!r}, but "
+        f"the package's version is {solar_challenge.__version__!r}. The release commit that "
+        "bumps the version replaces tests/_released_surface.py's four tables with the frozen "
+        "tables it releases, sets RELEASED_VERSION, and empties UNRELEASED ('Tag / release "
+        "convention' in docs/domain-library-consumption.md)."
+    )
+
+
+def test_a_form_changed_since_the_release_that_unreleased_does_not_list_fails_naming_its_released_and_current_forms_and_its_change(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def calculate_degradation_factor(
+        system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0
+    ) -> float: ...
+
+    scratch_edit.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    assert _printed_entry(message, "calculate_degradation_factor") == [
+        "solar_challenge.calculate_degradation_factor",
+        f"released: {RELEASED_SURFACE['calculate_degradation_factor']}",
+        "current:  (system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0) -> float",
+        "change:   additive",
+    ]
+
+
+def test_an_unreleased_path_whose_form_is_as_released_fails_naming_the_entry(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    scratch_edit.setitem(UNRELEASED, "calculate_degradation_factor", 1702)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    assert "solar_challenge.calculate_degradation_factor (task 1702)" in [
+        line.strip() for line in message.splitlines()
+    ]
+
+
+def test_an_unreleased_path_that_names_nothing_fails_apart_from_one_whose_form_is_as_released(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    scratch_edit.setitem(UNRELEASED, "calculate_degradation_factor", 1702)
+    scratch_edit.setitem(UNRELEASED, "Battery.max_discharge", 1702)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    lines = [line.strip() for line in message.splitlines()]
+    as_released = lines[lines.index("solar_challenge.calculate_degradation_factor (task 1702)") - 1]
+    names_nothing = lines[lines.index("solar_challenge.Battery.max_discharge (task 1702)") - 1]
+    assert as_released.endswith(":") and names_nothing.endswith(":")
+    assert as_released != names_nothing
+
+
+def test_a_name_new_to_all_since_the_release_prints_its_released_form_as_absent(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def scratch_name(a: int) -> int: ...
+
+    scratch_edit.setattr(solar_challenge, "__all__", [*solar_challenge.__all__, "scratch_name"])
+    scratch_edit.setattr(solar_challenge, "scratch_name", scratch_name, raising=False)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    assert _printed_entry(message, "scratch_name") == [
+        "solar_challenge.scratch_name",
+        "released: (not in the release)",
+        "current:  (a: int) -> int",
+        "change:   additive",
+    ]
+
+
+def test_two_tables_whose_drifts_share_a_path_fail_naming_the_path_and_both_tables() -> None:
+    drift = _Drift(baseline=None, current="(a: int) -> int", additive=True)
+
+    message = _lock_failure(
+        lambda: _merged_drift(
+            {
+                "RELEASED_CLOSURE": {"home.SimulationResults.Inner": drift},
+                "RELEASED_MEMBERS": {"home.SimulationResults.Inner": drift},
+            }
+        )
+    )
+
+    assert "solar_challenge.home.SimulationResults.Inner (RELEASED_CLOSURE and RELEASED_MEMBERS)" in [
+        line.strip() for line in message.splitlines()
+    ]
+
+
+def test_a_pinned_call_changed_since_the_release_is_listed_under_its_class_path_and_dunder_call(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def __call__(self, config: object, start_date: object, end_date: object, *, weather: object) -> object: ...
+
+    scratch_edit.setattr(solar_challenge.HomeSimulator, "__call__", __call__)
+
+    message = _lock_failure(test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release)
+
+    entry = _printed_entry(message, "HomeSimulator.__call__")
+    assert entry[:2] == [
+        "solar_challenge.HomeSimulator.__call__",
+        f"released: {RELEASED_CALLS['HomeSimulator']}",
+    ]
+    assert entry[3:] == ["change:   breaking"]
+
+
+def test_an_unreleased_task_with_no_note_file_fails_naming_the_note_to_write(
+    scratch_edit: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    scratch_edit.setitem(UNRELEASED, "calculate_degradation_factor", 999999999)
+
+    message = _lock_failure(lambda: test_every_task_unreleased_names_has_its_release_note(project_root))
+
+    assert note_path(CONSUMPTION_DOC, 999999999) in message
+    assert "calculate_degradation_factor" in message
+
+
+def test_a_changed_form_passes_once_unreleased_names_it_with_a_task_whose_note_exists(
+    scratch_edit: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def calculate_degradation_factor(
+        system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0
+    ) -> float: ...
+
+    scratch_edit.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+    scratch_edit.setitem(UNRELEASED, "calculate_degradation_factor", 4242)
+    for task in set(UNRELEASED.values()):
+        note = tmp_path / note_path(CONSUMPTION_DOC, task)
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text("What changed.\n", encoding="utf-8")
+
+    test_unreleased_lists_exactly_the_paths_whose_forms_changed_since_the_release()
+    test_every_task_unreleased_names_has_its_release_note(tmp_path)
+
+
+def test_a_version_bump_that_keeps_the_released_snapshot_fails_naming_both_versions(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    scratch_edit.setattr(solar_challenge, "__version__", "0.7.0")
+
+    message = _lock_failure(test_the_released_snapshot_is_of_the_package_version)
+
+    assert "'0.7.0'" in message
+    assert repr(RELEASED_VERSION) in message
+    assert "tests/_released_surface.py" in message
 
 
 # ===========================================================================
