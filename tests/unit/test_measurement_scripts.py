@@ -3,10 +3,11 @@
 
 docs/pv-inverter-string-matching.md, docs/tmy-irradiation-scaling.md,
 docs/pv-system-losses.md, docs/scheduled-charge-windows.md,
-docs/grid-charge-forecast.md and review/briefing.yaml's key_decisions say to
-re-measure their figures with scripts/measure_mppt_window.py,
-scripts/measure_tmy_irradiation.py, scripts/measure_pv_performance_ratio.py,
-scripts/measure_charge_window_bills.py and scripts/measure_grid_charge_forecast.py.
+docs/grid-charge-forecast.md, docs/battery-sizing-with-events.md and
+review/briefing.yaml's key_decisions say to re-measure their figures with
+scripts/measure_mppt_window.py, scripts/measure_tmy_irradiation.py,
+scripts/measure_pv_performance_ratio.py, scripts/measure_charge_window_bills.py,
+scripts/measure_grid_charge_forecast.py and scripts/measure_battery_sizing.py.
 """
 
 import dataclasses
@@ -23,7 +24,7 @@ import pytest
 from pvlib.modelchain import ModelChain
 
 import solar_challenge
-from solar_challenge.config import load_config, load_fleet_config
+from solar_challenge.config import ScenarioConfig, load_config, load_fleet_config, load_scenario
 from solar_challenge.dispatch import GRID_CHARGE_FORECASTS
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import BillBreakdown, bill_distribution
@@ -52,6 +53,7 @@ from solar_challenge.weather import (
 )
 from tests import _synthetic_weather
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._committed_weather_cache import COMMITTED_WEATHER_CACHE_DIR
 from tests._repository_paths import SCENARIOS_DIR
 from tests._scripts import load_script
 from tests._seeded_tmy import ClearJuneDays
@@ -715,3 +717,53 @@ class TestMeasureGridChargeForecast:
         ]
         refused = {arm.forecast: arm.householder_bill for arm in forecast_arms}["perfect_foresight"]
         assert refused.reason in report
+
+
+_VICTRON_SCENARIO = SCENARIOS_DIR / "bristol-phase1-victron.yaml"
+
+
+@pytest.fixture(scope="module")
+def battery_sizing() -> ModuleType:
+    """scripts/measure_battery_sizing.py."""
+    return load_script("measure_battery_sizing")
+
+
+@pytest.fixture(scope="module")
+def victron() -> ScenarioConfig:
+    """The Victron board scenario, its 100 homes over 2024, as the script reads it by default."""
+    return load_scenario(_VICTRON_SCENARIO)
+
+
+class TestMeasureBatterySizing:
+    """measure_battery_sizing prices the Victron sweep enrolled and not at each band (scripts/measure_battery_sizing.py, docs/battery-sizing-with-events.md)."""
+
+    def test_first_homes_keeps_the_scenarios_first_n_homes_and_scales_its_grant_to_their_share(
+        self, battery_sizing: ModuleType, victron: ScenarioConfig
+    ) -> None:
+        """The grant is the one project total in FinanceConfig, so a cut of the fleet carries its homes' share of it."""
+        assert victron.finance is not None
+
+        cut = battery_sizing.first_homes(victron, 20)
+
+        assert cut.homes == victron.homes[:20]
+        assert cut.finance is not None
+        assert cut.finance.grant_gbp == victron.finance.grant_gbp * 20 / 100
+        assert dataclasses.replace(cut.finance, grant_gbp=victron.finance.grant_gbp) == victron.finance
+        assert cut.period == victron.period
+        assert dataclasses.replace(cut, homes=victron.homes, finance=victron.finance) == victron
+
+    def test_first_homes_of_the_whole_fleet_is_the_scenario_itself(
+        self, battery_sizing: ModuleType, victron: ScenarioConfig
+    ) -> None:
+        assert battery_sizing.first_homes(victron, len(victron.homes)) == victron
+
+    @pytest.mark.parametrize("count", [0, 101])
+    def test_first_homes_refuses_a_count_outside_the_fleet(
+        self, battery_sizing: ModuleType, victron: ScenarioConfig, count: int
+    ) -> None:
+        with pytest.raises(ValueError, match=rf"\b{count}\b.*\b100 homes\b"):
+            battery_sizing.first_homes(victron, count)
+
+    def test_by_default_the_script_reads_the_committed_bristol_tmy(self, battery_sizing: ModuleType) -> None:
+        """The script cannot import tests/, so it names the committed cache itself; this pins the two to one directory."""
+        assert battery_sizing.COMMITTED_WEATHER_CACHE_DIR == COMMITTED_WEATHER_CACHE_DIR
