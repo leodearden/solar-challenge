@@ -12,6 +12,7 @@ from flask import (
     url_for,
 )
 
+from solar_challenge.heat_pump import HEAT_PUMP_TYPES
 from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
@@ -19,13 +20,19 @@ from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.builtin_scenarios import builtin_scenarios_loaded_by
 from solar_challenge.web.charts import fleet_results_tabs, home_results_tabs
 from solar_challenge.web.dashboard import get_storage
-from solar_challenge.web.fleet_scenario import fleet_form_from_yaml
+from solar_challenge.web.fleet_scenario import FLEET_FORM_DISPATCH, FLEET_FORM_TARIFFS, fleet_form_from_yaml
 from solar_challenge.web.storage import RunQuery
 from solar_challenge.web.stored_runs import RUN_KINDS, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 
 bp = Blueprint("main", __name__)
 
 _RECENT_RUNS = 10  # the runs the dashboard's Recent Runs table lists, the newest first
+
+#: The title of each heat pump type the home form offers, by its type.
+_HEAT_PUMP_TYPE_TITLES = {"ASHP": "Air Source (ASHP)", "GSHP": "Ground Source (GSHP)"}
+#: The heat pump types the home form offers, each with its title, in HEAT_PUMP_TYPES order,
+#: the one it starts at first.
+_HEAT_PUMP_TYPE_CHOICES = tuple((each, _HEAT_PUMP_TYPE_TITLES[each]) for each in HEAT_PUMP_TYPES)
 
 
 @bp.route("/", methods=["GET"])
@@ -50,6 +57,7 @@ def simulate_home_page() -> str:
         "simulate/home.html",
         seg_presets=SEG_PRESETS,
         tariff_preset_rates=_tariff_preset_rates(),
+        heat_pump_type_choices=_HEAT_PUMP_TYPE_CHOICES,
         default_system_losses=PVWATTS_DEFAULT_SYSTEM_LOSSES,
         default_run_name=RUN_KINDS["home"].default_name(()),
         location_presets=LOCATION_PRESETS,
@@ -60,20 +68,24 @@ def simulate_home_page() -> str:
 def simulate_fleet_page() -> str:
     """Render the fleet simulation configuration page, its Load Preset menu offering the presets its form loads.
 
-    Its Simulation Name placeholder shows the name a fleet run given none is created under,
-    whatever its homes.
+    Its tariff and dispatch strategy controls render from FLEET_FORM_TARIFFS and
+    FLEET_FORM_DISPATCH, which its script is handed as JSON. Its Simulation Name placeholder
+    shows the name a fleet run given none is created under, whatever its homes.
     """
     return str(render_template(
         "simulate/fleet.html",
         presets=builtin_scenarios_loaded_by(fleet_form_from_yaml),
         seg_presets=SEG_PRESETS,
-        tariff_preset_rates=_tariff_preset_rates(),
+        tariff_choices=FLEET_FORM_TARIFFS,
+        dispatch_choices=FLEET_FORM_DISPATCH,
+        tariff_choices_json=[choice.as_json() for choice in FLEET_FORM_TARIFFS],
+        dispatch_choices_json=[choice.as_json() for choice in FLEET_FORM_DISPATCH],
         default_run_name=RUN_KINDS["fleet"].default_name(()),
     ))
 
 
 def _tariff_preset_rates() -> dict[str, dict[str, float]]:
-    """PRESET_RATES as the simulate pages' forms read it: each economy type's off_peak_rate and peak_rate."""
+    """PRESET_RATES as the home page's form reads it: each economy type's off_peak_rate and peak_rate."""
     return {tariff_type: asdict(rates) for tariff_type, rates in PRESET_RATES.items()}
 
 

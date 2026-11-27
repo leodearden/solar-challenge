@@ -27,7 +27,7 @@ document.addEventListener('alpine:init', () => {
         altitude: 11.0,
         n_homes: limits.fleet_size_default,
         seed: limits.seed_default,
-        import_rate: 0.245,
+        import_rate: limits.flat_rate_start,
         seg_rate_pence_per_kwh: '',
 
         // Each component's distribution editor state, by its key, starting at its start in #page-limits

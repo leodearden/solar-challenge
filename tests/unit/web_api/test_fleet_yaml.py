@@ -515,13 +515,15 @@ class TestFleetPresetEndpoint:
             ),
             pytest.param(
                 "bristol-phase1-flex",
-                {"battery": {"capacity_kwh": 5.0}},
+                {
+                    "battery": {"capacity_kwh": 5.0},
+                    "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": None},
+                },
                 (
                     "fleet_distribution.battery.max_charge_kw",
                     "fleet_distribution.battery.max_discharge_kw",
                     "fleet_distribution.battery.grid_charging",
                     "fleet_distribution.load.use_stochastic",
-                    "fleet_distribution.battery.dispatch_strategy",
                 ),
                 id="bristol-phase1-flex",
             ),

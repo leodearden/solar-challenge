@@ -24,6 +24,7 @@ from solar_challenge.web.fleet_scenario import fleet_form_from_scenario
 from solar_challenge.web.scenario_import import (
     BlockRead,
     ImportedForm,
+    flat_rate_choice,
     not_loaded,
     read_blocks,
     read_component,
@@ -31,7 +32,6 @@ from solar_challenge.web.scenario_import import (
     read_period,
     read_seg,
     read_typed_block,
-    required,
     scenario_yaml_document,
 )
 from solar_challenge.web.simulation_params import read_iso_date
@@ -306,14 +306,12 @@ class TestReadSeg:
 
 
 class TestReadTypedBlock:
-    """read_typed_block reads a block whose type names its settings, as the page's settings table holds it."""
-
-    _SETTINGS = {"flat_rate": {"rate_per_kwh": required("builder")}}
+    """read_typed_block reads a block whose type names its settings, as the page's choice of that type holds them."""
 
     def test_a_held_type_loads_its_held_settings_and_names_the_rest(self) -> None:
         tariff = {"type": "flat_rate", "rate_per_kwh": 0.3, "name": "Flat"}
 
-        assert read_typed_block(tariff, "tariff", "type", self._SETTINGS, "builder") == (
+        assert read_typed_block(tariff, "tariff", "type", (flat_rate_choice("builder"),), "builder") == (
             {"type": "flat_rate", "rate_per_kwh": 0.3},
             ("tariff.name",),
         )
@@ -323,16 +321,14 @@ class TestReadTypedBlock:
         self, page: str
     ) -> None:
         with pytest.raises(ConfigurationError) as refusal:
-            read_typed_block({"type": "economy_7"}, "tariff", "type", self._SETTINGS, page)
+            read_typed_block({"type": "economy_7"}, "tariff", "type", (flat_rate_choice(page),), page)
 
         assert str(refusal.value) == f"tariff.type must be one the {page} holds (flat_rate), got 'economy_7'"
 
     @pytest.mark.parametrize("page", _PAGES)
     def test_a_required_setting_left_out_is_refused_naming_it_and_the_page(self, page: str) -> None:
-        settings = {"flat_rate": {"rate_per_kwh": required(page)}}
-
         with pytest.raises(ConfigurationError) as refusal:
-            read_typed_block({"type": "flat_rate"}, "tariff", "type", settings, page)
+            read_typed_block({"type": "flat_rate"}, "tariff", "type", (flat_rate_choice(page),), page)
 
         assert str(refusal.value) == f"tariff.rate_per_kwh must be set: the {page} always sets it"
 
