@@ -6,17 +6,22 @@ request from: heat pump, tariff, dispatch, PV age, system losses and SEG on /sim
 dispatch and SEG on /simulate/fleet.
 """
 
+import json
+
 import pytest
 
 pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.heat_pump import HEAT_PUMP_TYPES
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.fleet_scenario import FLEET_FORM_DISPATCH, FLEET_FORM_TARIFFS
+from solar_challenge.web.scenario_import import FormChoice, SettingInput
 from solar_challenge.web.stored_runs import RUN_KINDS
 from tests._html_page import (
     counts_of,
@@ -28,7 +33,9 @@ from tests._html_page import (
     texts,
     texts_after,
 )
-from tests._html_select_options import option_texts
+from tests._alpine_component_arguments import component_arguments
+from tests._html_labels import labelled_inputs
+from tests._html_select_options import option_texts, options_of_each
 from tests._web_job_days import web_job_days
 
 _JOB_DAYS = web_job_days(count=1)
@@ -186,6 +193,14 @@ class TestHomeFormRender:
         assert element_count(page, "select", {"x-model": "formData.tariff_type"}) == 1
         assert element_count(page, "select", {"x-model": "formData.dispatch_strategy_type"}) == 1
 
+    def test_home_form_offers_each_heat_pump_type_in_order_each_with_its_title(self, client: FlaskClient) -> None:
+        page = client.get("/simulate/home").get_data(as_text=True)
+
+        options = option_texts(page, {"x-model": "formData.heat_pump_type"})
+
+        assert list(options) == list(HEAT_PUMP_TYPES)
+        assert all(options.values())
+
     def test_home_form_shows_pv_age_inputs(self, client: FlaskClient) -> None:
         """GET /simulate/home renders one number input each for the PV system's age and its yearly degradation rate."""
         resp = client.get("/simulate/home")
@@ -324,8 +339,98 @@ class TestFleetFormRender:
         resp = client.get("/simulate/fleet")
         assert resp.status_code == 200
         page = resp.get_data(as_text=True)
-        assert element_count(page, "select", {"x-model": "tariffType"}) == 1
-        assert element_count(page, "select", {"x-model": "dispatchStrategyType"}) == 1
+        assert element_count(page, "select", {"x-model": "tariff.type"}) == 1
+        assert element_count(page, "select", {"x-model": "dispatch.type"}) == 1
         assert element_count(page, "select", {"x-model": "segPreset"}) == 1
         assert _options_per_seg_preset_key(page) == dict.fromkeys(SEG_PRESETS, 1)
         assert element_count(page, "input", {"type": "number", "x-model.number": "segRatePencePerKwh"}) == 1
+
+
+#: Each typed block of the fleet form, the state its script holds it in, with the choices it offers.
+_FLEET_FORM_BLOCKS: tuple[tuple[str, tuple[FormChoice, ...]], ...] = (
+    ("tariff", FLEET_FORM_TARIFFS),
+    ("dispatch", FLEET_FORM_DISPATCH),
+)
+
+
+def _setting_model(block: str, choice: FormChoice, key: str) -> str:
+    """The Alpine binding of the *key* setting of *choice*, which the fleet form holds in its *block* state."""
+    return f"{block}.settings.{choice.type}.{key}"
+
+
+class TestFleetFormRendersItsVocabularyFromTheTables:
+    """GET /simulate/fleet offers FLEET_FORM_TARIFFS and FLEET_FORM_DISPATCH: each choice as an option, each setting as a captioned, bounded input, and the tables as its script's x-data (V3)."""
+
+    @pytest.mark.parametrize(("block", "choices"), _FLEET_FORM_BLOCKS, ids=[block for block, _ in _FLEET_FORM_BLOCKS])
+    def test_each_blocks_select_offers_each_choice_in_order_with_its_title(
+        self, client: FlaskClient, block: str, choices: tuple[FormChoice, ...]
+    ) -> None:
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+
+        assert options_of_each(page, {"x-model": f"{block}.type"}) == [
+            [(choice.type, choice.title) for choice in choices]
+        ]
+
+    def test_each_number_setting_is_one_input_captioned_by_its_title_and_bounded_by_its_range_and_step(
+        self, client: FlaskClient
+    ) -> None:
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        clock_or_window_models = tuple(
+            _setting_model(block, choice, setting.key)
+            for block, choices in _FLEET_FORM_BLOCKS
+            for choice in choices
+            for setting in choice.settings
+            if setting.input is SettingInput.CLOCK_OR_WINDOW
+        )
+
+        rendered = [
+            (caption, model, attributes.get("step"), attributes.get("min"), attributes.get("max"))
+            for caption, attributes in labelled_inputs(page)
+            if (model := attributes.get("x-model.number") or "").startswith(("tariff.settings.", "dispatch.settings."))
+            and not model.startswith(clock_or_window_models)
+        ]
+
+        assert rendered == [
+            (
+                setting.title,
+                _setting_model(block, choice, setting.key),
+                str(setting.step),
+                str(setting.within.low),
+                str(setting.within.high),
+            )
+            for block, choices in _FLEET_FORM_BLOCKS
+            for choice in choices
+            for setting in choice.settings
+            if setting.input is SettingInput.NUMBER
+        ]
+
+    def test_tou_optimizeds_peak_hours_is_a_choice_of_the_tariffs_clock_or_a_custom_window_of_two_bounded_hours(
+        self, client: FlaskClient
+    ) -> None:
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        (choice,) = (each for each in FLEET_FORM_DISPATCH if each.type == "tou_optimized")
+        (setting,) = choice.settings
+        model = _setting_model("dispatch", choice, setting.key)
+        inputs = labelled_inputs(page)
+
+        radios = [
+            caption
+            for caption, attributes in inputs
+            if attributes.get("type") == "radio" and f"{model}.clock" in (attributes.get(":checked") or "")
+        ]
+        hours = [
+            (attributes.get("type"), attributes.get("min"), attributes.get("max"), attributes.get("step"))
+            for index in (0, 1)
+            for _caption, attributes in inputs
+            if attributes.get("x-model.number") == f"{model}.hours[{index}]"
+        ]
+
+        assert radios == ["Tariff's clock", "Custom window"]
+        bounds = ("number", str(setting.within.low), str(setting.within.high), str(setting.step))
+        assert hours == [bounds, bounds]
+
+    def test_the_page_hands_its_script_each_tables_choices_as_json(self, client: FlaskClient) -> None:
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+
+        expected = [[choice.as_json() for choice in choices] for _block, choices in _FLEET_FORM_BLOCKS]
+        assert component_arguments(page, "fleetSimulator") == json.loads(json.dumps(expected))

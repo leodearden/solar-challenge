@@ -423,6 +423,16 @@ def test_section_control_named_by_its_caption_sets_its_field_of_the_form_the_bui
     assert _form_sent_on_validate(page)[field] == value
 
 
+def test_a_freshly_opened_builder_starts_its_import_rate_at_the_flat_rate_start(page: Page, live_server: str) -> None:
+    """A freshly opened builder shows page_limits().flat_rate_start as its import rate, the flat rate every form starts at."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Tariff")
+
+    expect(page.get_by_role("spinbutton", name="Import Rate (GBP/kWh)", exact=True)).to_have_value(
+        str(page_limits().flat_rate_start)
+    )
+
+
 def test_a_freshly_opened_builder_sends_no_seg_rate(page: Page, live_server: str) -> None:
     """A freshly opened builder shows and sends an empty SEG export rate."""
     page.goto(live_server + "/scenarios/builder")

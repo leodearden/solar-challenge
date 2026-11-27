@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Both simulate pages start each economy tariff type at tariff.PRESET_RATES' rates.
 
-Each page hands its Alpine component the table, one rate pair per economy type, in the
-x-data that mounts it, so the forms state no economy rate of their own, and an Economy 7
-home body at the pair the home page hands its form is charged the library's preset rates.
+The home page hands its Alpine component the table, one rate pair per economy type, and
+the fleet page hands its component its tariff table, FLEET_FORM_TARIFFS, whose economy
+choices start at those rates, each in the x-data that mounts it. So the forms state no
+economy rate of their own, and an Economy 7 home body at the pair the home page hands its
+form is charged the library's preset rates.
 """
 
 import pandas as pd
@@ -34,8 +36,13 @@ def test_the_home_page_hands_its_form_each_economy_types_preset_rates(client: Fl
 
 def test_the_fleet_page_hands_its_form_each_economy_types_preset_rates(client: FlaskClient) -> None:
     page = client.get("/simulate/fleet").get_data(as_text=True)
+    tariff_choices = component_arguments(page, "fleetSimulator")[0]
 
-    assert component_arguments(page, "fleetSimulator") == [_EXPECTED]
+    assert {
+        choice["type"]: {setting["key"]: setting["start"] for setting in choice["settings"]}
+        for choice in tariff_choices
+        if choice["type"] in PRESET_RATES
+    } == _EXPECTED
 
 
 def test_an_economy_7_body_at_the_pair_the_home_page_hands_its_form_is_charged_the_preset_rates(

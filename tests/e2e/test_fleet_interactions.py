@@ -18,7 +18,10 @@ file cannot load or a fleet cannot export, that the simulation name reaches
 the submitted run, that Run shows why the page refuses a form, submits nothing
 and leaves the results link of an earlier run in place, that the period
 selector offers presets and a custom date range, that each economy tariff
-type shows and keeps its own rates, Run submitting the selected type's, and
+type shows and keeps its own rates, Run submitting the selected type's, that a
+fleet whose tou_optimized dispatch runs on its tariff's clock imports with the
+clock chosen and Run sends it, that Run sends the clock or the custom window the
+form holds, and
 that Preview shows each card's summary of Run's homes, or the server's refusal,
 that a summary lists at most 8 values as written and past that the min, median
 and max, that a change to the form clears every summary, and that an answer to
@@ -805,6 +808,62 @@ def test_fleet_run_posts_the_days_and_the_peak_hours_as_numbers(
     (sent,) = fleet_submissions
     assert sent["days"] == 14
     assert sent["dispatch_strategy"]["peak_hours"] == [[16, 19]]
+
+
+CLOCKED_TOU_FLEET = """\
+fleet_distribution:
+  n_homes: 2
+  pv:
+    capacity_kw: 4
+  battery:
+    capacity_kwh: 5
+    dispatch_strategy: {strategy_type: tou_optimized}
+  load:
+    annual_consumption_kwh: 3000
+tariff: {type: economy_7}
+"""
+
+
+def test_fleet_import_of_a_tariff_clocked_tou_dispatch_chooses_the_clock_and_run_sends_it(
+    page: Page, live_server: str, tmp_path: Path, fleet_submissions: list[Any]
+) -> None:
+    """Import YAML of a fleet whose tou_optimized dispatch sets no peak_hours, its Economy 7 tariff's clock, chooses the Tariff's clock, names nothing as not loaded, and Run sends peak_hours null."""
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(CLOCKED_TOU_FLEET)
+    page.goto(live_server + "/simulate/fleet")
+
+    with page.expect_file_chooser() as chooser:
+        page.get_by_role("button", name="Import YAML", exact=True).click()
+    chooser.value.set_files(fleet_file)
+
+    expect(page.get_by_role("combobox", name="Dispatch Strategy", exact=True)).to_have_value("tou_optimized")
+    expect(page.get_by_role("radio", name="Tariff's clock", exact=True)).to_be_checked()
+    expect(page.get_by_role("status")).to_have_count(0)
+    with _fleet_run_fails(page):
+        page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    (sent,) = fleet_submissions
+    assert sent["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": None}
+
+
+def test_fleet_run_sends_the_clock_or_the_custom_window_the_form_holds(
+    page: Page, live_server: str, fleet_submissions: list[Any]
+) -> None:
+    """Under Time-of-Use, Run sends peak_hours null with the Tariff's clock checked, and the custom window it started at once Custom window is checked again."""
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("combobox", name="Dispatch Strategy", exact=True).select_option(
+        label="Time-of-Use Optimised"
+    )
+    run = page.get_by_role("button", name="Run Fleet Simulation")
+
+    page.get_by_role("radio", name="Tariff's clock", exact=True).check()
+    with _fleet_run_fails(page):
+        run.click()
+    page.get_by_role("radio", name="Custom window", exact=True).check()
+    with _fleet_run_fails(page):
+        run.click()
+
+    assert [sent["dispatch_strategy"]["peak_hours"] for sent in fleet_submissions] == [None, [[16, 19]]]
 
 
 COMPLETED_RUN_ID = "run-1"
