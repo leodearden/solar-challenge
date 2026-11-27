@@ -3,10 +3,12 @@
 Verifies page loading, that each form control is found by role and by the name
 its label gives it, that the radio group named "Sweep Mode" holds the Linear
 and Geometric radios and the group named "Base Configuration" holds the
-Battery (kWh), Location and Days controls, preview calculations (the preview
-lists its values in the list named "Sweep values"), that submitting a sweep
-filled into the form returns one background job per sweep point, and detects
-Bug B1 (Alpine race condition with external JS).
+Battery (kWh), Location and Days controls, that choosing a parameter starts
+Min and Max at the server's starting range for it, that the preview lists, in
+the list named "Sweep values", the values the server's points endpoint answers,
+or shows its refusal, and drops a preview request the form has outrun, that
+submitting a sweep filled into the form returns one background job per sweep
+point, and detects Bug B1 (Alpine race condition with external JS).
 
 Also verifies that each sweep point's row shows how its own job ended, that
 its status badge takes the classes the server draws for that status, that the
@@ -54,11 +56,13 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 from playwright.sync_api import BrowserContext, Locator, Page, Request, Route, expect
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+from solar_challenge.fleet_distribution import SweepSpec
 from solar_challenge.web.sweep_request import SWEEP_PARAMETERS
 from tests._server_drawn_badges import server_drawn_classes
 from tests.e2e._alpine_start import open_once_alpine_has_started
@@ -211,6 +215,96 @@ def test_sweep_preview_updates(page: Page, live_server: str) -> None:
     expect(sweep_values.get_by_role("listitem")).to_have_text(
         ["1", "3.25", "5.5", "7.75", "10"]
     )
+
+
+_POINTS_URL = "**/api/simulate/sweep/points"
+
+
+def _is_the_points_url(url: str) -> bool:
+    """Whether *url* is the sweep's points endpoint, which previews a sweep's values."""
+    return urlparse(url).path == "/api/simulate/sweep/points"
+
+
+def test_the_page_opens_previewing_the_points_the_server_answers_for_its_starting_sweep(
+    page: Page, live_server: str
+) -> None:
+    """On opening, the page posts its first parameter's starting range, in SweepSpec's default mode, to the points endpoint, and lists the values it answers."""
+    first_key, first = next(iter(SWEEP_PARAMETERS.items()))
+
+    with page.expect_response(_POINTS_URL) as previewed:
+        page.goto(live_server + "/scenarios/sweep")
+
+    body = previewed.value.request.post_data_json
+    assert {key: body.get(key) for key in ("parameter", "min", "max", "mode")} == {
+        "parameter": first_key,
+        "min": first.default_min,
+        "max": first.default_max,
+        "mode": SweepSpec.mode.value,
+    }
+    assert previewed.value.status == 200
+    values = previewed.value.json()["values"]
+    sweep_values = page.get_by_role("list", name="Sweep values", exact=True)
+    expect(sweep_values.get_by_role("listitem")).to_have_text([_as_the_page_shows(v) for v in values])
+    expect(page.get_by_text(f"{len(values)} values will be tested", exact=True)).to_be_visible()
+
+
+def test_a_geometric_preview_from_zero_shows_the_servers_refusal_until_linear_is_chosen(
+    page: Page, live_server: str
+) -> None:
+    """Min 0 in the preselected geometric mode previews no values: the page shows the points endpoint's refusal and keeps Run disabled, until choosing Linear previews the values the server answers.
+
+    No page_errors: Chromium logs the refusal's 400 as a console error.
+    """
+    page.goto(live_server + "/scenarios/sweep")
+    sweep_values = page.get_by_role("list", name="Sweep values", exact=True).get_by_role("listitem")
+    run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
+
+    with page.expect_response(
+        lambda response: _is_the_points_url(response.url) and response.status == 400
+    ) as refused:
+        page.get_by_label("Min Value", exact=True).fill("0")
+
+    assert refused.value.request.post_data_json["mode"] == SweepSpec.mode.value
+    refusal = page.get_by_text(refused.value.json()["error"], exact=True)
+    expect(refusal).to_be_visible()
+    expect(sweep_values).to_have_count(0)
+    expect(page.get_by_text("0 values will be tested", exact=True)).to_be_visible()
+    expect(run).to_be_disabled()
+
+    with page.expect_response(
+        lambda response: _is_the_points_url(response.url) and response.status == 200
+    ) as previewed:
+        page.get_by_role("radio", name="Linear", exact=True).check()
+
+    values = previewed.value.json()["values"]
+    assert len(values) == 5
+    assert values[0] == 0
+    expect(sweep_values).to_have_text([_as_the_page_shows(v) for v in values])
+    expect(refusal).to_be_hidden()
+    expect(run).to_be_enabled()
+
+
+def test_a_preview_request_still_unanswered_when_the_form_changes_is_dropped(
+    page: Page, live_server: str
+) -> None:
+    """A change to Max while the opening preview is still unanswered drops that request and posts the changed sweep."""
+    held_points_requests: list[Route] = []
+
+    def _hold(route: Route) -> None:
+        held_points_requests.append(route)
+
+    page.route(_POINTS_URL, _hold)
+    try:
+        with page.expect_request(_POINTS_URL) as opening:
+            page.goto(live_server + "/scenarios/sweep")
+        with (
+            page.expect_event("requestfailed", predicate=lambda request: request == opening.value),
+            page.expect_request(_POINTS_URL),
+        ):
+            page.get_by_label("Max Value", exact=True).fill("9")
+    finally:
+        while held_points_requests:
+            held_points_requests.pop().abort()
 
 
 # -- Sweep submission: one background home job per sweep point ------------
