@@ -13,6 +13,7 @@ booked.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from collections.abc import Callable
 
@@ -46,8 +47,14 @@ _AT_EVENTS = GridServicesAtEvents(
 )
 """One event window's breakdown: £14.958 a year from 1.5 kW."""
 
+_DISPATCHED_AT_EVENTS = dataclasses.replace(
+    _AT_EVENTS, per_window_displaced_self_use_kwh_per_event=(), per_window_displaced_import_gbp_per_year=()
+)
+"""_AT_EVENTS metered from a dispatched fleet, which reports no displaced self-use."""
+
 _FLAT = FlatGridServices(4.0)
 _EVENTS = GridServicesEventsConfig()
+_DISPATCHED = GridServicesEventsConfig(participation="dispatched")
 
 
 def _flat_income(**overrides: object) -> GridServicesIncome:
@@ -84,6 +91,24 @@ class TestGridServicesIncomeRefusals:
             ),
             pytest.param(lambda: _events_income(at_events=None), (repr(_EVENTS), "at_events=None"), id="events-without-at-events"),
             pytest.param(lambda: _events_income(annual_income_gbp=15.0), ("15.0", "14.958"), id="events-income-not-at-events"),
+            pytest.param(
+                lambda: _events_income(pricing=_DISPATCHED),
+                (
+                    "dispatched",
+                    "per_window_displaced_self_use_kwh_per_event=(2.3,)",
+                    "per_window_displaced_import_gbp_per_year=(8.1,)",
+                ),
+                id="displaced-self-use-under-dispatched",
+            ),
+            pytest.param(
+                lambda: _events_income(at_events=_DISPATCHED_AT_EVENTS),
+                (
+                    "observed",
+                    "per_window_displaced_self_use_kwh_per_event=()",
+                    "per_window_displaced_import_gbp_per_year=()",
+                ),
+                id="no-displaced-self-use-under-observed",
+            ),
             pytest.param(lambda: _flat_income(annual_income_gbp=-1.0), ("annual_income_gbp=-1.0",), id="negative-income"),
             pytest.param(lambda: _flat_income(annual_income_gbp=math.nan), ("annual_income_gbp=nan",), id="nan-income"),
             pytest.param(lambda: _flat_income(annual_income_gbp=math.inf), ("annual_income_gbp=inf",), id="infinite-income"),
@@ -158,6 +183,7 @@ _BOOKED_HEADING = "### Booked by the projection (£ a year)"
 _WINDOW_HEADING = "### This window's fleet, the same under every assumption"
 _FLEX_HEADING = "## Flexibility Value (per battery home)"
 _SPREADSHEET_AT_70 = "Spreadsheet (70% self-consumption)"
+_BILLS_INCLUDE_THE_EVENTS_IMPORT = "The bills in this report include the import the events caused"
 
 _TWO_WINDOWS = GridServicesAtEvents(
     annual_income_gbp=19.944,
@@ -195,11 +221,23 @@ class TestGridServicesIncomeSection:
     @pytest.mark.parametrize(
         ("income", "model"),
         [
-            pytest.param(_events_income(), "capacity at events, central band, operational delivery baseline", id="events"),
+            pytest.param(
+                _events_income(),
+                "capacity at events, central band, operational delivery baseline, observed participation",
+                id="events-observed",
+            ),
             pytest.param(
                 _events_income(pricing=GridServicesEventsConfig(band="high", delivery_baseline="capacity")),
-                "capacity at events, high band, capacity delivery baseline",
-                id="events-high-capacity",
+                "capacity at events, high band, capacity delivery baseline, observed participation",
+                id="events-high-capacity-observed",
+            ),
+            pytest.param(
+                _events_income(
+                    pricing=GridServicesEventsConfig(delivery_baseline="capacity", participation="dispatched"),
+                    at_events=_DISPATCHED_AT_EVENTS,
+                ),
+                "capacity at events, central band, capacity delivery baseline, dispatched participation",
+                id="events-capacity-dispatched",
             ),
             pytest.param(_flat_income(), "flat, £4.0/kW-yr", id="flat"),
         ],
@@ -227,11 +265,30 @@ class TestGridServicesIncomeSection:
             ["Per-event available capacity", "1.5 kW"],
             ["Capacity on 50% of event days", "2.0 kW"],
             ["Capacity on 90% of event days", "1.0 kW"],
+            ["Battery export per event", "0.4 kWh"],
             ["Evening self-use displaced, per event", "2.3 kWh"],
             ["Evening self-use displaced, value per year", "£8"],
         ]
         assert "gross of the evening self-use an event displaces" in report
         assert "£0 for a home simulated without one" in report
+        assert _BILLS_INCLUDE_THE_EVENTS_IMPORT not in report
+        assert "is one event window's figure" not in report
+
+    def test_a_dispatched_breakdown_renders_its_metered_delivery_and_reports_no_displaced_self_use(self) -> None:
+        report = _report(grid_services=_events_income(pricing=_DISPATCHED, at_events=_DISPATCHED_AT_EVENTS))
+
+        assert table_rows(report, _WINDOW_HEADING) == [
+            ["Metric", "Value"],
+            ["Annual fleet income", "£15"],
+            ["Per-event metered delivery", "1.5 kW"],
+            ["Delivery on 50% of event days", "2.0 kW"],
+            ["Delivery on 90% of event days", "1.0 kW"],
+            ["Battery export per event", "0.4 kWh"],
+            ["Evening self-use displaced, per event", "not reported"],
+            ["Evening self-use displaced, value per year", "not reported"],
+        ]
+        assert "gross of the evening self-use" not in report
+        assert _BILLS_INCLUDE_THE_EVENTS_IMPORT in report
         assert "is one event window's figure" not in report
 
     def test_with_several_event_windows_no_per_window_figure_is_summed(self) -> None:
@@ -243,11 +300,35 @@ class TestGridServicesIncomeSection:
             "Per-event available capacity",
             "Capacity on 50% of event days",
             "Capacity on 90% of event days",
+            "Battery export per event",
             "Evening self-use displaced, per event",
         ):
             assert row_cells(report, _WINDOW_HEADING, label) == ["—"], label
         assert row_cells(report, _WINDOW_HEADING, "Evening self-use displaced, value per year") == ["£10"]
         assert "is one event window's figure" in report
+
+    def test_with_several_dispatched_event_windows_no_delivery_or_export_figure_is_summed(self) -> None:
+        two_windows = dataclasses.replace(
+            _TWO_WINDOWS, per_window_displaced_self_use_kwh_per_event=(), per_window_displaced_import_gbp_per_year=()
+        )
+        income = _events_income(
+            pricing=_DISPATCHED, annual_income_gbp=two_windows.annual_income_gbp, at_events=two_windows
+        )
+
+        report = _report(grid_services=income)
+
+        for label in (
+            "Per-event metered delivery",
+            "Delivery on 50% of event days",
+            "Delivery on 90% of event days",
+            "Battery export per event",
+        ):
+            assert row_cells(report, _WINDOW_HEADING, label) == ["—"], label
+        for label in ("Evening self-use displaced, per event", "Evening self-use displaced, value per year"):
+            assert row_cells(report, _WINDOW_HEADING, label) == ["not reported"], label
+        assert row_cells(report, _WINDOW_HEADING, "Annual fleet income") == ["£20"]
+        assert "is one event window's figure" in report
+        assert _BILLS_INCLUDE_THE_EVENTS_IMPORT in report
 
     def test_each_modes_column_books_its_own_projections_first_and_last_year(self) -> None:
         physics = make_fleet_projection([(0, 20.0), (12, 18.0), (24, 15.0)], asset_life_years=25)

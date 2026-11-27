@@ -659,7 +659,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
 
     lines = result.output.splitlines()
     assert "## Grid Services Income" in lines, result.output
-    assert "Model: **capacity at events, central band, operational delivery baseline**" in lines, result.output
+    assert "Model: **capacity at events, central band, operational delivery baseline, observed participation**" in lines, result.output
 
     # The rendered event-derived £ must be present (positive)
     assert "£" in result.output, "Output must contain a £ figure"
@@ -800,7 +800,7 @@ def test_b10_finance_run_renders_the_booked_grid_services_income_with_the_econom
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     assert "## Grid Services Income" in lines, result.output
-    assert "Model: **capacity at events, central band, operational delivery baseline**" in lines, result.output
+    assert "Model: **capacity at events, central band, operational delivery baseline, observed participation**" in lines, result.output
 
     breakdown = compute_grid_services_at_events(answered[0], pricing)
     assert len(breakdown.per_window_avail_kw) == 1
