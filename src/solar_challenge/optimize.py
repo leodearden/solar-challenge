@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Generic, Iterator, List, Mapping, Optional, Sequence, TypeVar
 
-from solar_challenge.battery import CAPACITY_SETTING_KWH
+from solar_challenge.battery import CAPACITY_SETTING_KWH, has_battery
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
@@ -58,32 +59,49 @@ class ConfigPoint:
             "no battery".
         inverter_kw: AC inverter rated capacity in kW, a finite number greater
             than 0, held as a float.
+        battery_kw: The battery's charge and discharge power in kW, a finite
+            number greater than 0 held as a float, or None (the default).  When
+            set, the ``battery_power_kw`` knob sets every home's
+            ``max_charge_kw`` and ``max_discharge_kw`` to it; None keeps each
+            home's own battery power.  A point with no battery
+            (``battery_kwh`` exactly 0) sets no power, and one that does is
+            refused.
     """
 
     pv_kwp: float
     battery_kwh: float
     inverter_kw: float
+    battery_kw: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Read the three install dimensions through number_fields, holding the floats read."""
+        """Read the install dimensions through number_fields, holding the floats read, and refuse a battery power on a point with no battery."""
         read_field(self, "pv_kwp", as_finite_float, POSITIVE)
         read_field(self, "battery_kwh", as_finite_float, CAPACITY_SETTING_KWH)
         read_field(self, "inverter_kw", as_finite_float, POSITIVE)
+        read_field(self, "battery_kw", as_finite_float, POSITIVE, optional=True)
+        if self.battery_kw is not None and not has_battery(self.battery_kwh, "battery_kwh"):
+            raise ConfigurationError(
+                f"battery_kw ({self.battery_kw:g}) needs a battery, but battery_kwh is 0, which means no battery"
+            )
 
 
-# Each install knob a ConfigPoint sets, with the dimension of the point it sets it to.
-_INSTALL_KNOBS: tuple[tuple[Knob, Callable[[ConfigPoint], float]], ...] = (
+# Each install knob a ConfigPoint sets, with the dimension of the point it sets it to; a
+# dimension that is None leaves its knob unapplied.
+_INSTALL_KNOBS: tuple[tuple[Knob, Callable[[ConfigPoint], Optional[float]]], ...] = (
     (KNOBS["pv_capacity_kw"], lambda point: point.pv_kwp),
     (KNOBS["battery_capacity_kwh"], lambda point: point.battery_kwh),
+    (KNOBS["battery_power_kw"], lambda point: point.battery_kw),
     (KNOBS["inverter_capacity_kw"], lambda point: point.inverter_kw),
 )
 
 
 def _installed(base: ScenarioConfig, point: ConfigPoint) -> ScenarioConfig:
-    """*base* with each install knob applied at its dimension of *point*."""
+    """*base* with each install knob applied at its dimension of *point*, a dimension that is None left unapplied."""
     scenario = base
     for knob, dimension in _INSTALL_KNOBS:
-        scenario = knob.apply(scenario, dimension(point))
+        value = dimension(point)
+        if value is not None:
+            scenario = knob.apply(scenario, value)
     return scenario
 
 
@@ -275,11 +293,27 @@ def _require_fleet_scenario(scenario: ScenarioConfig, caller: str) -> None:
         )
 
 
+def _battery_dimensions(
+    battery_kwh: Sequence[float], battery_kw: Optional[Sequence[float]]
+) -> list[tuple[float, Optional[float]]]:
+    """Each battery size with its power, the i-th with the i-th, or with None when *battery_kw* is None; ValueError when the two lengths differ."""
+    if battery_kw is None:
+        return [(kwh, None) for kwh in battery_kwh]
+    if len(battery_kw) != len(battery_kwh):
+        raise ValueError(
+            f"battery_kw must give one power per battery_kwh size: battery_kwh has "
+            f"{len(battery_kwh)} values, battery_kw {len(battery_kw)}."
+        )
+    return list(zip(battery_kwh, battery_kw))
+
+
 def iter_configs(
     base: ScenarioConfig,
     pv_kwp: Sequence[float],
     battery_kwh: Sequence[float],
     inverter_kw: Sequence[float],
+    *,
+    battery_kw: Optional[Sequence[float]] = None,
 ) -> Iterator[tuple[ConfigPoint, ScenarioConfig]]:
     """Generator variant of :func:`enumerate_configs` for memory-efficient sweeps.
 
@@ -289,11 +323,13 @@ def iter_configs(
     10×10×10 = 1 000-cell sweep over a 100-home fleet would otherwise produce
     100 000 :class:`~solar_challenge.home.HomeConfig` objects simultaneously).
 
-    Args and raises are identical to :func:`enumerate_configs`.
+    Args and raises are identical to :func:`enumerate_configs`; they are
+    checked before the first pair is yielded.
 
     Yields:
         ``(ConfigPoint, ScenarioConfig)`` pairs in
-        ``itertools.product(pv_kwp, battery_kwh, inverter_kw)`` order.
+        ``itertools.product(pv_kwp, battery sizes with their powers, inverter_kw)``
+        order.
     """
     _require_fleet_scenario(base, "iter_configs")
     if not pv_kwp:
@@ -302,9 +338,10 @@ def iter_configs(
         raise ValueError("battery_kwh must be a non-empty sequence.")
     if not inverter_kw:
         raise ValueError("inverter_kw must be a non-empty sequence.")
+    batteries = _battery_dimensions(battery_kwh, battery_kw)
 
-    for pv, batt, inv in itertools.product(pv_kwp, battery_kwh, inverter_kw):
-        point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv)
+    for pv, (batt, batt_kw), inv in itertools.product(pv_kwp, batteries, inverter_kw):
+        point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv, battery_kw=batt_kw)
         yield point, _installed(base, point)
 
 
@@ -313,6 +350,8 @@ def enumerate_configs(
     pv_kwp: Sequence[float],
     battery_kwh: Sequence[float],
     inverter_kw: Sequence[float],
+    *,
+    battery_kw: Optional[Sequence[float]] = None,
 ) -> list[tuple[ConfigPoint, ScenarioConfig]]:
     """Enumerate homogeneous-install scenarios over the cartesian product of three
     discrete install dimensions.
@@ -320,10 +359,13 @@ def enumerate_configs(
     For each combination in ``itertools.product(pv_kwp, battery_kwh, inverter_kw)``
     (pv outermost, inverter innermost) a :class:`ConfigPoint` is built and a new
     :class:`~solar_challenge.config.ScenarioConfig` is produced from *base* by
-    the ``pv_capacity_kw``, ``battery_capacity_kwh`` and ``inverter_capacity_kw``
-    knobs of :mod:`~solar_challenge.scenario_knobs`, so every scenario-level
-    field is kept.  The homes in the returned scenario are homogeneous in
-    PV/battery/inverter install capacity.
+    the ``pv_capacity_kw``, ``battery_capacity_kwh``, ``battery_power_kw`` and
+    ``inverter_capacity_kw`` knobs of :mod:`~solar_challenge.scenario_knobs`, so
+    every scenario-level field is kept.  The homes in the returned scenario are
+    homogeneous in PV/battery/inverter install capacity, and in battery power
+    when *battery_kw* is given.  *battery_kw* is parallel to *battery_kwh*: the
+    i-th power goes with the i-th size, so the pair is one dimension of the
+    product, not two.
 
     .. note::
         This function eagerly materialises the full product into a list.  For a
@@ -341,15 +383,22 @@ def enumerate_configs(
             battery nameplate (total) capacities in kWh (non-empty; 0.0 = no
             battery).
         inverter_kw: Discrete AC inverter capacities in kW (non-empty).
+        battery_kw: Keyword-only.  The battery power in kW of each
+            *battery_kwh* size, in the same order, set as
+            :attr:`ConfigPoint.battery_kw`; None (the default) keeps each
+            home's own battery power.
 
     Returns:
         A list of ``(ConfigPoint, ScenarioConfig)`` pairs in
         ``itertools.product`` order.
 
     Raises:
-        ValueError: If *base* is not a fleet scenario or any sequence is empty.
+        ValueError: If *base* is not a fleet scenario, any sequence is empty,
+            or *battery_kw*'s length differs from *battery_kwh*'s.
+        ConfigurationError: If a :class:`ConfigPoint` refuses its dimensions,
+            e.g. a power paired with the no-battery size 0.
     """
-    return list(iter_configs(base, pv_kwp, battery_kwh, inverter_kw))
+    return list(iter_configs(base, pv_kwp, battery_kwh, inverter_kw, battery_kw=battery_kw))
 
 
 # ---------------------------------------------------------------------------
