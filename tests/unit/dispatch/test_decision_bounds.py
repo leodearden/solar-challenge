@@ -140,6 +140,12 @@ class TestTheStepRefusesAPowerThatIsNotFiniteAndAtLeast0:
         assert battery.soc_kwh == soc_kwh
 
 
+_EXPORT_BOUND = (
+    "the discharge limit's headroom after the step's shortfall, within any site export limit less the step's PV excess"
+)
+"""What require_admissible calls the bound of export_kw."""
+
+
 def _refusal(*breaches: str) -> str:
     """simulate_timestep's refusal of a decision by the strategy named 'over_limit' that makes *breaches*, given in field order."""
     return "Dispatch strategy 'over_limit' decided more than the step allows: " + "; ".join(breaches)
@@ -201,14 +207,14 @@ class TestAStepRefusesAnExportBeyondItsLimitBeforeTheBatteryMoves:
 
     def test_an_export_above_the_headroom_the_shortfall_leaves_is_refused(self) -> None:
         battery = ten_kwh_battery(5.0)
-        refusal = _refusal("export_kw=2.0 kW is above 1.5 kW, the discharge limit's headroom after the step's shortfall")
+        refusal = _refusal(f"export_kw=2.0 kW is above 1.5 kW, {_EXPORT_BOUND}")
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             _hour_under(DispatchDecision(0.0, 1.0, 0.0, 2.0), generation_kw=0.0, demand_kw=1.0, battery=battery)
         assert battery.soc_kwh == 5.0
 
     def test_an_export_on_a_step_whose_shortfall_takes_the_whole_discharge_limit_is_refused(self) -> None:
         battery = ten_kwh_battery(5.0)
-        refusal = _refusal("export_kw=0.5 kW is above 0.0 kW, the discharge limit's headroom after the step's shortfall")
+        refusal = _refusal(f"export_kw=0.5 kW is above 0.0 kW, {_EXPORT_BOUND}")
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             _hour_under(DispatchDecision(0.0, 2.5, 0.0, 0.5), generation_kw=0.0, demand_kw=3.0, battery=battery)
         assert battery.soc_kwh == 5.0
@@ -217,7 +223,7 @@ class TestAStepRefusesAnExportBeyondItsLimitBeforeTheBatteryMoves:
         battery = ten_kwh_battery(5.0)
         refusal = _refusal(
             "discharge_kw=2.0 kW is above 1.0 kW, the step's shortfall",
-            "export_kw=2.0 kW is above 1.5 kW, the discharge limit's headroom after the step's shortfall",
+            f"export_kw=2.0 kW is above 1.5 kW, {_EXPORT_BOUND}",
         )
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             _hour_under(DispatchDecision(0.0, 2.0, 0.0, 2.0), generation_kw=0.0, demand_kw=1.0, battery=battery)
@@ -300,6 +306,61 @@ class TestTheLimitsForAStep:
             max_charge_kw=_MAX_CHARGE_KW,
             max_export_kw=step.max_export_kw,
         )
+
+    @pytest.mark.parametrize("step", STEPS)
+    def test_with_no_site_export_limit_the_limits_are_those_of_the_battery_alone(self, step: _Step) -> None:
+        assert StepLimits.for_step(
+            step.generation_kw,
+            step.demand_kw,
+            max_charge_kw=_MAX_CHARGE_KW,
+            max_discharge_kw=_MAX_DISCHARGE_KW,
+            site_export_limit_kw=None,
+        ) == StepLimits.for_step(
+            step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW, max_discharge_kw=_MAX_DISCHARGE_KW
+        )
+
+
+class TestTheLimitsForAStepUnderASiteExportLimit:
+    """docs/prds/event-dispatch-and-battery-sizing.md §5.4: a site export limit caps the export limit at the site limit less the step's PV excess, or 0, under the 2.5 kW discharge limit's headroom."""
+
+    @pytest.mark.parametrize(
+        ("generation_kw", "demand_kw", "site_export_limit_kw", "max_export_kw"),
+        [
+            pytest.param(0.0, 1.0, 1.0, 1.0, id="shortfall-step-limit-below-the-headroom"),
+            pytest.param(3.0, 1.0, 3.0, 1.0, id="excess-step-limit-above-the-excess"),
+            pytest.param(4.0, 1.0, 3.0, 0.0, id="excess-at-the-limit"),
+            pytest.param(5.0, 1.0, 3.0, 0.0, id="excess-above-the-limit"),
+            pytest.param(0.0, 1.0, 0.0, 0.0, id="zero-limit"),
+            pytest.param(0.0, 1.0, 10.0, 1.5, id="shortfall-step-limit-above-the-headroom"),
+            pytest.param(3.0, 1.0, 10.0, 2.5, id="excess-step-limit-above-excess-plus-the-headroom"),
+        ],
+    )
+    def test_the_export_limit_is_the_least_of_the_two_headrooms(
+        self, generation_kw: float, demand_kw: float, site_export_limit_kw: float, max_export_kw: float
+    ) -> None:
+        limits = StepLimits.for_step(
+            generation_kw,
+            demand_kw,
+            max_charge_kw=_MAX_CHARGE_KW,
+            max_discharge_kw=_MAX_DISCHARGE_KW,
+            site_export_limit_kw=site_export_limit_kw,
+        )
+
+        assert limits == dataclasses.replace(
+            StepLimits.for_step(
+                generation_kw, demand_kw, max_charge_kw=_MAX_CHARGE_KW, max_discharge_kw=_MAX_DISCHARGE_KW
+            ),
+            max_export_kw=max_export_kw,
+        )
+
+    def test_an_export_above_the_site_reduced_limit_is_refused_naming_it_its_value_and_the_limit(self) -> None:
+        limits = StepLimits.for_step(
+            3.0, 1.0, max_charge_kw=_MAX_CHARGE_KW, max_discharge_kw=_MAX_DISCHARGE_KW, site_export_limit_kw=3.0
+        )
+        refusal = _refusal(f"export_kw=1.5 kW is above 1.0 kW, {_EXPORT_BOUND}")
+
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            limits.require_admissible(DispatchDecision(0.0, 0.0, 0.0, 1.5), "over_limit")
 
 
 def _on_2024_01_15_at(hour: int) -> datetime:

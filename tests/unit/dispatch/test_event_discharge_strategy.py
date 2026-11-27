@@ -22,8 +22,11 @@ from solar_challenge.dispatch import (
     GridChargeContext,
     PeakShavingStrategy,
     SelfConsumptionStrategy,
+    SelfConsumptionStrategyConfig,
     StepLimits,
     TOUOptimizedStrategy,
+    build_dispatch_strategy,
+    with_event_discharge,
 )
 from solar_challenge.errors import ConfigurationError
 
@@ -296,3 +299,101 @@ class TestEventDischargeStrategy:
             EventDischargeStrategy(
                 SelfConsumptionStrategy(), ({"days": [], "hours": []},), max_discharge_kw=MAX_DISCHARGE_KW
             )
+
+
+SITE_EXPORT_LIMIT_KW = 3.0
+IN_THE_WINDOW = datetime(2024, 1, 15, 17, 30, tzinfo=LONDON)
+
+LIMITED_STEPS = [
+    pytest.param(0.0, 1.0, id="shortfall"),
+    pytest.param(3.0, 1.0, id="excess-below-the-limit"),
+    pytest.param(4.5, 1.0, id="excess-above-the-limit"),
+]
+"""(generation_kw, demand_kw) of a step at which a 3 kW site export limit, or the 2.5 kW discharge limit, binds."""
+
+
+def _limited_full_power_decision(generation_kw: float, demand_kw: float) -> tuple[DispatchDecision, StepLimits]:
+    limits = StepLimits.for_step(
+        generation_kw,
+        demand_kw,
+        max_charge_kw=MAX_DISCHARGE_KW,
+        max_discharge_kw=MAX_DISCHARGE_KW,
+        site_export_limit_kw=SITE_EXPORT_LIMIT_KW,
+    )
+    decision = DispatchDecision(
+        charge_kw=0.0, discharge_kw=limits.shortfall_kw, grid_charge_kw=0.0, export_kw=limits.max_export_kw
+    )
+    return decision, limits
+
+
+class TestASiteExportLimit:
+    """docs/prds/event-dispatch-and-battery-sizing.md §5.4: under a site export limit a window exports exactly the export limit StepLimits.for_step gives the step, PV excess included."""
+
+    @pytest.mark.parametrize(("generation_kw", "demand_kw"), LIMITED_STEPS)
+    def test_inside_a_window_it_exports_the_export_limit_the_site_limit_leaves(
+        self, generation_kw: float, demand_kw: float
+    ) -> None:
+        strategy = EventDischargeStrategy(
+            SelfConsumptionStrategy(),
+            (WINDOW,),
+            max_discharge_kw=MAX_DISCHARGE_KW,
+            site_export_limit_kw=SITE_EXPORT_LIMIT_KW,
+        )
+        expected, limits = _limited_full_power_decision(generation_kw, demand_kw)
+
+        decision = _decide(strategy, IN_THE_WINDOW, generation_kw, demand_kw, None)
+
+        assert decision == expected
+        limits.require_admissible(decision, strategy.name)
+
+    def test_the_limit_lowers_the_export_of_a_step_where_it_binds(self) -> None:
+        unlimited = _decide(_wrapped(SelfConsumptionStrategy()), IN_THE_WINDOW, 3.0, 1.0, None)
+        limited, _ = _limited_full_power_decision(3.0, 1.0)
+
+        assert (unlimited.export_kw, limited.export_kw) == (2.5, 1.0)
+
+    @pytest.mark.parametrize(("generation_kw", "demand_kw"), STEPS)
+    def test_with_no_limit_its_decision_is_the_discharge_limits_alone(
+        self, generation_kw: float, demand_kw: float
+    ) -> None:
+        strategy = EventDischargeStrategy(
+            SelfConsumptionStrategy(), (WINDOW,), max_discharge_kw=MAX_DISCHARGE_KW, site_export_limit_kw=None
+        )
+
+        assert _decide(strategy, IN_THE_WINDOW, generation_kw, demand_kw, None) == _full_power_decision(
+            generation_kw, demand_kw
+        )[0]
+
+    @pytest.mark.parametrize("site_export_limit_kw", [-1.0, math.nan, True], ids=["-1", "nan", "True"])
+    def test_a_limit_that_is_not_a_finite_number_of_at_least_0_is_refused_naming_it(
+        self, site_export_limit_kw: float
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=r"^site_export_limit_kw must be "):
+            EventDischargeStrategy(
+                SelfConsumptionStrategy(),
+                (WINDOW,),
+                max_discharge_kw=MAX_DISCHARGE_KW,
+                site_export_limit_kw=site_export_limit_kw,
+            )
+
+    def test_with_event_discharge_wraps_at_the_limit(self) -> None:
+        strategy = with_event_discharge(
+            SelfConsumptionStrategy(),
+            (WINDOW,),
+            max_discharge_kw=MAX_DISCHARGE_KW,
+            site_export_limit_kw=SITE_EXPORT_LIMIT_KW,
+        )
+
+        assert _decide(strategy, IN_THE_WINDOW, 3.0, 1.0, None) == _limited_full_power_decision(3.0, 1.0)[0]
+
+    def test_build_dispatch_strategy_wraps_at_the_limit(self) -> None:
+        strategy = build_dispatch_strategy(
+            SelfConsumptionStrategyConfig(),
+            grid_charging=None,
+            tariff=None,
+            event_discharge=(WINDOW,),
+            max_discharge_kw=MAX_DISCHARGE_KW,
+            site_export_limit_kw=SITE_EXPORT_LIMIT_KW,
+        )
+
+        assert _decide(strategy, IN_THE_WINDOW, 3.0, 1.0, None) == _limited_full_power_decision(3.0, 1.0)[0]
