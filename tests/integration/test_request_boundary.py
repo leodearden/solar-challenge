@@ -158,7 +158,7 @@ _ROUTE_PROBES: Mapping[str, _RouteProbe] = {
         reader="parse_home_config",
         reaching={"json": {}},
     ),
-    "api.simulate_sweep_points": _RouteProbe(
+    "api.preview_sweep_points": _RouteProbe(
         refused={"json": _A_MODE_NO_SWEEP_HAS},
         refusal=partial(read_sweep_request, _A_MODE_NO_SWEEP_HAS),
         reader="read_sweep_request",

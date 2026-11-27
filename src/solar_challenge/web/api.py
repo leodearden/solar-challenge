@@ -61,7 +61,7 @@ from solar_challenge.web.simulation_params import parse_home_config, with_defaul
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
-from solar_challenge.web.sweep_request import SweepRequest, read_sweep_request
+from solar_challenge.web.sweep_request import read_sweep_request
 from solar_challenge.web.text_options import read_one_of
 from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
@@ -465,10 +465,10 @@ def simulate_sweep() -> tuple[Response, int]:
     """
     data = request_json_object()
     sweep = read_sweep_request(data)
-    base = _sweep_base(require_json_object(data.get("base_config", {}), "base_config"), sweep)
+    knob = sweep.parameter.knob
+    base = _sweep_base(require_json_object(data.get("base_config", {}), "base_config"), f"Sweep {knob.name}")
     points = sweep.point_homes(base)
     start_date, end_date = base.simulation_bounds()
-    knob = sweep.parameter.knob
 
     job_manager = get_job_manager()
     job_ids: list[str] = []
@@ -489,7 +489,7 @@ def simulate_sweep() -> tuple[Response, int]:
 
 
 @api_bp.route("/simulate/sweep/points", methods=["POST"])
-def simulate_sweep_points() -> tuple[Response, int]:
+def preview_sweep_points() -> tuple[Response, int]:
     """Preview the values POST /api/simulate/sweep would run for the same body, read by the same reader; it builds no home and submits no job.
 
     Returns:
@@ -499,21 +499,17 @@ def simulate_sweep_points() -> tuple[Response, int]:
     return jsonify({"parameter": sweep.parameter.knob.name, "values": list(sweep.values())}), 200
 
 
-def _sweep_base(base_config: Mapping[str, Any], sweep: SweepRequest) -> ScenarioConfig:
-    """The single-home scenario every point of *sweep* starts from: *base_config*'s home over its window.
+def _sweep_base(base_config: Mapping[str, Any], name: str) -> ScenarioConfig:
+    """The single-home scenario named *name* that every point of a sweep starts from: *base_config*'s home over its window.
 
     Raises:
-        ConfigurationError: For a base_config parse_home_config refuses, as "base_config: <refusal>".
+        ConfigurationError: For a base_config that parse_home_config or the scenario refuses, as "base_config: <refusal>".
     """
     try:
         home, start_date, end_date, _ = parse_home_config(with_default_days(base_config, _SWEEP_DEFAULT_DAYS))
+        return ScenarioConfig(name=name, period=run_window(home.location, start_date, end_date), home=home)
     except ConfigurationError as refusal:
         raise ConfigurationError(f"base_config: {refusal}") from refusal
-    return ScenarioConfig(
-        name=f"Sweep {sweep.parameter.knob.name}",
-        period=run_window(home.location, start_date, end_date),
-        home=home,
-    )
 
 
 # ---------------------------------------------------------------------------
