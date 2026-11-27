@@ -128,6 +128,37 @@ def test_sidebar_history_link(page: Page, live_server: str) -> None:
     assert "/history/runs" in page.url
 
 
+# Defers each desktop-sidebar link's navigation by one second after its click, so the
+# navigation starts after Playwright's click has returned.
+_DEFER_SIDEBAR_LINK_NAVIGATION = """
+window.addEventListener(
+    "click",
+    (event) => {
+        if (!event.isTrusted) return;
+        const link = event.target.closest("a");
+        if (!link || link.closest("aside") !== document.querySelector("aside")) return;
+        event.preventDefault();
+        setTimeout(() => location.assign(link.href), 1000);
+    },
+    true,
+);
+"""
+
+
+def test_a_sidebar_link_opens_its_page_when_its_navigation_starts_after_the_click_returns(
+    page: Page, live_server: str
+) -> None:
+    """A sidebar link test waits for the page the link opens, even when that page's navigation starts after the click returns."""
+    page.add_init_script(_DEFER_SIDEBAR_LINK_NAVIGATION)
+    page.goto(live_server + "/")
+    page.wait_for_load_state("domcontentloaded")
+
+    _expand_sidebar_group(page, "Simulate")
+    _click_sidebar_link(page, "Fleet")
+
+    assert "/simulate/fleet" in page.url
+
+
 def test_sidebar_shows_the_group_of_the_current_page_open(page: Page, live_server: str) -> None:
     """On the fleet page the desktop sidebar shows the Simulate group's links without a click, and keeps the Scenarios group's links hidden."""
     page.goto(live_server + "/simulate/fleet")
