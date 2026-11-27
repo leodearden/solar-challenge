@@ -221,8 +221,36 @@ def _swept_values_by_axis(report: str) -> dict[str, list[float]]:
 
 
 def _pounds(cell: str) -> float:
-    """The figure of a report's '£1,234.56' cell."""
-    return float(cell.removeprefix("£").replace(",", ""))
+    """The figure of a report's '£1,234.56', '+£1,234.56' or '-£3.25' cell."""
+    return float(cell.replace("£", "").replace(",", ""))
+
+
+def _invoke_configs(
+    tmp_path: Path,
+    fleet_results: FleetResults,
+    options: list[str],
+    *,
+    n_homes: int = 5,
+    finance_overrides: Optional[dict[str, object]] = None,
+    seg_rate: Optional[float] = None,
+) -> tuple[Result, list[FleetConfig]]:
+    """Run `optimize configs` on a fresh *n_homes*-home scenario, its finance block updated with *finance_overrides* and its SEG rate *seg_rate* when given, with *options*, answering every fleet simulation with *fleet_results*' per-home results, paired with that fleet's homes.
+
+    Returns the CliRunner result and the fleet configs the injected simulator
+    was asked to simulate.
+    """
+    simulated_fleets: list[FleetConfig] = []
+    answer = answering_with(fleet_results)
+
+    def simulate(fleet_config, start, end):
+        simulated_fleets.append(fleet_config)
+        return answer(fleet_config, start, end)
+
+    scenario_file = _write_optimize_scenario(
+        tmp_path, n_homes=n_homes, finance_overrides=finance_overrides, seg_rate=seg_rate
+    )
+    result = invoke_cli(["optimize", "configs", str(scenario_file), *options], answering(simulate))
+    return result, simulated_fleets
 
 
 class TestOptimizeCLIE2EFast:
@@ -232,34 +260,6 @@ class TestOptimizeCLIE2EFast:
     context object (``obj=CliInvocation(runner=...)``), so the whole sweep,
     sensitivity panel included, runs offline without PVGIS.
     """
-
-    @staticmethod
-    def _invoke_configs(
-        tmp_path: Path,
-        fleet_results: FleetResults,
-        options: list[str],
-        *,
-        n_homes: int = 5,
-        finance_overrides: Optional[dict[str, object]] = None,
-        seg_rate: Optional[float] = None,
-    ) -> tuple[Result, list[FleetConfig]]:
-        """Run `optimize configs` on a fresh *n_homes*-home scenario, its finance block updated with *finance_overrides* and its SEG rate *seg_rate* when given, with *options*, answering every fleet simulation with *fleet_results*' per-home results, paired with that fleet's homes.
-
-        Returns the CliRunner result and the fleet configs the injected simulator
-        was asked to simulate.
-        """
-        simulated_fleets: list[FleetConfig] = []
-        answer = answering_with(fleet_results)
-
-        def simulate(fleet_config, start, end):
-            simulated_fleets.append(fleet_config)
-            return answer(fleet_config, start, end)
-
-        scenario_file = _write_optimize_scenario(
-            tmp_path, n_homes=n_homes, finance_overrides=finance_overrides, seg_rate=seg_rate
-        )
-        result = invoke_cli(["optimize", "configs", str(scenario_file), *options], answering(simulate))
-        return result, simulated_fleets
 
     def test_optimize_configs_standard_sweep_output(
         self,
@@ -274,7 +274,7 @@ class TestOptimizeCLIE2EFast:
         token) to avoid re-running the CLI and its injected simulator once per
         assertion.
         """
-        result, simulated_fleets = self._invoke_configs(
+        result, simulated_fleets = _invoke_configs(
             tmp_path,
             optimize_fleet_results,
             [
@@ -320,7 +320,7 @@ class TestOptimizeCLIE2EFast:
         one_home_fleet_results: FleetResults,
     ) -> None:
         """Each alias's axis sweeps exactly its knob's optimize.SENSITIVITY_BANDS values."""
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             [
@@ -353,7 +353,7 @@ class TestOptimizeCLIE2EFast:
     ) -> None:
         """--sensitivity takes a knob's canonical name as well as its alias, sweeping that knob's band."""
         knob = "retained_cash_floor_per_home_per_year_gbp"
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", knob],
@@ -371,7 +371,7 @@ class TestOptimizeCLIE2EFast:
         one_home_fleet_results: FleetResults,
     ) -> None:
         """A knob with no sensitivity band is a configuration error naming it and the banded knobs, refused before the sweep."""
-        result, simulated_fleets = self._invoke_configs(
+        result, simulated_fleets = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "seg"],
@@ -393,7 +393,7 @@ class TestOptimizeCLIE2EFast:
     ) -> None:
         """A knob named by its alias and by its canonical name is a configuration error naming both, refused before the sweep."""
         canonical = "retained_cash_floor_per_home_per_year_gbp"
-        result, simulated_fleets = self._invoke_configs(
+        result, simulated_fleets = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", f"retained_floor,{canonical}"],
@@ -416,7 +416,7 @@ class TestOptimizeCLIE2EFast:
         Robustness: the comma-list parser must handle a single non-comma value
         without raising an error.
         """
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             optimize_fleet_results,
             [
@@ -438,7 +438,7 @@ class TestOptimizeCLIE2EFast:
         one_home_fleet_results: FleetResults,
     ) -> None:
         """With no --sensitivity, a scenario that prices no grid services at events sweeps both default axes and notes no omission."""
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5"],
@@ -458,7 +458,7 @@ class TestOptimizeCLIE2EFast:
         one_home_fleet_results: FleetResults,
     ) -> None:
         """C8: with no --sensitivity, a scenario that prices grid services at events sweeps the retained floor alone, and one stderr note names the omitted grid_services axis and why."""
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5"],
@@ -488,7 +488,7 @@ class TestOptimizeCLIE2EFast:
         )
 
         def baseline_surplus_gbp(options: list[str]) -> float:
-            result, _ = self._invoke_configs(
+            result, _ = _invoke_configs(
                 tmp_path,
                 fleet_results,
                 ["--pv", "4", "--battery", "5", "--inverter", "5", "--sensitivity", "", *options],
@@ -507,7 +507,7 @@ class TestOptimizeCLIE2EFast:
         tmp_path: Path,
         one_home_fleet_results: FleetResults,
     ) -> None:
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", ""],
@@ -525,7 +525,7 @@ class TestOptimizeCLIE2EFast:
         one_home_fleet_results: FleetResults,
     ) -> None:
         """Two configs over _write_optimize_scenario's 25-year asset life, each one smooth projection."""
-        result, simulated_fleets = self._invoke_configs(
+        result, simulated_fleets = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4,5", "--battery", "0", "--inverter", "5", "--sensitivity", ""],
@@ -540,7 +540,7 @@ class TestOptimizeCLIE2EFast:
         tmp_path: Path,
         one_home_fleet_results: FleetResults,
     ) -> None:
-        result, simulated_fleets = self._invoke_configs(
+        result, simulated_fleets = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", ""],
@@ -597,7 +597,7 @@ class TestOptimizeCLIE2EFast:
         simulator answers that many and raises on the next, which the panel asks for.
         """
         options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
-        sweep_only, sweep_fleets = self._invoke_configs(
+        sweep_only, sweep_fleets = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             [*options, "--sensitivity", ""],
@@ -637,7 +637,7 @@ class TestOptimizeCLIE2EFast:
     ) -> None:
         """With every config infeasible, the command prints the report without the panel, notes the skip on stderr and exits 0."""
         options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             [*options, "--retained-floor", "9999999", "--sensitivity", "grid_services"],
@@ -665,7 +665,7 @@ class TestOptimizeCLIE2EFast:
         simulator answers that many and refuses the next, which the panel asks for.
         """
         options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
-        sweep_only, sweep_fleets = self._invoke_configs(
+        sweep_only, sweep_fleets = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             [*options, "--sensitivity", ""],
@@ -713,7 +713,7 @@ class TestOptimizeCLIE2EFast:
             "grid_services_model": {"type": "flat", "income_per_kw_per_year_gbp": 6.0},
         }
         options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
-        sweep_only, one_sweeps_fleets = self._invoke_configs(
+        sweep_only, one_sweeps_fleets = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             [*options, "--sensitivity", ""],
@@ -722,7 +722,7 @@ class TestOptimizeCLIE2EFast:
         )
         assert sweep_only.exit_code == 0, sweep_only.output
 
-        result, simulated_fleets = self._invoke_configs(
+        result, simulated_fleets = _invoke_configs(
             tmp_path, one_home_fleet_results, options, n_homes=1, finance_overrides=finance_overrides
         )
 
@@ -743,10 +743,10 @@ class TestOptimizeCLIE2EFast:
             "grid_services_model": {"type": "flat", "income_per_kw_per_year_gbp": 6.0},
         }
         options = ["--pv", "4", "--battery", "0", "--inverter", "5"]
-        without_flag, fleets_without_flag = self._invoke_configs(
+        without_flag, fleets_without_flag = _invoke_configs(
             tmp_path, one_home_fleet_results, options, n_homes=1, finance_overrides=finance_overrides
         )
-        with_flag, fleets_with_flag = self._invoke_configs(
+        with_flag, fleets_with_flag = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             [*options, "--retained-floor", "27"],
@@ -765,7 +765,7 @@ class TestOptimizeCLIE2EFast:
         one_home_fleet_results: FleetResults,
     ) -> None:
         """--retained-floor 60 on the scenario's floor of 100 is the floor the ranked configs' solve binds at, with the floor axis still swept."""
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5", "--retained-floor", "60"],
@@ -791,7 +791,7 @@ class TestOptimizeCLIE2EFast:
         """Run _ASSUMPTION_SWEEP with *assumptions* on a one-home scenario whose finance sets *override*, none when None, written in *run*'s own directory under *tmp_path*."""
         run_dir = tmp_path / run
         run_dir.mkdir()
-        return self._invoke_configs(
+        return _invoke_configs(
             run_dir,
             fleet_results,
             [*self._ASSUMPTION_SWEEP, *assumptions],
@@ -873,7 +873,7 @@ class TestOptimizeCLIE2EFast:
         one_home_fleet_results: FleetResults,
     ) -> None:
         """The panel sweeps configs on the ranking's assumption: given configs on another than its baseline's, it would refuse them before reaching the report."""
-        result, _ = self._invoke_configs(
+        result, _ = _invoke_configs(
             tmp_path,
             one_home_fleet_results,
             ["--pv", "4", "--battery", "0", "--inverter", "5", "--assumptions", "spreadsheet",
@@ -921,25 +921,16 @@ _EXTRA_CAPEX = "Extra CapEx vs Reference (£/home)"
 _OUTLAY_CHANGE = "Outlay Change vs Reference (£/yr)"
 
 
-def _signed_pounds(cell: str) -> float:
-    """The figure of a report's '+£1,234.56' or '-£3.25' cell."""
-    return float(cell.replace("£", "").replace(",", ""))
-
-
 class TestBatteryPowerAndReference:
     """`optimize configs --battery-kw` pairs a power with each --battery size, and --reference names the marginal columns' reference."""
 
     _GRID = ["--pv", "4", "--inverter", "3.68", "--sensitivity", "", "--battery", "5.12,10.24"]
     _PAIRED = [*_GRID, "--battery-kw", "2.4,3.68"]
 
-    @staticmethod
-    def _run(tmp_path: Path, fleet_results: FleetResults, options: list[str]) -> tuple[Result, list[FleetConfig]]:
-        return TestOptimizeCLIE2EFast._invoke_configs(tmp_path, fleet_results, options)
-
     def test_each_battery_size_is_simulated_at_its_power(
         self, tmp_path: Path, optimize_fleet_results: FleetResults
     ) -> None:
-        result, asked = self._run(tmp_path, optimize_fleet_results, self._PAIRED)
+        result, asked = _invoke_configs(tmp_path, optimize_fleet_results, self._PAIRED)
 
         assert result.exit_code == 0, result.output
         powers = {
@@ -953,7 +944,7 @@ class TestBatteryPowerAndReference:
     def test_a_power_count_other_than_the_size_count_is_refused_naming_both_flags_before_any_simulation(
         self, tmp_path: Path, optimize_fleet_results: FleetResults
     ) -> None:
-        result, asked = self._run(tmp_path, optimize_fleet_results, [*self._GRID, "--battery-kw", "2.4"])
+        result, asked = _invoke_configs(tmp_path, optimize_fleet_results, [*self._GRID, "--battery-kw", "2.4"])
 
         stderr = " ".join(result.stderr.split())
         assert result.exit_code == 1, result.output
@@ -965,7 +956,7 @@ class TestBatteryPowerAndReference:
     def test_without_a_reference_the_smallest_battery_at_the_smallest_pv_is_the_reference(
         self, tmp_path: Path, optimize_fleet_results: FleetResults
     ) -> None:
-        result, _ = self._run(tmp_path, optimize_fleet_results, self._PAIRED)
+        result, _ = _invoke_configs(tmp_path, optimize_fleet_results, self._PAIRED)
 
         assert result.exit_code == 0, result.output
         assert f"{_REFERENCE_LINE}{_SMALL}**" in section_under(result.stdout, RANK)
@@ -975,13 +966,13 @@ class TestBatteryPowerAndReference:
     def test_a_reference_names_the_configuration_every_row_is_compared_against(
         self, tmp_path: Path, optimize_fleet_results: FleetResults
     ) -> None:
-        result, _ = self._run(tmp_path, optimize_fleet_results, [*self._PAIRED, "--reference", "4,10.24,3.68,3.68"])
+        result, _ = _invoke_configs(tmp_path, optimize_fleet_results, [*self._PAIRED, "--reference", "4,10.24,3.68,3.68"])
 
         assert result.exit_code == 0, result.output
         assert f"{_REFERENCE_LINE}{_LARGE}**" in section_under(result.stdout, RANK)
         reference = config_row(result.stdout, RANK, _LARGE)
         other = config_row(result.stdout, RANK, _SMALL)
-        change = _signed_pounds(other[_OUTLAY_CHANGE])
+        change = _pounds(other[_OUTLAY_CHANGE])
         assert change == pytest.approx(
             _pounds(other["Rep Outlay (£)"]) - _pounds(reference["Rep Outlay (£)"]), abs=0.011
         )
@@ -990,7 +981,7 @@ class TestBatteryPowerAndReference:
     def test_a_reference_outside_the_grid_is_refused_listing_the_grid_before_any_simulation(
         self, tmp_path: Path, optimize_fleet_results: FleetResults
     ) -> None:
-        result, asked = self._run(tmp_path, optimize_fleet_results, [*self._PAIRED, "--reference", "4,7,3.68,2.4"])
+        result, asked = _invoke_configs(tmp_path, optimize_fleet_results, [*self._PAIRED, "--reference", "4,7,3.68,2.4"])
 
         stderr = " ".join(result.stderr.split())
         assert result.exit_code == 1, result.output
@@ -1014,7 +1005,7 @@ class TestBatteryPowerAndReference:
         reference: str,
         field: str,
     ) -> None:
-        result, asked = self._run(tmp_path, optimize_fleet_results, [*self._GRID, *battery_kw, "--reference", reference])
+        result, asked = _invoke_configs(tmp_path, optimize_fleet_results, [*self._GRID, *battery_kw, "--reference", reference])
 
         stderr = " ".join(result.stderr.split())
         assert result.exit_code == 1, result.output
@@ -1026,7 +1017,7 @@ class TestBatteryPowerAndReference:
         self, tmp_path: Path, optimize_fleet_results: FleetResults
     ) -> None:
         options = ["--pv", "4", "--inverter", "3.68", "--sensitivity", "", "--battery", "0,5.12", "--battery-kw", "2.4,3.68"]
-        result, asked = self._run(tmp_path, optimize_fleet_results, options)
+        result, asked = _invoke_configs(tmp_path, optimize_fleet_results, options)
 
         stderr = " ".join(result.stderr.split())
         assert result.exit_code == 1, result.output
@@ -1044,7 +1035,7 @@ class TestBatteryPowerAndReference:
     def test_a_reference_of_the_wrong_arity_is_refused_naming_its_form_before_any_simulation(
         self, tmp_path: Path, optimize_fleet_results: FleetResults, battery_kw: list[str], reference: str
     ) -> None:
-        result, asked = self._run(tmp_path, optimize_fleet_results, [*self._GRID, *battery_kw, "--reference", reference])
+        result, asked = _invoke_configs(tmp_path, optimize_fleet_results, [*self._GRID, *battery_kw, "--reference", reference])
 
         stderr = " ".join(result.stderr.split())
         assert result.exit_code == 1, result.output

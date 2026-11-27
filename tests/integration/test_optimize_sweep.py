@@ -695,9 +695,6 @@ class TestRunSweepMultiConfig:
 
         return simulate
 
-    def _make_infeasible_finance(self) -> FinanceConfig:
-        return _infeasible_finance()
-
     def test_results_sorted_ascending_by_outlay(self) -> None:
         """results is sorted ascending by representative_outlay_gbp."""
         n_homes = 3
@@ -752,7 +749,7 @@ class TestRunSweepMultiConfig:
         # Feasible finance for most configs
         feasible_finance = _interior_finance(n_homes)
         # Infeasible finance for one
-        infeasible_finance = self._make_infeasible_finance()
+        infeasible_finance = _infeasible_finance()
 
         # Build two scenarios: one feasible, one infeasible
         feasible_scenario = _make_scenario(n_homes=n_homes, finance=feasible_finance)
