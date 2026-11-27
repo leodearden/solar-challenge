@@ -226,7 +226,7 @@ Deletable: Every transitional re-export or dual field a stream kept only until t
 | Refusal type raised by the checker (depends on the Errors stream's base-class choice) | S4 | every other stream that reads it |
 | scenario_blocks.py as the home of battery.py's TYPE_CHECKING types until the Dispatch stream moves them (order the two streams: Dispatch first) | S5 | every other stream that reads it |
 | Fleet-document overlay reader (owner: config; consumers cli/finance, cli/optimize, cli/home, cli/fleet, web/fleet_scenario, web/builder_form) | S6 | every other stream that reads it |
-| ScenarioConfig.homes()/with_seg() (owner: config; consumers finance, optimize, cli/validate) | S6 | every other stream that reads it |
+| ScenarioConfig.simulated_homes() / map_homes() / window() / with_window() / simulation_bounds() (owner: config, S6 α and β; consumers finance, optimize, projection.scenario_fleet (928), cli, web, S25, S26; there is no with_seg(): simulated_homes() fills the scenario SEG under D10) [amended L41] | S6 | every other stream that reads it |
 | Component block key tables shared by config's parsers and scenario_writer (one owner, read by both) | S7 | every other stream that reads it |
 | Billing-energy records (owner: finance.py; readers projection module, tests) | S8 | every other stream that reads it |
 | solar_challenge.__init__._SYMBOL_MODULE maps solve_cost_recovery_rate to 'finance' (frozen surface): re-export from finance or version bump | S8 | every other stream that reads it |
@@ -259,8 +259,8 @@ Deletable: Every transitional re-export or dual field a stream kept only until t
 | FROZEN_SURFACE as the one home of the surface (owner: tests/_surface_forms.py; readers the merged test module, release notes) | S23 | every other stream that reads it |
 | Lane-only suite list (owner: tests/conftest.py collect_ignore; readers lane rows, interpreter_matrix, newest_releases) | S24 | every other stream that reads it |
 | Collection report (owner: tests/_collect_only via JUnit XML) | S24 | every other stream that reads it |
-| Report sections keyed by assumption mode (owner: output.generate_finance_report; reader cli/finance) | S25 | every other stream that reads it |
-| Typed summary rows (owner: home.SummaryStatistics / fleet.FleetSummary; reader cli/utils) | S25 | every other stream that reads it |
+| Report sections keyed by assumption mode (owner: board_report.generate_finance_report after S25 β; reader cli/finance) [amended L39] | S25 | every other stream that reads it |
+| Typed summary rows (owner: cli/utils home_summary_rows and fleet_summary_rows, task 705 as S25 α; readers cli/home, cli/fleet) [amended L39] | S25 | every other stream that reads it |
 | Knob registry (owner: the fleet_distribution/config stratum; readers web/api, cli/fleet, cli/optimize, optimize) | S26 | every other stream that reads it |
 | Dispatch factory (owner: dispatch.py, from the Dispatch stream; this stream follows it) | S27 | every other stream that reads it |
 | BatteryConfig fields on the frozen surface (version-bump route) | S28 | every other stream that reads it |
@@ -570,6 +570,8 @@ Keys: fk-b3dfd41a4d6a fk-72af0b90338d fk-9cc706d3afdd fk-4cc34de4e649 fk-d63c41c
 
 ### D29. surface sequencing under D4 (S2 Q1, S10 Q3) — ruled_by: human
 
+Amended 2026-11-06 (docs/prds/release-note-fragments.md, Leo's ruling on sitting item 506): where this program says 'Unreleased on main' line or paragraph, the leaf writes its note file, docs/unreleased/<doc>/<task id>.md, and declares that file, never docs/domain-library-consumption.md, in metadata.files.
+
 Additive frozen-table edits land in-leaf with their FROZEN_* entry and an 'Unreleased on main' line (main's precedent, tasks 326 and 469); only renames and retirements are held leaves released by S29, which writes the one release section and consumer-recipe update.
 
 Options considered: additive in-leaf, retirements held; every frozen-table touch waits for S29.
@@ -758,6 +760,46 @@ Consequence that decided it: no review and merge of code 930 replaces, and 928/9
 
 Keys: fk-50cf1dd5df58
 
+### D48. S25 board figures that move (ruled by Leo 2026-10-17) — ruled_by: human
+
+Both S25 moves are accepted for the board and recorded on leaves γ and δ: γ makes --assumptions spreadsheet render the override's economics and solved own-use rate (today physics), physics on bristol-fin-calibration.yaml render physics (today the override's) and both gain Spreadsheet columns, the 'Physics Assumptions' heading going; δ makes the flex block's grid-services row on bristol-phase1-flex.yaml --flex-band central fall from the consulting £30 per home to the booked events figure, about £3 per battery home on the S9 ~£296 fleet figure, the headline falling by the difference, and the events income appears whenever the report projects.
+
+Options considered: accept both; accept γ only, hold δ; hold both.
+
+Consequence that decided it: the board report says what D24 and D41 already decided, in one release.
+
+Keys: fk-b7241e0ce122
+
+### D49. task 377 (S5 decompose, ruled by Leo 2026-10-18) — ruled_by: human
+
+Task 377 (finance parser errors name the offending key), a keyless twin of S5 δ (948) with a live claimant and three commits on task/377, is kept behind 948 and re-read at dispatch; it is not cancelled.
+
+Options considered: keep behind 948; cancel now with x_superseded_by 948.
+
+Consequence that decided it: no running work is killed; 372 and 374 already delivered most of its finance items.
+
+Keys: fk-e2aaf2bfe651
+
+### D50. flat home-file form (S6 Q5, ruled by Leo 2026-10-18) — ruled_by: human
+
+S6 γ retires the flat home-file form (a home file whose top level is the home's own keys without a home: block) with a named refusal that says to wrap it in home:; one home-file form remains.
+
+Options considered: retire with a named refusal; keep the flat form as a documented exception.
+
+Consequence that decided it: one reader, one form; the retired flat keys derive from HOME_BLOCK_KEYS.
+
+Keys: fk-2264bc150fa3 fk-416eb5643e7a
+
+### D51. task 358 against D24/D48 (ruled by Leo 2026-10-18) — ruled_by: human
+
+D24 and D48 stand: S25 γ (973) threads each --assumptions mode into the bill, the projection, the economics and the solve and labels every column; task 358 (finance run --assumptions selects only the bill table), whose esc-308-3 ruling of 2026-10-17 said label and do not thread, is cancelled with x_superseded_by 973 and that reading is recorded as considered and rejected.
+
+Options considered: D24/D48 stand, cancel 358; keep label-do-not-thread, re-rule S25 γ and amend D24/D48.
+
+Consequence that decided it: one assumption model in the board report, ruled with the deliberation context.
+
+Keys: fk-b7241e0ce122
+
 ## Lead rulings on PRD open questions
 
 - L1 (S1; non-numeric input refusals (S1 lead Q1)): S4 converts the non-numeric ValueError refusals of the input types in the same edits as the numeric ones; invariant 1's test asserts the type; S17 depends on S4.
@@ -798,9 +840,45 @@ Keys: fk-50cf1dd5df58
 - L36 (decompositions S4, S12, S16, S20, S24, S3; deviations and leftovers reported): Accepted: 742 and 121 were in progress at S16's decompose, so 882 depends on 742 and 889 on 121 instead of cancelling them, and S16 ε carries x_finding_key [] with x_lead_ruling L10; task 728 (a reconciliation-filed twin of fk-1d920c89e872 with no key) is cancelled by the lead with x_superseded_by 894 and 895; task 270 had merged its tail extraction so S3 α (896) carries x_supersedes_task 270; task 183 is cancelled; 366's description is corrected to the L23 variable; fk-5827f41eb082 is stamped on 517 only until S17 ζ supersedes it. Housekeeping recorded in §Triage: worktrees .worktrees/123, 492, 680 and the empty branches of 382, 314, 187 belong to cancelled tasks.
 - L37 (S5; ordering against S7 (Q1); ScenarioConfig.tariff_config (Q2); priority of β and γ (Q3)): Default accepted for Q1: β and γ depend on every S7 leaf whose metadata.files includes src/solar_challenge/config.py (the S5 decompose reads them from the store after S7 files) and S7 takes no edge on S5, so each move lands once. Q2: S6 decides in its /prd session whether tariff_config stays as the typed home of a scenario-level tariff: under D10 fill-and-refuse; if S6 names no reader, S5 ζ retires it with output. Q3: β and γ are filed high and join gate 772, an exception to priority = severity recorded on each leaf as metadata.x_lead_ruling L37, because 866 and 868 (high) wait on them and the gate must see the whole chain. Q4 (task 237, implemented on task/237) is Leo's, see D46.
 - L38 (decompositions S13, S22, S27, S23, S8, S17, S7; deviations and leftovers reported): Accepted: 894 is released by the lead onto 906; 790 files gain community.py; 440 is narrowed to api.simulate_sweep and 751 retitled as S22 β; the files of 297 and 668 are corrected for the deleted and split test modules (a stale path blocked 394 at the merge gate); 287 gains an edge on 930 rather than being absorbed by S8 ζ; 584 depends on 921 and 935 and goes to the S18 decompose as a pre-existing task, since its web route samples through the one sampler (D18); the S27 β web/jobs.py conditional and the S17 γ / S7 β location-rule overlap are accepted as order-agnostic; the stale L36 claim that fk-5827f41eb082 was on 517 is corrected (it lives on 938). Task 582 is Leo's, see D47.
+- L39 (S25; typed-rows seam owner (Q1); task 705 re-scoped as α (Q2); report-sections seam owner (Q3); per-mode projection simulations under both (Q4)): Defaults accepted: the Typed summary rows seam is owned by cli/utils (home_summary_rows and fleet_summary_rows, task 705), since the labels are CLI presentation and members on the frozen domain types would widen a frozen form; 705 is re-scoped in place as S25 α with fk-6a52ed98b18e stamped (re-read first: if done, stamp the key only; if cancelled, file α new); the Report sections seam is owned by board_report.generate_finance_report once β moves it; the extra per-mode projection under --assumptions both is accepted now and sharing its node simulations is a §Triage follow-up after 929, since it needs an S8 contract change. Q5 (board figures) is Leo's, see D48.
+- L40 (S5 decompose; sidecar hazards (lines 2-5) and keyless twins (line 6) reported): The S4 construction wrap is spelled constructed (public) in scenario_blocks.py and the 866 wrap-exists check plus the S4 sidecar admit both spellings; the 790 held-leaf absent-check in the S2 sidecar also scans fleet_distribution.py; the 914 and 837 present-checks already scan scenario_blocks.py and the 868 float_or_none pattern already covers both spellings, so nothing else changes. Keyless twins: 328 and 563 are cancelled with x_superseded_by 948 and 762 with 945 (pending, no claimant, no branch commits); 325 is handed to the S6 decompose, which cancels it as superseded by S6 γ; 261 depends on 945 instead of 237 and drops the deleted test file from its files; 587 needs no edge. 377 is Leo's, see D49.
+- L41 (S6; edge direction with 928 (Q1); freezing ScenarioConfig in-leaf (Q2); accessor name (Q3); S17 pointer (Q4)): Defaults accepted: 928 (S8 δ) depends on S6 α and β and builds scenario_fleet on simulated_homes() and simulation_bounds(), moving neither, since S6 owns the accessors; ScenarioConfig is frozen in-leaf under L30 (the freeze moves to ι only if the S23 lock labels it breaking at the base); the accessor is simulated_homes() with map_homes() for home-level transforms and no with_seg(), and D25 and the S25/S26 decompose prompts read homes() as simulated_homes(); the fleet import loading a scenario-level location is an S18 follow-up candidate in §Triage, not filed. One home for the default window: S6 β defines timebase.DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY (not config.py) and S18 α reads them (L42). S6 η owns the dashboard reading through the reader and S18 ζ depends on it. The fleet run SEG booking and the home run one-day period are consequences of D10 and D11, recorded in §Triage. Q5 (flat home files) is Leo's, see D50.
+- L42 (S18; preview (Q1); old flat-form presets (Q2); builder start state (Q3); drawn values (Q4); constants and import overlaps with S6): Defaults accepted: ε keeps the preview endpoint and wires it into the fleet page through parse_fleet_form (D18 and the stream row keep it); builder presets saved in the old flat form are refused by name; the builder starts at the fleet page distributions; every home value, drawn ones included, is bounded by the component range and a draw that crosses it is refused naming the home. α defines no constant: it depends on S6 β, which puts DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY in timebase.py, and repoints the CLI, templates and web/simulation_params.py to them, adding the invariant 11 window test; ζ depends on S6 η and moves the parse_scenario-based readers into web/scenario_import.py; δ and S6 η overlap textually in fleet_scenario.py, second lands rebases. β takes the S21 form-label macro as number_field and carries no S21 key; the next run re-verifies the form-label part of fk-ff5b90768f66. 612 and 298 are parked deferred by the lead now and cancelled at decompose.
+- L43 (S26; task 440 (Q1); placement table location (Q2); S6 seams (Q3); --param readings (Q4); 804 edge (Q5)): Defaults accepted: 440 stays as narrowed (L29) and S26 δ depends on it; SWEEP_PLACEMENTS lives in fleet_distribution.py and the registry scenario_knobs.py above config; the S6 seams are simulated_homes() for reads, map_homes() as the form-preserving write, the SEG knob as replace(seg_tariff_pence_per_kwh=v) refused at construction when a home sets its own other rate (D10 holds at construction, so the knob stays in the registry), the fleet-document reader S6 γ and the cli/optimize rewiring S6 ε, so S26 β depends on S6 α and γ, S26 γ on S6 ε and S26 η on S6 γ; fleet sweep --param keeps one option with two readings; 804 depends on S26 β.
+- L44 (S6 decompose; keyless twins 390, 658, 759 and the 767/358 overlaps reported): 390 is cancelled with x_superseded_by 961 and 658 with x_superseded_by 956 (each pending with no claimant and no branch commits when re-read); 759, which would put the default-window constants in config.py, is cancelled at the S18 decompose with x_superseded_by S18 α and 956 (L42 puts them in timebase.py); 767 and 358 keep their edges on 959; the extra edge 960 -> 739 and the moved edges 390 -> 961, 358 -> 959 are accepted; the S18 decompose reads the constants as DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY.
+- L45 (S29; task 224 (Q1); version (Q2); what β waits for (Q3); tag and re-pin (Q4); gate 772 (Q5); contradictions found (Q6)): Defaults accepted: 224 is parked deferred by the lead now and re-scoped in place as β at the S29 decompose, keeping its release-scope notes; the version is 0.6.0 (a pre-1.0 minor, as 224 notes and the v0.5.0 precedent say); β waits for every held leaf and every open library-side program leaf, recomputed from the store at decompose, so the platform re-pins once (D4); the tag cut and the platform re-pin are the human gate γ, since a leaf cannot tag its own merge commit; β joins gate 772 at medium priority, an exception recorded as x_lead_ruling D4, so the next review-all run follows the release. Contradictions resolved: S29 writes no S4 entry and β folds the S4 in-leaf lines (the later S4 decompose line stands); the held count is 16 today (15 retirements across 14 streams plus 927) and 17 with S25 ζ; the store spelling of 826 x_seam_wait holds; the edge-direction ask is met by splitting α (window open, held leaves depend on it) from β (release commit, depends on them); 950 retires tariff_config and its title is amended at the S29 decompose.
+- L46 (S26 decompose; 807 check, extra edges and task 486 reported): The 807 server-side-step-ceiling check is widened to paths src/solar_challenge/web and pattern SWEEP_MAX_STEPS on the task and in the S19 sidecar, so moving the ceiling into web/sweep_request.py at 967 does not wedge 968; the extra edges 969 -> 957, 971 -> 960 and 767 -> 966 are ratified; task 486 (pending, four commits on task/486, no claimant) is not cancelled: it depends on 964 and re-reads at dispatch, with fleet_distribution.py added to its files, since 947 empties config.py of the reader it fixes.
+- L47 (S25 decompose; checks pinned to output.py; 358; keyless overlaps 724 and 439): The 783 board-reports-render-notice, 837 report-renders-the-reliability-rows and report-renders-the-displaced-self-use present checks and the 930 configured-rate-not-a-literal absent check also scan src/solar_challenge/board_report.py, on the tasks and in the S10, S9 and S8 sidecars, because S25 β (970) moves the board reports there; the edges 970 -> 724 (its branch deletes the dead ratio wrappers) and 975 -> 439 (in progress, adds the SEG-rate-passing summaries ε removes) are ratified; 705 re-scoped in place as α stands. Task 358 is Leo's, see D51.
+- L48 (S18 decompose; θ priority; twins 844 and 754; fk-94cab00e114e): θ (984) filed high is ratified as the integration gate and joins gate 772; fk-94cab00e114e moves from the cancelled 759 to 977; twins 844 (keyless) and 754 (/review-keyed) are cancelled by the lead with x_superseded_by 980 when pending with no claimant and no branch commits, else kept behind 980.
+- L49 (S29 decompose; 804 dropped check; overbroad warnings; the β fold against five doc-pinned checks; 950 description; 224 stale fields; held-leaf priorities; γ milestone delay): The 804 transitional-rule-deleted absent check, refused as vacuous_absent because its producer has not landed, is accepted as dropped (804 keeps seven checks and its signal); the 905 and 976 overbroad warnings are advisory, their upstream leaves 904 and 975 delete the matched lines; the five finance-model-doc present checks (801 capacity_at_events and 9.97, 803 independent calibrations, 837 delivery_baseline, 865 equivalent full cycle, 900 charge loss) are widened to also scan docs/domain-library-consumption.md on the tasks and in the S9, S28 and S3 sidecars, so the 224 fold can move the Unreleased paragraphs without wedging gate 772, and the keep-in-place constraint appended to 224 becomes advisory; 950's description carries a lead note resolving its conditional clause; 224 keeps its pending_since and routing record; 912, 927 and 976 stay at their filed priority; γ takes no milestone delay.
 
 ## Cross-reference lines applied by the lead
 
+- S29 (decompose, L45, L49): α is 986 (window open; depends on 926 and 774), β is 224 re-scoped in place (release commit 0.6.0; priority medium; 116 dependencies: 986, 926, the 16 held retirement leaves and 98 open library-side program leaves recomputed from the store), γ is 987 (human gate, task_kind deterministic; depends on 224); 927 and 772 depend on 224; every held leaf (784, 790, 804, 826, 827, 843, 867, 892, 901, 905, 912, 939, 941, 950, 963, 976) depends on 986 and was released by one commit_planning each, x_seam_wait moved to x_seam_released, each stream sidecar stamped; 950 title and description note amended (tariff_config retired).
+- S9, S8, S10, S28, S3 (from S29 decompose, L49): the finance-model-doc present checks of 801 (capacity_at_events, 9.97), 803 (independent calibrations), 837 (delivery_baseline), 865 (equivalent full cycle) and 900 (charge loss) also scan docs/domain-library-consumption.md, where the 224 fold moves the Unreleased paragraphs, so the fold cannot wedge gate 772; the 804 transitional-rule-deleted absent check was refused as vacuous_absent at release and is accepted as dropped (804 keeps seven checks); the overbroad warnings on 905 (simulate_timestep_tou in home.py, deleted by 904) and 976 (seg_revenue_gbp in cli/utils.py, fleet.py, output.py, deleted by 975) are advisory; 912, 927 and 976 stay at their filed priority; 224 keeps its 2026-09-30 pending_since and routing record (gated by its dependencies).
+- S5, S6, S7, S4, S17, S11, S2, tasks (from S18 decompose, L48): S18 is 977 α, 978 β, 979 γ (high), 980 δ (high), 981 ε, 982 ζ, 983 η, 984 θ (filed high, the PRD row said medium: ratified, it is the integration gate); 979, 980 and 984 join gate 772; 977 depends on 956 (the timebase constants) and carries fk-94cab00e114e (moved from 759); 982 depends on 961; 676 moved from 612 to 978; 844 and 754 depend on 980 pending the lead cancellation; cancelled with x_superseded_by: 664, 376, 612 -> 978; 611, 753, 424, 592, 584, 360 -> 980; 569, 571 -> 981; 545, 549, 553, 554, 298, 359 -> 982; 759 -> 977 and 956; D28 re-measures recorded on δ and ζ (fleet_config 41.3% docstrings, fleet_scenario 34.2%).
+- S8, S9, S10, S19, S29, tasks (from S25 decompose): S25 is 705 α (re-scoped in place, fk-6a52ed98b18e stamped), 970 β, 973 γ (high), 974 δ (high), 975 ε, 976 ζ (held for S29); 973 and 974 join gate 772; edges 970 -> 783, 837, 930, 765, 724 (724 deletes the dead ratio wrappers β moves); 973 -> 970, 930, 959; 974 -> 973, 803; 975 -> 705, 922, 780, 822, 439 (in progress, adds a SEG-rate-passing calculate_home_summaries that ε removes); 976 -> 975, 822; 358 depends on 973 pending the D51 reconciliation of its esc-308-3 ruling with D24/D48; the 783 and 837 present checks and the 930 15p absent check also scan src/solar_challenge/board_report.py (L47) because β moves the report builders there; two S25 absent checks and one comment check were re-anchored at decompose.
+- S19, S20, S5, S6, S7, S9, tasks (from S26 decompose, L46): S26 is 964 α, 965 β, 966 γ, 967 δ, 968 ε, 969 ζ, 971 η, 972 θ, all medium, none on gate 772; 807 server-side-step-ceiling check widened by the lead to paths src/solar_challenge/web and pattern SWEEP_MAX_STEPS because δ moves the ceiling into the Flask-free web/sweep_request.py; ε must not use JSON.parse in parameter-sweep.js (888 absent check); 804 depends on 965; 718 cancelled -> 966 and 140 -> 968; 739 delivers fk-32d5e6707fb5 and 971 depends on it; 440 stays narrowed and 967 depends on it; extra edges ratified: 969 -> 957 (both rewrite parse_fleet_config and parse_sweep_fleet_configs), 971 -> 960 (fleet sweep file reading), 767 -> 966 (its own text starts after S26); 486 (four commits on its branch) depends on 964 and re-reads at dispatch, its files gain fleet_distribution.py; S7 defines no FleetFieldPath, ζ defines its own alias; textual overlaps only: 732 with η, 854 with γ, 959 and 767 with β; .worktrees/718 is an empty worktree of a cancelled task.
+- S29 (from its PRD, L45): three leaves: α opens the solar-challenge-v0.6.0 release window (the release section heading in docs/domain-library-consumption.md and ConfigurationError in __all__, L3; depends on 926 and 774), β is the release commit (version 0.6.0 in pyproject and __init__, folded release notes from every Unreleased paragraph, the consumer recipe; task 224 re-scoped in place) and γ is the human gate that cuts and pushes the tag on β merge commit and files the platform re-pin. Release model: every held leaf depends on α and writes its Unreleased paragraph under the v0.6.0 heading; β depends on every held leaf and on every open library-side program leaf (recomputed from the store at decompose), so the platform re-pins once (D4); 927 depends on β. β joins gate 772 at medium (L45 exception) so the next review-all does not see a half-released surface.
+- S2, S3, S5, S6, S8, S9, S10, S11, S12, S14, S15, S16, S23, S25, S27, S28 (from S29): each held leaf (784, 790, 804, 826, 827, 843, 867, 892, 901, 905, 912, 939, 941, 950, 963, S25 ζ) gains an edge on S29 α, writes its Unreleased on main paragraph under the v0.6.0 heading, touches neither version, uv.lock, tag list nor worked example, and is released by the S29 decompose commit_planning with x_seam_wait moved to x_seam_released; 927 depends on β and writes the snapshot step; the S4 line reads: S29 writes no S4 entry, β folds the in-leaf Unreleased lines of S4, S7, S13, S17, S22 and of the streams with no held leaf (S18, S20, S21, S24, S26); 950 retires tariff_config since S6 named no reader, its title amended at decompose.
+- Platform (from S29): the solar_challenge_platform re-pin task γ files covers, at d521265, simulation_days (13 sites in 3 files), annual_self_consumption_kwh (4), seg_revenue_gbp (3), the heat-pump summary fields (12), per_home_net_bill_gbp (1), SimulationPeriod (2), GridChargeConfig imported from config (2 files) and solve_cost_recovery_rate simulate (3).
+- S8, S18, S25, S26, S29, tasks (from S6 decompose): 928 depends on 955 and 956 and builds scenario_fleet on simulated_homes() and simulation_bounds() (L41 note appended to its details); S18 α depends on 956 and S18 ζ on 961, and the constants are DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY (not the S18 PRD DEFAULT_WINDOW_START/END spelling; S18 keeps SHORT_WINDOW_START); S25 γ and its cli/optimize work depend on 959; S26 β depends on 955 and 957, γ on 959, η on 957; S29 releases ι 963 beside the 950 tariff_config retirement; 528 depends on 957; 960 depends on 739 (in progress, rewrites fleet sweep); cancelled with x_superseded_by: 485, 296 -> 955; 185, 542, 325 -> 957; 681, 422 -> 958; 287, 186, 541 -> 959; 390 moved from 185 to 961 and 358 from 186 and 287 to 959; 767 depends on 959; the ε carve-out check reads seg_tariff_pence_per_kwh= in cli/finance.py (task/738 drops the pre-CR5 comment); 955, 957, 958, 959, 962 (high) join gate 772; empty task/* branches and worktrees remain for 185, 186, 325, 422, 485 and 541 (housekeeping).
+- Tasks (from S6 decompose, L44): keyless twins 390 (the simulate endpoint builds homes from the exported document, apply_fleet_overlay retired) and 658 (the non-date period refusal) are cancelled by the lead with x_superseded_by 961 and 956; 759 (the default-window constants in config.py) is cancelled at the S18 decompose with x_superseded_by S18 α and 956.
+- S4, S2, S7, S9 (from S5 decompose, L40): 866 is released and depends on 946, 868 on 947, 948 on 866 and 868; the construction wrap is spelled constructed (public) in scenario_blocks.py because the S5 γ guard refuses an underscore import across grammar modules and 868 imports it, so the 866 wrap-exists check and the S4 sidecar admit both spellings; the 790 absent-check in the S2 sidecar also scans fleet_distribution.py; the 914 system_losses and 837 delivery_baseline present-checks already scan scenario_blocks.py; the 868 float_or_none pattern already covers both spellings.
+- Tasks (from S5 decompose, L40, D46, D49): 237, 320, 651 cancelled with x_superseded_by 945 and 423 with 948 (fk-caad5305a3be stamped on 237); keyless twins 328 and 563 cancelled by the lead with x_superseded_by 948 and 762 with 945; 377 (live claimant, three commits) stays behind 948 (D49); 325 depends on 949 and is cancelled by the S6 decompose as superseded by S6 γ; 261 depends on 945 instead of 237 and drops tests/unit/config/test_parameter_sweep.py from its files; 587 (hoist import re) needs no edge; 933, 937 and 940 overlap 946, second lands repoints the imports; S6 depends on 947 and 949, S18 and S26 on 947; 946 and 947 (high, L37) join gate 772.
+- S6 (from its PRD, L41, D50): the accessors are ScenarioConfig.simulated_homes() and map_homes() (homes() cannot exist beside the homes field), with window(), with_window() and simulation_bounds(); there is no with_seg(), simulated_homes() fills the scenario SEG and a contradicting home rate is refused at construction (D10); tariff_config gets no reader and S5 ζ (950) retires it, a scenario-level tariff: is applied as each home is built; the period is read as the S10 SimulationWindow and ι (held for S29) retires SimulationPeriod; flat home files are refused by name (D50); S6 γ adds tariff, fleet_distribution, flex_band and community to the S5 ε recognised keys and derives the retired flat home keys from HOME_BLOCK_KEYS.
+- S8, S9, S10, S12, S16, S17, S18, S25, S26, S29, tasks (from S6, L41): 928 depends on S6 α and β (reversing the S8 §13 proposal) and builds scenario_fleet on simulated_homes() and simulation_bounds(), moving neither; S6 γ depends on 803 and ε deletes the 803 raw flex_band read; β depends on 778 and 893 (ONE_MINUTE); θ depends on 882; δ depends on 931; ε on 738; S18 α depends on S6 β and S18 ζ on S6 η (L42); S25 γ and the cli/optimize work depend on S6 ε; S26 β depends on S6 α and γ, S26 γ on S6 ε, S26 η on S6 γ, the SEG knob is replace(seg_tariff_pence_per_kwh=v) and home-level knobs use map_homes; S29 releases ι and the release section names it with the 950 tariff_config retirement; 528 depends on S6 γ; superseded at decompose: 485, 296 -> α; 185, 542, 325 -> γ; 422, 681 -> δ; 186, 287, 541 -> ε.
+- S6, S18, S10 (L42, one home for the default simulation window): S6 β defines timebase.DEFAULT_FIRST_DAY and DEFAULT_LAST_DAY beside SimulationWindow (not in config.py) and reads them as the D11 default tier; S18 α depends on S6 β, defines no constant, and repoints the CLI, the templates and web/simulation_params.py to them, adding the invariant 11 window test tests/unit/test_window_defaults.py beside the S11 γ tariff half; both sidecars name timebase.py and the S6 names.
+- S18 (from its PRD, L42): ε keeps the preview endpoint and wires it into the fleet page as a preview of the homes Run builds, through parse_fleet_form (D18 and the stream row keep it); builder presets saved in the old flat form are refused by name; the builder starts at the fleet page distributions; every home value, drawn ones included, is bounded by the component range and a distribution whose draw crosses it is refused naming the home; β takes the S21 form-label macro as number_field, carries no S21 key, and the next run re-verifies the form-label part of fk-ff5b90768f66 after β; 612 and 298 are parked deferred by the lead until the S18 decompose cancels them.
+- S5, S7, S4, S17, S11, S2, S21, S22, S26, tasks (from S18): γ depends on 947 and replaces _DISTRIBUTION_SPEC_TYPES with a public DISTRIBUTION_TYPES in fleet_distribution.py; γ depends on 921 and 868, η on 911, 786, 839 and 841, β on 860 and 774, δ on 870, 937, 313 (in progress) and 394; the preview generates through 916; CHARGER_TYPES has no S18 reader; δ deletes the shape-only translator and its refusals raise ConfigurationError; 424 and 584 are superseded by δ; PageLimits.flat_rate_start is 0.28 on all three forms; no edge with 830 or 836, second lands rebases; β renders the assistant PV descriptions from the component range (overlap with 751); the sweep page parameter options come from the S26 registry and may read ComponentLimits.value_range, 140 keeps its scope; superseded at decompose: 376, 612, 664 -> β; 611, 753, 424, 592, 584, 360 -> δ; 569, 571 -> ε; 298, 359, 545, 549, 553, 554 -> ζ; 676 moves its dependency from 612 to β; 140 and 297 kept; S18 γ and δ (high) join gate 772.
+- S26 (from its PRD, L43): 440 stays as narrowed and S26 δ depends on it, moving its reads into web/sweep_request.read_sweep_request and its overflow refusal into SweepSpec; the YAML placement table SWEEP_PLACEMENTS lives in fleet_distribution.py (the parser sits below config) and the registry scenario_knobs.py above it; fleet sweep --param resolves a knob name first, then a ${VAR}, refusing a name with both readings; 804 depends on S26 β and edits the scenario_knobs grid-services entry (FlatGridServices(v), NoGridServices() at 0), SENSITIVITY_BANDS keyed by Knob.
+- S4, S5, S7, S8, S16, S17, S18, S19, S21, tasks (from S26): 868 SweepSpec number reads land before S26 α and 870 simulate_sweep reads before S26 δ; S26 α edits SweepSpec in fleet_distribution.py (typed mode, values(), finite points) and ζ adds SWEEP_PLACEMENTS and F7 there, refusals through scenario_blocks.refusal if 948 has landed; ζ joins the FleetDistributionConfig.__post_init__ checks after 921; S26 γ depends on 930 and 885 (sensitivity_panel takes the baseline RankedSweep, run_sweep loses its floor override); δ reads parameter and mode with read_string (938); web/sweep_request.SWEEP_PARAMETERS bounds each web sweep by FLEET_COMPONENTS fixed_range and reads the 807 steps constant, δ and ε depend on 807; ε depends on 835 (parameter_label rendered from SWEEP_PARAMETERS); 718 superseded by S26 γ, 140 by S26 ε; 739 delivers fk-32d5e6707fb5 and η depends on it.
+- S6 (from S25): S25 γ depends on the S6 cli/finance reader leaf (label supplied by the lead at S6 decompose); S25 does not touch the cli/optimize.configs scenario.
+- S8 (from S25): γ adds finance.own_use_basis and with_own_use_basis and home_ledger reads its basis through own_use_basis; δ adds FleetProjection.grid_services_income_gbp; β moves the two reports after 930; γ and β depend on 930.
+- S9, S10, S27 (from S25): the 837 rows (p50, p90, displaced self-use) move into the δ Grid Services Income section and the flex row shows the booked figure, δ depends on 803; the 783 extrapolated notice moves with β and renders once per report, β depends on 783 and 837; δ replaces the S27 "(PRD §6)" planning pointer.
+- S12, S16, S19, S21 (from S25): 897 per-load seasonal tables build on the calculate_seasonal_metrics aggregation (the other half of fk-ae20e1833a19), ε and 897 overlap textually; γ keeps the 890 reusing wrapper and the bill run simulates scenario_fleet(scenario).homes; ε and ζ each add a RunDocumentStep and depend on 822, the row helper stays in cli so run_headline does not delegate to it; no S25 rows for the 833 flow properties.
+- S29 (from S25): release section includes S25 ζ (SummaryStatistics.seg_revenue_gbp retired, held) plus the Unreleased lines of β, γ, δ and ε (PRD §5.9).
+- Tasks (from S25): 705 is re-scoped in place as S25 α (fk-2106d1fbaed0 plus fk-6a52ed98b18e stamped); 703 and 712 closed their keys (fk-89afcb2b57f7, fk-41767a1bc146); 738 keeps fk-f66948b9528c and γ finishes the mode half through 930; 741 keeps fk-b523bff3e51c and 930 rewrites its sweep-count sentence; 765 lands before β; the four moving board figures are recorded on γ and δ (D48).
 - S12, S4, S16 (from S13 decompose): 894 depends on 906 (the hand-off leaf) and was released by the lead (commit_planning 2026-10-17, S12 β stamped); 573 is cancelled, its range rule superseded by 906 and its residual (the fleet_distribution.seed whole-number read) to 868; 746 is cancelled, superseded by 908 (S13 β), file overlap with S16 only; gate 772 depends on 906.
 - Tasks (from S22 decompose): S22 α is 907 (depends on 818, 823); β is 751, re-scoped in place and retitled by the lead; 506 is cancelled with x_superseded_by 751; 440 is narrowed by the lead to api.simulate_sweep (L29) and its assistant item belongs to 751; whichever of 440 and 751 lands second adapts dispatch_tool; no S22 leaf is high.
 - S2, S16, S29, tasks (from S27 decompose): 790 metadata.files gains community.py (done by the lead); 910 depends on 879, and 910 and 889 both edit the web/jobs.py fleet assembly, whichever lands second adapts (910 converts that site to tuples if 889 has not landed); 909 and 879/882 overlap textually in cli/fleet.py::run, load_community_config stays above the simulation; 669 lists five classes and no longer fleet.py or community.py; 706 is cancelled, superseded by 909; the α (909) and β (910) Unreleased lines land in-leaf, γ is 912, held, released by S29.
@@ -906,6 +984,9 @@ Keys: fk-50cf1dd5df58
 - The quality definition is dark-factory's docs/code-quality.md (this repo carries no copy); the contract is docs/quality-findings-contract.md in the dark-factory checkout.
 - Weakened findings (D28) are re-measured by the session before decomposition; a measurement that fails is recorded on the task, not silently dropped.
 - The frozen public surface changes only through S29's one bump (D4): a stream that retires or renames a public name files its surface edit as a held leaf waiting on S29.
+- 2026-10-19 (L2 watcher, Q4 relay): S3 /prd states task 729's figure change. Lifting P4 moves export by 30-47 kWh/yr per battery home, about £90/yr across the bristol-phase1 fleet (esc-729-1).
+- 2026-10-19 (L2 watcher, Q4 relay): S23 /prd cross-references task 700's fail-closed ruling (esc-700-3, Leo ruled C 2026-10-17).
+- 2026-10-19 (L2 watcher, Q4 relay): S5 owns tasks 237, 261, 320, 321, 762 and 651. 237 and 320 are cancelled into 945; 762 and 651 are cancelled; 321 is cancelled into 945 under Leo's 2026-10-19 ruling on esc-261-2; 261 was trimmed.
 
 ## Triage briefing
 
@@ -913,9 +994,9 @@ Keys: fk-50cf1dd5df58
 - Tasks 681, 270, 581, 485, 674, 297, 675, 237, 284, 376, 564 and 245 pre-date this run and already cover 13 mechanical findings; do not duplicate them.
 - The `/review` instrument keyed cli/, tariff.py and seg.py under other areas (D1): until `/review-briefing` writes the member lists, a key lookup that misses may be a re-keyed twin; search by anchor as well.
 - `richardsonpy` load generation seeds process-global RNGs (S13); until S13 lands, parallel fleet tests that compare profiles are order-sensitive.
-- Board figures that move (for the board): S8 θ physics capex falls 2.22% (£9,551 at £1,000/kWp on bristol-phase1) for PV the simulator never wires; S8 ε per-year revenue between projection nodes by up to £41-150; S3 γ bus-energy settlement (D42); S11 preset re-pricing (D34/D44); S14 NOCT-SAM +1.9% yield (D32); S9 α′ events income (D41).
-- Candidate finding for the next run (S3 Q6): self-consumption accounting of grid-charged discharge. Task 183 stays deferred: a revival re-plans its oracle grid-charge ceiling as an input of TOUOptimizedStrategy on the one engine (L25). Housekeeping: worktrees .worktrees/123, 492, 680, 283, 403 and 582 and the empty branches of 382, 314, 187 belong to cancelled tasks (S21, S20, S4, S7 decomposes; D47); keep .worktrees/.task-meta/{283,403}/plan.json, cited by 914, 916 and 919.
-- Follow-up candidates (not filed): a PVConfig mounting field for NOCT-SAM (S14 Q5, after 823); the finance capex basis, nameplate vs wired DC (S8, fk-8b8f9d686b86); the counterfactual event-simulation PRD after S9 α′ (D41); the D3 mid-term design follow-up (grid charging in every dispatcher) after S3 and S11 land (L8).
+- Board figures that move (for the board): S8 θ physics capex falls 2.22% (£9,551 at £1,000/kWp on bristol-phase1) for PV the simulator never wires; S8 ε per-year revenue between projection nodes by up to £41-150; S3 γ bus-energy settlement (D42); S11 preset re-pricing (D34/D44); S14 NOCT-SAM +1.9% yield (D32); S9 α′ events income (D41); S25 γ mode semantics (spreadsheet mode renders the override economics and solved rate, both gains Spreadsheet columns) and δ flex-block grid-services row from £30 per home to about £3 per battery home on bristol-phase1-flex.yaml (D48); S6 (D10, D11 consequences, L41): fleet run books SEG export revenue on the five shipped fleet files carrying a seg: block (today £0.00) and home run on bristol-arbitrage.yaml simulates its one-day period instead of all of 2024.
+- Candidate finding for the next run (S3 Q6): self-consumption accounting of grid-charged discharge. Task 183 stays deferred: a revival re-plans its oracle grid-charge ceiling as an input of TOUOptimizedStrategy on the one engine (L25). Housekeeping: worktrees .worktrees/123, 492, 680, 283, 403 and 582 and the empty branches of 382, 314, 187 belong to cancelled tasks (S21, S20, S4, S7 decomposes; D47); keep .worktrees/.task-meta/{283,403}/plan.json, cited by 914, 916 and 919. Branch task/237 is unmerged and superseded by 945 (D46); task/582 by 930 (D47). Empty task/* branches and worktrees of 185, 186, 325, 422, 485 and 541 belong to tasks the S6 decompose cancelled. .worktrees/718 belongs to 718, cancelled at the S26 decompose.
+- Follow-up candidates (not filed): a PVConfig mounting field for NOCT-SAM (S14 Q5, after 823); the finance capex basis, nameplate vs wired DC (S8, fk-8b8f9d686b86); the counterfactual event-simulation PRD after S9 α′ (D41); the D3 mid-term design follow-up (grid charging in every dispatcher) after S3 and S11 land (L8); sharing the per-mode projection node simulations under --assumptions both, which needs an S8 contract change (S25 Q4, L39, after 929); the fleet import loading a scenario-level location, the S17 out-of-scope pointer to S6 that S6 did not take because the fleet page has no location control (S6 Q4, L41: an S18 follow-up candidate, not filed).
 - Instrument debt: none (both siblings ran whole in Phase 2); the dark-factory snapshot instrument needs task 6921 before the next run can measure this repo without the shim.
 
 ## FILED — program status
@@ -923,27 +1004,29 @@ Keys: fk-50cf1dd5df58
 | Stream | PRD | Task id | Finding keys | Severity |
 |---|---|---|---|---|
 | (Phase 5 mechanical) | — | see report §Mechanical filings | 69 keys: 53 filed as tickets, 13 already covered, 3 left open (weakened) | mixed |
+| S29 β | docs/prds/surface-version-bump.md | 224 (pending) |  | medium |
+| S25 α | docs/prds/board-reports-sections-by-mode.md | 705 (pending) | fk-2106d1fbaed0 fk-6a52ed98b18e | medium |
 | S22 β | docs/prds/assistant-facts-from-engine.md | 751 (pending) | fk-93d3bd7aa219 | low |
 | S1 α | docs/prds/errors-leaf.md | 773 (done) | fk-601c5b5f6415 fk-4435376bedb3 fk-da69830bb2d6 | medium |
-| S1 β | docs/prds/errors-leaf.md | 774 (in-progress) | fk-291910b552af fk-da69830bb2d6 | medium |
+| S1 β | docs/prds/errors-leaf.md | 774 (pending) | fk-291910b552af fk-da69830bb2d6 | medium |
 | S1 γ | docs/prds/errors-leaf.md | 775 (in-progress) | fk-601c5b5f6415 | medium |
 | S10 α | docs/prds/simulation-window-and-cadence.md | 777 (done) | fk-7ef1099d24e8 fk-d63c41ca13f9 | medium |
-| S10 β | docs/prds/simulation-window-and-cadence.md | 778 (pending) | fk-1cd332300623 fk-d63c41ca13f9 | medium |
+| S10 β | docs/prds/simulation-window-and-cadence.md | 778 (in-progress) | fk-1cd332300623 fk-d63c41ca13f9 | medium |
 | S10 γ1 | docs/prds/simulation-window-and-cadence.md | 779 (pending) | fk-7ef1099d24e8 | low |
 | S10 γ2 | docs/prds/simulation-window-and-cadence.md | 780 (pending) | fk-7ef1099d24e8 fk-d63c41ca13f9 | medium |
 | S10 δ | docs/prds/simulation-window-and-cadence.md | 781 (pending) | fk-d63c41ca13f9 | medium |
 | S10 ε | docs/prds/simulation-window-and-cadence.md | 782 (pending) | fk-1cd332300623 fk-d63c41ca13f9 fk-286fe17c28c9 | medium |
 | S10 ζ | docs/prds/simulation-window-and-cadence.md | 783 (pending) | fk-1cd332300623 fk-d63c41ca13f9 | medium |
-| S10 η | docs/prds/simulation-window-and-cadence.md | 784 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-286fe17c28c9 fk-7ef1099d24e8 fk-1cd332300623 | medium |
+| S10 η | docs/prds/simulation-window-and-cadence.md | 784 (pending) | fk-286fe17c28c9 fk-7ef1099d24e8 fk-1cd332300623 | medium |
 | S2 α | docs/prds/dispatch-configuration-below-config.md | 786 (pending) | fk-b3dfd41a4d6a fk-615cbc883512 fk-370b3e49b67c fk-c36d6fcbc2a8 fk-94f4881bbe48 fk-04b52ee632c6 | medium |
 | S2 β | docs/prds/dispatch-configuration-below-config.md | 787 (pending) | fk-fc652220a4d3 fk-94f4881bbe48 fk-04b52ee632c6 | medium |
 | S2 γ | docs/prds/dispatch-configuration-below-config.md | 788 (pending) | fk-8529726bbd6b fk-99244625d7f2 fk-f126b1c9cbbe | high |
 | S2 δ | docs/prds/dispatch-configuration-below-config.md | 789 (pending) | fk-f126b1c9cbbe | high |
-| S2 ε | docs/prds/dispatch-configuration-below-config.md | 790 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-94f4881bbe48 fk-04b52ee632c6 | medium |
+| S2 ε | docs/prds/dispatch-configuration-below-config.md | 790 (pending) | fk-94f4881bbe48 fk-04b52ee632c6 | medium |
 | S9 α | docs/prds/grid-services-pricing-model.md | 801 (pending) | fk-758b2f309cab fk-4ddab794283a | medium |
 | S9 β | docs/prds/grid-services-pricing-model.md | 802 (pending) | fk-aafe32daa988 fk-d432a549b03f | medium |
 | S9 γ | docs/prds/grid-services-pricing-model.md | 803 (pending) | fk-0f24b7f66eb2 fk-aafe32daa988 | medium |
-| S9 ε | docs/prds/grid-services-pricing-model.md | 804 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-aafe32daa988 fk-d432a549b03f | medium |
+| S9 ε | docs/prds/grid-services-pricing-model.md | 804 (pending) | fk-aafe32daa988 fk-d432a549b03f | medium |
 | S19 α | docs/prds/run-store-one-owner.md | 805 (pending) | fk-bfdae4525795 | medium |
 | S19 β | docs/prds/run-store-one-owner.md | 806 (pending) | fk-bfdae4525795 fk-df9d0fc1b2d3 fk-9d7f66fdcfdd fk-c14c02dc1b77 | medium |
 | S19 η | docs/prds/run-store-one-owner.md | 807 (pending) | fk-2ac79d7a1989 fk-9d7f66fdcfdd | medium |
@@ -965,8 +1048,8 @@ Keys: fk-50cf1dd5df58
 | S14 ε | docs/prds/pv-model-one-home.md | 823 (pending) | fk-f5cd69400ce6 fk-0edf0069c6bb | high |
 | S19 μ | docs/prds/run-store-one-owner.md | 824 (pending) | fk-df9d0fc1b2d3 fk-bfdae4525795 | medium |
 | S14 ζ | docs/prds/pv-model-one-home.md | 825 (pending) | fk-f5cd69400ce6 fk-0edf0069c6bb | high |
-| S14 η | docs/prds/pv-model-one-home.md | 826 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-3ccbba41d836 | medium |
-| S15 ε | docs/prds/weather-as-explicit-input.md | 827 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-06035cd76226 fk-44fdf5fb356b | medium |
+| S14 η | docs/prds/pv-model-one-home.md | 826 (pending) | fk-3ccbba41d836 | medium |
+| S15 ε | docs/prds/weather-as-explicit-input.md | 827 (pending) | fk-06035cd76226 fk-44fdf5fb356b | medium |
 | S21 α | docs/prds/chart-panels-and-theme-tokens.md | 829 (pending) | fk-93ee9a05751a | medium |
 | S21 β | docs/prds/chart-panels-and-theme-tokens.md | 830 (pending) | fk-93ee9a05751a fk-2e7ddcee2379 | medium |
 | S21 γ | docs/prds/chart-panels-and-theme-tokens.md | 831 (pending) | fk-93ee9a05751a fk-55f4e4ea396d | medium |
@@ -981,20 +1064,20 @@ Keys: fk-50cf1dd5df58
 | S21  | docs/prds/chart-panels-and-theme-tokens.md | 840 (cancelled) | fk-657669b23e71 | low |
 | S11 γ | docs/prds/tariff-coverage-classifier-presets.md | 841 (pending) | fk-463e82417506 | medium |
 | S11 δ | docs/prds/tariff-coverage-classifier-presets.md | 842 (pending) | fk-bd03fe349ffd | medium |
-| S11 ε | docs/prds/tariff-coverage-classifier-presets.md | 843 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-2f88003e22c8 | medium |
+| S11 ε | docs/prds/tariff-coverage-classifier-presets.md | 843 (pending) | fk-2f88003e22c8 | medium |
 | S4 α | docs/prds/finite-quantities.md | 860 (pending) | fk-a9c609ecb8ef fk-649851e5fc38 | high |
 | S4 β | docs/prds/finite-quantities.md | 861 (pending) | fk-a9c609ecb8ef fk-606a9211b34d fk-7dcdc5559d22 fk-a2b33a420bcf | high |
 | S4 γ | docs/prds/finite-quantities.md | 862 (pending) | fk-b69968a37b36 fk-606a9211b34d | medium |
 | S28 α | docs/prds/battery-efficiency-and-throughput.md | 863 (pending) | fk-35b8ddcf5565 | medium |
 | S4 δ | docs/prds/finite-quantities.md | 864 (pending) | fk-a9c609ecb8ef fk-606a9211b34d | high |
 | S28 β | docs/prds/battery-efficiency-and-throughput.md | 865 (pending) | fk-50a3985fae0f | medium |
-| S4 ε | docs/prds/finite-quantities.md | 866 (deferred) held: x_seam_wait={'stream': 'S5', 'contract': 'the config.py partition module names'} | fk-649851e5fc38 fk-a2b33a420bcf | high |
-| S28 γ | docs/prds/battery-efficiency-and-throughput.md | 867 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-35b8ddcf5565 | medium |
+| S4 ε | docs/prds/finite-quantities.md | 866 (pending) | fk-649851e5fc38 fk-a2b33a420bcf | high |
+| S28 γ | docs/prds/battery-efficiency-and-throughput.md | 867 (pending) | fk-35b8ddcf5565 | medium |
 | S4 ζ | docs/prds/finite-quantities.md | 868 (pending) | fk-649851e5fc38 fk-60410de6dd0a fk-a2b33a420bcf | high |
 | S4 η | docs/prds/finite-quantities.md | 870 (pending) | fk-60410de6dd0a fk-239274130a5a | high |
 | S4 θ | docs/prds/finite-quantities.md | 871 (pending) | fk-f2f8a5512feb fk-a9c609ecb8ef | high |
 | S4 ι | docs/prds/finite-quantities.md | 872 (pending) | fk-a9c609ecb8ef fk-606a9211b34d fk-b69968a37b36 | high |
-| S24 α | docs/prds/lane-harness-one-collection-source.md | 873 (pending) | fk-dd434cb2d4b9 | low |
+| S24 α | docs/prds/lane-harness-one-collection-source.md | 873 (in-progress) | fk-dd434cb2d4b9 | low |
 | S24 β | docs/prds/lane-harness-one-collection-source.md | 874 (pending) | fk-1abd62632ae1 fk-a0b751097301 | medium |
 | S24 γ | docs/prds/lane-harness-one-collection-source.md | 875 (pending) | fk-f48c29a98a89 fk-eec3806e584e | medium |
 | S24 ε | docs/prds/lane-harness-one-collection-source.md | 877 (pending) | fk-e5820c5e22ed | high |
@@ -1011,26 +1094,26 @@ Keys: fk-50cf1dd5df58
 | S16 δ | docs/prds/fleet-execution-policy.md | 889 (pending) | fk-7bdd33abd0ff fk-f6c905f91d32 fk-7aaa879bf0ac fk-7e76b4cf2cb2 | medium |
 | S16 ε | docs/prds/fleet-execution-policy.md | 890 (pending) |  | medium |
 | S24 θ | docs/prds/lane-harness-one-collection-source.md | 891 (pending) | fk-eec3806e584e | medium |
-| S16 ζ | docs/prds/fleet-execution-policy.md | 892 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-7e76b4cf2cb2 | medium |
+| S16 ζ | docs/prds/fleet-execution-policy.md | 892 (pending) | fk-7e76b4cf2cb2 | medium |
 | S12 α | docs/prds/load-composition-and-calendar-days.md | 893 (pending) | fk-1d920c89e872 | high |
-| S12 β | docs/prds/load-composition-and-calendar-days.md | 894 (pending) held: x_seam_wait={'stream': 'S13', 'contract': 'the per-day simulator hand-off leaf of the RNG stream'} | fk-1d920c89e872 fk-89777ec9faad fk-72af0b90338d | high |
+| S12 β | docs/prds/load-composition-and-calendar-days.md | 894 (pending) | fk-1d920c89e872 fk-89777ec9faad fk-72af0b90338d | high |
 | S12 γ | docs/prds/load-composition-and-calendar-days.md | 895 (pending) | fk-1d920c89e872 fk-7fa120a8bb98 fk-781d153ab978 | high |
 | S3 α | docs/prds/one-dispatch-engine.md | 896 (pending) | fk-491014934d1e | medium |
 | S12 δ | docs/prds/load-composition-and-calendar-days.md | 897 (pending) | fk-781d153ab978 fk-1609d8c3d091 | medium |
 | S3 β | docs/prds/one-dispatch-engine.md | 898 (pending) | fk-4df47ebe6a96 | medium |
 | S12 ε | docs/prds/load-composition-and-calendar-days.md | 899 (pending) | fk-781d153ab978 | medium |
 | S3 γ | docs/prds/one-dispatch-engine.md | 900 (pending) | fk-7440003fdd59 | high |
-| S12 ζ | docs/prds/load-composition-and-calendar-days.md | 901 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-781d153ab978 fk-7fa120a8bb98 | medium |
+| S12 ζ | docs/prds/load-composition-and-calendar-days.md | 901 (pending) | fk-781d153ab978 fk-7fa120a8bb98 | medium |
 | S3 δ | docs/prds/one-dispatch-engine.md | 902 (pending) | fk-2a53ae89932e fk-f622bbaa9f2e fk-a9c609ecb8ef | high |
 | S3 ε | docs/prds/one-dispatch-engine.md | 904 (pending) | fk-4df47ebe6a96 | medium |
-| S3 ζ | docs/prds/one-dispatch-engine.md | 905 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-4df47ebe6a96 | medium |
+| S3 ζ | docs/prds/one-dispatch-engine.md | 905 (pending) | fk-4df47ebe6a96 | medium |
 | S13 α | docs/prds/rng-hand-off.md | 906 (pending) | fk-16df1a7ac416 fk-c78416de5500 | high |
 | S22 α | docs/prds/assistant-facts-from-engine.md | 907 (pending) | fk-194e5b40da23 | medium |
 | S13 β | docs/prds/rng-hand-off.md | 908 (pending) | fk-e0e34ef46058 | low |
 | S27 α | docs/prds/community-dispatch-from-factory.md | 909 (pending) | fk-664e2030921e | medium |
 | S27 β | docs/prds/community-dispatch-from-factory.md | 910 (pending) | fk-8995288451e6 | low |
 | S7 α | docs/prds/component-defaults-one-home.md | 911 (pending) | fk-d6f16d95b126 | low |
-| S27 γ | docs/prds/community-dispatch-from-factory.md | 912 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-083990041fdc | low |
+| S27 γ | docs/prds/community-dispatch-from-factory.md | 912 (pending) | fk-083990041fdc | low |
 | S23 α | docs/prds/surface-lock-one-module.md | 913 (pending) | fk-293a1282ace4 fk-9df95e9e2b45 | low |
 | S7 β | docs/prds/component-defaults-one-home.md | 914 (pending) | fk-2b16cc8bcf46 fk-d2b4045c6676 fk-148991ab9439 fk-dfeefbe95640 | high |
 | S23 β | docs/prds/surface-lock-one-module.md | 915 (pending) | fk-879e8c13f581 | high |
@@ -1044,7 +1127,7 @@ Keys: fk-50cf1dd5df58
 | S23 ε | docs/prds/surface-lock-one-module.md | 924 (pending) | fk-d2881616c782 | medium |
 | S8 γ | docs/prds/finance-partition.md | 925 (pending) | fk-caeaf35c8151 fk-c2c9277c1920 fk-9cc706d3afdd | high |
 | S23 ζ | docs/prds/surface-lock-one-module.md | 926 (pending) | fk-dc5370224a78 | low |
-| S23 η | docs/prds/surface-lock-one-module.md | 927 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the release commit that bumps the version and writes the one release section'} | fk-dc5370224a78 | low |
+| S23 η | docs/prds/surface-lock-one-module.md | 927 (pending) | fk-dc5370224a78 | low |
 | S8 δ | docs/prds/finance-partition.md | 928 (pending) | fk-b0f648b0e6d0 fk-41283f42a36a fk-5fdb04305288 fk-9cc706d3afdd | medium |
 | S8 ε | docs/prds/finance-partition.md | 929 (pending) | fk-c0e0ae3dcca8 fk-5b34adae950b | high |
 | S8 ζ | docs/prds/finance-partition.md | 930 (pending) | fk-4a9af7c31a4f fk-3b0a239d0489 | medium |
@@ -1056,13 +1139,52 @@ Keys: fk-50cf1dd5df58
 | S8 θ | docs/prds/finance-partition.md | 936 (pending) | fk-8b8f9d686b86 | medium |
 | S17 ε | docs/prds/web-request-boundary.md | 937 (pending) | fk-29af8a4fe018 fk-ba29e186122f | medium |
 | S17 ζ | docs/prds/web-request-boundary.md | 938 (pending) | fk-da0e3a4df6e7 fk-5827f41eb082 | medium |
-| S8 ι | docs/prds/finance-partition.md | 939 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-5fdb04305288 | medium |
+| S8 ι | docs/prds/finance-partition.md | 939 (pending) | fk-5fdb04305288 | medium |
 | S17 η | docs/prds/web-request-boundary.md | 940 (pending) | fk-70edc755ede4 | medium |
-| S8 κ | docs/prds/finance-partition.md | 941 (deferred) held: x_seam_wait={'stream': 'S29', 'contract': 'the surface bump release window'} | fk-3f4daea21220 | medium |
+| S8 κ | docs/prds/finance-partition.md | 941 (pending) | fk-3f4daea21220 | medium |
 | S17 θ | docs/prds/web-request-boundary.md | 942 (pending) | fk-bd7f2abebeba | low |
 | S17 κ | docs/prds/web-request-boundary.md | 943 (pending) | fk-6c98ee030531 fk-1d143fefefed fk-66f886576b3f | medium |
-| trigger chain | — | 772 (deferred; depends on [788, 789, 823, 825, 816, 822, 832, 860, 861, 864, 866, 868, 870, 871, 872, 883, 888, 877, 893, 894, 895, 900, 902, 906, 914, 919, 921, 915, 935, 297, 922, 925, 929]) | — | medium |
+| S9  | docs/prds/grid-services-pricing-model.md | 944 (pending) |  | medium |
+| S5 α | docs/prds/scenario-grammar-partition.md | 945 (pending) | fk-59fdc80fdded fk-caad5305a3be | medium |
+| S5 β | docs/prds/scenario-grammar-partition.md | 946 (pending) | fk-62821dcde535 fk-2dc9d1cd2c06 | high |
+| S5 γ | docs/prds/scenario-grammar-partition.md | 947 (pending) | fk-62821dcde535 fk-2dc9d1cd2c06 fk-59fdc80fdded | high |
+| S5 δ | docs/prds/scenario-grammar-partition.md | 948 (pending) | fk-e2aaf2bfe651 | medium |
+| S5 ε | docs/prds/scenario-grammar-partition.md | 949 (pending) | fk-897e13f84164 | medium |
+| S5 ζ | docs/prds/scenario-grammar-partition.md | 950 (pending) | fk-897e13f84164 | medium |
+| S6 α | docs/prds/one-scenario-reader.md | 955 (pending) | fk-8047de9b6789 fk-188af6c13d71 fk-0b791f2be2d6 fk-81d0840d19e2 | high |
+| S6 β | docs/prds/one-scenario-reader.md | 956 (pending) | fk-be5b13274bcb fk-f99038047a27 | medium |
+| S6 γ | docs/prds/one-scenario-reader.md | 957 (pending) | fk-3be3240278ee fk-2264bc150fa3 fk-a391cf1f4edf | high |
+| S6 δ | docs/prds/one-scenario-reader.md | 958 (pending) | fk-416eb5643e7a fk-2264bc150fa3 fk-e756dab8077e | high |
+| S6 ε | docs/prds/one-scenario-reader.md | 959 (pending) | fk-f99038047a27 fk-be5b13274bcb fk-81d0840d19e2 | high |
+| S6 ζ | docs/prds/one-scenario-reader.md | 960 (pending) | fk-be5b13274bcb | medium |
+| S6 η | docs/prds/one-scenario-reader.md | 961 (pending) | fk-a391cf1f4edf fk-ad65ad5e4e48 | medium |
+| S6 θ | docs/prds/one-scenario-reader.md | 962 (pending) | fk-3be3240278ee fk-2264bc150fa3 fk-be5b13274bcb | high |
+| S6 ι | docs/prds/one-scenario-reader.md | 963 (pending) | fk-be5b13274bcb | medium |
+| S26 α | docs/prds/sweep-knob-registry.md | 964 (pending) | fk-59fdc80fdded fk-4cc34de4e649 | medium |
+| S26 β | docs/prds/sweep-knob-registry.md | 965 (pending) | fk-4cc34de4e649 | medium |
+| S26 γ | docs/prds/sweep-knob-registry.md | 966 (pending) | fk-3ca00f8edeb8 fk-0b4f5e04067c fk-4cc34de4e649 | medium |
+| S26 δ | docs/prds/sweep-knob-registry.md | 967 (pending) | fk-bea05911eb70 fk-59fdc80fdded fk-4cc34de4e649 | medium |
+| S26 ε | docs/prds/sweep-knob-registry.md | 968 (pending) | fk-bea05911eb70 | medium |
+| S26 ζ | docs/prds/sweep-knob-registry.md | 969 (pending) | fk-ac39320dcf1d fk-4cc34de4e649 | medium |
+| S25 β | docs/prds/board-reports-sections-by-mode.md | 970 (pending) | fk-ae20e1833a19 | low |
+| S26 η | docs/prds/sweep-knob-registry.md | 971 (pending) | fk-4cc34de4e649 fk-ac39320dcf1d | medium |
+| S26 θ | docs/prds/sweep-knob-registry.md | 972 (pending) | fk-4cc34de4e649 | medium |
+| S25 γ | docs/prds/board-reports-sections-by-mode.md | 973 (pending) | fk-b7241e0ce122 | high |
+| S25 δ | docs/prds/board-reports-sections-by-mode.md | 974 (pending) | fk-b7241e0ce122 | high |
+| S25 ε | docs/prds/board-reports-sections-by-mode.md | 975 (pending) | fk-ef13881623be | low |
+| S25 ζ | docs/prds/board-reports-sections-by-mode.md | 976 (pending) | fk-ef13881623be | low |
+| S18 α | docs/prds/dashboard-limits-and-distribution-table.md | 977 (pending) | fk-94cab00e114e | medium |
+| S18 β | docs/prds/dashboard-limits-and-distribution-table.md | 978 (pending) | fk-1df9dbc0d971 fk-f8b7b3ab709d fk-366773b4083f | medium |
+| S18 γ | docs/prds/dashboard-limits-and-distribution-table.md | 979 (pending) | fk-8107696f0b02 fk-a6d9f3e5a7e2 | high |
+| S18 δ | docs/prds/dashboard-limits-and-distribution-table.md | 980 (pending) | fk-a6d9f3e5a7e2 fk-8107696f0b02 fk-366773b4083f fk-c3625a25eed4 fk-3cd0d3f3b512 fk-021a21b35427 | high |
+| S18 ε | docs/prds/dashboard-limits-and-distribution-table.md | 981 (pending) | fk-7893b49b92c3 fk-88374e6e3553 fk-c3625a25eed4 | medium |
+| S18 ζ | docs/prds/dashboard-limits-and-distribution-table.md | 982 (pending) | fk-40dff1473b94 fk-d303b6dbf669 fk-021a21b35427 | medium |
+| S18 η | docs/prds/dashboard-limits-and-distribution-table.md | 983 (pending) | fk-006c3339e3b2 | low |
+| S18 θ | docs/prds/dashboard-limits-and-distribution-table.md | 984 (pending) | fk-a6d9f3e5a7e2 fk-1df9dbc0d971 | high |
+| S29 α | docs/prds/surface-version-bump.md | 986 (pending) |  | medium |
+| S29 γ | docs/prds/surface-version-bump.md | 987 (pending) |  | medium |
+| trigger chain | — | 772 (pending; depends on 46 leaves: [788, 789, 823, 825, 816, 822, 832, 860, 861, 864, 866, 868, 870, 871, 872, 883, 888, 877, 893, 894, 895, 900, 902, 906, 914, 919, 921, 915, 935, 297, 922, 925, 929, 946, 947, 955, 957, 958, 959, 962, 973, 974, 979, 980, 984, 224]) | — | medium |
 
-Trigger chain: human gate task 772 (interim form, skills/_shared/filing-the-trigger-chain.md §4; `metadata.trigger_chain = {role: human_gate, skill: review-all, run_id: review-all-solar_challenge-20261013}`), filed deferred under planning mode on 2026-10-14; each /prd session adds its high and critical leaves as its dependencies; committed by the human once this table is complete. No earlier review-all chain existed; launched_from: none.
+Trigger chain: human gate task 772 (interim form, skills/_shared/filing-the-trigger-chain.md §4; `metadata.trigger_chain = {role: human_gate, skill: review-all, run_id: review-all-solar_challenge-20261013}`), filed deferred under planning mode on 2026-10-14; each /prd session added its high and critical leaves as its dependencies, and S29 β (224, the release commit) joined it at L45; the table above is complete as of 2026-10-18 (every stream S1-S29 filed, every held leaf released), and the gate was committed to pending on 2026-10-18 by the lead at Leo's written instruction (commit_planning(task_ids="772"); 46 dependencies). No earlier review-all chain existed; launched_from: none.
 
 Coordinator interventions: the S9 and S11 spawns failed once on shell quoting and were relaunched; the fused-memory server restarted during Phase 5 ticket resolution and 29 tickets were resubmitted.

@@ -2,13 +2,20 @@
 
 These tests run full simulations with different dispatch strategies
 and verify that strategy selection produces measurably different results.
+
+Every simulation is given clear June days as Bristol's weather, so these tests run offline.
 """
 
 import pytest
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import DispatchStrategyConfig
+from solar_challenge.dispatch import (
+    DispatchStrategyConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.home import (
     HomeConfig,
     SimulationResults,
@@ -18,6 +25,8 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from tests._seeded_tmy import ClearJuneDays
+from tests._synthetic_weather import weather_for
 
 
 def _make_config(
@@ -41,42 +50,42 @@ def _make_config(
 
 
 # Short simulation period to keep tests fast
-START = pd.Timestamp("2024-06-21")
-END = pd.Timestamp("2024-06-23")  # 3 days
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
+START, END = _JUNE_DAYS.window()
 
 
-@pytest.mark.slow
-@pytest.mark.integration
 class TestSelfConsumptionStrategy:
     """Integration tests for self-consumption dispatch strategy."""
 
     @pytest.fixture
     def config(self) -> HomeConfig:
         return _make_config(
-            DispatchStrategyConfig(strategy_type="self_consumption"),
+            SelfConsumptionStrategyConfig(),
             name="Self-consumption home",
         )
 
     def test_simulation_completes(self, config):
         """Self-consumption strategy simulation runs to completion."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert isinstance(results, SimulationResults)
         assert len(results.generation) == 3 * 1440
 
     def test_energy_balance(self, config):
         """Energy balance validates with self-consumption strategy."""
-        results = simulate_home(config, START, END, validate_balance=True)
+        results = simulate_home(
+            config, START, END, validate_balance=True, weather=weather_for(config, _JUNE_DAYS.hourly_weather())
+        )
         assert results is not None
 
     def test_battery_active(self, config):
         """Battery charges and discharges with self-consumption strategy."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert results.battery_charge.sum() > 0
         assert results.battery_discharge.sum() > 0
 
     def test_no_negative_values(self, config):
         """All output values are non-negative."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert (results.generation >= 0).all()
         assert (results.demand >= 0).all()
         assert (results.self_consumption >= 0).all()
@@ -87,41 +96,38 @@ class TestSelfConsumptionStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.slow
-@pytest.mark.integration
 class TestTOUOptimizedStrategy:
     """Integration tests for TOU-optimized dispatch strategy."""
 
     @pytest.fixture
     def config(self) -> HomeConfig:
         return _make_config(
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(16, 20)],
-            ),
+            TOUOptimizedStrategyConfig(peak_hours=((16, 20),)),
             name="TOU-optimized home",
         )
 
     def test_simulation_completes(self, config):
         """TOU strategy simulation runs to completion."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert isinstance(results, SimulationResults)
         assert len(results.generation) == 3 * 1440
 
     def test_energy_balance(self, config):
         """Energy balance validates with TOU strategy."""
-        results = simulate_home(config, START, END, validate_balance=True)
+        results = simulate_home(
+            config, START, END, validate_balance=True, weather=weather_for(config, _JUNE_DAYS.hourly_weather())
+        )
         assert results is not None
 
     def test_battery_active(self, config):
         """Battery charges and discharges with TOU strategy."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert results.battery_charge.sum() > 0
         assert results.battery_discharge.sum() > 0
 
     def test_no_negative_values(self, config):
         """All output values are non-negative."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert (results.generation >= 0).all()
         assert (results.demand >= 0).all()
         assert (results.battery_charge >= 0).all()
@@ -131,41 +137,38 @@ class TestTOUOptimizedStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.slow
-@pytest.mark.integration
 class TestPeakShavingStrategy:
     """Integration tests for peak-shaving dispatch strategy."""
 
     @pytest.fixture
     def config(self) -> HomeConfig:
         return _make_config(
-            DispatchStrategyConfig(
-                strategy_type="peak_shaving",
-                import_limit_kw=0.1,
-            ),
+            PeakShavingStrategyConfig(import_limit_kw=0.1),
             name="Peak-shaving home",
         )
 
     def test_simulation_completes(self, config):
         """Peak-shaving strategy simulation runs to completion."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert isinstance(results, SimulationResults)
         assert len(results.generation) == 3 * 1440
 
     def test_energy_balance(self, config):
         """Energy balance validates with peak-shaving strategy."""
-        results = simulate_home(config, START, END, validate_balance=True)
+        results = simulate_home(
+            config, START, END, validate_balance=True, weather=weather_for(config, _JUNE_DAYS.hourly_weather())
+        )
         assert results is not None
 
     def test_battery_active(self, config):
         """Battery charges and discharges with peak-shaving strategy."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert results.battery_charge.sum() > 0
         assert results.battery_discharge.sum() > 0
 
     def test_no_negative_values(self, config):
         """All output values are non-negative."""
-        results = simulate_home(config, START, END)
+        results = simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
         assert (results.generation >= 0).all()
         assert (results.battery_charge >= 0).all()
         assert (results.battery_discharge >= 0).all()
@@ -174,37 +177,29 @@ class TestPeakShavingStrategy:
         assert (results.grid_export >= 0).all()
 
 
-@pytest.mark.slow
-@pytest.mark.integration
 class TestStrategyComparison:
     """Compare results across different dispatch strategies."""
 
     @pytest.fixture
     def self_consumption_results(self) -> SimulationResults:
         config = _make_config(
-            DispatchStrategyConfig(strategy_type="self_consumption"),
+            SelfConsumptionStrategyConfig(),
         )
-        return simulate_home(config, START, END)
+        return simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
 
     @pytest.fixture
     def tou_results(self) -> SimulationResults:
         config = _make_config(
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(16, 20)],
-            ),
+            TOUOptimizedStrategyConfig(peak_hours=((16, 20),)),
         )
-        return simulate_home(config, START, END)
+        return simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
 
     @pytest.fixture
     def peak_shaving_results(self) -> SimulationResults:
         config = _make_config(
-            DispatchStrategyConfig(
-                strategy_type="peak_shaving",
-                import_limit_kw=0.1,
-            ),
+            PeakShavingStrategyConfig(import_limit_kw=0.1),
         )
-        return simulate_home(config, START, END)
+        return simulate_home(config, START, END, weather=weather_for(config, _JUNE_DAYS.hourly_weather()))
 
     def test_generation_identical_across_strategies(
         self,
@@ -304,8 +299,6 @@ class TestStrategyComparison:
             assert 0 <= summary.export_ratio <= 1
 
 
-@pytest.mark.slow
-@pytest.mark.integration
 class TestDefaultStrategyBackwardCompatibility:
     """Verify that no strategy config gives same results as explicit self-consumption."""
 
@@ -319,11 +312,15 @@ class TestDefaultStrategyBackwardCompatibility:
             name="No strategy",
         )
         explicit_sc_config = _make_config(
-            DispatchStrategyConfig(strategy_type="self_consumption"),
+            SelfConsumptionStrategyConfig(),
         )
 
-        no_strategy = simulate_home(no_strategy_config, START, END)
-        explicit_sc = simulate_home(explicit_sc_config, START, END)
+        no_strategy = simulate_home(
+            no_strategy_config, START, END, weather=weather_for(no_strategy_config, _JUNE_DAYS.hourly_weather())
+        )
+        explicit_sc = simulate_home(
+            explicit_sc_config, START, END, weather=weather_for(explicit_sc_config, _JUNE_DAYS.hourly_weather())
+        )
 
         pd.testing.assert_series_equal(
             no_strategy.battery_charge,

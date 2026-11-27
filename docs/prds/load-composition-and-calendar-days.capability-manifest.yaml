@@ -259,7 +259,7 @@ tasks:
           kind: manual
           reason: "integration behaviour asserted by B8's tests"
   - label: "ζ"
-    task_id: null
+    task_id: 901
     title: "Retire the per-kind result fields and type the EV config at the bump (held for S29)"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from this batch's commit_planning until S29 releases it. Depends on task 822 (S19 κ) for RunDocumentStep."
     capabilities:

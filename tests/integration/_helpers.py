@@ -1,53 +1,48 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Shared integration-test helpers for grid-services tests.
-
-Provides the common board-scenario/finance builder shared across
-``test_flex_grid_services`` and ``test_grid_services_events`` to prevent
-independent drift when the board YAML or config API changes.
+"""The board scenario for the integration tests: ``SCENARIO``, the path of its YAML, and ``board_econ_scenario()``, which builds its ``ScenarioConfig`` and ``FinanceConfig``.
 
 Usage::
 
-    from tests.integration._helpers import board_econ_scenario
+    from tests.integration._helpers import SCENARIO, board_econ_scenario
+
     scenario, finance = board_econ_scenario()
-
+    raw = load_config(SCENARIO)
 """
-from __future__ import annotations
 
-from pathlib import Path
+from __future__ import annotations
 
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
     load_fleet_config,
-    parse_finance_config,
 )
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.scenario_blocks import parse_finance_config
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, SimulationWindow
+from tests._repository_paths import SCENARIOS_DIR
 
-SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+SCENARIO = SCENARIOS_DIR / "bristol-phase1-flex.yaml"
 
 
-def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple:
+def board_econ_scenario() -> tuple[ScenarioConfig, FinanceConfig]:
     """Build (scenario, finance_loaded) from the board YAML.
 
     Mirrors the canonical consumer path in cli/finance.py::
 
         load_config → parse_finance_config → load_fleet_config → ScenarioConfig
 
-    Args:
-        scenario_name: Optional name for the constructed ``ScenarioConfig``
-            instance.  Defaults to ``"Board-GridServices-Test"``.
-
     Returns:
         Tuple of ``(ScenarioConfig, FinanceConfig)`` for the board scenario.
     """
     cfg = load_config(SCENARIO)
     finance = parse_finance_config(cfg.get("finance"))
+    assert finance is not None, f"the board scenario {SCENARIO} has no finance block"
     fleet = load_fleet_config(SCENARIO)
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+    period = SimulationWindow(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, fleet.homes[0].location.timezone)
     scenario = ScenarioConfig(
-        name=scenario_name,
+        name="Board-GridServices-Test",
         period=period,
-        homes=list(fleet.homes),
+        homes=tuple(fleet.homes),
     )
     return scenario, finance

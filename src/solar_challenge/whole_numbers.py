@@ -4,7 +4,7 @@
 import math
 from typing import Optional
 
-import numpy as np
+from solar_challenge.boolean_fields import is_boolean
 
 
 def whole_number(value: float) -> Optional[int]:
@@ -12,7 +12,7 @@ def whole_number(value: float) -> Optional[int]:
 
     A whole-number float such as 20.0, or a numpy integer, gives the plain int it equals.
     """
-    if isinstance(value, (bool, np.bool_)) or not -math.inf < value < math.inf:
+    if is_boolean(value) or not -math.inf < value < math.inf:
         return None
     whole = int(value)
     return whole if whole == value else None

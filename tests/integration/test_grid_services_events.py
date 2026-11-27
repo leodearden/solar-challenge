@@ -8,46 +8,64 @@ the flat per-kW term, gated by FinanceConfig.grid_services_model.
 
 Covers, after the shared helpers:
 - B3: supersede takes effect.
-- Guard: capacity_at_events + events=None → ConfigurationError.
-- Compute-once / reuse-across-ages (PRD decision 7).
-- B4: backward-compat / flat bit-identical regression.
+- Guard (C6): finance run refuses a scenario whose grid_services_model is the
+  retired string selector before any simulation.
+- C1, C2: each simulated age, seed or bisection trial, books its own fleet's
+  event income.
+- An event window the simulated period never enters warns once per projection.
+- B4: the default pricing is no grid services, and prices the fleet
+  differently from the events model.
 - B5: solve-still-holds + I4 rate-independence.
-- ε: the finance report and the CLI render the capacity-at-events line.
+- ε: the finance report and the CLI render the Grid Services Income section.
+- α′ (PRD §9 C13): finance run's mean-over-event-days income beside the events
+  table's reliability and displaced-self-use rows, which
+  tests/unit/test_board_report_grid_services.py renders from given breakdowns.
+- B10, B11 (review-all S25 δ): finance run renders the income each mode's
+  projection booked at year 1 and year N beside this window's fleet, with no
+  flexibility band; and the flexibility-value block's grid-services row reads
+  the booked income.
 """
 from __future__ import annotations
 
 import dataclasses
 import math
-import re
 from pathlib import Path
+from typing import Callable, NamedTuple
 
 import pandas as pd
 import pytest
+import yaml
 
-import solar_challenge.gridservices as gs_module
-from solar_challenge.config import load_config, parse_finance_config
-from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import (
-    FinanceConfig,
-    bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
-)
-from solar_challenge.fleet import FleetResults
-from solar_challenge.flex import resolve_flex_band
+import solar_challenge
+from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.board_report import GridServicesIncome, generate_finance_report
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.demand import LoadKind
+from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
+from solar_challenge.flex import FLEX_VALUE_BANDS
 from solar_challenge.gridservices import (
+    DEFAULT_EVENT_WINDOWS,
+    GRID_SERVICES_RATE_BANDS,
+    EventWindow,
+    GridServicesBand,
     GridServicesEventsConfig,
+    NoGridServices,
     compute_grid_services_at_events,
 )
-from solar_challenge.home import SimulationResults, SummaryStatistics
-from solar_challenge.output import generate_finance_report
-from tests._cli_fleet_simulator import invoke_finance_run
-from tests.integration._helpers import board_econ_scenario
-
-pytestmark = pytest.mark.integration
-
-SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+from solar_challenge.home import RunPricing, SimulationResults, SummaryStatistics
+from solar_challenge.projection import (
+    MultiYearCurve,
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
+)
+from tests._assumption_sections import make_assumption_section, sections_of
+from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
+from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
+from tests._markdown_tables import row_cells
+from tests.integration._helpers import SCENARIO, board_econ_scenario
 
 
 # ---------------------------------------------------------------------------
@@ -55,69 +73,71 @@ SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-f
 # ---------------------------------------------------------------------------
 
 
-def _make_in_window_sim_results(n_steps: int = 8760) -> SimulationResults:
-    """Build a SimulationResults with constant battery_soc above min_soc_kwh and
-    battery_discharge below max_discharge_kw, on a full-year hourly tz-aware index.
+_A_YEAR_OF_HOURS_FROM_2024 = pd.date_range(
+    "2024-01-01", periods=8760, freq="1h", tz="Europe/London"
+)
 
-    With battery_soc=3.0 kWh (above min_soc_kwh=0.5 for a 5kWh×0.1 battery)
-    and battery_discharge=0.5 kW (below max_discharge_kw=2.5), DEFAULT_EVENT_WINDOWS
-    (winter-weekday-16-18h) selects real in-window steps and
-    compute_fleet_spare_capacity_kw yields a positive event figure.
+
+def _make_spare_battery_sim_results(
+    hours: pd.DatetimeIndex = _A_YEAR_OF_HOURS_FROM_2024, battery_soc_kwh: float = 3.0
+) -> SimulationResults:
+    """Build a SimulationResults on the hourly index *hours*, with constant
+    battery_soc above min_soc_kwh and battery_discharge below max_discharge_kw.
+
+    With the default battery_soc_kwh=3.0 (above min_soc_kwh=0.5 for a 5kWh×0.1 battery)
+    and battery_discharge=0.2 kW (below max_discharge_kw=2.5), DEFAULT_EVENT_WINDOWS
+    (winter-weekday-16-18h) selects real in-window steps of the default full-year
+    index, and compute_fleet_spare_capacity_kw yields a positive event figure.
     """
-    idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
+    n_steps = len(hours)
     # NOTE: gen/demand/self-consumption magnitudes are arbitrary.  They cancel
     # in the flat-rate-0 delta isolation and do not feed the grid-services
     # computation (which only reads battery_soc and battery_discharge).  Each
-    # kW row lasts an hour, so the year totals 2,000 kWh of self-consumption,
-    # 800 kWh of export and 1,400 kWh of import.
+    # kW row lasts an hour, so *hours* total 2,000 kWh of self-consumption,
+    # 800 kWh of export and 1,400 kWh of import.  The 0.2 kW discharge totals
+    # at most 1,752 kWh over a year of hours, under the 2,000 kWh of
+    # self-consumption that counts it.
     sc_kw = 2000.0 / n_steps
     exp_kw = 800.0 / n_steps
     imp_kw = 1400.0 / n_steps
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
+    zeros = pd.Series(0.0, index=hours)
 
     return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
+        generation=pd.Series(gen_kw, index=hours),
+        demand=pd.Series(demand_kw, index=hours),
+        self_consumption=pd.Series(sc_kw, index=hours),
         battery_charge=zeros.copy(),
-        battery_discharge=pd.Series(0.5, index=idx),  # below max_discharge_kw=2.5
-        battery_soc=pd.Series(3.0, index=idx),  # above min_soc_kwh=0.5
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
+        battery_discharge=pd.Series(0.2, index=hours),  # below max_discharge_kw=2.5
+        battery_soc=pd.Series(battery_soc_kwh, index=hours),
+        grid_import=pd.Series(imp_kw, index=hours),
+        grid_export=pd.Series(exp_kw, index=hours),
         import_cost=zeros.copy(),
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
         grid_charge_cost=None,
+        pricing=RunPricing(None, None),
     )
 
 
 def _synthetic_fleet_results_in_window(homes: list) -> FleetResults:
     """Build FleetResults with in-window battery_soc/discharge per home."""
-    per_home = [_make_in_window_sim_results() for _ in homes]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
+    per_home = [_make_spare_battery_sim_results() for _ in homes]
+    return make_fleet_results_of(per_home, homes=homes)
 
 
-def _constant_simulate(fr: "FleetResults") -> "Callable":  # type: ignore[name-defined]
+def _constant_simulate(
+    fr: FleetResults,
+) -> Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]:
     """Return a constant simulate function: (fc, s, e) -> fr (age-independent)."""
     return lambda fc, s, e: fr
 
 
-def _board_econ_scenario() -> tuple:
-    """Build (scenario, finance_loaded) from the board YAML.
-
-    Delegates to ``tests.integration._helpers.board_econ_scenario`` — the
-    canonical shared implementation — to avoid duplication with
-    ``test_flex_grid_services._board_econ_scenario``.
-    """
-    return board_econ_scenario("Board-EventsGridServices-Test")
-
-
 def _rev_at(
-    scenario: "ScenarioConfig",  # type: ignore[name-defined]
+    scenario: ScenarioConfig,
     finance: FinanceConfig,
-    simulate: "Callable",  # type: ignore[name-defined]
+    simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults],
     year: int = 0,
 ) -> float:
     """Return fleet_revenue_gbp at a given year from project_multi_year."""
@@ -126,10 +146,10 @@ def _rev_at(
 
 
 def _isolate_gs_component(
-    scenario: "ScenarioConfig",  # type: ignore[name-defined]
+    scenario: ScenarioConfig,
     finance_events: FinanceConfig,
     finance_flat0: FinanceConfig,
-    simulate: "Callable",  # type: ignore[name-defined]
+    simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults],
     year: int = 0,
 ) -> float:
     """Isolate the grid_services component via the flat-rate-0 delta.
@@ -159,24 +179,14 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     computed, the isolated delta would equal the flat increment (0, since flat
     rate=0) while the event-derived figure is positive.
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
 
     events_cfg = GridServicesEventsConfig(band="central")
-    finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,  # irrelevant in events model
-    )
-    finance_flat0 = dataclasses.replace(
-        finance_base,
-        grid_services_model="flat",
-        grid_services_events=None,
-        grid_services_income_per_kw_per_year_gbp=0.0,  # irrelevant in flat model
-    )
+    finance_events = dataclasses.replace(finance_base, grid_services_model=events_cfg)
+    finance_flat0 = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
 
     # Direct event-derived figure (the expected value for the delta)
     expected_gs = compute_grid_services_at_events(fr, events_cfg).annual_income_gbp
@@ -192,7 +202,7 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     )
 
     # Teeth: event figure ≠ flat term for a non-zero flat rate
-    flat_rate = finance_base.grid_services_income_per_kw_per_year_gbp
+    flat_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
     sigma = sum(
         h.battery_config.max_discharge_kw
         for h in homes
@@ -206,186 +216,210 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Guard — None events → ConfigurationError
+# Guard (C6) — the retired string selector → ConfigurationError before any simulation
 # ---------------------------------------------------------------------------
 
 
-def test_guard_capacity_at_events_with_events_none_raises_configuration_error() -> None:
-    """capacity_at_events + grid_services_events=None must raise ConfigurationError.
+def test_finance_run_refuses_the_retired_string_selector_before_simulating(
+    tmp_path: Path,
+) -> None:
+    """C6: finance run on the board scenario whose grid_services_model is the retired string selector exits 1 naming the block, and simulates no fleet."""
+    document = yaml.safe_load(SCENARIO.read_text(encoding="utf-8"))
+    document["finance"]["grid_services_model"] = "capacity_at_events"
+    path = tmp_path / SCENARIO.name
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    simulated: list[FleetConfig] = []
 
-    α permits grid_services_events=None even when model='capacity_at_events'
-    (α only validates the selector field; δ is the consumer that must guard this).
+    def _recording_simulate(
+        fleet_config: FleetConfig, start_ts: pd.Timestamp, end_ts: pd.Timestamp
+    ) -> FleetResults:
+        simulated.append(fleet_config)
+        return _synthetic_fleet_results_in_window(fleet_config.homes)
 
-    An explicit ConfigurationError guard, not a bare assert, rejects the missing events.
+    result = invoke_cli(["finance", "run", str(path)], answering(_recording_simulate))
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 1, result.output
+    assert "Configuration error:" in stderr
+    assert "finance.grid_services_model" in stderr
+    assert simulated == []
+
+
+# ---------------------------------------------------------------------------
+# C1, C2 — each simulated age books its own fleet's event income
+# ---------------------------------------------------------------------------
+
+
+def _soh_tracking_simulate(
+    fleets_by_age: dict[int, FleetResults],
+) -> Callable[..., FleetResults]:
+    """A simulate whose battery SOC is 0.8 × capacity × each aged home's SOH; every other flow is the same at every age.
+
+    It records each fleet it answers in *fleets_by_age*, keyed by the age
+    project_multi_year aged the homes' PV to.
     """
-    scenario, finance_base = _board_econ_scenario()
-    homes = scenario.homes
-    fr = _synthetic_fleet_results_in_window(homes)
-    simulate = _constant_simulate(fr)
 
-    finance_none = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=None,
-    )
-
-    with pytest.raises(ConfigurationError):
-        project_multi_year(scenario, finance_none, simulate=simulate)
-
-
-# ---------------------------------------------------------------------------
-# Compute-once / reuse-across-ages
-# ---------------------------------------------------------------------------
-
-
-def test_compute_once_event_figure_reused_across_ages(monkeypatch: pytest.MonkeyPatch) -> None:
-    """compute_grid_services_at_events is called exactly ONCE per project_multi_year run.
-
-    Monkeypatches a counting wrapper on solar_challenge.gridservices.
-    compute_grid_services_at_events. The lazy `from solar_challenge.gridservices
-    import ...` inside _simulate_age re-resolves the attribute on each call, so the
-    patch is observed.
-
-    With asset_life_years=25 → seed_ages=[0,12,24] (3 ages) + bisection trial
-    nodes → ≥3 _simulate_age calls without memoization.
-
-    First-call memoization keeps the count at 1; a per-age implementation would
-    call the function for every _simulate_age invocation (count ≥ 3).
-    """
-    original_fn = gs_module.compute_grid_services_at_events
-    call_count: dict[str, int] = {"n": 0}
-
-    def counting_wrapper(fleet_results, cfg):  # type: ignore[no-untyped-def]
-        call_count["n"] += 1
-        return original_fn(fleet_results, cfg)
-
-    monkeypatch.setattr(gs_module, "compute_grid_services_at_events", counting_wrapper)
-
-    scenario, finance_base = _board_econ_scenario()
-    homes = scenario.homes
-    fr = _synthetic_fleet_results_in_window(homes)
-    simulate = _constant_simulate(fr)
-
-    events_cfg = GridServicesEventsConfig(band="central")
-    finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,
-    )
-
-    project_multi_year(scenario, finance_events, simulate=simulate)
-
-    assert call_count["n"] == 1, (
-        f"compute_grid_services_at_events must be called exactly once per "
-        f"project_multi_year run; got {call_count['n']}. "
-        f"The figure must be memoized across ages."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Coverage extension: memo reuse on bisection path
-# ---------------------------------------------------------------------------
-
-
-def _age_nonlinear_simulate(homes: list) -> "Callable":  # type: ignore[name-defined]
-    """Return a simulate function whose fleet_revenue decays quadratically with age.
-
-    Parses the age from fleet_config.name (``"proj-age-{age}"``).  The quadratic
-    decay ensures the PCHIP midpoint error between sampled ages exceeds the
-    default ``error_target_pct=1.0 %``, which triggers bisection and adds trial
-    nodes beyond the initial three seed ages.
-
-    ``battery_soc`` and ``battery_discharge`` stay constant across all ages so
-    ``compute_grid_services_at_events`` always returns a positive figure —
-    the test cares only that the event function is called exactly once (memo
-    reuse), not that the figure changes with age.
-    """
-    def _sim(fc: object, start_ts: object, end_ts: object) -> FleetResults:
-        m = re.search(r"proj-age-(\d+)", str(getattr(fc, "name", "")))
-        age = int(m.group(1)) if m else 0
-
-        # Quadratic decay: revenue at age=0 is 4× revenue at age=24 → PCHIP
-        # midpoint error ≈ 4 % between seed ages 0 and 12 → bisection fires.
-        scale = max(0.05, (1.0 - age / 30.0) ** 2)
-        n_steps = 8760
-        idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-        zeros = pd.Series(0.0, index=idx)
-        sc_kw = 2.0 * scale
-        exp_kw = 0.5 * scale
-        imp_kw = 0.3 * scale
-
-        sim_r = SimulationResults(
-            generation=pd.Series(sc_kw + exp_kw, index=idx),
-            demand=pd.Series(sc_kw + imp_kw, index=idx),
-            self_consumption=pd.Series(sc_kw, index=idx),
-            battery_charge=zeros.copy(),
-            battery_discharge=pd.Series(0.5, index=idx),   # constant below max_discharge_kw=2.5
-            battery_soc=pd.Series(3.0, index=idx),          # constant above min_soc_kwh=0.5
-            grid_import=pd.Series(imp_kw, index=idx),
-            grid_export=pd.Series(exp_kw, index=idx),
-            import_cost=zeros.copy(),
-            export_revenue=zeros.copy(),
-            tariff_rate=zeros.copy(),
-            grid_charge_cost=None,
+    def _simulate(fleet_config, start_ts, end_ts):  # type: ignore[no-untyped-def]
+        homes = fleet_config.homes
+        fleet = make_fleet_results_of(
+            [
+                _make_spare_battery_sim_results(
+                    battery_soc_kwh=0.8
+                    * home.battery_config.capacity_kwh
+                    * home.battery_config.soh
+                )
+                for home in homes
+            ],
+            homes=homes,
         )
-        fc_homes = list(getattr(fc, "homes", []))
-        per_home = [sim_r for _ in fc_homes]
-        return FleetResults(per_home_results=per_home, home_configs=fc_homes)
+        fleets_by_age[int(homes[0].pv_config.system_age_years)] = fleet
+        return fleet
 
-    return _sim
+    return _simulate
 
 
-def test_compute_once_memo_reused_on_bisection_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """compute_grid_services_at_events is called exactly once even when bisection
-    adds trial nodes beyond the initial three seed ages.
+class _SohTrackingProjections(NamedTuple):
+    events: MultiYearCurve
+    no_grid_services: MultiYearCurve
+    events_fleets_by_age: dict[int, FleetResults]
 
-    Uses an age-nonlinear simulate (quadratic revenue decay) so the PCHIP
-    midpoint error between seed ages exceeds error_target_pct → bisection fires
-    and _simulate_age is called for additional mid-point ages.  The memo must
-    still be populated only on the first call (age-0) and reused on all
-    subsequent calls — including every bisection trial node.
 
-    Covers the concern raised in review: the original compute-once test uses
-    _constant_simulate, which never triggers bisection, leaving the bisection
-    code path unexercised.
+@pytest.fixture(scope="module")
+def soh_tracking_projections() -> _SohTrackingProjections:
+    """Two 5 kWh default-fade batteries over 25 years, priced by the events model and by no grid services.
+
+    At a 1 p/kWh own-use rate and no SEG rate, the event income is over a third
+    of the age-0 revenue, so the SOH kink at the 0.5 floor bends the events
+    revenue curve past the 1% bisection target.
     """
-    original_fn = gs_module.compute_grid_services_at_events
-    call_count: dict[str, int] = {"n": 0}
+    scenario, finance = make_scenario_and_finance(
+        n_homes=2, asset_life_years=25, battery_config=BatteryConfig(capacity_kwh=5.0)
+    )
+    finance_none = dataclasses.replace(finance, own_use_rate_pence_per_kwh=1.0)
+    finance_events = dataclasses.replace(finance_none, grid_services_model=GridServicesEventsConfig())
+    events_fleets_by_age: dict[int, FleetResults] = {}
+    return _SohTrackingProjections(
+        events=project_multi_year(
+            scenario, finance_events, simulate=_soh_tracking_simulate(events_fleets_by_age)
+        ),
+        no_grid_services=project_multi_year(
+            scenario, finance_none, simulate=_soh_tracking_simulate({})
+        ),
+        events_fleets_by_age=events_fleets_by_age,
+    )
 
-    def counting_wrapper(fleet_results, cfg):  # type: ignore[no-untyped-def]
-        call_count["n"] += 1
-        return original_fn(fleet_results, cfg)
 
-    monkeypatch.setattr(gs_module, "compute_grid_services_at_events", counting_wrapper)
+def _booked_and_priced_event_income(
+    projections: _SohTrackingProjections, age: int
+) -> tuple[float, float]:
+    """The event income the events curve books at *age*, and what that age's simulated fleet prices at."""
+    booked = (
+        projections.events.points[age].fleet_revenue_gbp
+        - projections.no_grid_services.points[age].fleet_revenue_gbp
+    )
+    priced = compute_grid_services_at_events(
+        projections.events_fleets_by_age[age], GridServicesEventsConfig()
+    ).annual_income_gbp
+    return booked, priced
 
-    scenario, finance_base = _board_econ_scenario()
-    homes = scenario.homes
 
-    events_cfg = GridServicesEventsConfig(band="central")
+def test_c1_each_sampled_age_books_its_own_fleets_event_income(
+    soh_tracking_projections: _SohTrackingProjections,
+) -> None:
+    curve = soh_tracking_projections.events
+    booked_by_age = {}
+    for age in curve.sampled_ages:
+        booked, priced = _booked_and_priced_event_income(soh_tracking_projections, age)
+        assert booked == pytest.approx(priced, rel=1e-9), f"age {age}"
+        booked_by_age[age] = booked
+
+    assert booked_by_age[24] < booked_by_age[0]
+    assert booked_by_age[24] == pytest.approx(
+        booked_by_age[0] * curve.points[24].battery_soh / curve.points[0].battery_soh,
+        rel=1e-9,
+    )
+
+
+def test_c2_bisection_trial_ages_book_their_own_fleets_event_income(
+    soh_tracking_projections: _SohTrackingProjections,
+) -> None:
+    sampled_ages = soh_tracking_projections.events.sampled_ages
+    assert len(sampled_ages) > 3, sampled_ages
+
+    for age in sorted(set(sampled_ages) - {0, 12, 24}):
+        booked, priced = _booked_and_priced_event_income(soh_tracking_projections, age)
+        assert booked == pytest.approx(priced, rel=1e-9), f"age {age}"
+
+
+# ---------------------------------------------------------------------------
+# An event window the simulated period never enters warns once per projection
+# ---------------------------------------------------------------------------
+
+
+_JUNE_2024_HOURS = pd.date_range(
+    "2024-06-01 00:00", "2024-06-30 23:00", freq="h", tz="Europe/London"
+)
+
+
+def _june_only_simulate(
+    fleet_config: FleetConfig, start_ts: pd.Timestamp, end_ts: pd.Timestamp
+) -> FleetResults:
+    """Every home of *fleet_config* with a spare battery through June 2024 alone."""
+    homes = fleet_config.homes
+    return make_fleet_results_of(
+        [_make_spare_battery_sim_results(hours=_JUNE_2024_HOURS) for _ in homes],
+        homes=homes,
+    )
+
+
+def _june_only_fleet_on_two_unentered_windows() -> tuple[ScenarioConfig, FinanceConfig, FleetSimulate]:
+    """A 2-home, 5 kWh battery scenario priced at the default winter window and a March one, simulated in June alone."""
+    march_window = EventWindow(
+        months=(3,),
+        weekdays=(0, 1, 2, 3, 4),
+        hours=(16, 17, 18),
+        events_per_year=12,
+        event_hours=3.0,
+    )
+    scenario, finance = make_scenario_and_finance(
+        n_homes=2, asset_life_years=25, battery_config=BatteryConfig(capacity_kwh=5.0)
+    )
     finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,
+        finance,
+        grid_services_model=GridServicesEventsConfig(event_windows=(DEFAULT_EVENT_WINDOWS[0], march_window)),
     )
+    return scenario, finance_events, _june_only_simulate
 
-    simulate = _age_nonlinear_simulate(homes)
 
-    curve = project_multi_year(scenario, finance_events, simulate=simulate)
+def test_a_projection_shows_each_unobserved_window_warning_once() -> None:
+    """Every simulated age prices a June-only fleet, which neither event window enters.
 
-    # Bisection should have fired — more than the initial 3 seed ages sampled.
-    assert len(curve.sampled_ages) > 3, (
-        f"Expected bisection to add trial nodes (sampled_ages={curve.sampled_ages}); "
-        "check that _age_nonlinear_simulate produces sufficient PCHIP deviation."
-    )
+    Each age's pricing warns of both windows in the same words, and the
+    projection shows each window's warning once, attributed to its caller
+    (docs/prds/grid-services-pricing-model.md §5.4).
+    """
+    scenario, finance_events, simulate = _june_only_fleet_on_two_unentered_windows()
 
-    # Even with bisection nodes, compute_grid_services_at_events is called once.
-    assert call_count["n"] == 1, (
-        f"compute_grid_services_at_events must be called exactly once per "
-        f"project_multi_year run even when bisection adds trial nodes; "
-        f"got {call_count['n']} calls (sampled_ages={curve.sampled_ages})."
-    )
+    with pytest.warns(UserWarning) as record:
+        curve = project_multi_year(scenario, finance_events, simulate=simulate)
+
+    # Premise: several ages are priced, so a warning shown per age would repeat.
+    assert len(curve.sampled_ages) >= 3, curve.sampled_ages
+    for names_the_window in ("months=(11, 12, 1, 2)", "months=(3,)"):
+        window_warnings = [w for w in record if names_the_window in str(w.message)]
+        assert len(window_warnings) == 1, [str(w.message) for w in window_warnings]
+        assert window_warnings[0].filename == __file__
+
+
+def test_the_packages_frozen_solve_attributes_a_projection_warning_to_its_caller() -> None:
+    """A window warning the projection shows through solar_challenge.solve_cost_recovery_rate names the line that calls it."""
+    scenario, finance_events, simulate = _june_only_fleet_on_two_unentered_windows()
+
+    with pytest.warns(UserWarning) as record:
+        solar_challenge.solve_cost_recovery_rate(scenario, finance_events, simulate=simulate)
+
+    march_window_warnings = [w for w in record if "months=(3,)" in str(w.message)]
+    assert [w.filename for w in march_window_warnings] == [__file__]
 
 
 # ---------------------------------------------------------------------------
@@ -393,59 +427,36 @@ def test_compute_once_memo_reused_on_bisection_path(monkeypatch: pytest.MonkeyPa
 # ---------------------------------------------------------------------------
 
 
-def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
-    """B4 backward-compat regression: flat model YearPoint stream is bit-identical
-    whether or not grid_services_events is attached; flat ≠ capacity_at_events.
+def test_b4_the_default_pricing_is_no_grid_services_and_differs_from_the_events_model() -> None:
+    """B4: FinanceConfig's default pricing is no grid services, and it prices the
+    same fleet differently from capacity_at_events.
 
-    (1) FinanceConfig.grid_services_model default is "flat".
-    (2) Flat with events=None vs flat with events config attached → identical curves.
-        The event config is inert unless grid_services_model=='capacity_at_events'.
-    (3) Flat curve ≠ capacity_at_events curve for the same fleet (teeth).
-
-    The single conditional on the model preserves the flat path char-for-char and
-    ignores grid_services_events when model is "flat".
+    (1) FinanceConfig.grid_services_model default is NoGridServices().
+    (2) The no-grid-services curve ≠ capacity_at_events curve for the same fleet (teeth).
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
 
-    # (1) FinanceConfig.grid_services_model field default is "flat"
-    # (decoupled from the board YAML, which ships capacity_at_events after task-76 ε flip)
+    # (1) FinanceConfig.grid_services_model field default is NoGridServices()
+    # (decoupled from the board YAML, which ships capacity_at_events)
     _gs_field = next(
         f for f in dataclasses.fields(finance_base) if f.name == "grid_services_model"
     )
-    assert _gs_field.default == "flat", (
-        "FinanceConfig.grid_services_model field default must be 'flat'"
+    assert _gs_field.default == NoGridServices(), (
+        "FinanceConfig.grid_services_model field default must be NoGridServices()"
     )
 
-    # (2) flat: no events config vs attached events config → bit-identical
-    # Build from an explicitly flat base (board YAML ships capacity_at_events after ε flip)
-    finance_flat_base = dataclasses.replace(
-        finance_base, grid_services_model="flat", grid_services_events=None
-    )
-    finance_flat_no_events = finance_flat_base  # events already None
-    finance_flat_with_events = dataclasses.replace(
-        finance_flat_base,
-        grid_services_events=GridServicesEventsConfig(band="central"),
-    )
-    curve_no_events = project_multi_year(scenario, finance_flat_no_events, simulate=simulate)
-    curve_with_events = project_multi_year(scenario, finance_flat_with_events, simulate=simulate)
-    assert curve_no_events.points == curve_with_events.points, (
-        "Flat model must produce bit-identical YearPoint tuples with/without "
-        "grid_services_events attached — the event config is inert in flat mode."
-    )
-
-    # (3) flat ≠ capacity_at_events (teeth — confirms supersede is real)
+    # (2) no grid services ≠ capacity_at_events (teeth — confirms supersede is real)
+    finance_flat_base = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
     finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=GridServicesEventsConfig(band="central"),
-        grid_services_income_per_kw_per_year_gbp=0.0,
+        finance_base, grid_services_model=GridServicesEventsConfig(band="central")
     )
+    curve_flat = project_multi_year(scenario, finance_flat_base, simulate=simulate)
     curve_events = project_multi_year(scenario, finance_events, simulate=simulate)
 
-    rev_flat = curve_no_events.points[0].fleet_revenue_gbp
+    rev_flat = curve_flat.points[0].fleet_revenue_gbp
     rev_events = curve_events.points[0].fleet_revenue_gbp
     assert rev_flat != rev_events, (
         f"Flat (£{rev_flat:.4f}) and capacity_at_events (£{rev_events:.4f}) "
@@ -471,26 +482,17 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
 
     Event income (like the flat term) is rate-independent
     (own_use_rate never enters physical dispatch or gridservices computation),
-    so the existing affine reconstruction (finance.py:1789-1802) remains exact.
+    so the existing affine reconstruction (projection.solve_cost_recovery_rate's
+    surplus_at) remains exact.
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
 
     events_cfg = GridServicesEventsConfig(band="central")
-    finance_events = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,
-    )
-    finance_flat0 = dataclasses.replace(
-        finance_base,
-        grid_services_model="flat",
-        grid_services_events=None,
-        grid_services_income_per_kw_per_year_gbp=0.0,
-    )
+    finance_events = dataclasses.replace(finance_base, grid_services_model=events_cfg)
+    finance_flat0 = dataclasses.replace(finance_base, grid_services_model=NoGridServices())
 
     # (1) solve converges (finite rate, valid binding)
     sol = solve_cost_recovery_rate(scenario, finance_events, simulate=simulate)
@@ -510,10 +512,10 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
     curve_events = project_multi_year(scenario, finance_events, simulate=simulate)
     curve_flat0 = project_multi_year(scenario, finance_flat0, simulate=simulate)
     surplus_events = project_economics(
-        curve_events, scenario, finance_events
+        curve_events, scenario_fleet(scenario), finance_events
     ).net_surplus_per_home_per_year_gbp
     surplus_flat0 = project_economics(
-        curve_flat0, scenario, finance_flat0
+        curve_flat0, scenario_fleet(scenario), finance_flat0
     ).net_surplus_per_home_per_year_gbp
     assert surplus_events > surplus_flat0, (
         f"capacity_at_events surplus (£{surplus_events:.4f}/home/yr) must exceed "
@@ -540,19 +542,8 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
-    """generate_finance_report with grid_services_at_events renders the event-derived line.
-
-    Builds a synthetic BillDistribution + a positive-spare FleetResults,
-    computes the event figure, then asserts the rendered report contains:
-      - "Grid services (capacity-at-events)" label
-      - the formatted annual £ (event-derived)
-      - the per-window avail_kW value
-
-    The Optional[GridServicesAtEvents] param renders the line inside the existing
-    flex-value block.
-    """
-    # Build a minimal synthetic BillDistribution (mirrors test_flex_timeshift pattern)
+def _synthetic_bill_distribution() -> BillDistribution:
+    """A one-home BillDistribution over 365 days (mirrors tests/integration/test_flex_timeshift.py's pattern)."""
     sc_ratio = 2200.0 / 4000.0
     gd_ratio = 1200.0 / 3400.0
     ex_ratio = 1800.0 / 4000.0
@@ -569,20 +560,35 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
         self_consumption_ratio=sc_ratio,
         grid_dependency_ratio=gd_ratio,
         export_ratio=ex_ratio,
-        simulation_days=365,
         total_import_cost_gbp=276.0,
         total_export_revenue_gbp=73.8,
         net_cost_gbp=202.2,
-        seg_revenue_gbp=73.8,
+        window=make_window(days=365),
+        pricing=RunPricing(0.23, 4.1),
+        load_energy_kwh={LoadKind.HOUSEHOLD: 3400.0},
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,
         own_use_rate_pence_per_kwh=15.0,
     )
-    dist = bill_distribution([summary], finance, 365)
+    return bill_distribution([summary], finance)
+
+
+def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
+    """generate_finance_report with an events GridServicesIncome renders the event-derived section.
+
+    Builds a synthetic BillDistribution + a positive-spare FleetResults,
+    computes the event figure, then asserts the rendered report contains:
+      - the "## Grid Services Income" section
+      - the formatted annual £ (event-derived)
+      - the per-window avail_kW value
+
+    The section renders without a flexibility band.
+    """
+    dist = _synthetic_bill_distribution()
 
     # Build an in-window FleetResults from the board homes
-    scenario, _finance_base = _board_econ_scenario()
+    scenario, _finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
 
@@ -593,18 +599,21 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
         "Synthetic in-window fleet must yield positive annual event income"
     )
 
-    # Call generate_finance_report with the grid_services_at_events param
+    batteries = [home.battery_config for home in homes if home.battery_config is not None]
     report = generate_finance_report(
-        dist,
+        sections_of(make_assumption_section(bill=dist)),
         scenario_name="Epsilon-Events-Test",
-        flex_band=resolve_flex_band("central"),
-        flex_band_name="central",
-        grid_services_at_events=gse,
+        grid_services=GridServicesIncome(
+            pricing=events_cfg,
+            annual_income_gbp=gse.annual_income_gbp,
+            battery_homes=len(batteries),
+            battery_discharge_kw=sum(battery.max_discharge_kw for battery in batteries),
+            at_events=gse,
+        ),
     )
 
-    # The line must appear in the flex-value block
-    assert "Grid services (capacity-at-events)" in report, (
-        "Report must contain the 'Grid services (capacity-at-events)' label"
+    assert "## Grid Services Income" in report.splitlines(), (
+        "Report must contain the '## Grid Services Income' section"
     )
     # Formatted annual £ must appear (comma-separated, no decimals)
     expected_gbp_str = f"£{gse.annual_income_gbp:,.0f}"
@@ -630,48 +639,205 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     Invokes the CLI against the board scenario, answering every fleet simulation
     with an in-window synthetic FleetResults, and asserts:
       - exit_code == 0
-      - "Grid services (capacity-at-events)" line in output
+      - the "## Grid Services Income" section and its model line in output
       - a positive event-derived £ figure in output
-      - (after YAML flip) the supersede inequality: event income ≠ flat_rate × Σ kW
+      - the supersede inequality: event income ≠ flat_rate × Σ kW
 
-    The board YAML selects capacity_at_events and the CLI passes the computed
-    grid_services_at_events to generate_finance_report.
+    The board YAML selects capacity_at_events and the CLI passes the income its
+    pricing books to generate_finance_report.
     """
-    scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
-
     # In-window FleetResults from the board homes
-    scenario, _finance = _board_econ_scenario()
+    scenario, finance = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
 
-    result = invoke_finance_run([str(scenario_path)], fr)
+    result = invoke_finance_run([str(SCENARIO)], fr)
 
     assert result.exit_code == 0, (
         f"CLI exited {result.exit_code}. Output:\n{result.output}"
     )
 
-    # Main assertion: the capacity-at-events line must appear
-    assert "Grid services (capacity-at-events)" in result.output, (
-        f"Expected 'Grid services (capacity-at-events)' line in output.\n{result.output}"
-    )
+    lines = result.output.splitlines()
+    assert "## Grid Services Income" in lines, result.output
+    assert "Model: **capacity at events, central band, operational delivery baseline**" in lines, result.output
 
     # The rendered event-derived £ must be present (positive)
     assert "£" in result.output, "Output must contain a £ figure"
 
-    # Supersede inequality (only checkable after ε flips the board YAML to
-    # capacity_at_events; skips gracefully if still flat)
-    raw = load_config(scenario_path)
-    finance = parse_finance_config(raw.get("finance"))
-    assert finance is not None
-    if finance.grid_services_events is not None:
-        flat_rate = finance.grid_services_income_per_kw_per_year_gbp
-        sigma = sum(
-            h.battery_config.max_discharge_kw
-            for h in homes if h.battery_config is not None
-        )
-        gse_direct = compute_grid_services_at_events(fr, finance.grid_services_events)
-        assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
-            f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
-            f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
-            "confirms the supersede takes effect."
-        )
+    assert isinstance(finance.grid_services_model, GridServicesEventsConfig), (
+        f"{SCENARIO} (grid_services_model={finance.grid_services_model!r}) does not price "
+        "capacity at events, so the supersede inequality cannot be checked"
+    )
+    flat_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
+    sigma = sum(
+        h.battery_config.max_discharge_kw
+        for h in homes if h.battery_config is not None
+    )
+    gse_direct = compute_grid_services_at_events(fr, finance.grid_services_model)
+    assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
+        f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
+        f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
+        "confirms the supersede takes effect."
+    )
+
+
+# ---------------------------------------------------------------------------
+# α′ — the events table's reliability and displaced-self-use rows (PRD §9 C13)
+# ---------------------------------------------------------------------------
+
+
+def test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement() -> None:
+    """finance run on the board scenario, every battery home at its floor through 8 January's window and 1.0 kW clear of it on 9 January.
+
+    Per home: avail 0 on 8 January and min(2.5 − 0.5, (3.5 − 0.5) / 3) = 1.0 kW on
+    9 January, so with N battery homes A = (0, N): the income books the mean N / 2
+    (× £9.972), p50 is N and p90 0. On 9 January each home displaces min(1.0 × 3,
+    2 h × 1.0 kW before the 21:00 recharge) = 2.0 kWh at 0.25 £/kWh: N kWh per
+    event, and mean(0, 0.5 N) × 12 = £3N a year.
+    """
+    scenario, _finance = board_econ_scenario()
+    battery_homes = [home for home in scenario.homes if home.battery_config is not None]
+    for home in battery_homes:
+        battery = home.battery_config
+        assert (battery.capacity_kwh, battery.max_discharge_kw) == (5.0, 2.5)
+        assert Battery(battery).min_soc_kwh == pytest.approx(0.5)
+    n = len(battery_homes)
+    hours = pd.date_range("2024-01-08", periods=48, freq="1h", tz="Europe/London")
+    window_hours = hours.hour.isin([16, 17, 18])
+    sim = dataclasses.replace(
+        _make_spare_battery_sim_results(hours=hours),
+        battery_soc=pd.Series(3.5, index=hours).mask((hours.day == 8) & window_hours, 0.5),
+        battery_discharge=pd.Series(0.0, index=hours)
+        .mask(window_hours, 0.5)
+        .mask(hours.hour.isin([19, 20]), 1.0),
+        battery_charge=pd.Series(0.0, index=hours).mask(hours.hour == 21, 1.0),
+        tariff_rate=pd.Series(0.25, index=hours),
+    )
+    fr = make_fleet_results_of([sim for _ in scenario.homes], homes=scenario.homes)
+
+    result = invoke_finance_run(
+        [str(SCENARIO), "--flex-band", "central", "--start", "2024-01-08", "--end", "2024-01-09"], fr
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    for row in (
+        f"| Annual fleet income | £{n / 2 * 9.972:,.0f} |",
+        f"| Per-event available capacity | {n / 2:.1f} kW |",
+        f"| Capacity on 50% of event days | {float(n):.1f} kW |",
+        "| Capacity on 90% of event days | 0.0 kW |",
+        f"| Evening self-use displaced, per event | {float(n):.1f} kWh |",
+        f"| Evening self-use displaced, value per year | £{3 * n:,.0f} |",
+    ):
+        assert row in lines, result.output
+
+
+# ---------------------------------------------------------------------------
+# B10, B11 — the booked income renders with the economics; the flex row reads it
+# ---------------------------------------------------------------------------
+
+
+_TWO_JANUARY_WEEKDAYS = pd.date_range("2024-01-08", periods=2 * 24 * 60, freq="1min", tz="Europe/London")
+"""Monday 8 and Tuesday 9 January 2024, two winter-weekday event days, at one minute: the window simulate_home runs, so
+finance run's projection answers its age-0 fleet from the bill run's results (fleet.reusing refuses any other)."""
+
+_WINDOW_HEADING = "### This window's fleet, the same under every assumption"
+_BOOKED_HEADING = "### Booked by the projection (£ a year)"
+
+
+def _board_scenario_without_its_flex_band(tmp_path: Path) -> Path:
+    """A copy of the board scenario under *tmp_path* with its top-level flex_band deleted."""
+    document = yaml.safe_load(SCENARIO.read_text(encoding="utf-8"))
+    del document["flex_band"]
+    path = tmp_path / SCENARIO.name
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    return path
+
+
+def _soh_tracking_january_simulate(
+    answered: list[FleetResults], by_age: dict[int, FleetResults]
+) -> Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]:
+    """A simulate answering each home over _TWO_JANUARY_WEEKDAYS with its battery at 0.8 × capacity × its SOH.
+
+    It appends each answer to *answered*, in the order asked, and keys it in
+    *by_age* by the age of the fleet's PV.
+    """
+
+    def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        per_home = []
+        for home in fleet_config.homes:
+            battery = home.battery_config
+            assert battery is not None, home
+            soc_kwh = 0.8 * battery.capacity_kwh * battery.resolved_soh
+            per_home.append(_make_spare_battery_sim_results(hours=_TWO_JANUARY_WEEKDAYS, battery_soc_kwh=soc_kwh))
+        results = make_fleet_results_of(per_home, homes=fleet_config.homes)
+        answered.append(results)
+        by_age[int(fleet_config.homes[0].pv_config.system_age_years)] = results
+        return results
+
+    return simulate
+
+
+def test_b10_finance_run_renders_the_booked_grid_services_income_with_the_economics(tmp_path: Path) -> None:
+    """finance run --project --assumptions both on the board scenario without a flex band renders the Grid Services Income section.
+
+    Its model line names the pricing; each mode's booked year-1 and year-N
+    income is the pricing of the fleet that mode's projection simulated at
+    ages 0 and N − 1; this window's table is the bill run's breakdown.
+    """
+    path = _board_scenario_without_its_flex_band(tmp_path)
+    _scenario, finance = board_econ_scenario()
+    pricing = finance.grid_services_model
+    assert isinstance(pricing, GridServicesEventsConfig)
+    answered: list[FleetResults] = []
+    by_age: dict[int, FleetResults] = {}
+
+    result = invoke_cli(
+        ["finance", "run", str(path), "--project", "--assumptions", "both", "--start", "2024-01-08", "--end", "2024-01-09"],
+        answering(_soh_tracking_january_simulate(answered, by_age)),
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "## Grid Services Income" in lines, result.output
+    assert "Model: **capacity at events, central band, operational delivery baseline**" in lines, result.output
+
+    breakdown = compute_grid_services_at_events(answered[0], pricing)
+    assert len(breakdown.per_window_avail_kw) == 1
+    for label, cell in (
+        ("Annual fleet income", f"£{breakdown.annual_income_gbp:,.0f}"),
+        ("Capacity on 50% of event days", f"{breakdown.per_window_avail_p50_kw[0]:.1f} kW"),
+        ("Capacity on 90% of event days", f"{breakdown.per_window_avail_p90_kw[0]:.1f} kW"),
+        ("Evening self-use displaced, per event", f"{breakdown.per_window_displaced_self_use_kwh_per_event[0]:.1f} kWh"),
+        ("Evening self-use displaced, value per year", f"£{sum(breakdown.per_window_displaced_import_gbp_per_year):,.0f}"),
+    ):
+        assert row_cells(result.output, _WINDOW_HEADING, label) == [cell], label
+    assert "gross of the evening self-use an event displaces" in result.output
+
+    last_year = finance.asset_life_years
+    year_1, year_n = pricing.annual_income_gbp(by_age[0]), pricing.annual_income_gbp(by_age[last_year - 1])
+    assert year_n < year_1
+    assert f"£{year_n:,.0f}" != f"£{year_1:,.0f}"
+    assert row_cells(result.output, _BOOKED_HEADING, "Year 1") == [f"£{year_1:,.0f}"] * 2
+    assert row_cells(result.output, _BOOKED_HEADING, f"Year {last_year}") == [f"£{year_n:,.0f}"] * 2
+    assert "Flexibility Value" not in result.output
+
+
+def test_b11_the_flex_blocks_grid_services_row_reads_the_booked_events_income() -> None:
+    """finance run --flex-band central on the board scenario: the grid-services row is the events income per battery home and per kW."""
+    scenario, finance = board_econ_scenario()
+    assert isinstance(finance.grid_services_model, GridServicesEventsConfig)
+    fr = _synthetic_fleet_results_in_window(list(scenario.homes))
+    batteries = [home.battery_config for home in scenario.homes if home.battery_config is not None]
+    income = compute_grid_services_at_events(fr, finance.grid_services_model).annual_income_gbp
+    homes, kw = len(batteries), sum(battery.max_discharge_kw for battery in batteries)
+    assert income > 0.0
+
+    result = invoke_finance_run([str(SCENARIO), "--flex-band", "central"], fr)
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert f"| Grid services (booked) | £{income / homes:.0f} | £{income / kw:.1f}/kW |" in lines, result.output
+    time_shift = FLEX_VALUE_BANDS[GridServicesBand.CENTRAL].time_shift_gbp
+    assert f"| **Headline total** | **£{time_shift + income / homes:.0f}** | — |" in lines, result.output
+    assert "PRD §6" not in result.output

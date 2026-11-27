@@ -1,55 +1,33 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Discrete install-config sweep and optimisation tools (W3).
+"""Discrete install-config sweep and optimisation tools.
 
-This module provides the homogeneous-install config enumerator that is the
-foundation of the W3 cost-recovery sweep (PRD §3.1/§3.2/§10-A/§10-B).
-
-Public API
-----------
-ConfigPoint           — frozen (pv_kwp, battery_kwh, inverter_kw) value object
-ConfigResult          — per-config evaluation result (cost-recovery + baseline economics)
-RankedSweep           — aggregated sweep output (ranked feasible configs + infeasible set)
-enumerate_configs     — cartesian-product enumerator → eager list (small grids)
-iter_configs          — generator variant of enumerate_configs (large grids / streaming)
-run_sweep             — drive all configs through W2 cost-recovery + rank by outlay
-rank                  — pure stable sort over any ConfigResult sequence (5-key ascending)
-feasible_split        — partition ConfigResults by binding=='infeasible_above_retail'
-pareto_baseline       — non-dominated set on (baseline_outlay ↓, baseline_surplus ↑)
-cheapest_feasible     — ConfigPoint with lowest outlay among feasible results, or None
-SensitivityAxis       — one OAT axis: name, swept values, per-value rankings + top configs
-SensitivityPanel      — aggregated OAT output (axes, baseline_top, rank_stability scalar)
-sensitivity_panel     — OAT assumption sensitivity over the W3 cost-recovery rank
-apply_knob            — copy of a fleet ScenarioConfig with one sensitivity knob set
-SENSITIVITY_BANDS     — board-facing swept values per sensitivity knob (grid services from flex)
+Enumerates homogeneous-install fleet scenarios over discrete PV, battery and
+inverter sizes, ranks them by householder outlay at the solved cost-recovery
+own-use rate, and measures how one-at-a-time assumption changes move that
+rank.  The knobs a sweep or panel varies, and the edit each makes, are
+scenario_knobs'.  The design is specified in
+docs/prds/discrete-install-config-sweep.md.
 """
 
 from __future__ import annotations
 
 import itertools
-import math
-from dataclasses import dataclass, fields as dc_fields, replace
+from collections import Counter
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Generic, Iterator, List, Mapping, Optional, Sequence, TypeVar
 
-from solar_challenge.battery import BatteryConfig, has_battery, require_valid_capacity_setting
+from solar_challenge.battery import CAPACITY_SETTING_KWH
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import (
-    FinanceConfig,
-    _resolve_homes,
-    bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
-)
-from solar_challenge.fleet import FleetConfig, simulate_fleet
-from solar_challenge.flex import resolve_grid_services_band
-from solar_challenge.home import HomeConfig, calculate_summary
-from solar_challenge.seg import SEGTariff
+from solar_challenge.finance import FinanceConfig, bill_distribution
+from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
+from solar_challenge.number_fields import FRACTION, POSITIVE, as_finite_float, read_field
+from solar_challenge.projection import run_cost_recovery, scenario_fleet
+from solar_challenge.scenario_knobs import KNOBS, Knob
 
 if TYPE_CHECKING:
-    import pandas as pd
     from solar_challenge.finance import CostRecoverySolution
-    from solar_challenge.fleet import FleetResults
+    from solar_challenge.fleet import FleetSimulate
 
 
 # ---------------------------------------------------------------------------
@@ -58,23 +36,28 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ConfigPoint:
-    """A single discrete install specification for the W3 sweep.
+    """A single discrete install specification for the install-config sweep.
 
     Attributes:
-        pv_kwp: PV DC rated capacity in kWp (must be > 0 and finite).
-        battery_kwh: Battery nameplate (total) energy capacity in kWh (must be
-            >= 0 and finite), set as ``BatteryConfig.capacity_kwh`` on every home.  The
+        pv_kwp: PV DC rated capacity in kWp, a finite number greater than 0,
+            held as a float.
+        battery_kwh: Battery nameplate (total) energy capacity in kWh, a finite
+            number ``battery.CAPACITY_SETTING_KWH`` admits, held as a float, and
+            set as ``BatteryConfig.capacity_kwh`` on every home.  The
             energy a home can actually cycle is the usable window inside that
             capacity, bounded by its battery's ``min_soc_fraction`` and
             ``max_soc_fraction``.
-            The value **exactly** ``0.0`` is the no-battery sentinel; it causes
-            :func:`_apply_install` (and therefore :func:`enumerate_configs` /
-            :func:`iter_configs`) to set ``battery_config = None`` on every home
-            in the scenario.  Any strictly positive value — however small —
-            triggers battery fabrication or replacement; there is no epsilon
-            tolerance.  Callers must pass ``0.0`` (not, e.g., ``1e-9``) to mean
+            The value **exactly** ``0.0`` is the no-battery sentinel; the
+            ``battery_capacity_kwh`` knob of
+            :mod:`~solar_challenge.scenario_knobs`, which
+            :func:`enumerate_configs` / :func:`iter_configs` apply, then sets
+            ``battery_config = None`` on every home in the scenario.  Any
+            strictly positive value — however small — triggers battery
+            fabrication or replacement; there is no epsilon tolerance.
+            Callers must pass ``0.0`` (not, e.g., ``1e-9``) to mean
             "no battery".
-        inverter_kw: AC inverter rated capacity in kW (must be > 0 and finite).
+        inverter_kw: AC inverter rated capacity in kW, a finite number greater
+            than 0, held as a float.
     """
 
     pv_kwp: float
@@ -82,20 +65,30 @@ class ConfigPoint:
     inverter_kw: float
 
     def __post_init__(self) -> None:
-        """Validate install dimensions."""
-        if not 0 < self.pv_kwp < math.inf:
-            raise ValueError(
-                f"pv_kwp must be > 0 and finite, got {self.pv_kwp}"
-            )
-        require_valid_capacity_setting(self.battery_kwh, "battery_kwh")
-        if not 0 < self.inverter_kw < math.inf:
-            raise ValueError(
-                f"inverter_kw must be > 0 and finite, got {self.inverter_kw}"
-            )
+        """Read the three install dimensions through number_fields, holding the floats read."""
+        read_field(self, "pv_kwp", as_finite_float, POSITIVE)
+        read_field(self, "battery_kwh", as_finite_float, CAPACITY_SETTING_KWH)
+        read_field(self, "inverter_kw", as_finite_float, POSITIVE)
+
+
+# Each install knob a ConfigPoint sets, with the dimension of the point it sets it to.
+_INSTALL_KNOBS: tuple[tuple[Knob, Callable[[ConfigPoint], float]], ...] = (
+    (KNOBS["pv_capacity_kw"], lambda point: point.pv_kwp),
+    (KNOBS["battery_capacity_kwh"], lambda point: point.battery_kwh),
+    (KNOBS["inverter_capacity_kw"], lambda point: point.inverter_kw),
+)
+
+
+def _installed(base: ScenarioConfig, point: ConfigPoint) -> ScenarioConfig:
+    """*base* with each install knob applied at its dimension of *point*."""
+    scenario = base
+    for knob, dimension in _INSTALL_KNOBS:
+        scenario = knob.apply(scenario, dimension(point))
+    return scenario
 
 
 # ---------------------------------------------------------------------------
-# ConfigResult — per-config evaluation output (W3 task B, PRD §3.1)
+# ConfigResult — per-config evaluation output
 # ---------------------------------------------------------------------------
 
 
@@ -103,41 +96,38 @@ class ConfigPoint:
 class ConfigResult:
     """Full evaluation result for one (ConfigPoint, ScenarioConfig) pair.
 
-    Produced by :func:`run_sweep` (one per grid cell).  Combines the W2
+    Produced by :func:`run_sweep` (one per grid cell).  Combines the projection's
     cost-recovery solve with baseline economics so the board can rank configs
-    both by householder outlay and by project-economics trade-offs.
+    both by householder outlay and by project-economics trade-offs.  The
+    baseline economics, outlay and surplus are at the configured own-use rate
+    (``baseline_own_use_rate_pence_per_kwh``).
+
+    The five solved fields, ``representative_outlay_gbp``,
+    ``solved_own_use_rate_pence_per_kwh``, ``surplus_at_solved_gbp``,
+    ``feasible`` and ``binding``, are read-only properties that read through
+    ``solution``, so they cannot disagree with it.
 
     Attributes:
         config: The install specification for this grid cell.
         solution: Full :class:`~solar_challenge.finance.CostRecoverySolution`
-            from :func:`~solar_challenge.finance.solve_cost_recovery_rate`.
-        representative_outlay_gbp: Representative (median-outlay) home's total
-            annual outlay at the solved own-use rate (£).
-            == solution.representative_outlay_gbp.
-        solved_own_use_rate_pence_per_kwh: Solved own-use rate charged by the
-            CBS to householders (p/kWh, ≥ 0).
-            == solution.own_use_rate_pence_per_kwh.
-        surplus_at_solved_gbp: Project net surplus per home per year at the
-            solved rate (£/home/year).
-            == solution.net_surplus_per_home_per_year_gbp.
-        feasible: True when the CBS can meet the retained_cash_floor within
-            [0, retail_baseline_rate].
-            == solution.feasible.
-        binding: Binding constraint — one of ``'floor'``,
-            ``'rate_clamped_zero'``, ``'infeasible_above_retail'``.
-            == solution.binding.
-        total_capex_gbp: Total fleet capex (£) from the baseline-15p economics.
+            from :func:`~solar_challenge.projection.run_cost_recovery`.
+        total_capex_gbp: Total fleet capex (£) from the baseline economics, at
+            the configured own-use rate (baseline_own_use_rate_pence_per_kwh).
         min_dscr: Minimum DSCR over loan years from the baseline economics.
             ``float('inf')`` when debt-free.
         equity_irr: Equity IRR (fraction) from the baseline economics.
             ``float('nan')`` when undefined.
         payback_years: Equity payback year (1-based, float) from the baseline
             economics, or ``None`` if never within the asset life.
+        baseline_own_use_rate_pence_per_kwh: The configured own-use rate the
+            baseline pair is priced at (p/kWh), the scenario's
+            ``finance.own_use_rate_pence_per_kwh``.
         baseline_outlay_gbp: Representative home's total annual outlay at the
-            *configured* own_use_rate (15 p/kWh) derived from an independent
-            age-0 fleet simulation.  Floor-independent (own_use_rate fixed).
+            configured own-use rate (baseline_own_use_rate_pence_per_kwh),
+            billed on the projection's age-0 summaries: a new install with the
+            scenario's SEG.  Floor-independent (own-use rate fixed).
         baseline_surplus_per_home_gbp: Project net surplus per home per year at
-            own_use_rate=15p (the configured rate).
+            the configured own-use rate (baseline_own_use_rate_pence_per_kwh).
             == project_economics.net_surplus_per_home_per_year_gbp.
     """
 
@@ -145,25 +135,10 @@ class ConfigResult:
     """Install specification for this grid cell."""
 
     solution: "CostRecoverySolution"
-    """W2 cost-recovery solve result."""
-
-    representative_outlay_gbp: float
-    """Representative home annual outlay at the solved rate (£).  W3 rank key."""
-
-    solved_own_use_rate_pence_per_kwh: float
-    """Solved own-use rate (p/kWh, ≥ 0)."""
-
-    surplus_at_solved_gbp: float
-    """Project net surplus per home per year at the solved rate (£/home/year)."""
-
-    feasible: bool
-    """True when solved within [0, retail_baseline_rate]."""
-
-    binding: str
-    """'floor', 'rate_clamped_zero', or 'infeasible_above_retail'."""
+    """Cost-recovery solve result."""
 
     total_capex_gbp: float
-    """Total fleet capex (£) from baseline-15p project_economics."""
+    """Total fleet capex (£) from the baseline project_economics, at the configured own-use rate."""
 
     min_dscr: float
     """Minimum DSCR over loan years (float('inf') when debt-free)."""
@@ -174,15 +149,43 @@ class ConfigResult:
     payback_years: Optional[float]
     """First year cumulative equity cashflow ≥ 0 (1-based), or None."""
 
+    baseline_own_use_rate_pence_per_kwh: float
+    """The configured own-use rate the baseline pair is priced at, the scenario's finance.own_use_rate_pence_per_kwh (p/kWh)."""
+
     baseline_outlay_gbp: float
-    """Representative home annual outlay at own_use_rate=15p from age-0 sim (£)."""
+    """Representative home annual outlay at the configured own-use rate, billed on the projection's age-0 summaries (£)."""
 
     baseline_surplus_per_home_gbp: float
-    """Project net surplus per home per year at own_use_rate=15p (£/home/year)."""
+    """Project net surplus per home per year at the configured own-use rate (£/home/year)."""
+
+    @property
+    def representative_outlay_gbp(self) -> float:
+        """Representative home annual outlay at the solved rate (£), the solution's; the primary rank key."""
+        return self.solution.representative_outlay_gbp
+
+    @property
+    def solved_own_use_rate_pence_per_kwh(self) -> float:
+        """The solution's solved own-use rate (p/kWh, ≥ 0)."""
+        return self.solution.own_use_rate_pence_per_kwh
+
+    @property
+    def surplus_at_solved_gbp(self) -> float:
+        """The solution's project net surplus per home per year at the solved rate (£/home/year)."""
+        return self.solution.net_surplus_per_home_per_year_gbp
+
+    @property
+    def feasible(self) -> bool:
+        """The solution's feasible flag: False exactly when its binding is 'infeasible_above_retail'."""
+        return self.solution.feasible
+
+    @property
+    def binding(self) -> str:
+        """The solution's binding: 'floor', 'rate_clamped_zero' or 'infeasible_above_retail'."""
+        return self.solution.binding
 
 
 # ---------------------------------------------------------------------------
-# RankedSweep — aggregated sweep output (W3 task B, PRD §3.1)
+# RankedSweep — aggregated sweep output
 # ---------------------------------------------------------------------------
 
 
@@ -196,10 +199,10 @@ class RankedSweep:
             desc, pv_kwp asc, battery_kwh asc, inverter_kw asc).
         infeasible: :class:`ConfigPoint` objects whose
             ``binding == 'infeasible_above_retail'``, in input order.
-        retained_cash_floor_gbp: The effective retained-cash floor used for
-            the solve across all grid cells (£/home/year).  Echoes
-            ``retained_cash_floor_gbp`` passed to :func:`run_sweep` when
-            non-None, otherwise ``scenario.finance.retained_cash_floor_per_home_per_year_gbp``.
+        retained_cash_floor_gbp: The retained-cash floor every config's
+            finance sets, ``finance.retained_cash_floor_per_home_per_year_gbp``,
+            which :func:`run_sweep` requires to be one (£/home/year): the
+            floor of every grid cell's solve.
         cheapest_feasible: :class:`ConfigPoint` with the lowest
             ``representative_outlay_gbp`` (== ``results[0].config``), or
             ``None`` when ``results`` is empty.
@@ -207,6 +210,13 @@ class RankedSweep:
             (baseline_outlay ↓, baseline_surplus ↑) trade-off, computed over
             ALL evaluated configs (feasible and infeasible), sorted by
             ``baseline_outlay_gbp`` ascending.
+        self_consumption_override: The ``self_consumption_override`` every
+            config's finance sets, which :func:`run_sweep` requires to be one:
+            ``None`` when every config is solved on simulated own-use
+            (``finance.OwnUseBasis.SIMULATED``), else the fraction every
+            config's own-use is overridden to (``OwnUseBasis.OVERRIDE``), in
+            (0, 1] as ``FinanceConfig`` reads it.  It has no default, so a
+            sweep built by hand states the assumption it was solved under.
     """
 
     results: tuple[ConfigResult, ...]
@@ -216,7 +226,7 @@ class RankedSweep:
     """ConfigPoints with binding=='infeasible_above_retail', in input order."""
 
     retained_cash_floor_gbp: float
-    """Effective retained-cash floor used for the solve (£/home/year)."""
+    """The configs' common retained-cash floor, every solve's (£/home/year)."""
 
     cheapest_feasible: Optional[ConfigPoint]
     """ConfigPoint with lowest outlay (results[0].config), or None."""
@@ -224,8 +234,19 @@ class RankedSweep:
     pareto_baseline: tuple[ConfigPoint, ...]
     """Non-dominated set on (baseline_outlay ↓, baseline_surplus ↑) over all configs."""
 
+    self_consumption_override: Optional[float]
+    """The configs' common self_consumption_override, every solve's own-use assumption (None: simulated)."""
+
     def __post_init__(self) -> None:
-        """Validate cheapest_feasible invariant."""
+        """Refuse a cheapest_feasible other than results[0].config, and a self_consumption_override FinanceConfig would refuse.
+
+        Raises:
+            ValueError: If cheapest_feasible is not results[0].config, or not
+                None when results is empty.
+            ConfigurationError: If self_consumption_override is not None and
+                not a finite number in (0, 1], naming it.
+        """
+        read_field(self, "self_consumption_override", as_finite_float, FRACTION, optional=True)
         if self.results:
             if self.cheapest_feasible is not self.results[0].config:
                 raise ValueError(
@@ -284,8 +305,7 @@ def iter_configs(
 
     for pv, batt, inv in itertools.product(pv_kwp, battery_kwh, inverter_kw):
         point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv)
-        new_homes = [_apply_install(h, point) for h in base.homes]
-        yield point, replace(base, homes=new_homes)
+        yield point, _installed(base, point)
 
 
 def enumerate_configs(
@@ -299,11 +319,11 @@ def enumerate_configs(
 
     For each combination in ``itertools.product(pv_kwp, battery_kwh, inverter_kw)``
     (pv outermost, inverter innermost) a :class:`ConfigPoint` is built and a new
-    :class:`~solar_challenge.config.ScenarioConfig` is produced from *base* via
-    ``dataclasses.replace`` so that all scenario-level fields (finance,
-    location, period, tariff, seg, name) are preserved automatically.  The homes
-    in the returned scenario are homogeneous in PV/battery/inverter install
-    (see :func:`_apply_install`).
+    :class:`~solar_challenge.config.ScenarioConfig` is produced from *base* by
+    the ``pv_capacity_kw``, ``battery_capacity_kwh`` and ``inverter_capacity_kw``
+    knobs of :mod:`~solar_challenge.scenario_knobs`, so every scenario-level
+    field is kept.  The homes in the returned scenario are homogeneous in
+    PV/battery/inverter install capacity.
 
     .. note::
         This function eagerly materialises the full product into a list.  For a
@@ -315,7 +335,7 @@ def enumerate_configs(
     Args:
         base: Fleet :class:`~solar_challenge.config.ScenarioConfig`; must have
             ``homes`` populated (``base.homes`` non-empty).  Single-home
-            scenarios are rejected because the W3 sweep operates at fleet level.
+            scenarios are rejected because the sweep operates at fleet level.
         pv_kwp: Discrete PV DC capacities in kWp (non-empty).
         battery_kwh: Discrete values for :attr:`ConfigPoint.battery_kwh`, the
             battery nameplate (total) capacities in kWh (non-empty; 0.0 = no
@@ -333,7 +353,7 @@ def enumerate_configs(
 
 
 # ---------------------------------------------------------------------------
-# Public pure helpers (W3 task C)
+# Public pure helpers
 # ---------------------------------------------------------------------------
 
 __all__ = [
@@ -350,14 +370,22 @@ __all__ = [
     "SensitivityAxis",
     "SensitivityPanel",
     "sensitivity_panel",
-    "apply_knob",
     "SENSITIVITY_BANDS",
 ]
 
 
 # ---------------------------------------------------------------------------
-# OAT sensitivity dataclasses (W3 task D)
+# OAT sensitivity dataclasses
 # ---------------------------------------------------------------------------
+
+def _check_axis_values(name: str, values: Sequence[float]) -> None:
+    """Refuse an axis that sweeps no value or sweeps a value twice, naming the axis *name*."""
+    if not values:
+        raise ValueError(f"axis '{name}': values must not be empty")
+    repeated = sorted(value for value, count in Counter(values).items() if count > 1)
+    if repeated:
+        raise ValueError(f"axis '{name}' sweeps {repeated} more than once; give each value once")
+
 
 @dataclass(frozen=True)
 class SensitivityAxis:
@@ -367,9 +395,9 @@ class SensitivityAxis:
     the resulting per-value ConfigPoint rankings and cheapest-feasible tops.
 
     Attributes:
-        name: Knob name (a FinanceConfig field name, or a supported alias
-            such as ``'seg'`` / ``'degradation'``).
-        values: Swept values for this axis (non-empty).
+        name: The swept knob's canonical name, its
+            :class:`~solar_challenge.scenario_knobs.Knob`'s ``name``.
+        values: Swept values for this axis (non-empty, none repeated).
         rankings: Per-value tuple of feasible ConfigPoints in ascending
             outlay order (i.e. ``run_sweep(...).results`` mapped to configs).
             Infeasible configs are absent.  Length == len(values).
@@ -384,10 +412,7 @@ class SensitivityAxis:
     top_config_per_value: "tuple[Optional[ConfigPoint], ...]"
 
     def __post_init__(self) -> None:
-        if not self.values:
-            raise ValueError(
-                f"SensitivityAxis '{self.name}': values must not be empty"
-            )
+        _check_axis_values(self.name, self.values)
         if len(self.values) != len(self.rankings):
             raise ValueError(
                 f"SensitivityAxis '{self.name}': "
@@ -407,9 +432,9 @@ class SensitivityPanel:
 
     Attributes:
         axes: One :class:`SensitivityAxis` per swept knob (non-empty).
-        baseline_top: The cheapest-feasible :class:`ConfigPoint` from the
-            baseline ``run_sweep`` (at the panel's own ``retained_cash_floor_gbp``
-            and the scenarios' original finance/tariff values).
+        baseline_top: The cheapest-feasible :class:`ConfigPoint` of the
+            caller's baseline sweep, the ``run_sweep`` of the base scenarios
+            at their own finance and tariff values.
         rank_stability: Fraction of (axis, value) points for which
             ``cheapest_feasible == baseline_top``; ``None`` tops count as
             unstable.  In [0, 1].
@@ -434,221 +459,137 @@ class SensitivityPanel:
 # ---------------------------------------------------------------------------
 
 # Board-facing values to sweep per sensitivity_panel knob, headline axes first; pass the mapping,
-# or a subset, as the panel's axes. Grid services sweeps the flex value model's per-kW rates;
+# or a subset, as the panel's axes. Grid services sweeps GRID_SERVICES_RATE_BANDS' flat column, low to high;
 # the other spans are provisional: docs/prds/discrete-install-config-sweep.md §12, questions 2-3.
-SENSITIVITY_BANDS: Mapping[str, tuple[float, ...]] = MappingProxyType({
-    "retained_cash_floor_per_home_per_year_gbp": (15.0, 27.0, 40.0),
-    "grid_services_income_per_kw_per_year_gbp": tuple(
-        resolve_grid_services_band(band) for band in ("low", "central", "high")
+SENSITIVITY_BANDS: Mapping[Knob, tuple[float, ...]] = MappingProxyType({
+    KNOBS["retained_cash_floor_per_home_per_year_gbp"]: (15.0, 27.0, 40.0),
+    KNOBS["grid_services_income_per_kw_per_year_gbp"]: tuple(
+        GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year for band in GridServicesBand
     ),
-    "battery_cost_per_kwh_gbp": (200.0, 300.0, 450.0),
-    "pv_cost_per_kwp_gbp": (800.0, 1200.0, 1800.0),
-    "inverter_cost_per_kw_gbp": (100.0, 200.0, 350.0),
+    KNOBS["battery_cost_per_kwh_gbp"]: (200.0, 300.0, 450.0),
+    KNOBS["pv_cost_per_kwp_gbp"]: (800.0, 1200.0, 1800.0),
+    KNOBS["inverter_cost_per_kw_gbp"]: (100.0, 200.0, 350.0),
 })
 
 
 # ---------------------------------------------------------------------------
-# OAT knob application (W3 task D)
+# OAT sensitivity panel
 # ---------------------------------------------------------------------------
 
-def _repriced_at_seg_rate(
-    scenario: ScenarioConfig, rate_pence_per_kwh: float
-) -> ScenarioConfig:
-    """Return *scenario* with its SEG rate and every home's SEG tariff set to *rate_pence_per_kwh*.
-
-    Each home's own tariff, named or not, is replaced, so the whole fleet exports at one rate.
-    """
-    tariff = SEGTariff(name="", rate_pence_per_kwh=rate_pence_per_kwh)
-    return replace(
-        scenario,
-        homes=[replace(home, seg_tariff=tariff) for home in scenario.homes],
-        seg_tariff_pence_per_kwh=rate_pence_per_kwh,
-    )
-
-
-_FINANCE_KNOBS: frozenset[str] = frozenset(f.name for f in dc_fields(FinanceConfig))
-_SEG_KNOBS: tuple[str, ...] = ("seg", "seg_tariff_pence_per_kwh")
-_DEGRADATION_KNOBS: tuple[str, ...] = ("degradation", "degradation_rate_per_year")
-
-
-def apply_knob(scenario: ScenarioConfig, name: str, value: float) -> ScenarioConfig:
-    """Return a copy of the fleet *scenario* with the sensitivity knob *name* set to *value*.
-
-    The supported knobs:
-
-    - any :class:`~solar_challenge.finance.FinanceConfig` field: that field of
-      ``scenario.finance``;
-    - ``'seg'`` / ``'seg_tariff_pence_per_kwh'``: the scenario's SEG rate and every
-      home's ``seg_tariff``, through :func:`_repriced_at_seg_rate`;
-    - ``'degradation'`` / ``'degradation_rate_per_year'``: every home's
-      ``pv_config.degradation_rate_per_year``.
-
-    *scenario* itself is not modified.  A single-home scenario is refused, whatever
-    the knob.
-
-    Raises:
-        ValueError: If *scenario* is not a fleet scenario, *name* is not a supported
-            knob, or *name* is a FinanceConfig field and ``scenario.finance`` is None.
-    """
-    _require_fleet_scenario(scenario, "apply_knob")
-    if name in _FINANCE_KNOBS:
-        if scenario.finance is None:
-            raise ValueError(
-                f"Cannot set finance knob '{name}': scenario.finance is None"
-            )
-        new_finance = replace(scenario.finance, **{name: value})  # type: ignore[arg-type]
-        return replace(scenario, finance=new_finance)
-    if name in _SEG_KNOBS:
-        return _repriced_at_seg_rate(scenario, value)
-    if name in _DEGRADATION_KNOBS:
-        return replace(
-            scenario,
-            homes=[
-                replace(h, pv_config=replace(h.pv_config, degradation_rate_per_year=value))
-                for h in scenario.homes
-            ],
+def _baseline_top(
+    base_configs: Sequence[tuple[ConfigPoint, ScenarioConfig]], baseline: RankedSweep
+) -> ConfigPoint:
+    """*baseline*'s cheapest feasible config, refusing a baseline that is not the run_sweep of *base_configs*."""
+    evaluated = Counter([*(result.config for result in baseline.results), *baseline.infeasible])
+    expected = Counter(point for point, _ in base_configs)
+    if evaluated != expected:
+        raise ValueError(
+            "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs hold "
+            f"{list(expected.elements())} but the baseline evaluated {list(evaluated.elements())}"
         )
-    supported = sorted(_FINANCE_KNOBS) + list(_SEG_KNOBS) + list(_DEGRADATION_KNOBS)
-    raise ValueError(f"Unknown sensitivity knob '{name}'. Supported knobs: {supported}")
+    for setting in _RECORDED_SETTINGS:
+        setting.refuse_a_baseline_at_another(base_configs, baseline)
+    if baseline.cheapest_feasible is None:
+        raise ValueError(
+            "baseline run_sweep has no feasible config; cannot form a sensitivity panel"
+        )
+    return baseline.cheapest_feasible
+
+
+def _sweep_at(
+    knob: Knob,
+    value: float,
+    base_configs: Sequence[tuple[ConfigPoint, ScenarioConfig]],
+    *,
+    baseline: RankedSweep,
+    simulate: FleetSimulate,
+) -> RankedSweep:
+    """The sweep of *base_configs* with *knob* at *value*: *baseline* itself when that leaves every scenario equal."""
+    applied = [(point, knob.apply(scenario, value)) for point, scenario in base_configs]
+    if all(after == before for (_, after), (_, before) in zip(applied, base_configs, strict=True)):
+        return baseline
+    return run_sweep(applied, simulate=simulate)
+
+
+def _axis(
+    knob: Knob,
+    values: Sequence[float],
+    base_configs: Sequence[tuple[ConfigPoint, ScenarioConfig]],
+    *,
+    baseline: RankedSweep,
+    simulate: FleetSimulate,
+) -> SensitivityAxis:
+    """The panel's axis for *knob*: each of *values* swept in isolation."""
+    sweeps = [
+        _sweep_at(knob, value, base_configs, baseline=baseline, simulate=simulate) for value in values
+    ]
+    return SensitivityAxis(
+        name=knob.name,
+        values=tuple(values),
+        rankings=tuple(tuple(result.config for result in sweep.results) for sweep in sweeps),
+        top_config_per_value=tuple(sweep.cheapest_feasible for sweep in sweeps),
+    )
 
 
 def sensitivity_panel(
     base_configs: "List[tuple[ConfigPoint, ScenarioConfig]]",
-    axes: "Mapping[str, Sequence[float]]",
+    axes: "Mapping[Knob, Sequence[float]]",
     *,
-    retained_cash_floor_gbp: Optional[float] = None,
-    simulate: Optional[
-        Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"]
-    ] = None,
+    baseline: RankedSweep,
+    simulate: FleetSimulate,
 ) -> SensitivityPanel:
-    """Compute a one-at-a-time (OAT) sensitivity panel over the W3 cost-recovery rank.
+    """Compute a one-at-a-time (OAT) sensitivity panel over the cost-recovery rank.
 
-    For each axis (knob name + values), every value is swept in isolation while
-    all other knobs stay at their baseline levels.  The panel floor
-    ``retained_cash_floor_gbp`` is held fixed for non-floor axes (OAT); the
-    ``retained_cash_floor_per_home_per_year_gbp`` axis is routed through
-    ``run_sweep``'s first-class floor override to avoid double-application.
+    For each axis (knob + values), every value is swept in isolation while
+    all other knobs stay at their baseline levels: each value's ``knob.apply``
+    sets that knob on every base scenario, and the scenarios so set are swept
+    with :func:`run_sweep`.  A value that leaves every base scenario equal,
+    such as the floor axis at the scenarios' own floor, reuses *baseline*
+    rather than sweeping it again.
 
     Args:
         base_configs: (ConfigPoint, ScenarioConfig) pairs produced by
             :func:`enumerate_configs`.  The scenarios carry the baseline
-            finance / tariff values; :func:`apply_knob` sets exactly one knob
-            on each scenario per axis per value.
-        axes: Mapping of knob name → non-empty sequence of float values.
-            Supported names: the knobs :func:`apply_knob` supports.  The
-            ``retained_cash_floor_per_home_per_year_gbp`` axis goes through
-            ``run_sweep``'s floor override instead.
-            :data:`SENSITIVITY_BANDS`, or a subset of it, holds the board-facing values.
-        retained_cash_floor_gbp: Optional panel-level floor override passed to
-            every ``run_sweep`` call (baseline and non-floor axes).
-        simulate: Injected fleet simulator; if ``None`` the real fleet
-            simulator is called.
+            finance / tariff values, the retained-cash floor included.
+        axes: Mapping of :class:`~solar_challenge.scenario_knobs.Knob` (a value
+            of ``scenario_knobs.KNOBS``) → non-empty sequence of float values,
+            none repeated.  :data:`SENSITIVITY_BANDS`, or a subset of it, holds
+            the board-facing values.
+        baseline: The :class:`RankedSweep` that ``run_sweep(base_configs)``
+            returned: the panel's baseline, never swept again.
+        simulate: The fleet simulator every ``run_sweep`` call runs through,
+            such as a :class:`~solar_challenge.fleet.FleetRunner`'s ``simulate``.
 
     Returns:
         :class:`SensitivityPanel` with one :class:`SensitivityAxis` per entry
         in *axes*.
 
     Raises:
-        ValueError: If *base_configs* is empty, *axes* is empty, any axis has
-            empty values, or the baseline run has no feasible config.  Every
-            axis but the floor's also propagates :func:`apply_knob`'s
-            ValueError for an unknown knob name or a non-fleet scenario.
+        ValueError: Before any simulation, if *base_configs* is empty, *axes*
+            is empty, an axis has no values or repeats one, *baseline*'s
+            evaluated points, retained-cash floor or self-consumption
+            override differ from *base_configs*', or *baseline* has no
+            feasible config.  Each axis
+            also propagates any ValueError (ConfigurationError included) that
+            its ``knob.apply`` raises.
     """
-    # -----------------------------------------------------------------------
-    # Input guards
-    # -----------------------------------------------------------------------
     if not base_configs:
         raise ValueError("base_configs must not be empty")
     if not axes:
         raise ValueError("axes mapping must not be empty")
-    for axis_name, axis_vals in axes.items():
-        if not list(axis_vals):
-            raise ValueError(f"axis '{axis_name}' must have at least one value")
+    for knob, values in axes.items():
+        _check_axis_values(knob.name, values)
+    baseline_top = _baseline_top(base_configs, baseline)
 
-    # -----------------------------------------------------------------------
-    # Baseline
-    # -----------------------------------------------------------------------
-    base = run_sweep(
-        base_configs,
-        retained_cash_floor_gbp=retained_cash_floor_gbp,
-        simulate=simulate,
+    panel_axes = tuple(
+        _axis(knob, values, base_configs, baseline=baseline, simulate=simulate)
+        for knob, values in axes.items()
     )
-    if base.cheapest_feasible is None:
-        raise ValueError(
-            "baseline run_sweep has no feasible config; cannot form a sensitivity panel"
-        )
-    baseline_top: ConfigPoint = base.cheapest_feasible
-
-    # -----------------------------------------------------------------------
-    # OAT loop
-    # Optimisations to avoid redundant run_sweep calls:
-    #   1. Floor-baseline short-circuit: when the floor axis sweeps a value
-    #      equal to the panel-level floor, the call would be identical to the
-    #      already-computed `base` sweep — reuse it directly.
-    #   2. Result cache: keyed by (axis_name, value); base_configs, the panel
-    #      floor, and simulate are all constant within this function call, so
-    #      (name, v) uniquely identifies the sweep.  Identical repeated values
-    #      across axes (e.g. two axes both sweeping 0.0) avoid re-simulation.
-    # -----------------------------------------------------------------------
-    _sweep_cache: dict[tuple[str, float], RankedSweep] = {}
-    axis_list: List[SensitivityAxis] = []
-    total = 0
-    stable = 0
-
-    for name, values in axes.items():
-        vals_list = list(values)
-        rankings_per_value: List[tuple[ConfigPoint, ...]] = []
-        tops_per_value: List[Optional[ConfigPoint]] = []
-
-        for v in vals_list:
-            cache_key = (name, v)
-            if cache_key in _sweep_cache:
-                ranked = _sweep_cache[cache_key]
-            # Special-case: floor axis must go through run_sweep's override to
-            # avoid panel-floor clobber / double-apply.
-            elif name == "retained_cash_floor_per_home_per_year_gbp":
-                # Short-circuit: same floor value as the panel baseline.
-                if v == retained_cash_floor_gbp:
-                    ranked = base
-                else:
-                    ranked = run_sweep(
-                        base_configs, retained_cash_floor_gbp=v, simulate=simulate
-                    )
-                _sweep_cache[cache_key] = ranked
-            else:
-                axis_cfgs = [
-                    (point, apply_knob(scenario, name, v)) for point, scenario in base_configs
-                ]
-                ranked = run_sweep(
-                    axis_cfgs,
-                    retained_cash_floor_gbp=retained_cash_floor_gbp,
-                    simulate=simulate,
-                )
-                _sweep_cache[cache_key] = ranked
-
-            rankings_per_value.append(tuple(r.config for r in ranked.results))
-            top = ranked.cheapest_feasible
-            tops_per_value.append(top)
-
-            total += 1
-            if top is not None and top == baseline_top:
-                stable += 1
-
-        axis_list.append(
-            SensitivityAxis(
-                name=name,
-                values=tuple(vals_list),
-                rankings=tuple(rankings_per_value),
-                top_config_per_value=tuple(tops_per_value),
-            )
-        )
-
-    rank_stability = stable / total  # total >= 1 guaranteed by guards above
-
+    tops = [top for axis in panel_axes for top in axis.top_config_per_value]
     return SensitivityPanel(
-        axes=tuple(axis_list),
+        axes=panel_axes,
         baseline_top=baseline_top,
-        rank_stability=rank_stability,
+        rank_stability=sum(top == baseline_top for top in tops) / len(tops),
     )
 
 
@@ -735,9 +676,9 @@ def feasible_split(
 ) -> "tuple[List[ConfigResult], List[ConfigResult]]":
     """Partition ConfigResults into feasible and infeasible lists.
 
-    The split predicate is ``binding == 'infeasible_above_retail'``; records
-    with ``binding`` of ``'floor'`` or ``'rate_clamped_zero'`` land in the
-    feasible side regardless of the :attr:`ConfigResult.feasible` boolean.
+    The split is on :attr:`ConfigResult.feasible`, which is False exactly
+    for ``binding == 'infeasible_above_retail'``: the solution refuses any
+    other pairing at construction.
 
     Input order is preserved within each output list.
 
@@ -746,21 +687,21 @@ def feasible_split(
 
     Returns:
         ``(feasible, infeasible)`` where *infeasible* contains every record
-        whose ``binding == 'infeasible_above_retail'`` and *feasible* contains
-        the remainder.  Both sides are :class:`ConfigResult` lists.
+        whose ``feasible`` is False and *feasible* contains the remainder.
+        Both sides are :class:`ConfigResult` lists.
     """
     feasible: List[ConfigResult] = []
     infeasible: List[ConfigResult] = []
     for r in results:
-        if r.binding == "infeasible_above_retail":
-            infeasible.append(r)
-        else:
+        if r.feasible:
             feasible.append(r)
+        else:
+            infeasible.append(r)
     return feasible, infeasible
 
 
 def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
-    """Sort ConfigResults by the W3 rank key (pure, stable, no filtering).
+    """Sort ConfigResults by the sweep's rank key (pure, stable, no filtering).
 
     Sort key (five levels, all applied for determinism):
 
@@ -794,205 +735,124 @@ def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
 
 
 # ---------------------------------------------------------------------------
-# Private helpers
+# run_sweep — per-config cost-recovery evaluation + ranking
 # ---------------------------------------------------------------------------
 
-def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
-    """Return a new :class:`~solar_challenge.home.HomeConfig` with the PV,
-    inverter, and battery install from *point* applied.
 
-    **What is homogenized** (equalized across the fleet for a given
-    :class:`ConfigPoint`):
+def _required_finance(point: ConfigPoint, scenario: ScenarioConfig) -> FinanceConfig:
+    """*scenario*'s finance block, which a cost-recovery sweep of *point* requires."""
+    if scenario.finance is None:
+        raise ValueError(
+            "a cost-recovery sweep requires every scenario to have a finance block; "
+            f"got scenario.finance=None for config {point!r}"
+        )
+    return scenario.finance
 
-    - PV DC capacity (``pv_config.capacity_kw``)
-    - AC inverter capacity (``pv_config.inverter_capacity_kw``)
-    - Battery nameplate (total) energy capacity (``battery_config.capacity_kwh``)
 
-    **What is intentionally left diverse** (preserved from the base home):
+_Setting = TypeVar("_Setting", covariant=True)
 
-    - Battery power limit (``max_discharge_kw``), state-of-charge limits
-      (``min_soc_fraction``/``max_soc_fraction``), grid-charging schedule
-      (``grid_charging``), and battery dispatch strategy (``dispatch_strategy``).
-      Homes that already have a battery therefore retain their individual power,
-      state-of-charge and dispatch characteristics, while only capacity is
-      swept; two homes at one :class:`ConfigPoint` can thus have different
-      usable windows.
-    - Household load profile (``load_config``) and home-level dispatch strategy
-      (``HomeConfig.dispatch_strategy``) — occupancy diversity and the board
-      dispatch are preserved (PRD §3.2, W-H2).
 
-    .. note::
-        Because battery power limits, state-of-charge limits and
-        ``grid_charging`` are left diverse, two homes at the same
-        :class:`ConfigPoint` may behave economically differently if their base
-        configs differ in those fields.  "Homogeneous install" means equal
-        *install capacity*, not equal *dispatch behaviour*.
+@dataclass(frozen=True)
+class _RecordedSetting(Generic[_Setting]):
+    """A finance setting a cost-recovery sweep solves every config at one value of, and records on its RankedSweep.
 
-    *PV/inverter*: ``pv_config.capacity_kw`` and ``pv_config.inverter_capacity_kw``
-    are set to *point.pv_kwp* and *point.inverter_kw* respectively.
-
-    *Battery*: battery presence is
-    :func:`~solar_challenge.battery.has_battery` of ``point.battery_kwh``. There is
-    no epsilon tolerance; a small positive value fabricates a battery.
-
-    - No battery → ``battery_config = None``.
-    - A battery, and the home already has one →
-      ``dataclasses.replace(home.battery_config, capacity_kwh=point.battery_kwh)``
-      preserving ``max_discharge_kw``, ``grid_charging``, ``dispatch_strategy``,
-      ``efficiency``, and all other base fields (PRD §3.2 / design decision 2).
-    - A battery, and the home has NO battery → a fresh
-      :class:`~solar_challenge.battery.BatteryConfig` is FABRICATED at defaults
-      (``max_discharge_kw=2.5``, ``grid_charging=None``, ``dispatch_strategy=None``).
-      This is the intentional divergence from ``apply_fleet_overlay`` (which
-      never fabricates a battery).
-
-    Args:
-        home: Original (frozen) home configuration.
-        point: Install specification for this grid cell.
-
-    Returns:
-        A fresh :class:`~solar_challenge.home.HomeConfig` with updated install.
+    run_sweep reads each one's common value through :meth:`common`, and
+    sensitivity_panel refuses, through :meth:`refuse_a_baseline_at_another`,
+    a baseline that recorded another value than its base configs share.
     """
-    new_pv = replace(
-        home.pv_config,
-        capacity_kw=point.pv_kwp,
-        inverter_capacity_kw=point.inverter_kw,
-    )
 
-    new_battery: Optional[BatteryConfig]
-    if not has_battery(point.battery_kwh, "battery_kwh"):
-        new_battery = None
-    elif home.battery_config is not None:
-        new_battery = replace(home.battery_config, capacity_kwh=point.battery_kwh)
-    else:
-        new_battery = BatteryConfig(capacity_kwh=point.battery_kwh)
+    name: str
+    unit: str
+    of_finance: Callable[[FinanceConfig], _Setting]
+    of_sweep: Callable[[RankedSweep], _Setting]
+    remedy: str
 
-    return replace(home, pv_config=new_pv, battery_config=new_battery)
+    def common(self, configs: Sequence[tuple[ConfigPoint, ScenarioConfig]]) -> _Setting:
+        """The value every config's finance sets, refusing configs on two, naming both and the remedy."""
+        first_point, first_scenario = configs[0]
+        value = self.of_finance(_required_finance(first_point, first_scenario))
+        for point, scenario in configs[1:]:
+            other = self.of_finance(_required_finance(point, scenario))
+            if other != value:
+                raise ValueError(
+                    f"a cost-recovery sweep solves every config at one {self.name}; "
+                    f"config {first_point!r} sets {value!r}{self.unit} but config {point!r} sets {other!r}. "
+                    f"{self.remedy}"
+                )
+        return value
+
+    def refuse_a_baseline_at_another(
+        self, base_configs: Sequence[tuple[ConfigPoint, ScenarioConfig]], baseline: RankedSweep
+    ) -> None:
+        """Refuse *baseline* when it recorded another value than *base_configs* share, naming both."""
+        expected = self.common(base_configs)
+        solved = self.of_sweep(baseline)
+        if solved != expected:
+            raise ValueError(
+                "sensitivity_panel's baseline must be the run_sweep of base_configs; base_configs set a "
+                f"{self.name} of {expected!r}{self.unit} but the baseline was solved at {solved!r}"
+            )
 
 
-# ---------------------------------------------------------------------------
-# run_sweep — W3 task B: per-config cost-recovery evaluation + ranking
-# ---------------------------------------------------------------------------
+_RETAINED_CASH_FLOOR: _RecordedSetting[float] = _RecordedSetting(
+    name="retained-cash floor",
+    unit=" £/home/yr",
+    of_finance=lambda finance: finance.retained_cash_floor_per_home_per_year_gbp,
+    of_sweep=lambda sweep: sweep.retained_cash_floor_gbp,
+    remedy="Set the floor on the base scenario, through its "
+    "retained_cash_floor_per_home_per_year_gbp knob, before enumerate_configs.",
+)
 
+_SELF_CONSUMPTION_OVERRIDE: _RecordedSetting[Optional[float]] = _RecordedSetting(
+    name="self_consumption_override",
+    unit="",
+    of_finance=lambda finance: finance.self_consumption_override,
+    of_sweep=lambda sweep: sweep.self_consumption_override,
+    remedy="Put the base scenario on one own-use assumption, e.g. with "
+    "finance.with_own_use_basis, before enumerate_configs.",
+)
 
-def _age0_baseline_outlay(
-    scenario: ScenarioConfig,
-    finance: FinanceConfig,
-    simulate: Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"],
-) -> float:
-    """Compute representative householder outlay from an age-0 fleet simulation.
-
-    Runs the fleet with all PV configs aged to 0.0 using the injected
-    *simulate*, computes per-home :class:`~solar_challenge.home.SummaryStatistics`,
-    and returns
-    ``bill_distribution(..., finance, sim_days).representative.total_outlay_gbp``.
-
-    This is the 'second pure post-sim evaluation' from PRD §3.3 — the baseline
-    outlay at the *configured* ``own_use_rate`` (15 p/kWh), independent of the
-    retained-cash floor.
-
-    Args:
-        scenario: Fleet scenario (must have at least one home).
-        finance: FinanceConfig at the configured own_use_rate (not the solved rate).
-        simulate: Injected fleet simulator callable.
-
-    Returns:
-        Representative home's total annual outlay (£).
-    """
-    # Reuse finance._resolve_homes so homes-resolution semantics stay in one place
-    homes: List[HomeConfig] = _resolve_homes(scenario)
-
-    # Age all PV to system_age_years=0.0 (battery left unchanged for age-0 baseline)
-    aged_homes = [
-        replace(h, pv_config=replace(h.pv_config, system_age_years=0.0))
-        for h in homes
-    ]
-
-    # Derive timezone and timestamps from the scenario
-    tz: str
-    if scenario.location is not None:
-        tz = scenario.location.timezone
-    else:
-        tz = homes[0].location.timezone
-    start_ts = scenario.period.get_start_timestamp(tz)
-    end_ts = scenario.period.get_end_timestamp(tz)
-
-    fleet_config = FleetConfig(homes=aged_homes, name="age-0-baseline")
-    fleet_results = simulate(fleet_config, start_ts, end_ts)
-
-    summaries = [
-        calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
-        for r in fleet_results.per_home_results
-    ]
-    sim_days = summaries[0].simulation_days if summaries else 365
-    dist = bill_distribution(summaries, finance, sim_days)
-    return dist.representative.total_outlay_gbp
+_RECORDED_SETTINGS: tuple[_RecordedSetting[object], ...] = (_RETAINED_CASH_FLOOR, _SELF_CONSUMPTION_OVERRIDE)
+"""Every setting a RankedSweep records, each one sensitivity_panel checks its baseline against."""
 
 
 def _evaluate_config(
     point: ConfigPoint,
     scenario: ScenarioConfig,
     *,
-    simulate: Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"],
-    retained_cash_floor_gbp: Optional[float],
+    simulate: FleetSimulate,
 ) -> ConfigResult:
-    """Evaluate one (ConfigPoint, ScenarioConfig) pair against the W2 contract.
+    """Evaluate one (ConfigPoint, ScenarioConfig) pair with one :func:`~solar_challenge.projection.run_cost_recovery`.
 
-    Calls three W2 primitives in sequence:
-
-    1. :func:`~solar_challenge.finance.solve_cost_recovery_rate` → *rank* fields.
-    2. :func:`~solar_challenge.finance.project_multi_year` +
-       :func:`~solar_challenge.finance.project_economics` at ``finance.own_use_rate``
-       (15 p/kWh) → *baseline surplus* + economics fields.
-    3. :func:`_age0_baseline_outlay` → *baseline_outlay* at age 0.
+    The run's solution gives the *rank* fields; its economics, at
+    ``finance.own_use_rate_pence_per_kwh``, the baseline surplus and economics
+    fields; and its projection's age-0 summaries, billed at that rate, the
+    baseline outlay.
 
     Args:
         point: Install specification for this grid cell.
-        scenario: Fleet scenario for this grid cell (from :func:`enumerate_configs`).
+        scenario: Fleet scenario for this grid cell (from :func:`enumerate_configs`);
+            its finance block sets the retained-cash floor of the solve, which the
+            baseline pair does not read.
         simulate: Injected fleet simulator callable.
-        retained_cash_floor_gbp: When not None, overrides
-            ``scenario.finance.retained_cash_floor_per_home_per_year_gbp`` before
-            the solve; the baseline pair is computed at the *original*
-            ``own_use_rate`` so it remains floor-independent.
 
     Returns:
         :class:`ConfigResult` with all fields populated.
     """
-    # Validate finance block (required for cost-recovery sweep)
-    if scenario.finance is None:
-        raise ValueError(
-            "run_sweep requires every scenario to have a finance block; "
-            f"got scenario.finance=None for config {point!r}"
-        )
-    finance: FinanceConfig = scenario.finance
-
-    # Apply retained_cash_floor_gbp override if provided
-    if retained_cash_floor_gbp is not None:
-        finance = replace(finance, retained_cash_floor_per_home_per_year_gbp=retained_cash_floor_gbp)
-        scenario = replace(scenario, finance=finance)
-
-    # 1. RANK: solve cost-recovery rate at the (possibly overridden) floor
-    solution = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
-
-    # 2. BASELINE + ECON: project at finance.own_use_rate (15p) — floor-independent
-    curve = project_multi_year(scenario, finance, simulate=simulate)
-    econ = project_economics(curve, scenario, finance)
-
-    # 3. BASELINE OUTLAY: independent age-0 fleet sim at finance.own_use_rate
-    baseline_outlay = _age0_baseline_outlay(scenario, finance, simulate)
+    finance = _required_finance(point, scenario)
+    run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=simulate)
+    solution = run.solution
+    econ = run.economics
+    baseline_outlay = bill_distribution(run.projection.age0_summaries, finance).representative.total_outlay_gbp
 
     return ConfigResult(
         config=point,
         solution=solution,
-        representative_outlay_gbp=solution.representative_outlay_gbp,
-        solved_own_use_rate_pence_per_kwh=solution.own_use_rate_pence_per_kwh,
-        surplus_at_solved_gbp=solution.net_surplus_per_home_per_year_gbp,
-        feasible=solution.feasible,
-        binding=solution.binding,
         total_capex_gbp=econ.total_capex_gbp,
         min_dscr=econ.min_dscr,
         equity_irr=econ.equity_irr,
         payback_years=econ.payback_years,
+        baseline_own_use_rate_pence_per_kwh=finance.own_use_rate_pence_per_kwh,
         baseline_outlay_gbp=baseline_outlay,
         baseline_surplus_per_home_gbp=econ.net_surplus_per_home_per_year_gbp,
     )
@@ -1001,21 +861,16 @@ def _evaluate_config(
 def run_sweep(
     configs: List[tuple[ConfigPoint, ScenarioConfig]],
     *,
-    retained_cash_floor_gbp: Optional[float] = None,
-    simulate: Optional[
-        Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"]
-    ] = None,
+    simulate: FleetSimulate,
 ) -> RankedSweep:
-    """Drive a cartesian config grid through W2 cost-recovery evaluation and rank results.
+    """Drive a cartesian config grid through cost-recovery evaluation and rank results.
 
-    For each (ConfigPoint, ScenarioConfig) pair produced by :func:`enumerate_configs`:
-
-    1. Calls :func:`~solar_challenge.finance.solve_cost_recovery_rate` at the
-       (possibly overridden) retained-cash floor → *rank* fields.
-    2. Calls :func:`~solar_challenge.finance.project_multi_year` +
-       :func:`~solar_challenge.finance.project_economics` at
-       ``finance.own_use_rate`` (15 p/kWh) → baseline surplus + economics.
-    3. Runs an independent age-0 fleet simulation → baseline outlay.
+    For each (ConfigPoint, ScenarioConfig) pair produced by :func:`enumerate_configs`,
+    makes one :func:`~solar_challenge.projection.run_cost_recovery` at the
+    retained-cash floor its finance sets: its solution gives the *rank*
+    fields, its economics the baseline surplus and economics, and its
+    projection's age-0 summaries the baseline outlay, all at
+    ``finance.own_use_rate_pence_per_kwh``.
 
     The feasible configs (``binding != 'infeasible_above_retail'``, split off by
     :func:`feasible_split`) are sorted ascending by ``representative_outlay_gbp``
@@ -1025,51 +880,44 @@ def run_sweep(
     Args:
         configs: List of ``(ConfigPoint, ScenarioConfig)`` pairs, typically from
             :func:`enumerate_configs`.  Must be non-empty; every scenario must
-            carry a ``finance`` block (not None).
-        retained_cash_floor_gbp: When not None, overrides each scenario's
-            ``finance.retained_cash_floor_per_home_per_year_gbp`` before the
-            solve.  The baseline (outlay, surplus) pair is floor-independent
-            (own_use_rate stays fixed at 15 p/kWh).  When None, the echoed
-            ``RankedSweep.retained_cash_floor_gbp`` comes from the **first**
-            config's finance block; the caller is responsible for ensuring a
-            homogeneous fleet when that field is used for reporting.
-        simulate: Optional injected fleet simulator for offline testing.
-            Defaults to :func:`~solar_challenge.fleet.simulate_fleet`.
+            carry a ``finance`` block (not None), and every finance block must
+            set the same ``retained_cash_floor_per_home_per_year_gbp`` and the
+            same ``self_consumption_override``: set the floor on the base
+            scenario, through its knob, and put it on one own-use assumption,
+            e.g. with ``finance.with_own_use_basis``, before enumerating.
+        simulate: The fleet simulator every config's projection runs
+            through, such as a :class:`~solar_challenge.fleet.FleetRunner`'s
+            ``simulate``.
 
     Returns:
         :class:`RankedSweep` with sorted feasible results, infeasible points,
-        Pareto front, cheapest config, and the effective retained-cash floor.
+        Pareto front, cheapest config, and the configs' common retained-cash
+        floor and self-consumption override.
 
     Raises:
-        ValueError: When *configs* is empty or any scenario's ``finance`` is None.
+        ValueError: When *configs* is empty, any scenario's ``finance`` is
+            None, or two configs' finance blocks set different retained-cash
+            floors or different self-consumption overrides; each is refused
+            before any simulation.
 
     .. note::
-        **Simulation cost** — each config triggers up to three independent fleet
-        simulations per call to :func:`_evaluate_config`: one inside
-        :func:`~solar_challenge.finance.solve_cost_recovery_rate` (which
-        internally calls :func:`~solar_challenge.finance.project_multi_year` at
-        the solved rate), one explicit :func:`~solar_challenge.finance.project_multi_year`
-        call at the baseline rate (15 p/kWh), and one age-0 baseline outlay
-        simulation.  With the real ``simulate_fleet`` (ProcessPoolExecutor over
-        a 100-home fleet) this is substantial: size grids conservatively or use
-        an injected *simulate* for offline sweeps.
+        **Simulation cost** — each config is one projection: at least
+        ``projection.fewest_simulated_ages(asset_life_years)`` fleet
+        simulations (5 at the default 25 years), more where bisection adds
+        ages.  With the real :meth:`~solar_challenge.fleet.FleetRunner.simulate` (a process pool over
+        a 100-home fleet) this is substantial: size grids conservatively or pass
+        a stand-in *simulate* for offline sweeps.
     """
     if not configs:
         raise ValueError(
             "run_sweep: configs must be non-empty; received an empty list"
         )
-
-    if simulate is None:
-        simulate = simulate_fleet
+    common_floor = _RETAINED_CASH_FLOOR.common(configs)
+    common_override = _SELF_CONSUMPTION_OVERRIDE.common(configs)
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [
-        _evaluate_config(
-            point,
-            scenario,
-            simulate=simulate,
-            retained_cash_floor_gbp=retained_cash_floor_gbp,
-        )
+        _evaluate_config(point, scenario, simulate=simulate)
         for point, scenario in configs
     ]
 
@@ -1083,25 +931,11 @@ def run_sweep(
     # Compute Pareto front over ALL evaluated configs (feasible + infeasible)
     pareto = pareto_baseline(all_results)
 
-    # Determine the effective retained-cash floor to echo.
-    # When no global override is given, we read the floor from the FIRST config's
-    # finance block.  This is a documented homogeneity assumption: callers with
-    # heterogeneous finance blocks should pass retained_cash_floor_gbp explicitly
-    # to get a well-defined reported floor (see run_sweep docstring).
-    effective_floor: float
-    if retained_cash_floor_gbp is not None:
-        effective_floor = retained_cash_floor_gbp
-    else:
-        first_finance = configs[0][1].finance
-        if first_finance is not None:
-            effective_floor = first_finance.retained_cash_floor_per_home_per_year_gbp
-        else:
-            effective_floor = 0.0  # Guard fires before here; defensive fallback
-
     return RankedSweep(
         results=tuple(ranked_feasible),
         infeasible=tuple(infeasible_pts),
-        retained_cash_floor_gbp=effective_floor,
+        retained_cash_floor_gbp=common_floor,
         cheapest_feasible=cheapest,
         pareto_baseline=pareto,
+        self_consumption_override=common_override,
     )

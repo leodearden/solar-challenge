@@ -15,7 +15,7 @@ from solar_challenge.web.assistant import MAX_HISTORY_TURNS, request_messages
 
 
 def stored_turn(role: str, content: str) -> dict[str, Any]:
-    """A chat turn shaped as database.get_chat_history returns one."""
+    """A chat turn shaped as chat_messages.get_chat_history returns one."""
     return {"role": role, "content": content, "created_at": "2026-10-14T12:00:00+00:00", "metadata": None}
 
 

@@ -9,28 +9,19 @@ every module, the web subpackage's too, so like the web tests it needs the web e
 """
 
 import doctest
-import importlib
 import io
-import pkgutil
-from types import ModuleType
 
 import pytest
 
-import solar_challenge
+from tests._package_modules import package_modules
 
 pytest.importorskip("flask")
-
-
-def _package_modules() -> list[ModuleType]:
-    """Return solar_challenge and every module beneath it, imported."""
-    walk = pkgutil.walk_packages(solar_challenge.__path__, f"{solar_challenge.__name__}.")
-    return [solar_challenge, *(importlib.import_module(info.name) for info in walk)]
 
 
 def _examples_by_docstring() -> list[doctest.DocTest]:
     """Return the examples of each package docstring that has any, one DocTest per docstring."""
     finder = doctest.DocTestFinder()
-    return [found for module in _package_modules() for found in finder.find(module) if found.examples]
+    return [found for module in package_modules() for found in finder.find(module) if found.examples]
 
 
 _EXAMPLES_BY_DOCSTRING = _examples_by_docstring()

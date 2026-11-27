@@ -116,14 +116,15 @@ The calibration test suite maintains two parallel columns:
 | Column | Method | DSCR | IRR | Self-cons fraction |
 |--------|--------|------|-----|-------------------|
 | **Spreadsheet-input** | `spreadsheet_revenue_curve` (analytic) | ~4.02 | ~10.7% | 0.70 (named inp) |
-| **Physics** | `project_multi_year` (real PVGIS sim) | reported | reported | reported (window-dependent) |
+| **Physics** | `project_multi_year` (simulated fleet) | reported | reported | reported (window-dependent) |
 
 Only the **spreadsheet-input column** is hard-asserted (capex + covenant floor).
-The **physics column** is run in the `@pytest.mark.slow` suite over a 2-home,
-3-day January window and *reported* alongside the spreadsheet column as a smoke
-check of the physics path. It does **not** document the §2.3 annual
-self-consumption tension: a short winter window cannot show an annual
-self-consumption fraction. The DSCR/IRR that report prints are degenerate in
+The **physics column** runs offline in the verify, over a 2-home fleet and three
+clear June days that the test seeds as Bristol's TMY
+(`PHYSICS_COLUMN_DAYS` in `tests/_fin_calibration.py`), and is *reported* alongside the
+spreadsheet column as a smoke check of the physics path. It does **not** document
+the §2.3 annual self-consumption tension: three synthetic days cannot show an
+annual self-consumption fraction. The DSCR/IRR that report prints are degenerate in
 **both** columns (the [FIN] grant exceeds the 2-home capex, so financed capex,
 debt and equity are all zero); the ~4.02 / ~10.7% in the table above are the
 100-home spreadsheet-input figures. Documenting the annual tension would need a
@@ -143,9 +144,13 @@ for real fleet projections.
 
 **The 0.70 assumption bills more own-use than a household consumes.** Applied to the
 named yield, it gives 0.70 × 5.5 × 1,050 = 4,042.5 kWh/home of own-use, but the
-calibration scenario's homes demand 3,400 kWh/yr (UK TDCV,
+calibration scenario's homes demand 3,400 kWh/yr (England's 2022 mean domestic
+electricity consumption per household, rounded: 3,399.87 kWh in DESNZ's *Subnational
+electricity consumption statistics 2005 to 2024*;
 `scenarios/bristol-fin-calibration.yaml`; §1's transcribed cells carry no household
-demand).  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
+demand). Since task 894 a simulated calendar year of a calibration home delivers exactly
+that demand; before it, the seasonal weights delivered 3,336.2 kWh over the scenario's
+2024, 1.9% short.  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
 15 p own-use rate instead of the 6 p export rate credits
 642.5 × (15 − 6) / 100 = £57.825/home/yr (£5,782.50/yr for 100 homes).
 
@@ -180,6 +185,22 @@ scenario's 2024 on Bristol's scaled TMY, each figure with the losses and with
   home 0 no longer generates in 2024.
 - The H6 hard asserts (§3.3) are analytic, so the losses leave them unchanged.
 
+**[Amended 2026-10-20, task 823: the figures above predate task 236's configured inverter
+efficiency ([pv-inverter-efficiency.md](pv-inverter-efficiency.md)) and task 823's
+NOCT-SAM cell temperature, from the module's own NOCT and efficiency
+([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured by the same method on task
+823's commit 2be9d1b (same interpreter and libraries, the same TMY): home 0 generates
+5,654.0 kWh with the losses, 1,028.0 kWh per nameplate kWp against the sheet's 1,050 and
+1,008.6 per wired kWp; without them 6,583.6 kWh, 1,197.0 and 1,174.4. The losses take
+929.6 kWh of its 2024. The five-home solve under the 0.70 override reads 2.20 p/kWh
+without the losses and 3.77 with them.]**
+
+**[Amended 2026-11-01, task 894: every figure above was measured with each home demanding
+3,336.2 kWh over the scenario's 2024, the seasonal weights' 1.9% shortfall; since task 894
+the year delivers the 3,400 kWh of §4.1. The specific yields do not read demand, but the
+five-home solves do, through the 0.70 override's cap of own-use at each home's demand. They
+are not re-measured here.]**
+
 ---
 
 ## 5. Summary
@@ -189,13 +210,16 @@ scenario's 2024 on Bristol's scaled TMY, each figure with the losses and with
   to abstracted fees/deferral — covenant floor (≥1.20) and IRR > 0 are asserted
 - The £125,000 capex delta is a battery-size reconciliation, not an error
 - Annual physics self-consumption is expected to differ from the spreadsheet's
-  0.70 by design — physics is the correct path for real projections. The slow
+  0.70 by design — physics is the correct path for real projections. The
   3-day physics column is a smoke report, not evidence of that difference
 - The spreadsheet's 0.70 × 5,775 = 4,042.5 kWh/home of own-use exceeds the 3,400 kWh
-  TDCV demand by 642.5 kWh (£57.825/home/yr at 15 p rather than 6 p).
+  demand the calibration scenario assumes by 642.5 kWh (£57.825/home/yr at 15 p rather
+  than 6 p).
   `spreadsheet_revenue_curve` keeps it uncapped for method-agreement; the simulator's
   override path caps own-use at demand (`docs/cost-recovery-finance-model.md` §3,
   *Override (spreadsheet-assumption) path*)
 - With task 252's system losses the calibration home's physics yield is 1,013.8 kWh per
   nameplate kWp against the sheet's 1,050 (1,181.9 without them), and the 5-home
   cost-recovery solve under the 0.70 override rises from 2.34 to 3.90 p/kWh (§4.2)
+  **[Amended 2026-10-20, task 823: under NOCT-SAM's cell temperature the yield is 1,028.0
+  (1,197.0 without the losses), and the solve rises from 2.20 to 3.77 p/kWh (§4.2).]**

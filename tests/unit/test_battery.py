@@ -6,15 +6,50 @@ import pickle
 import re
 from collections.abc import Callable
 
+import numpy as np
 import pytest
 from solar_challenge.battery import (
+    CAPACITY_SETTING_KWH,
     BatteryConfig,
     Battery,
+    SocEnvelope,
     compute_soh,
     has_battery,
     require_valid_capacity_setting,
+    require_valid_power_limit,
 )
-from solar_challenge.config import GridChargeConfig
+from solar_challenge.dispatch import (
+    STRATEGY_CONFIG_BY_TYPE,
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+)
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import as_finite_float
+from solar_challenge.timebase import HOURS_PER_MINUTE
+from tests._over_rounding_discharges import BATTERY_THEY_OVER_ROUND_ON, OVER_ROUNDING_DISCHARGES
+from tests._read_outcomes import outcome_of
+from tests._unusable_numbers import UNUSABLE_NUMBERS
+
+_SOC_ORDER_REFUSAL = (
+    "min_soc_fraction must be less than max_soc_fraction, "
+    "got min_soc_fraction={min_soc_fraction!r} and max_soc_fraction={max_soc_fraction!r}"
+)
+
+_NUMBER_FIELDS = (
+    "capacity_kwh",
+    "max_charge_kw",
+    "max_discharge_kw",
+    "min_soc_fraction",
+    "max_soc_fraction",
+    "charge_efficiency",
+    "discharge_efficiency",
+    "system_age_years",
+    "calendar_fade_rate_per_year",
+    "cycle_fade_per_equivalent_full_cycle",
+    "soh_floor",
+    "soh",
+)
 
 
 class TestBatteryConfigBasics:
@@ -52,45 +87,115 @@ class TestBatteryConfigDefaults:
         assert config.max_discharge_kw == 2.5
         assert config.name  # Has a name
 
+    def test_a_battery_that_names_no_strategy_dispatches_self_consumption(self) -> None:
+        assert BatteryConfig(capacity_kwh=5.0).dispatch_strategy == SelfConsumptionStrategyConfig()
+
+
+class TestBatteryConfigDispatchStrategy:
+    """A battery's dispatch strategy is one of DispatchStrategyConfig's variants, never None."""
+
+    @pytest.mark.parametrize(
+        "strategy",
+        [
+            pytest.param(None, id="none"),
+            pytest.param("tou_optimized", id="tag"),
+            pytest.param({"strategy_type": "self_consumption"}, id="block"),
+            pytest.param(GridChargeConfig(target_soc_fraction=0.8), id="other-config"),
+        ],
+    )
+    def test_a_value_that_is_not_a_strategy_variant_is_refused_naming_the_field_the_value_and_each_tag(
+        self, strategy: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy)
+
+        message = str(exc_info.value)
+        assert message.startswith("dispatch_strategy ")
+        assert message.endswith(f", got {strategy!r}")
+        assert all(tag in message for tag in STRATEGY_CONFIG_BY_TYPE)
+
+    @pytest.mark.parametrize("variant", list(STRATEGY_CONFIG_BY_TYPE.values()))
+    def test_each_variant_is_held_as_given(self, variant: type) -> None:
+        strategy = variant(import_limit_kw=3.0) if variant is PeakShavingStrategyConfig else variant()
+
+        assert BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy).dispatch_strategy is strategy
+
 
 class TestBatteryConfigValidation:
     """Test parameter validation."""
 
-    def test_capacity_must_be_positive(self):
+    @pytest.mark.parametrize("capacity_kwh", [0, -1.0])
+    def test_capacity_must_be_positive(self, capacity_kwh):
         """Capacity <= 0 raises error."""
-        with pytest.raises(ValueError, match="Capacity"):
-            BatteryConfig(capacity_kwh=0)
-        with pytest.raises(ValueError, match="Capacity"):
-            BatteryConfig(capacity_kwh=-1.0)
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=capacity_kwh)
+        assert str(exc_info.value) == f"capacity_kwh must be greater than 0, got {capacity_kwh!r}"
 
-    def test_max_charge_must_be_positive(self):
+    @pytest.mark.parametrize("max_charge_kw", [0, -1.0])
+    def test_max_charge_must_be_positive(self, max_charge_kw):
         """Max charge <= 0 raises error."""
-        with pytest.raises(ValueError, match="charge"):
-            BatteryConfig(capacity_kwh=5.0, max_charge_kw=0)
-        with pytest.raises(ValueError, match="charge"):
-            BatteryConfig(capacity_kwh=5.0, max_charge_kw=-1.0)
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0, max_charge_kw=max_charge_kw)
+        assert str(exc_info.value) == f"max_charge_kw must be greater than 0, got {max_charge_kw!r}"
 
-    def test_max_discharge_must_be_positive(self):
+    @pytest.mark.parametrize("max_discharge_kw", [0, -1.0])
+    def test_max_discharge_must_be_positive(self, max_discharge_kw):
         """Max discharge <= 0 raises error."""
-        with pytest.raises(ValueError, match="discharge"):
-            BatteryConfig(capacity_kwh=5.0, max_discharge_kw=0)
-        with pytest.raises(ValueError, match="discharge"):
-            BatteryConfig(capacity_kwh=5.0, max_discharge_kw=-1.0)
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0, max_discharge_kw=max_discharge_kw)
+        assert str(exc_info.value) == f"max_discharge_kw must be greater than 0, got {max_discharge_kw!r}"
 
     @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
-    @pytest.mark.parametrize(
-        ("field", "invariant", "unit"),
-        [
-            ("capacity_kwh", "Capacity must be positive and finite", "kWh"),
-            ("max_charge_kw", "Max charge power must be positive and finite", "kW"),
-            ("max_discharge_kw", "Max discharge power must be positive and finite", "kW"),
-        ],
-    )
+    @pytest.mark.parametrize("field", ["capacity_kwh", "max_charge_kw", "max_discharge_kw"])
     def test_a_capacity_or_power_limit_that_is_not_finite_is_refused(
-        self, field: str, invariant: str, unit: str, value: float
+        self, field: str, value: float
     ) -> None:
-        with pytest.raises(ValueError, match=re.escape(f"{invariant}, got {value} {unit}")):
+        with pytest.raises(ConfigurationError) as exc_info:
             dataclasses.replace(BatteryConfig(capacity_kwh=5.0), **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("field", _NUMBER_FIELDS)
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_every_number_setting_refuses_a_value_that_is_not_a_finite_number_naming_it(
+        self, field: str, value: object
+    ) -> None:
+        """A NaN, an infinity, a bool or a word is refused by name, before any range or the SOC order is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(BatteryConfig(capacity_kwh=5.0), **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    def test_a_whole_number_capacity_is_held_as_the_float_it_equals(self) -> None:
+        capacity_kwh = BatteryConfig(capacity_kwh=5).capacity_kwh
+        assert capacity_kwh == 5.0
+        assert type(capacity_kwh) is float
+
+    @pytest.mark.parametrize("direction", ["charge", "discharge"])
+    @pytest.mark.parametrize(
+        "kw", [0.0, -1.0, math.nan, math.inf, True, pytest.param("x", id="word")]
+    )
+    def test_require_valid_power_limit_refuses_as_battery_config_does(
+        self, direction: str, kw: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as config_refusal:
+            BatteryConfig(capacity_kwh=5.0, **{f"max_{direction}_kw": kw})
+        with pytest.raises(ConfigurationError) as helper_refusal:
+            require_valid_power_limit(kw, direction)
+        assert str(helper_refusal.value) == str(config_refusal.value)
+
+    @pytest.mark.parametrize("direction", ["charge", "discharge"])
+    @pytest.mark.parametrize(
+        "kw", [3, pytest.param(np.float64(3.5), id="numpy"), pytest.param("3.5", id="quoted")]
+    )
+    def test_require_valid_power_limit_returns_the_limit_as_battery_config_holds_it(
+        self, direction: str, kw: object
+    ) -> None:
+        field = f"max_{direction}_kw"
+        held = getattr(BatteryConfig(capacity_kwh=5.0, **{field: kw}), field)
+
+        read = require_valid_power_limit(kw, direction)
+
+        assert read == held
+        assert type(read) is float
 
 
 class TestBatteryCapacitySetting:
@@ -98,29 +203,75 @@ class TestBatteryCapacitySetting:
 
     @pytest.mark.parametrize(
         ("capacity_kwh", "expected"),
-        [(0.0, False), (0, False), (1e-9, True), (5.0, True)],
+        [
+            (0.0, False),
+            (0, False),
+            (1e-9, True),
+            (5.0, True),
+            pytest.param("0", False, id="quoted-0"),
+            pytest.param("4", True, id="quoted-4"),
+        ],
     )
     def test_a_positive_capacity_is_a_battery_and_zero_is_none(
-        self, capacity_kwh: float, expected: bool
+        self, capacity_kwh: object, expected: bool
     ) -> None:
         assert has_battery(capacity_kwh, "battery_kwh") is expected
 
     @pytest.mark.parametrize("check", [has_battery, require_valid_capacity_setting])
-    @pytest.mark.parametrize("capacity_kwh", [math.nan, math.inf, -math.inf, -1.0, -1e-9])
+    @pytest.mark.parametrize(
+        ("capacity_kwh", "requirement"),
+        [
+            pytest.param(math.nan, "a finite number", id="nan"),
+            pytest.param(math.inf, "a finite number", id="inf"),
+            pytest.param(-math.inf, "a finite number", id="-inf"),
+            pytest.param(-1.0, "at least 0", id="-1.0"),
+            pytest.param(-1e-9, "at least 0", id="-1e-09"),
+        ],
+    )
     def test_a_negative_or_non_finite_capacity_is_refused_naming_the_setting(
-        self, capacity_kwh: float, check: Callable[[float, str], object]
+        self, capacity_kwh: float, requirement: str, check: Callable[[float, str], object]
     ) -> None:
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             check(capacity_kwh, "--battery-kwh")
-        assert str(exc_info.value) == (
-            f"--battery-kwh must be >= 0 and finite (0 for no battery), got {capacity_kwh} kWh"
-        )
+        assert str(exc_info.value) == f"--battery-kwh must be {requirement}, got {capacity_kwh!r}"
 
-    @pytest.mark.parametrize("capacity_kwh", [0.0, 5.0])
-    def test_require_valid_capacity_setting_accepts_zero_and_a_positive_finite_capacity(
-        self, capacity_kwh: float
+    @pytest.mark.parametrize(
+        ("capacity_kwh", "expected"),
+        [
+            (0, 0.0),
+            (5.0, 5.0),
+            pytest.param(np.float64(5.0), 5.0, id="numpy"),
+            pytest.param("5", 5.0, id="quoted"),
+        ],
+    )
+    def test_require_valid_capacity_setting_returns_zero_or_a_positive_finite_capacity_as_a_float(
+        self, capacity_kwh: object, expected: float
     ) -> None:
-        assert require_valid_capacity_setting(capacity_kwh, "battery_kwh") is None
+        read = require_valid_capacity_setting(capacity_kwh, "battery_kwh")
+
+        assert read == expected
+        assert type(read) is float
+
+    @pytest.mark.parametrize(
+        "capacity_kwh",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="word"),
+            pytest.param(-1.0, id="-1.0"),
+            pytest.param(-1e-9, id="-1e-09"),
+            pytest.param(0, id="no-battery"),
+            pytest.param(1e-9, id="tiny"),
+            pytest.param(5, id="whole"),
+            pytest.param("5", id="quoted"),
+            pytest.param(np.float64(5.0), id="numpy"),
+            pytest.param(1e9, id="huge"),
+        ],
+    )
+    def test_require_valid_capacity_setting_reads_under_capacity_setting_kwh(self, capacity_kwh: object) -> None:
+        """A field read with as_finite_float under CAPACITY_SETTING_KWH reads as require_valid_capacity_setting reads it."""
+        assert outcome_of(lambda: require_valid_capacity_setting(capacity_kwh, "battery_kwh")) == outcome_of(
+            lambda: as_finite_float(capacity_kwh, "battery_kwh", CAPACITY_SETTING_KWH)
+        )
 
 
 class TestBatteryConfigGridCharging:
@@ -160,59 +311,108 @@ class TestBatteryConfigGridCharging:
         assert restored == cfg
 
 
-class TestBatteryConfigRoundTripEfficiency:
-    """Test BatteryConfig round-trip efficiency split via sqrt."""
+class TestBatteryAnswersItsGridChargeTarget:
+    """A Battery answers the SOC grid charging fills it to, a fraction of its effective capacity capped at max_soc_kwh, and the charge limit charge() applies."""
 
-    def test_efficiency_splits_into_sqrt(self) -> None:
-        """efficiency=0.9 -> charge_efficiency==sqrt(0.9), discharge_efficiency==sqrt(0.9)."""
-        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
-        assert cfg.charge_efficiency == pytest.approx(math.sqrt(0.9))
-        assert cfg.discharge_efficiency == pytest.approx(math.sqrt(0.9))
+    def test_without_grid_charging_there_is_no_target(self) -> None:
+        assert Battery(BatteryConfig(capacity_kwh=10.0)).grid_charge_target_kwh is None
 
-    def test_efficiency_retained_as_raw(self) -> None:
-        """efficiency field retains the original round-trip value."""
-        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
-        assert cfg.efficiency == 0.9
-
-    def test_efficiency_overrides_explicit_charge_discharge(self) -> None:
-        """efficiency takes precedence over explicit charge_efficiency/discharge_efficiency."""
-        cfg = BatteryConfig(
-            capacity_kwh=5.0,
-            efficiency=0.81,
-            charge_efficiency=0.99,
-            discharge_efficiency=0.99,
+    @pytest.mark.parametrize("soh", [1.0, 0.7])
+    def test_the_target_is_its_fraction_of_the_effective_capacity(self, soh: float) -> None:
+        battery = Battery(
+            BatteryConfig(capacity_kwh=10.0, soh=soh, grid_charging=GridChargeConfig(0.5))
         )
-        assert cfg.charge_efficiency == pytest.approx(math.sqrt(0.81))
-        assert cfg.discharge_efficiency == pytest.approx(math.sqrt(0.81))
+        assert battery.grid_charge_target_kwh == pytest.approx(0.5 * 10.0 * soh)
 
-    def test_efficiency_zero_raises(self) -> None:
-        """efficiency == 0 raises ValueError."""
-        with pytest.raises(ValueError, match="efficiency"):
-            BatteryConfig(capacity_kwh=5.0, efficiency=0.0)
+    def test_a_target_above_the_ceiling_is_the_ceiling(self) -> None:
+        battery = Battery(
+            BatteryConfig(
+                capacity_kwh=10.0, soh=0.7, max_soc_fraction=0.9, grid_charging=GridChargeConfig(0.95)
+            )
+        )
+        assert battery.grid_charge_target_kwh == battery.max_soc_kwh
 
-    def test_efficiency_greater_than_one_raises(self) -> None:
-        """efficiency > 1 raises ValueError."""
-        with pytest.raises(ValueError, match="efficiency"):
-            BatteryConfig(capacity_kwh=5.0, efficiency=1.5)
+    def test_a_target_above_an_assigned_ceiling_is_that_ceiling(self) -> None:
+        battery = Battery(
+            BatteryConfig(capacity_kwh=10.0, soh=0.7, grid_charging=GridChargeConfig(0.95))
+        )
+        battery.max_soc_fraction = 0.6
+        assert battery.grid_charge_target_kwh == battery.max_soc_kwh
 
-    def test_efficiency_negative_raises(self) -> None:
-        """efficiency < 0 raises ValueError."""
-        with pytest.raises(ValueError, match="efficiency"):
-            BatteryConfig(capacity_kwh=5.0, efficiency=-0.5)
+    def test_the_charge_limit_is_the_configured_one_and_the_one_charge_applies(self) -> None:
+        battery = Battery(BatteryConfig(capacity_kwh=10.0, max_charge_kw=3.3), initial_soc_kwh=1.0)
+        assert battery.max_charge_kw == 3.3
+        assert battery.charge(2 * battery.max_charge_kw, 60) == pytest.approx(battery.max_charge_kw * 1.0)
+        assert battery.soc_kwh - 1.0 == pytest.approx(battery.max_charge_kw * 1.0 * battery.charge_efficiency)
 
-    def test_efficiency_one_is_valid(self) -> None:
-        """efficiency == 1 is valid (100% round-trip)."""
-        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=1.0)
-        assert cfg.charge_efficiency == pytest.approx(1.0)
-        assert cfg.discharge_efficiency == pytest.approx(1.0)
+    def test_the_discharge_limit_is_the_configured_one_and_the_one_discharge_applies(self) -> None:
+        battery = Battery(BatteryConfig(capacity_kwh=10.0, max_discharge_kw=3.3), initial_soc_kwh=9.0)
+        assert battery.max_discharge_kw == 3.3
+        assert battery.discharge(2 * battery.max_discharge_kw, 60) == pytest.approx(battery.max_discharge_kw * 1.0)
+        assert 9.0 - battery.soc_kwh == pytest.approx(battery.max_discharge_kw * 1.0 / battery.discharge_efficiency)
 
-    def test_efficiency_pickles_idempotently(self) -> None:
-        """BatteryConfig with efficiency round-trips through pickle correctly."""
-        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
-        restored = pickle.loads(pickle.dumps(cfg))
-        assert restored == cfg
-        # After pickle, charge_efficiency should still equal sqrt(0.9)
-        assert restored.charge_efficiency == pytest.approx(math.sqrt(0.9))
+
+class TestBatteryConfigRoundTripEfficiency:
+    """A battery's round-trip efficiency is no field of BatteryConfig: with_round_trip sets the pair it splits into."""
+
+    def test_a_round_trip_efficiency_argument_is_refused_naming_it(self) -> None:
+        with pytest.raises(TypeError) as exc_info:
+            BatteryConfig(capacity_kwh=5, efficiency=0.9)
+        assert "'efficiency'" in str(exc_info.value)
+
+    def test_a_battery_given_a_round_trip_pickles_to_an_equal_one(self) -> None:
+        battery = BatteryConfig(capacity_kwh=5.0).with_round_trip(0.9)
+
+        restored = pickle.loads(pickle.dumps(battery))
+
+        assert restored == battery
+        assert restored.charge_efficiency == math.sqrt(0.9)
+
+
+class TestBatteryConfigWithRoundTrip:
+    """with_round_trip gives a battery the per-direction pair its round-trip efficiency splits into."""
+
+    def test_it_makes_each_direction_the_square_root_and_keeps_every_other_field(self) -> None:
+        battery = BatteryConfig(capacity_kwh=5.0, max_charge_kw=3.0, name="Wall")
+
+        with_round_trip = battery.with_round_trip(0.95)
+
+        assert with_round_trip == dataclasses.replace(
+            battery, charge_efficiency=math.sqrt(0.95), discharge_efficiency=math.sqrt(0.95)
+        )
+
+    @pytest.mark.parametrize("round_trip", [0.0, 1.5, -0.5])
+    def test_a_round_trip_outside_its_range_is_refused_naming_it(self, round_trip: float) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
+        assert str(exc_info.value) == (
+            f"round-trip efficiency must be greater than 0 and at most 1, got {round_trip!r}"
+        )
+
+    @pytest.mark.parametrize("round_trip", [True, pytest.param("x", id="word")])
+    def test_a_round_trip_that_is_not_a_finite_number_is_refused_naming_it(self, round_trip: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
+        assert str(exc_info.value) == f"round-trip efficiency must be a finite number, got {round_trip!r}"
+
+    def test_a_lossless_round_trip_makes_each_direction_lossless(self) -> None:
+        battery = BatteryConfig(capacity_kwh=5.0).with_round_trip(1.0)
+
+        assert (battery.charge_efficiency, battery.discharge_efficiency) == (1.0, 1.0)
+
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            pytest.param({"soh": 0.7}, id="finance-aged-home"),
+            pytest.param({"capacity_kwh": 10.0}, id="optimize-install"),
+        ],
+    )
+    def test_replacing_another_field_keeps_the_pair_the_round_trip_set(
+        self, changes: dict[str, float]
+    ) -> None:
+        battery = dataclasses.replace(BatteryConfig(capacity_kwh=5.0).with_round_trip(0.81), **changes)
+
+        assert (battery.charge_efficiency, battery.discharge_efficiency) == (0.9, 0.9)
 
 
 class TestBatteryConfigSOCEfficiencyValidation:
@@ -221,24 +421,32 @@ class TestBatteryConfigSOCEfficiencyValidation:
     # --- SOC fraction validation ---
 
     def test_min_soc_equal_to_max_raises(self) -> None:
-        """min_soc_fraction == max_soc_fraction raises ValueError."""
-        with pytest.raises(ValueError, match="SOC"):
+        """min_soc_fraction == max_soc_fraction raises ConfigurationError."""
+        with pytest.raises(ConfigurationError) as exc_info:
             BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.5, max_soc_fraction=0.5)
+        assert str(exc_info.value) == _SOC_ORDER_REFUSAL.format(
+            min_soc_fraction=0.5, max_soc_fraction=0.5
+        )
 
     def test_min_soc_greater_than_max_raises(self) -> None:
-        """min_soc_fraction > max_soc_fraction raises ValueError."""
-        with pytest.raises(ValueError, match="SOC"):
+        """min_soc_fraction > max_soc_fraction raises ConfigurationError."""
+        with pytest.raises(ConfigurationError) as exc_info:
             BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.8, max_soc_fraction=0.3)
+        assert str(exc_info.value) == _SOC_ORDER_REFUSAL.format(
+            min_soc_fraction=0.8, max_soc_fraction=0.3
+        )
 
     def test_min_soc_fraction_negative_raises(self) -> None:
-        """min_soc_fraction < 0 raises ValueError."""
-        with pytest.raises(ValueError, match="SOC"):
+        """min_soc_fraction < 0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError) as exc_info:
             BatteryConfig(capacity_kwh=5.0, min_soc_fraction=-0.1, max_soc_fraction=0.9)
+        assert str(exc_info.value) == "min_soc_fraction must be between 0 and 1, got -0.1"
 
     def test_max_soc_fraction_exceeds_one_raises(self) -> None:
-        """max_soc_fraction > 1 raises ValueError."""
-        with pytest.raises(ValueError, match="SOC"):
+        """max_soc_fraction > 1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError) as exc_info:
             BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.1, max_soc_fraction=1.1)
+        assert str(exc_info.value) == "max_soc_fraction must be between 0 and 1, got 1.1"
 
     # --- charge_efficiency validation ---
 
@@ -329,11 +537,6 @@ class TestBatteryConfigSOCEfficiencyFields:
         """BatteryConfig default discharge_efficiency is 0.975."""
         cfg = BatteryConfig(capacity_kwh=5.0)
         assert cfg.discharge_efficiency == 0.975
-
-    def test_default_efficiency_is_none(self) -> None:
-        """BatteryConfig default efficiency (round-trip) is None."""
-        cfg = BatteryConfig(capacity_kwh=5.0)
-        assert cfg.efficiency is None
 
     def test_custom_soc_fractions(self) -> None:
         """Custom SOC fractions are stored correctly."""
@@ -428,8 +631,8 @@ class TestBatteryReadsSOCEffFromConfig:
         assert battery.discharge_efficiency == 0.6
 
     def test_battery_uses_config_efficiency_for_charging(self) -> None:
-        """Battery built from config with efficiency=0.9 charges with sqrt(0.9)."""
-        cfg = BatteryConfig(capacity_kwh=10.0, efficiency=0.9)
+        """Battery built from a config given round-trip efficiency 0.9 charges with sqrt(0.9)."""
+        cfg = BatteryConfig(capacity_kwh=10.0).with_round_trip(0.9)
         battery = Battery(cfg, initial_soc_kwh=cfg.capacity_kwh * cfg.min_soc_fraction + 1.0)
         initial_soc = battery.soc_kwh
         # Charge 1 kW for 1 hour
@@ -461,10 +664,13 @@ class TestBatteryReadsSOCEffFromConfig:
         assert battery.max_soc_fraction == 0.8
 
     def test_out_of_range_min_soc_constructor_override_raises(self) -> None:
-        """min_soc_fraction > max_soc_fraction explicit override raises ValueError."""
+        """min_soc_fraction > max_soc_fraction explicit override raises ConfigurationError."""
         cfg = BatteryConfig(capacity_kwh=5.0)
-        with pytest.raises(ValueError, match="SOC"):
+        with pytest.raises(ConfigurationError) as exc_info:
             Battery(cfg, min_soc_fraction=0.95, max_soc_fraction=0.1)
+        assert str(exc_info.value) == _SOC_ORDER_REFUSAL.format(
+            min_soc_fraction=0.95, max_soc_fraction=0.1
+        )
 
     def test_out_of_range_charge_efficiency_constructor_override_raises(self) -> None:
         """charge_efficiency > 1 explicit override raises ValueError."""
@@ -485,15 +691,23 @@ class TestBatterySOCEffAssignment:
     @pytest.mark.parametrize(
         ("attribute", "value", "message"),
         [
-            ("min_soc_fraction", 0.9, "Invalid SOC limits: min=0.9, max=0.9"),
-            ("min_soc_fraction", -0.1, "Invalid SOC limits: min=-0.1, max=0.9"),
-            ("min_soc_fraction", math.nan, "Invalid SOC limits: min=nan, max=0.9"),
-            ("max_soc_fraction", 0.1, "Invalid SOC limits: min=0.1, max=0.1"),
-            ("max_soc_fraction", 1.1, "Invalid SOC limits: min=0.1, max=1.1"),
-            ("charge_efficiency", 0.0, "Charge efficiency must be (0, 1], got 0.0"),
-            ("charge_efficiency", 1.5, "Charge efficiency must be (0, 1], got 1.5"),
-            ("discharge_efficiency", 0.0, "Discharge efficiency must be (0, 1], got 0.0"),
-            ("discharge_efficiency", math.nan, "Discharge efficiency must be (0, 1], got nan"),
+            (
+                "min_soc_fraction",
+                0.9,
+                _SOC_ORDER_REFUSAL.format(min_soc_fraction=0.9, max_soc_fraction=0.9),
+            ),
+            ("min_soc_fraction", -0.1, "min_soc_fraction must be between 0 and 1, got -0.1"),
+            ("min_soc_fraction", math.nan, "min_soc_fraction must be a finite number, got nan"),
+            (
+                "max_soc_fraction",
+                0.1,
+                _SOC_ORDER_REFUSAL.format(min_soc_fraction=0.1, max_soc_fraction=0.1),
+            ),
+            ("max_soc_fraction", 1.1, "max_soc_fraction must be between 0 and 1, got 1.1"),
+            ("charge_efficiency", 0.0, "charge_efficiency must be greater than 0 and at most 1, got 0.0"),
+            ("charge_efficiency", 1.5, "charge_efficiency must be greater than 0 and at most 1, got 1.5"),
+            ("discharge_efficiency", 0.0, "discharge_efficiency must be greater than 0 and at most 1, got 0.0"),
+            ("discharge_efficiency", math.nan, "discharge_efficiency must be a finite number, got nan"),
         ],
     )
     def test_an_assignment_that_breaks_the_bounds_is_refused_and_changes_nothing(
@@ -511,15 +725,15 @@ class TestBatterySOCEffAssignment:
             )
 
         before = snapshot()
-        with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
             setattr(battery, attribute, value)
         assert snapshot() == before
 
     def test_an_assignment_is_checked_against_the_battery_s_current_limits(self) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         battery.max_soc_fraction = 0.5
-        message = "Invalid SOC limits: min=0.6, max=0.5"
-        with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        message = _SOC_ORDER_REFUSAL.format(min_soc_fraction=0.6, max_soc_fraction=0.5)
+        with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
             battery.min_soc_fraction = 0.6
         assert battery.min_soc_fraction == 0.1
 
@@ -567,6 +781,162 @@ class TestBatterySOCEffAssignment:
         assert battery.min_soc_kwh == pytest.approx(2.0)
 
 
+_TEN_KWH_CHARGING_TO_HALF = BatteryConfig(capacity_kwh=10.0, grid_charging=GridChargeConfig(target_soc_fraction=0.5))
+
+
+class TestBatteryConfigAssignment:
+    """Assigning a Battery's config makes everything the battery derives from its config follow the new one before the assignment returns, and keeps the battery's own SOC limits, efficiencies and SOC."""
+
+    def test_an_assigned_configs_capacity_grid_charging_and_charge_limit_follow_at_once(self) -> None:
+        battery = Battery(_TEN_KWH_CHARGING_TO_HALF)
+        config = dataclasses.replace(
+            _TEN_KWH_CHARGING_TO_HALF, capacity_kwh=20.0, grid_charging=None, max_charge_kw=1.0
+        )
+        battery.config = config
+        assert battery.config is config
+        assert battery.effective_capacity_kwh == 20.0
+        assert battery.max_soc_kwh == pytest.approx(18.0)
+        assert battery.grid_charge_target_kwh is None
+        assert battery.max_charge_kw == 1.0
+        assert battery.soh == 1.0
+
+    @pytest.mark.parametrize(
+        ("config", "soh", "effective_capacity_kwh", "max_soc_kwh", "grid_charge_target_kwh"),
+        [
+            pytest.param(
+                dataclasses.replace(
+                    _TEN_KWH_CHARGING_TO_HALF, capacity_kwh=20.0, grid_charging=None, max_charge_kw=1.0, soh=0.5
+                ),
+                0.5,
+                10.0,
+                9.0,
+                None,
+                id="soh-override",
+            ),
+            pytest.param(
+                dataclasses.replace(_TEN_KWH_CHARGING_TO_HALF, system_age_years=10.0),
+                0.8,
+                8.0,
+                7.2,
+                4.0,
+                id="calendar-fade",
+            ),
+        ],
+    )
+    def test_soh_follows_an_assigned_config_and_derates_its_envelope(
+        self,
+        config: BatteryConfig,
+        soh: float,
+        effective_capacity_kwh: float,
+        max_soc_kwh: float,
+        grid_charge_target_kwh: float | None,
+    ) -> None:
+        battery = Battery(_TEN_KWH_CHARGING_TO_HALF)
+        battery.config = config
+        assert battery.soh == config.resolved_soh == pytest.approx(soh)
+        assert battery.effective_capacity_kwh == pytest.approx(effective_capacity_kwh)
+        assert battery.max_soc_kwh == pytest.approx(max_soc_kwh)
+        assert battery.grid_charge_target_kwh == pytest.approx(grid_charge_target_kwh)
+        assert battery.soc_envelope == config.soc_envelope()
+
+    def test_an_assigned_grid_charging_sets_its_target_on_the_new_envelope(self) -> None:
+        battery = Battery(dataclasses.replace(_TEN_KWH_CHARGING_TO_HALF, grid_charging=None))
+        battery.config = dataclasses.replace(_TEN_KWH_CHARGING_TO_HALF, soh=0.7, grid_charging=GridChargeConfig(0.5))
+        assert battery.grid_charge_target_kwh == battery.soc_envelope.target_kwh(0.5)
+        assert battery.grid_charge_target_kwh == pytest.approx(0.5 * 10.0 * 0.7)
+        battery.config = dataclasses.replace(_TEN_KWH_CHARGING_TO_HALF, soh=0.7, grid_charging=GridChargeConfig(0.95))
+        assert battery.grid_charge_target_kwh == battery.soc_envelope.max_soc_kwh
+
+    def test_the_batterys_own_limits_and_efficiencies_survive_an_assignment(self) -> None:
+        battery = Battery(_TEN_KWH_CHARGING_TO_HALF, max_soc_fraction=0.7)
+        battery.min_soc_fraction = 0.3
+        battery.charge_efficiency = 0.9
+        battery.discharge_efficiency = 0.92
+        battery.config = dataclasses.replace(
+            _TEN_KWH_CHARGING_TO_HALF,
+            capacity_kwh=20.0,
+            min_soc_fraction=0.05,
+            max_soc_fraction=0.95,
+            charge_efficiency=0.99,
+            discharge_efficiency=0.99,
+        )
+        assert (
+            battery.min_soc_fraction,
+            battery.max_soc_fraction,
+            battery.charge_efficiency,
+            battery.discharge_efficiency,
+        ) == (0.3, 0.7, 0.9, 0.92)
+        assert battery.min_soc_kwh == pytest.approx(0.3 * 20.0)
+        assert battery.max_soc_kwh == pytest.approx(0.7 * 20.0)
+
+    def test_the_soc_is_untouched_and_not_checked_against_the_new_envelope(self) -> None:
+        battery = Battery(_TEN_KWH_CHARGING_TO_HALF, initial_soc_kwh=8.0)
+        battery.config = dataclasses.replace(_TEN_KWH_CHARGING_TO_HALF, capacity_kwh=5.0)
+        assert battery.soc_kwh == 8.0
+        assert battery.max_soc_kwh == pytest.approx(4.5)
+        assert battery.available_charge_capacity_kwh == 0.0
+        assert battery.charge(power_kw=2.5, duration_minutes=60) == 0.0
+        assert battery.soc_kwh == 8.0
+
+    def test_the_power_limits_follow_an_assigned_config_at_once(self) -> None:
+        battery = Battery(_TEN_KWH_CHARGING_TO_HALF)
+        battery.config = dataclasses.replace(_TEN_KWH_CHARGING_TO_HALF, max_charge_kw=1.0, max_discharge_kw=0.5)
+        assert battery.charge(power_kw=5.0, duration_minutes=60) == pytest.approx(1.0)
+        assert battery.discharge(power_kw=5.0, duration_minutes=60) == pytest.approx(0.5)
+
+    def test_an_assignment_that_cannot_build_an_envelope_is_refused_and_changes_nothing(self) -> None:
+        battery = Battery(_TEN_KWH_CHARGING_TO_HALF)
+        battery.min_soc_fraction = 0.3
+
+        def snapshot() -> tuple[object, ...]:
+            return (
+                battery.config,
+                battery.soh,
+                battery.soc_envelope,
+                battery.grid_charge_target_kwh,
+                battery.max_charge_kw,
+                battery.min_soc_fraction,
+                battery.max_soc_fraction,
+                battery.charge_efficiency,
+                battery.discharge_efficiency,
+                battery.soc_kwh,
+            )
+
+        before = snapshot()
+        message = "effective_capacity_kwh must be greater than 0, got 0.0"
+        with pytest.raises(ConfigurationError, match=f"^{re.escape(message)}$"):
+            battery.config = BatteryConfig(capacity_kwh=1e-300, soh=1e-30, max_charge_kw=1.0)
+        assert snapshot() == before
+        assert battery.config is _TEN_KWH_CHARGING_TO_HALF
+
+    def test_an_assignment_derives_before_it_returns_so_a_read_derives_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        battery = Battery(_TEN_KWH_CHARGING_TO_HALF)
+        config = dataclasses.replace(_TEN_KWH_CHARGING_TO_HALF, soh=0.5, grid_charging=GridChargeConfig(0.5))
+        battery.config = config
+        envelope = config.soc_envelope()
+        target_kwh = envelope.target_kwh(0.5)
+
+        def rederived(*args: object) -> float:
+            raise AssertionError(
+                "a read re-derived what the config assignment should have built before it returned"
+            )
+
+        monkeypatch.setattr(SocEnvelope, "__post_init__", rederived)
+        monkeypatch.setattr(SocEnvelope, "target_kwh", rederived)
+        monkeypatch.setattr(BatteryConfig, "resolved_soh", property(rederived))
+
+        assert battery.soh == 0.5
+        assert battery.grid_charge_target_kwh == target_kwh == pytest.approx(2.5)
+        assert battery.soc_envelope == envelope
+        assert battery.effective_capacity_kwh == envelope.effective_capacity_kwh == pytest.approx(5.0)
+        assert battery.min_soc_kwh == envelope.min_soc_kwh
+        assert battery.max_soc_kwh == envelope.max_soc_kwh == pytest.approx(4.5)
+        assert battery.usable_capacity_kwh == pytest.approx(envelope.max_soc_kwh - envelope.min_soc_kwh)
+        assert battery.soc_fraction == battery.soc_kwh / envelope.effective_capacity_kwh
+
+
 class TestBatteryPastAnAssignedSocLimit:
     """A battery whose SOC an assigned limit has moved past moves no energy further past it, and still moves energy back toward its limits."""
 
@@ -588,7 +958,7 @@ class TestBatteryPastAnAssignedSocLimit:
         battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=1.0)
         battery.min_soc_fraction = 0.4
         assert battery.available_charge_capacity_kwh == pytest.approx(3.5)
-        assert battery.charge(power_kw=1.0, duration_minutes=60) == pytest.approx(0.975)
+        assert battery.charge(power_kw=1.0, duration_minutes=60) == pytest.approx(1.0)
         assert battery.soc_kwh == pytest.approx(1.975)
 
     def test_above_an_assigned_ceiling_discharge_still_outputs_energy(self) -> None:
@@ -601,33 +971,29 @@ class TestBatteryPastAnAssignedSocLimit:
 
 @dataclasses.dataclass(frozen=True)
 class _Move:
-    """One of a battery's two moves: its method, the direction its refusals open with, and the limit in a config that caps its rate."""
+    """One of a battery's two moves: its method and the direction its refusals open with."""
 
     method: Callable[[Battery, float, float], float]
     direction: str
-    max_rate_kw_in: Callable[[BatteryConfig], float]
 
 
 MOVES = [
-    pytest.param(_Move(Battery.charge, "Charge", lambda config: config.max_charge_kw), id="charge"),
-    pytest.param(
-        _Move(Battery.discharge, "Discharge", lambda config: config.max_discharge_kw),
-        id="discharge",
-    ),
+    pytest.param(_Move(Battery.charge, "Charge"), id="charge"),
+    pytest.param(_Move(Battery.discharge, "Discharge"), id="discharge"),
 ]
 
 
 class TestBatteryRefusesARequestItCannotCarryOut:
-    """charge() and discharge() refuse a power that is not >= 0, or a duration that is not positive and finite, naming the value, and leave the battery unchanged."""
+    """charge() and discharge() refuse a power that is not finite and at least 0, or a duration that is not positive and finite, naming the value, and leave the battery unchanged."""
 
     @pytest.mark.parametrize("move", MOVES)
-    @pytest.mark.parametrize("power_kw", [math.nan, -math.inf, -1.0])
-    def test_a_power_that_is_not_at_least_0_is_refused_and_moves_no_energy(
+    @pytest.mark.parametrize("power_kw", [math.nan, math.inf, -math.inf, -1.0])
+    def test_a_power_that_is_not_finite_and_at_least_0_is_refused_and_moves_no_energy(
         self, move: _Move, power_kw: float
     ) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        message = f"{move.direction} power must be non-negative, got {power_kw} kW"
+        message = f"{move.direction} power must be non-negative and finite, got {power_kw} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
             move.method(battery, power_kw, 60.0)
         assert battery.soc_kwh == soc_kwh
@@ -652,16 +1018,6 @@ class TestBatteryRefusesARequestItCannotCarryOut:
         soc_kwh = battery.soc_kwh
         assert move.method(battery, 0.0, 60.0) == 0.0
         assert battery.soc_kwh == soc_kwh
-
-    @pytest.mark.parametrize("move", MOVES)
-    def test_an_infinite_power_moves_what_the_maximum_rate_moves(self, move: _Move) -> None:
-        config = BatteryConfig(capacity_kwh=10.0, max_charge_kw=2.0, max_discharge_kw=3.0)
-        at_infinite_power = Battery(config)
-        at_maximum_rate = Battery(config)
-        moved = move.method(at_infinite_power, math.inf, 30.0)
-        assert moved == move.method(at_maximum_rate, move.max_rate_kw_in(config), 30.0)
-        assert moved > 0.0
-        assert at_infinite_power.soc_kwh == at_maximum_rate.soc_kwh
 
 
 @pytest.fixture
@@ -809,11 +1165,11 @@ class TestBatteryChargeFromExcess:
         energy = battery.charge(power_kw=10.0, duration_minutes=60)
 
         # Should only charge at 2.5 kW rate
-        # 2.5 kW * 1 hour * 0.975 efficiency = 2.4375 kWh
-        assert energy == pytest.approx(2.4375, rel=0.01)
+        # 2.5 kW * 1 hour = 2.5 kWh drawn, 2.4375 kWh of it stored at 0.975 efficiency
+        assert energy == pytest.approx(2.5)
 
     def test_charge_returns_actual_energy(self, default_battery):
-        """Charge returns actual energy stored."""
+        """Charge returns the energy it drew."""
         energy = default_battery.charge(power_kw=1.0, duration_minutes=60)
         assert isinstance(energy, float)
         assert energy >= 0
@@ -845,6 +1201,27 @@ class TestBatteryDischargeToMeetDemand:
         energy = default_battery.discharge(power_kw=1.0, duration_minutes=60)
         assert isinstance(energy, float)
         assert energy >= 0
+
+    @pytest.mark.parametrize(("power_kw", "duration_minutes"), OVER_ROUNDING_DISCHARGES)
+    def test_discharge_delivers_what_it_was_asked_for_and_never_more(
+        self, power_kw: float, duration_minutes: float
+    ) -> None:
+        """On the battery each request here was found on, its withdrawal, less the discharge losses, rounds an ulp above the energy asked for."""
+        asked_kwh = power_kw * (duration_minutes * HOURS_PER_MINUTE)
+        delivered = Battery(BATTERY_THEY_OVER_ROUND_ON).discharge(power_kw, duration_minutes)
+        assert delivered <= asked_kwh
+        assert delivered == pytest.approx(asked_kwh, rel=1e-12)
+
+    @pytest.mark.parametrize(("limit_kw", "duration_minutes"), OVER_ROUNDING_DISCHARGES)
+    def test_a_discharge_held_to_its_rate_limit_delivers_the_limit_for_the_duration_and_never_more(
+        self, limit_kw: float, duration_minutes: float
+    ) -> None:
+        """Asked for twice its max_discharge_kw, the battery discharges at its max_discharge_kw, each limit here a power whose request over-rounds."""
+        limit_kwh = limit_kw * (duration_minutes * HOURS_PER_MINUTE)
+        config = dataclasses.replace(BATTERY_THEY_OVER_ROUND_ON, max_discharge_kw=limit_kw)
+        delivered = Battery(config).discharge(2 * limit_kw, duration_minutes)
+        assert delivered <= limit_kwh
+        assert delivered == pytest.approx(limit_kwh, rel=1e-12)
 
 
 class TestBatterySOCTimeSeries:
@@ -1063,10 +1440,9 @@ class TestBatterySOHFieldValidation:
         ["system_age_years", "calendar_fade_rate_per_year", "cycle_fade_per_equivalent_full_cycle"],
     )
     def test_an_aging_input_that_is_not_finite_is_refused(self, field: str, value: float) -> None:
-        with pytest.raises(
-            ValueError, match=re.escape(f"{field} must be >= 0 and finite, got {value}")
-        ):
+        with pytest.raises(ConfigurationError) as exc_info:
             dataclasses.replace(BatteryConfig(capacity_kwh=5.0), **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
     # --- soh_floor ---
 
@@ -1183,6 +1559,10 @@ class TestComputeSOH:
         expected = 1.0 - params.calendar_fade_rate_per_year * 5.0
         assert result == pytest.approx(max(params.soh_floor, min(1.0, expected)))
 
+    def test_one_equivalent_full_cycle_is_one_usable_capacity_of_discharged_energy(self) -> None:
+        """SOH = 1 − 0.02×12 calendar − 5e-5×(12000/4) cycle fade: 12,000 kWh discharged over 4 kWh usable is 3,000 equivalent full cycles."""
+        assert compute_soh(12.0, 12000.0, 4.0, BatteryConfig(capacity_kwh=5.0)) == pytest.approx(0.61, abs=1e-12)
+
 
 class TestBatteryConfigNominalUsableCapacity:
     """nominal_usable_capacity_kwh is the capacity between the SOC limits, before SOH de-rating."""
@@ -1235,6 +1615,10 @@ class TestBatterySOHDerating:
         cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
         battery = Battery(cfg)
         assert battery.soh < 1.0
+
+    def test_single_run_soh_is_one_minus_its_calendar_fade(self) -> None:
+        """SOH = 1 − 0.02×10: a single run counts no throughput, so no cycle fade."""
+        assert Battery(BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)).soh == pytest.approx(0.8, abs=1e-12)
 
     def test_aged_battery_usable_capacity_reduced(self) -> None:
         """Battery with age has strictly smaller usable_capacity_kwh than fresh battery."""

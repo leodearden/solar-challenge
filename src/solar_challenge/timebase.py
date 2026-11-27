@@ -1,22 +1,45 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's."""
+"""How long simulated time lasts: the minutes in an hour, the hours and minutes in a day; a duration in minutes, which is positive and finite; the row counts of one calendar year; the text naming the first row where two indexes differ; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; the default window's first and last days; and the first day of an n-day window."""
 
 import calendar
+import itertools
+import math
+from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 import numpy as np
 import pandas as pd
 
-HOURS_PER_MINUTE = 1 / 60
+MINUTES_PER_HOUR: int = 60
+"""Minutes in one hour: hours times this is minutes, and a wall-clock time's minute of the day is its hour times this plus its minute."""
+
+HOURS_PER_MINUTE: float = 1 / MINUTES_PER_HOUR
 """Hours in one minute: minutes times this is hours. It says nothing about a series' cadence; SimulationWindow.step_hours is how long one row lasts."""
 
+HOURS_PER_DAY: int = 24
+"""Hours on a 24-hour wall clock: the rows of one day of hourly weather. A local day across a clock change lasts 23 or 25 hours, so it is not how many hourly rows every day of a zoned series has."""
 
-def step_hours(index: pd.DatetimeIndex) -> float:
-    """The hours one row of index lasts: the gap between its first two rows, or one minute when it has fewer."""
-    if len(index) < 2:
-        return HOURS_PER_MINUTE
-    return float((index[1] - index[0]).total_seconds()) / 3600.0
+MINUTES_PER_DAY: int = HOURS_PER_DAY * MINUTES_PER_HOUR
+"""Minutes on a 24-hour wall clock, 00:00 to 23:59: the length of a minute-of-day table or profile. A local day across a clock change lasts 23 or 25 hours, so it is not how many one-minute rows every day of a zoned series has."""
+
+ONE_MINUTE: timedelta = timedelta(minutes=1)
+"""One minute, as the standard library's timedelta. A simulated run's window has this cadence, and no setting changes it (ruling L9, docs/prds/load-composition-and-calendar-days.md)."""
+
+DEFAULT_FIRST_DAY: date = date(2024, 1, 1)
+"""The first day a scenario simulates when neither its file nor a flag gives one: D11's default tier (ruling L42, docs/prds/one-scenario-reader.md)."""
+
+DEFAULT_LAST_DAY: date = date(2024, 12, 31)
+"""The last day a scenario simulates when neither its file nor a flag gives one: D11's default tier (ruling L42, docs/prds/one-scenario-reader.md)."""
+
+SHORT_WINDOW_START: date = date(2024, 6, 1)
+"""The first day of an n-day window: home quick's --days, and a dashboard request's days short of the full year, run that many days from it (docs/prds/dashboard-limits-and-distribution-table.md §4.2)."""
+
+
+def require_valid_duration(minutes: float, quantity: str) -> None:
+    """Refuse a duration of *minutes* unless it is positive and finite, naming it *quantity* in the refusal."""
+    if not 0 < minutes < math.inf:
+        raise ValueError(f"{quantity} must be positive and finite, got {minutes} minutes")
 
 
 def covered_days(first_day: date, last_day: date) -> int:
@@ -32,11 +55,76 @@ def covered_days(first_day: date, last_day: date) -> int:
     return last_day.toordinal() - first_day.toordinal() + 1
 
 
+def year_row_counts(rows_per_day: int) -> range:
+    """The row counts of one calendar year, 365 to 366 days of rows_per_day rows."""
+    return range(365 * rows_per_day, 366 * rows_per_day + 1)
+
+
+def describe_first_differing_row(index: pd.Index, expected: pd.Index, expected_name: str) -> str | None:
+    """None when index equals expected; else the text naming the first row where they differ, the shorter one's length when it is the other's start, and each one's row there, 'no row' past its end, *expected* named *expected_name*."""
+    shorter = min(len(index), len(expected))
+    differs = np.flatnonzero(np.asarray(index[:shorter] != expected[:shorter]))
+    if differs.size:
+        position = int(differs[0])
+    elif len(index) == len(expected):
+        return None
+    else:
+        position = shorter
+    return (
+        f"they first differ at row {position:,}, where it has {_row_text(index, position)} "
+        f"and {expected_name} has {_row_text(expected, position)}"
+    )
+
+
+def _row_text(index: pd.Index, position: int) -> str:
+    """index's row at position, as text, or 'no row' when index ends before it."""
+    return str(index[position]) if position < len(index) else "no row"
+
+
+def minutes_of_day(index: pd.DatetimeIndex) -> np.ndarray:
+    """Each timestamp's minute on its own wall clock, 0 to 1439: its hour times MINUTES_PER_HOUR plus its minute, its seconds dropped."""
+    minutes: np.ndarray = (index.hour * MINUTES_PER_HOUR + index.minute).to_numpy()
+    return minutes
+
+
+@dataclass(frozen=True, eq=False)
+class LocalDay:
+    """One calendar date of a window on the window's clock: the window's rows that start on that date, from the date's first instant, at the window's cadence.
+
+    Compared by identity, since a generated == would compare its rows element by element.
+    """
+
+    date: date
+    rows: pd.DatetimeIndex
+
+    def minute_of_day(self) -> np.ndarray:
+        """Each row's minute on the local wall clock, 0 to 1439: a day the clocks go back repeats the minutes of the hour they repeat, and a day they go forward lacks those of the hour they skip."""
+        return minutes_of_day(self.rows)
+
+    def instant(self, minute_of_day: int) -> pd.Timestamp:
+        """The first row of this date whose local clock reads minute_of_day or later.
+
+        Raises:
+            ValueError: If minute_of_day is outside 0 to 1439, naming it; or if no row of this date reads it
+                or later, naming the date and the minute.
+        """
+        if not 0 <= minute_of_day < MINUTES_PER_DAY:
+            raise ValueError(
+                f"LocalDay.instant reads a minute of the day from 0 to {MINUTES_PER_DAY - 1}: got {minute_of_day}"
+            )
+        reaching = np.flatnonzero(self.minute_of_day() >= minute_of_day)
+        if reaching.size == 0:
+            raise ValueError(
+                f"No row of {self.date.isoformat()} reads minute {minute_of_day} of the day or later"
+            )
+        return self.rows[reaching[0]]
+
+
 @dataclass(frozen=True)
 class SimulationWindow:
     """The calendar days a simulated series covers, its first and last local dates both counted; how long each of its rows lasts; and its clock's zone name, None for a naive index.
 
-    A yearly figure is a window total times annualisation_scale.
+    A yearly figure is a window total times annualisation_scale; rows() is the series' index, and local_days() splits its rows by date.
     """
 
     first_day: date
@@ -45,7 +133,10 @@ class SimulationWindow:
     timezone: str | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a last_day before first_day through covered_days, the one home of that rule, which names both days; and refuse a cadence that is not positive, naming it."""
+        """Refuse a first_day or last_day that is not exactly a date, such as a pd.Timestamp or a datetime, and a cadence that is not exactly a timedelta, such as a pd.Timedelta, naming the field and the value; then a last_day before first_day, through covered_days, the one home of that rule, which names both days; then a cadence that is not positive, naming it."""
+        _require_window_field_type(date, "first_day", self.first_day)
+        _require_window_field_type(date, "last_day", self.last_day)
+        _require_window_field_type(timedelta, "cadence", self.cadence)
         covered_days(self.first_day, self.last_day)
         if self.cadence <= timedelta(0):
             raise ValueError(
@@ -108,7 +199,7 @@ class SimulationWindow:
     @property
     def step_minutes(self) -> float:
         """How long each row lasts, in minutes."""
-        return self.cadence / timedelta(minutes=1)
+        return self.cadence / ONE_MINUTE
 
     def row_energy_kwh(self, power_kw: pd.Series) -> pd.Series:
         """Each row's kWh of a kW series on this window's rows: its kW times the hours the row lasts."""
@@ -117,6 +208,70 @@ class SimulationWindow:
     def energy_kwh(self, power_kw: pd.Series) -> float:
         """The kWh a kW series on this window's rows delivers: its rows' kWh summed."""
         return float(self.row_energy_kwh(power_kw).sum())
+
+    def rows(self) -> pd.DatetimeIndex:
+        """The window's rows: from its first day's first instant up to, not including, the first instant after its last day, at its cadence, on its clock, at microsecond resolution, the resolution of the timedelta its cadence is.
+
+        Raises:
+            ValueError: If the cadence does not divide one hour, naming it.
+        """
+        return self._rows_over(self._day_starts())
+
+    def local_days(self) -> Iterator[LocalDay]:
+        """One LocalDay per date from first_day to last_day, in order, splitting rows() at each date's first instant.
+
+        Raises:
+            ValueError: If the cadence does not divide one hour, naming it, when called rather than on the first next().
+        """
+        starts = self._day_starts()
+        rows = self._rows_over(starts)
+        bounds = itertools.pairwise(rows.searchsorted(starts))
+        return (
+            LocalDay(self.first_day + timedelta(days=offset), rows[begin:end])
+            for offset, (begin, end) in enumerate(bounds)
+        )
+
+    def _rows_over(self, day_starts: pd.DatetimeIndex) -> pd.DatetimeIndex:
+        """The rows from the first of day_starts up to, not including, the last, at the window's cadence, at microsecond resolution."""
+        return pd.date_range(
+            day_starts[0], day_starts[-1], freq=pd.Timedelta(self.cadence), inclusive="left", unit="us"
+        )
+
+    def _day_starts(self) -> pd.DatetimeIndex:
+        """Each date's first instant on the window's clock, from first_day to the day after last_day; the one place the window is checked for its rows.
+
+        A date's first instant is its local midnight; where the clocks skip midnight, the instant they jump to; and where they repeat it, the first 00:00, the earlier of its two readings, whichever of them the zone counts as daylight saving time. A window with no zone has 24-hour days.
+
+        Raises:
+            ValueError: If the cadence does not divide one hour, naming it.
+        """
+        if timedelta(hours=1) % self.cadence != timedelta(0):
+            raise ValueError(
+                "SimulationWindow's rows need a cadence that divides one hour, so that every local day, "
+                f"23, 24 or 25 hours long, holds whole rows: got cadence={self.cadence!r}, "
+                f"{self.step_minutes:g} minutes"
+            )
+        midnights = pd.date_range(
+            datetime.combine(self.first_day, time.min), periods=self.days + 1, freq="D", unit="us"
+        )
+        if self.timezone is None:
+            return midnights
+        read_as_dst, read_as_standard = (
+            midnights.tz_localize(
+                self.timezone, ambiguous=np.full(len(midnights), as_dst), nonexistent="shift_forward"
+            )
+            for as_dst in (True, False)
+        )
+        return read_as_dst.where(read_as_dst <= read_as_standard, read_as_standard)
+
+
+def _require_window_field_type(kind: type, field: str, value: object) -> None:
+    """Refuse value, the SimulationWindow field named field, unless its type is exactly kind, never a subclass of it, naming field and value."""
+    if type(value) is not kind:
+        raise ValueError(
+            f"SimulationWindow's {field} is exactly the standard library's {kind.__name__}, "
+            f"never a subclass of it or any other type: got {field}={value!r}"
+        )
 
 
 def _cadence(index: pd.DatetimeIndex) -> timedelta:

@@ -6,10 +6,11 @@ the fake's ``set_streams`` and ``set_chunks`` script its replies with the
 ``make_*_stream`` builders. ``thinking_block``, ``redacted_thinking_block``,
 ``text_block`` and ``tool_use_block`` build the content blocks a
 ``make_tool_use_stream_from_blocks`` reply carries. ``seed_run`` inserts a row
-into the runs table.
+into a Database's runs table.
 
 Usage::
 
+    from tests._run_summaries import home_summary
     from tests.unit.web_assistant._fakes import (
         install_fake_anthropic,
         make_end_turn_stream,
@@ -17,8 +18,8 @@ Usage::
         seed_run,
     )
 
-    seed_run(db_path, run_id="run-1", name="my-run",
-             created_at="2026-01-01T00:00:00+00:00", summary={})
+    seed_run(database, run_id="run-1", name="my-run",
+             created_at="2026-01-01T00:00:00+00:00", summary=home_summary(total_generation_kwh=987.65))
     anthropic_api = install_fake_anthropic(monkeypatch)
     anthropic_api.set_streams([
         make_tool_use_stream("toolu_1", "get_run_results", {"run_id_or_name": "run-1"}),
@@ -29,16 +30,17 @@ Usage::
     messages_with_tool_result = anthropic_api.calls[1]["messages"]
 """
 
-import json
 from collections.abc import Iterator, Sequence
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from solar_challenge.web.database import get_db, init_db
+from solar_challenge.fleet import FleetSummary
+from solar_challenge.home import SummaryStatistics
+from solar_challenge.web.database import Database
+from tests._run_summaries import summary_json
 
 
 class FakeAnthropic:
@@ -263,26 +265,25 @@ def _stream_manager(text_chunks: list[str], final_message: SimpleNamespace) -> M
 
 
 def seed_run(
-    db_path: str | Path,
+    database: Database,
     *,
     run_id: str,
     name: str,
     type: str = "home",
     status: str = "completed",
     created_at: str,
-    summary: dict[str, Any],
+    summary: SummaryStatistics | FleetSummary,
 ) -> None:
     """Insert a row into the runs table for testing read-only handlers.
 
-    Calls init_db (idempotent) to ensure the schema exists, then inserts
-    a minimal runs row with summary_json=json.dumps(summary).
+    Inserts a minimal runs row, into *database*'s initialised schema, whose summary_json
+    is the text a save writes for *summary*.
     """
-    init_db(db_path)
-    with get_db(db_path) as conn:
+    with database.transaction() as conn:
         conn.execute(
             """
             INSERT INTO runs (id, name, type, status, created_at, summary_json)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (run_id, name, type, status, created_at, json.dumps(summary)),
+            (run_id, name, type, status, created_at, summary_json(summary)),
         )

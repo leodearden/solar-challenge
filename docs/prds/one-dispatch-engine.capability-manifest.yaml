@@ -111,7 +111,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "charg(e|ing) loss"
-          paths: ["docs/cost-recovery-finance-model.md"]
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
       - name: "briefing-balance-convention-on-bus-energy"
         binding: "built by γ; review/briefing.yaml's energy-balance convention names no storage identity test at 1fa8f79"
@@ -205,13 +205,13 @@ tasks:
           paths: ["src/solar_challenge/home.py"]
           expect: absent
       - name: "inline-path-delegates"
-        binding: "built by ε; requires 839 (S11 β): TOUOptimizedStrategy(tariff=)"
+        binding: "built by ε; requires 839 (S11 β): TOUOptimizedStrategy(tariff=). Retired on purpose by successor task 905 (f91143c0), which deleted simulate_timestep_tou; per Leo's 2026-11-24 ruling (sitting item 14) the check now asserts no inline TOU timestep anywhere in src"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "TOUOptimizedStrategy\\(tariff=tariff\\)"
-          paths: ["src/solar_challenge/flow.py"]
-          expect: present
+          pattern: "simulate_timestep_tou"
+          paths: ["src/solar_challenge"]
+          expect: absent
       - name: "briefing-one-engine"
         binding: "built by ε; review/briefing.yaml reads 'Two dispatch paths coexist' at 1fa8f79"
         verdict: PASS
@@ -242,7 +242,7 @@ tasks:
           kind: manual
           reason: "cross-stream producers; gated by the add_dependency edges"
   - label: "ζ"
-    task_id: null
+    task_id: 905
     title: "Retire simulate_timestep_tou at the bump"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; excluded from this batch's commit_planning."
     capabilities:

@@ -1,0 +1,23 @@
+{
+  "n_homes": 2,
+  "total_generation_kwh": 61.11540333333333,
+  "total_demand_kwh": 26.999999999999996,
+  "total_self_consumption_kwh": 18.426959999999998,
+  "total_grid_import_kwh": 5.279396666666665,
+  "total_grid_export_kwh": 38.662526666666665,
+  "fleet_self_consumption_ratio": 0.3015108956983621,
+  "fleet_grid_dependency_ratio": 0.19553320987654318,
+  "per_home_generation_min_kwh": 26.483313333333335,
+  "per_home_generation_max_kwh": 34.63209,
+  "per_home_generation_mean_kwh": 30.557701666666667,
+  "per_home_generation_median_kwh": 30.557701666666667,
+  "per_home_self_consumption_ratio_min": 0.27701745211834844,
+  "per_home_self_consumption_ratio_max": 0.3335408434543814,
+  "per_home_self_consumption_ratio_mean": 0.3052791477863649,
+  "simulation_days": 1,
+  "total_seg_revenue_gbp": null,
+  "per_home_seg_revenue_mean_gbp": null,
+  "total_net_cost_gbp": -5.799300000000001,
+  "total_import_cost_gbp": 0.0,
+  "total_export_revenue_gbp": 5.799300000000001
+}

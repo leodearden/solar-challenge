@@ -5,9 +5,15 @@ uv.lock pins every dependency, so the per-task verify and every other lane job
 test only the pinned releases. A consumer that installs this package and
 re-locks gets the newest releases its declared ranges admit instead. This
 module copies the tree, upgrades the copy's uv.lock to those releases, and runs
-the orchestrator verify suite there verbatim, on the .python-version pin. An
-upstream release that breaks this code then files a fix task before a consumer
-meets it.
+the orchestrator verify suite there verbatim, on the .python-version pin.
+Before the upgrade, the copy's pyproject.toml declares that pin on this host a
+uv required environment, so wherever a release has no source distribution, uv
+pins there only a release that ships a wheel for it; tests/_required_environment.py
+says why. The suite's command is unchanged: only the copy's pyproject.toml
+gains that [tool.uv] table, which every uv command in the copy reads. The run
+deselects each test tests/_newest_releases_deselections.py names, which the
+copy breaks, or may break, by design. An upstream release that breaks this code then files a
+fix task before a consumer meets it.
 
 The orchestrator's offline lane runs this module after each merge to main, as
 its newest-releases job. tests/conftest.py keeps this directory out of every
@@ -17,9 +23,10 @@ because uv resolves and downloads the releases from PyPI.
 
 Manual run::
 
-    uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider
+    uv run --locked --extra dev pytest -n 0 tests/newest_releases -p no:cacheprovider
 """
 
+import shlex
 import shutil
 import subprocess
 import tomllib
@@ -28,15 +35,16 @@ from pathlib import Path
 
 import pytest
 
+from tests._command_runner import describe_pytest_outcome
+from tests._hermetic_checkout import init_hermetic_checkout
+from tests._newest_releases_deselections import NEWEST_RELEASES_DESELECTIONS
+from tests._repository_paths import REPOSITORY_ROOT
+from tests._required_environment import declare_required_environment, pinned_environment
 from tests._uv_env import isolated_uv_env
-from tests._verify_suite import output_tail, run_verify_suite
+from tests._verify_suite import run_verify_suite
 from tests._working_tree import copy_working_tree
 
 pytestmark = pytest.mark.slow
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-_SUITE = "tests/newest_releases"
 
 # It exists only so a hung resolution or download fails this test by name.
 _UV_TIMEOUT_SECS = 900
@@ -65,7 +73,9 @@ def _describe_upgrade(pinned: frozenset[tuple[str, str]], upgraded: frozenset[tu
 
 def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(tmp_path: Path) -> None:
     """The orchestrator verify suite passes in a copy of this tree whose uv.lock is upgraded to the newest
-    releases pyproject.toml's ranges admit, as a consumer that re-locks would install them.
+    releases pyproject.toml's ranges admit, as a consumer that re-locks would install them. For the
+    .python-version pin on this host, that is the newest release with a wheel for it wherever a release has no
+    source distribution.
 
     A missing git fails the test rather than skipping it: a skip would leave the
     lane green with nothing checked.
@@ -78,9 +88,10 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
     tests/unit/test_offline_lane_contracts.py, for one, needs the e2e extra's
     newest playwright wheel, which nothing else fetches.
     """
-    project = copy_working_tree(PROJECT_ROOT, tmp_path / "project")
-    # So the suite's tests that list the tree's files with git, such as test_external_install.py's, run.
-    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    project = copy_working_tree(REPOSITORY_ROOT, tmp_path / "project")
+    # So the suite's tests that list the tree's files with git, such as tests/integration/test_external_install.py's, run.
+    init_hermetic_checkout(project)
+    declare_required_environment(project, pinned_environment(project))
 
     pinned = _locked_releases(project)
     upgrade = _run(["uv", "lock", "--upgrade"], project, isolated_uv_env(tmp_path / "venv"))
@@ -100,12 +111,13 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
         f"extra into a scratch environment; uv's stderr:\n{fetched.stderr}"
     )
 
-    # The suite must never collect this canary, even if tests/conftest.py stops ignoring it.
-    env = {**isolated_uv_env(tmp_path / "venv"), "PYTEST_ADDOPTS": f"--ignore={_SUITE}"}
+    env = {
+        **isolated_uv_env(tmp_path / "venv"),
+        "PYTEST_ADDOPTS": shlex.join(f"--deselect={deselected.node_id}" for deselected in NEWEST_RELEASES_DESELECTIONS),
+    }
     result = run_verify_suite(project, env, variant="on the newest releases")
 
     assert result.returncode == 0, (
-        "the verify suite failed on the newest releases pyproject.toml's dependency ranges admit "
-        f"(exit {result.returncode}), the releases a consumer that re-locks installs; {upgrade_description}\n"
-        f"output tail:\n{output_tail(result.stdout)}"
+        "the verify suite failed on the newest releases pyproject.toml's dependency ranges admit, "
+        f"the releases a consumer that re-locks installs; {upgrade_description}\n{describe_pytest_outcome(result)}"
     )

@@ -1,0 +1,498 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""`solar-challenge web start` and `solar-challenge web migrate` on a dashboard store at a schema version other than this solar-challenge's.
+
+Each test runs a command in this process with typer's CliRunner, its HOME at the test's
+tmp_path, so its store is the one under tmp_path/.solar-challenge. COLUMNS is wide, so Rich
+prints each message on one line however long the store's path. A start whose store is at
+another version exits 1 with the refusal on stderr, naming the store's database and both
+versions, before the dashboard binds its port, and writes nothing to the store. migrate
+brings an older store to SCHEMA_VERSION, reporting on stdout each step it applied, and the
+dashboard then builds on the store. It refuses, exiting 1 with the refusal on stderr and
+changing nothing, a store a newer solar-challenge wrote, a store holding a row version 1
+cannot keep, naming the row, a store whose tables version 1 cannot rebuild, naming the fault,
+and a store another dashboard holds, naming its lock file. Both commands refuse a database
+file that is not a database, naming it, and leave it as it is. migrate brings the runs of a store
+at version 1 to the stored-run format too, reporting each value it drops that is not null and
+each run it cannot migrate, and the dashboard then shows a run stored before runs carried a
+format version (B5); a store at version 6 it brings forward by dropping each stored battery's
+efficiency, naming each that is not null, and the run then loads with the pair it derived; and it
+drops each stored home summary's seg_revenue_gbp, naming each that is not null, a home run then
+loading with none. It refuses a step that cannot write a run's file, exiting 1 with the
+refusal naming the step and the fault, and so it does a run an earlier migration left lagging
+whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault. Refused,
+it prints on stdout the report of the steps it applied, which stay applied, then the run files
+the refused step or catch-up brought forward before its fault, which stay so, among them the
+documents it already wrote of the run it stopped at, with each value dropped or rewritten in
+them, then the refusal on stderr; it prints no report of steps when it applied none, and no run
+files when the refused part brought none forward.
+"""
+
+import json
+import socket
+from pathlib import Path
+from typing import Any
+
+import pytest
+from flask import Flask
+from typer.testing import CliRunner, Result
+
+from solar_challenge.cli.main import app
+from solar_challenge.web.app import create_app, default_jobs
+from solar_challenge.web.dashboard import dashboard_of
+from solar_challenge.web.database import Database
+from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, open_database
+from solar_challenge.web.storage import RunQuery
+from solar_challenge.web.store_lock import acquire_store_lock
+from solar_challenge.web.stored_runs import StoredHomeRun, write_run_documents
+from tests._dashboard_databases import (
+    runs_rows_of,
+    schema_of,
+    write_database_a_newer_solar_challenge_wrote,
+    write_database_at_schema_version,
+    write_pre_548_database,
+)
+from tests._html_page import headings
+from tests._refused_migration_steps import the_step_to_version_3_refused
+from tests._run_storage_layout import stored_run_dir
+from tests._run_stores import run_storage_over
+from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
+from tests._web_app import run_storage_of
+
+
+@pytest.fixture(autouse=True)
+def _the_dashboard_never_serves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail a test whose command would serve the dashboard, which it would do until stopped, rather than let it hang."""
+
+    def serve(self: Flask, *args: Any, **kwargs: Any) -> None:
+        pytest.fail("`solar-challenge web start` served the dashboard rather than refusing its store")
+
+    monkeypatch.setattr(Flask, "run", serve)
+
+
+def _store_database(home: Path) -> Path:
+    """The database of the dashboard store of a user whose HOME is *home*."""
+    return home / ".solar-challenge" / "solar-challenge.db"
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port: int = sock.getsockname()[1]
+        return port
+
+
+def _web(home: Path, *args: str) -> Result:
+    """Run `solar-challenge web <args>` in this process, its HOME at *home*, on a console wide enough to print each message on one line."""
+    return CliRunner().invoke(app, ["web", *args], env={"HOME": str(home), "COLUMNS": "1000"})
+
+
+def test_web_start_refuses_a_legacy_store_naming_its_database_both_versions_and_the_migrate_command(
+    tmp_path: Path,
+) -> None:
+    """B2: a store an older solar-challenge left, with no schema version, is at version 0."""
+    database = write_pre_548_database(_store_database(tmp_path))
+    bytes_before = database.read_bytes()
+
+    result = _web(tmp_path, "start", "--port", str(_free_port()))
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    for named in [str(database), "schema version 0", str(SCHEMA_VERSION), "solar-challenge web migrate"]:
+        assert named in result.stderr, (named, result.stderr)
+    assert database.read_bytes() == bytes_before
+
+
+def test_web_start_refuses_a_store_a_newer_solar_challenge_wrote_naming_both_versions(tmp_path: Path) -> None:
+    """B4, for start."""
+    database = write_database_a_newer_solar_challenge_wrote(_store_database(tmp_path))
+    bytes_before = database.read_bytes()
+
+    result = _web(tmp_path, "start", "--port", str(_free_port()))
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    for named in ["newer", str(SCHEMA_VERSION + 1), str(SCHEMA_VERSION)]:
+        assert named in result.stderr, (named, result.stderr)
+    assert database.read_bytes() == bytes_before
+
+
+@pytest.fixture
+def legacy_store(tmp_path: Path) -> Path:
+    """The database of the store under tmp_path/.solar-challenge, the pre-548 store an older solar-challenge left: at version 0, with the jobs table and runs with no name."""
+    return write_pre_548_database(_store_database(tmp_path))
+
+
+def test_web_migrate_brings_a_legacy_store_to_the_schema_version_reporting_each_step_it_applied(
+    legacy_store: Path, tmp_path: Path
+) -> None:
+    """B3: the migrated store's schema is a new store's, with no jobs table, and each run with no name is named after its kind."""
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    for named in [str(legacy_store), "schema version 0", str(SCHEMA_VERSION), MIGRATIONS[0].description]:
+        assert named in result.stdout, (named, result.stdout)
+    assert schema_of(legacy_store) == schema_of(open_database(tmp_path / "fresh.db").path)
+    assert "jobs" not in {name for object_type, name, _, _ in schema_of(legacy_store) if object_type == "table"}
+    storage = run_storage_over(open_database(legacy_store))
+    assert storage.run_name("legacy-nameless-home") == "North Roof"
+    assert storage.run_name("legacy-nameless-fleet") == "Fleet Simulation"
+
+
+def test_the_dashboard_builds_on_a_store_web_migrate_migrated_and_lists_its_runs(
+    legacy_store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B3: create_app, with no test_config, opens the store under ~/.solar-challenge once it is at the schema version."""
+    assert _web(tmp_path, "migrate").exit_code == 0
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    dashboard = create_app(jobs=default_jobs)
+    try:
+        listed = run_storage_of(dashboard).page_runs(RunQuery()).records
+    finally:
+        dashboard_of(dashboard).close()
+
+    assert {record.id for record in listed} == {
+        "legacy-named-home",
+        "legacy-nameless-home",
+        "legacy-blank-home",
+        "legacy-nameless-fleet",
+    }
+
+
+def test_web_migrate_says_there_is_nothing_to_migrate_on_a_store_at_the_schema_version(
+    legacy_store: Path, tmp_path: Path
+) -> None:
+    assert _web(tmp_path, "migrate").exit_code == 0
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    assert f"schema version {SCHEMA_VERSION}" in result.stdout
+    assert "nothing to migrate" in result.stdout
+
+
+def test_web_migrate_refuses_a_store_a_newer_solar_challenge_wrote_naming_both_versions_and_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    """B4, for migrate."""
+    database = write_database_a_newer_solar_challenge_wrote(_store_database(tmp_path))
+    bytes_before = database.read_bytes()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    for named in ["newer", str(SCHEMA_VERSION + 1), str(SCHEMA_VERSION)]:
+        assert named in result.stderr, (named, result.stderr)
+    assert database.read_bytes() == bytes_before
+
+
+def test_web_migrate_refuses_a_store_holding_a_run_version_1_cannot_keep_naming_the_row_and_changes_nothing(
+    legacy_store: Path, tmp_path: Path
+) -> None:
+    """Version 1 no longer admits a 'sweep' run."""
+    with Database(legacy_store).transaction() as conn:
+        conn.execute("INSERT INTO runs (id, name, type) VALUES ('legacy-sweep', 'Sweep Run', 'sweep')")
+    bytes_before = legacy_store.read_bytes()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    for named in ["runs", "'legacy-sweep'", "type"]:
+        assert named in result.stderr, (named, result.stderr)
+    assert legacy_store.read_bytes() == bytes_before
+
+
+def test_web_migrate_refuses_a_store_whose_tables_version_1_cannot_rebuild_naming_the_fault_and_changes_nothing(
+    legacy_store: Path, tmp_path: Path
+) -> None:
+    """A store with no config_presets table, which no solar-challenge left."""
+    with Database(legacy_store).transaction() as conn:
+        conn.execute("DROP TABLE config_presets")
+    bytes_before = legacy_store.read_bytes()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    for named in [str(legacy_store), "schema version 1", "stays at version 0", "config_presets"]:
+        assert named in result.stderr, (named, result.stderr)
+    assert legacy_store.read_bytes() == bytes_before
+
+
+@pytest.mark.parametrize("command", ["start", "migrate"])
+def test_web_start_and_web_migrate_refuse_a_file_that_is_not_a_database_naming_it_and_leave_it_as_it_is(
+    command: str, tmp_path: Path
+) -> None:
+    database = _store_database(tmp_path)
+    database.parent.mkdir()
+    database.write_bytes(b"not a database")
+    options = ["--port", str(_free_port())] if command == "start" else []
+
+    result = _web(tmp_path, command, *options)
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    for named in [str(database), "file is not a database"]:
+        assert named in result.stderr, (named, result.stderr)
+    assert database.read_bytes() == b"not a database"
+
+
+def test_web_migrate_refuses_a_store_another_dashboard_holds_naming_its_lock_file_and_changes_nothing(
+    legacy_store: Path, tmp_path: Path
+) -> None:
+    bytes_before = legacy_store.read_bytes()
+    held = acquire_store_lock(legacy_store.parent)
+    try:
+        result = _web(tmp_path, "migrate")
+    finally:
+        held.release()
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert str(held.path) in result.stderr, result.stderr
+    assert legacy_store.read_bytes() == bytes_before
+
+
+def test_web_migrate_releases_the_store_lock_once_it_has_migrated_the_store(legacy_store: Path, tmp_path: Path) -> None:
+    assert _web(tmp_path, "migrate").exit_code == 0
+
+    acquire_store_lock(legacy_store.parent).release()
+
+
+@pytest.fixture
+def legacy_run_ids(tmp_path: Path) -> dict[str, str]:
+    """The run id of each legacy stored-run fixture, by name, each installed in the store under tmp_path/.solar-challenge, which a solar-challenge at schema version 1 left."""
+    database = write_database_at_schema_version(_store_database(tmp_path), 1)
+    return {
+        name: install_stored_run_fixture(name, Database(database), database.parent) for name in STORED_RUN_FIXTURES
+    }
+
+
+def _install_a_copy_editing_its_summary(tmp_path: Path, run_id: str, edit_summary: Any) -> str:
+    """Install a copy of the pre_469_home fixture as run *run_id* in the store under tmp_path/.solar-challenge, its summary.json edited by *edit_summary*; return *run_id*."""
+    database = _store_database(tmp_path)
+    install_stored_run_fixture("pre_469_home", Database(database), database.parent, run_id=run_id)
+    summary_path = stored_run_dir(run_storage_over(Database(database)), run_id) / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    edit_summary(summary)
+    summary_path.write_text(json.dumps(summary, indent=2))
+    return run_id
+
+
+def _a_line_naming(text: str, *parts: str) -> bool:
+    """Whether a line of *text* names each of *parts*."""
+    return any(all(part in line for part in parts) for line in text.splitlines())
+
+
+def test_web_migrate_brings_the_runs_of_a_store_at_version_1_forward_reporting_each_value_dropped_and_each_run_left(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """The report names the versions and version 2's step, each value it drops that is not null, and each run it cannot migrate."""
+    retired = _install_a_copy_editing_its_summary(
+        tmp_path, "retired-figure", lambda summary: summary.update(retired_figure=12.5)
+    )
+    lacking = _install_a_copy_editing_its_summary(
+        tmp_path, "lacking-generation", lambda summary: summary.pop("total_generation_kwh")
+    )
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    for named in [str(_store_database(tmp_path)), "schema version 1", str(SCHEMA_VERSION), MIGRATIONS[1].description]:
+        assert named in result.stdout, (named, result.stdout)
+    assert _a_line_naming(result.stdout, retired, "summary.json", "retired_figure", "12.5"), result.stdout
+    assert _a_line_naming(result.stdout, lacking, "summary.json", "total_generation_kwh"), result.stdout
+
+
+def test_web_migrate_brings_a_store_at_version_6_forward_naming_each_battery_round_trip_it_drops(tmp_path: Path) -> None:
+    """Version 7's step drops the pre-867 home's battery efficiency, naming its 0.81; the run then loads with the pair 0.9 it derived, and neither its config.json nor its runs row's config_json holds an efficiency."""
+    database = write_database_at_schema_version(_store_database(tmp_path), 6)
+    run_id = install_stored_run_fixture("pre_867_round_trip_home", Database(database), database.parent)
+    run_dir = stored_run_dir(run_storage_over(Database(database)), run_id)
+    write_run_documents(run_dir, (), 6)
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    for document in ["config.json", "runs.config_json"]:
+        assert _a_line_naming(result.stdout, run_id, f"{document}'s battery_config.efficiency", "0.81"), result.stdout
+    loaded = run_storage_over(open_database(database)).load_run(run_id)
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.config.battery_config is not None
+    assert (loaded.config.battery_config.charge_efficiency, loaded.config.battery_config.discharge_efficiency) == (0.9, 0.9)
+    configs = [json.loads((run_dir / "config.json").read_text()), json.loads(runs_rows_of(database)[run_id]["config_json"])]
+    assert ["efficiency" in config["battery_config"] for config in configs] == [False, False]
+
+
+def test_web_migrate_drops_each_stored_home_summary_s_seg_revenue_naming_each_that_is_not_null_and_the_home_run_then_loads(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """Version 9's step names the pre-975 fleet's two home-summary values; pre_469_home's null one goes unnamed, and its summary.json and its runs row's summary_json then hold none."""
+    database = _store_database(tmp_path)
+    fleet_id, home_id = legacy_run_ids["pre_975_seg_fleet"], legacy_run_ids["pre_469_home"]
+    fleet_dir = stored_run_dir(run_storage_over(Database(database)), fleet_id)
+    documents = [f"homes/home_{index}_summary.json" for index in range(2)]
+    stored = {document: json.loads((fleet_dir / document).read_text())["seg_revenue_gbp"] for document in documents}
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    for document, value in stored.items():
+        assert _a_line_naming(result.stdout, fleet_id, f"{document}'s seg_revenue_gbp", json.dumps(value)), result.stdout
+    assert not _a_line_naming(result.stdout, home_id, "seg_revenue_gbp"), result.stdout
+    home_dir = stored_run_dir(run_storage_over(Database(database)), home_id)
+    summaries = [json.loads((home_dir / "summary.json").read_text()), json.loads(runs_rows_of(database)[home_id]["summary_json"])]
+    assert ["seg_revenue_gbp" in summary for summary in summaries] == [False, False]
+    assert isinstance(run_storage_over(open_database(database)).load_run(home_id), StoredHomeRun)
+
+
+def test_web_migrate_reports_each_value_v3_rewrites_in_the_pre_787_fleet_with_the_value_it_holds_now(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """v3's values are rewritten, not dropped: each line says what the field holds now, under a heading that says so."""
+    run_id = legacy_run_ids["pre_787_dispatch_fleet"]
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    heading = lines.index("Rewrote each value below to the setting its run actually ran by:")
+    rewritten = [line for line in lines[heading + 1 :] if line.startswith(f"  run {run_id!r}: ")]
+    assert f"  run {run_id!r}: config.json's homes[2].dispatch_strategy was \"tou_optimized\", now \"greedy\"" in rewritten
+    assert (
+        f"""  run {run_id!r}: config.json's homes[0].battery_config.grid_charging was {{"target_soc_fraction": 0.8}}, now null"""
+        in rewritten
+    )
+    assert not any(run_id in line for line in lines[:heading]), result.stdout
+
+
+def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_step_and_the_fault(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """A directory in the place of a run's format.json stands in for a file the step cannot write, e.g. on a full disk.
+
+    Runs are brought forward in order of id, and pre_469_home's sorts before the fleet's, so its
+    files stay brought forward and are printed. No step committed, so no migration report is.
+    """
+    database = _store_database(tmp_path)
+    marker = stored_run_dir(run_storage_over(Database(database)), legacy_run_ids["legacy_fleet"]) / "format.json"
+    marker.mkdir()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    for named in [str(database), "schema version 2", "stays at version 1", str(marker)]:
+        assert named in result.stderr, (named, result.stderr)
+    assert result.stdout.startswith("Before the fault, brought forward the files of each run below"), result.stdout
+    assert f"  run {legacy_run_ids['pre_469_home']!r}" in result.stdout.splitlines(), result.stdout
+    assert legacy_run_ids["legacy_fleet"] not in result.stdout
+
+
+def test_web_migrate_refused_by_a_run_s_file_it_cannot_write_prints_the_documents_of_that_run_it_wrote_and_the_values_it_dropped_from_them(
+    tmp_path: Path,
+) -> None:
+    """A directory in the place of the format.json of the store's only run, a copy of pre_469_home holding a figure no field has, stands in for a file the step cannot write.
+
+    v2 writes the run's summary.json, the figure dropped, before the fault, so the refusal prints
+    that document and that value: the command run again reads that summary.json as v2 left it,
+    so it does not report the value.
+    """
+    write_database_at_schema_version(_store_database(tmp_path), 1)
+    run_id = _install_a_copy_editing_its_summary(
+        tmp_path, "retired-figure", lambda summary: summary.update(retired_figure=12.5)
+    )
+    marker = stored_run_dir(run_storage_over(Database(_store_database(tmp_path))), run_id) / "format.json"
+    marker.mkdir()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    assert str(marker) in result.stderr, result.stderr
+    assert result.stdout.startswith(
+        "Before the fault, brought forward only the documents named of each run below"
+    ), result.stdout
+    assert f"  run {run_id!r}: summary.json" in result.stdout.splitlines(), result.stdout
+    assert _a_line_naming(result.stdout, run_id, "summary.json", "retired_figure", "12.5"), result.stdout
+
+
+def test_web_migrate_refused_at_a_step_after_one_it_applied_prints_the_report_of_the_steps_it_applied_then_the_refusal(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """Version 3's step is refused once version 2's has committed, after its run-file part brought every run forward, rewriting the pre-787 fleet's config.json."""
+    retired = _install_a_copy_editing_its_summary(
+        tmp_path, "retired-figure", lambda summary: summary.update(retired_figure=12.5)
+    )
+    database = _store_database(tmp_path)
+
+    with the_step_to_version_3_refused(database, legacy_run_ids["pre_787_dispatch_fleet"]) as refusal:
+        result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    for named in [str(database), "from schema version 1 to 2", MIGRATIONS[1].description]:
+        assert named in result.stdout, (named, result.stdout)
+    assert _a_line_naming(result.stdout, retired, "summary.json", "retired_figure", "12.5"), result.stdout
+    assert MIGRATIONS[2].description not in result.stdout
+    for named in ["schema version 3", "stays at version 2", refusal]:
+        assert named in result.stderr, (named, result.stderr)
+    assert result.output.index("Migrated the dashboard database") < result.output.index(
+        "cannot be migrated to schema version 3"
+    ), result.output
+    files_heading = "Before the fault, brought forward the files of each run below"
+    assert files_heading in result.stdout, result.stdout
+    fleet = legacy_run_ids["pre_787_dispatch_fleet"]
+    assert (
+        f'  run {fleet!r}: config.json\'s homes[2].dispatch_strategy was "tou_optimized", now "greedy"'
+        in result.stdout[result.stdout.index(files_heading) :].splitlines()
+    ), result.stdout
+    assert result.stdout.index("Migrated the dashboard database") < result.stdout.index(files_heading), result.stdout
+
+
+def test_web_migrate_refuses_a_lagging_run_s_file_it_cannot_write_naming_the_store_and_the_fault(tmp_path: Path) -> None:
+    """A directory in the place of the format.json of a run in format 1, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write.
+
+    The catch-up writes the run's config.json, whose battery v7 rids of its efficiency, and its
+    summary.json, which v5 gives a window, before the fault, and the report on stdout names them.
+    """
+    database = open_database(_store_database(tmp_path))
+    run_id = install_stored_run_fixture("pre_469_home", database, database.path.parent)
+    marker = stored_run_dir(run_storage_over(database), run_id) / "format.json"
+    marker.mkdir()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    for named in [str(database.path), f"schema version {SCHEMA_VERSION}", str(marker)]:
+        assert named in result.stderr, (named, result.stderr)
+    assert f"run {run_id!r}: config.json, summary.json" in result.stdout, result.stdout
+
+
+def test_after_web_migrate_the_dashboard_shows_a_run_stored_before_469_and_loads_it_with_no_grid_charge(
+    legacy_run_ids: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B5's second half: before `web migrate` its page flashes format_version; after, it answers 200."""
+    run_id = legacy_run_ids["pre_469_home"]
+    assert _web(tmp_path, "migrate").exit_code == 0
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    dashboard = create_app(jobs=default_jobs)
+    try:
+        response = dashboard.test_client().get(f"/results/{run_id}")
+        loaded = run_storage_of(dashboard).load_run(run_id)
+    finally:
+        dashboard_of(dashboard).close()
+
+    assert response.status_code == 200
+    assert headings(response.get_data(as_text=True))[0] == "Elm Street"
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.summary.total_grid_charge_kwh == 0.0

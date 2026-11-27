@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solar-challenge"
-version = "0.5.0"
+version = "0.6.0"
 description = "Energy flow simulator for domestic PV and battery systems"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -25,14 +25,14 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "pvlib>=0.10.0",
-    "pandas>=2.0.0",
-    "numpy>=1.24.0",
-    "pyyaml>=6.0.0",
-    "typer>=0.12.1",
-    "rich>=12.3.0",
-    "richardsonpy>=0.2.0",
-    "scipy>=1.7.2",
+    "pvlib>=0.15.1",
+    "pandas>=3.1.1",
+    "numpy>=2.4.6",
+    "pyyaml>=6.0.3",
+    "typer>=0.26.3",
+    "rich>=15.0.0",
+    "richardsonpy>=0.2.3",
+    "scipy>=1.17.1",
 ]
 
 [project.scripts]
@@ -40,23 +40,27 @@ solar-challenge = "solar_challenge.cli:app"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "mypy>=1.0.0",
-    "packaging>=22.0",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "mypy>=2.1.0",
+    "packaging>=26.2",
     "pytest-rerunfailures>=16.7",
-    "ruff>=0.15.9",
+    "ruff>=0.16.10",
+    "requests>=2.34.2",  # used directly by tests/unit/test_network_guard_helper.py
+    "pytest-xdist>=3.8.0",
 ]
 stochastic = []  # backward-compat alias; richardsonpy is now a core dependency
 web = [
-    "flask>=3.0.0",
-    "plotly>=5.0.0",
-    "pyarrow>=10.0.0",
-    "anthropic>=0.40.0",  # streaming chat endpoint in web/assistant.py (imported lazily)
+    "flask>=3.1.3",
+    "plotly>=6.7.0",
+    "pyarrow>=24.0.0",
+    "anthropic>=0.105.2",  # streaming chat endpoint in web/assistant.py (imported lazily)
+    "werkzeug>=3.1.8",
+    "jinja2>=3.1.6",  # used directly by the web tests
 ]
 e2e = [
-    "playwright>=1.51.0",
-    "pytest-playwright>=0.6.0",
+    "playwright>=1.61.0",
+    "pytest-playwright>=0.8.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -71,14 +75,16 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short --ignore=tests/e2e"
-# Every pytest deprecation is an error; tests/unit/test_pytest_deprecations_are_errors.py says why.
-filterwarnings = ["error::pytest.PytestDeprecationWarning"]
+addopts = "-v --tb=short"
+# Every pytest deprecation, and every deprecated call made from solar_challenge's modules or the test suite's own, is an error;
+# tests/unit/test_pytest_deprecations_are_errors.py and tests/unit/test_deprecated_calls_from_solar_challenge_and_its_tests_are_errors.py say why.
+filterwarnings = ["error::pytest.PytestDeprecationWarning", 'error::DeprecationWarning:solar_challenge|tests(\.|$)']
+# An unregistered mark fails collection; tests/unit/test_unregistered_marks_are_refused.py says why.
+strict_markers = true
 markers = [
-    "e2e: end-to-end browser tests (require playwright)",
     "slow: tests that make real external API calls (e.g. PVGIS)",
-    "integration: marks tests that exercise multiple modules together (full simulation; may hit real PVGIS)",
     "build: tests that invoke the build toolchain (uv build --wheel); requires uv and cached build-backend deps",
+    "xdist_group(name): asks --dist loadgroup to run the tests sharing a name on one pytest-xdist worker; tests/unit/test_parallel_suite.py says whether it does",
 ]
 
 [tool.mypy]
@@ -91,7 +97,8 @@ explicit_package_bases = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["pvlib.*", "pandas.*", "numpy.*", "yaml", "richardsonpy.*", "flask.*", "plotly.*"]
+# Read as Any when mypy finds no types for them; docs/type-check.md says why scipy is here, not scipy-stubs.
+module = ["pvlib.*", "pandas.*", "yaml", "richardsonpy.*", "plotly.*", "scipy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -102,5 +109,5 @@ module = ["solar_challenge.web.*"]
 disallow_untyped_decorators = false
 
 [tool.ruff.lint]
-# The rules tests/unit/test_lint.py holds the package to.
-select = ["F"]
+# The rules tests/unit/test_lint.py holds the package and its tests to; docs/lint-gate.md says why.
+select = ["E402", "E7", "E9", "F"]

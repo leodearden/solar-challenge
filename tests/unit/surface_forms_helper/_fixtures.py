@@ -1,17 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The fixtures more than one rule module of this package uses.
+"""The fixtures more than one rule module of this package uses; each one's name, or its own docstring, says what it is.
 
 Outer and Preset are defined at module level, where a qualified name carries no
 '<locals>'; a rule module that imports them binds their names for its own forward
-references to resolve. imported_module writes a module and imports it, for the rules
-about the module a name is read in.
+references to resolve.
 """
 
+import fractions
+import functools
 import importlib.util
+import inspect
 import pathlib
+import re
 import sys
 import types
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import pytest
 
@@ -26,24 +31,356 @@ class Preset:
     rate: float
 
 
-_source_by_name: dict[str, str] = {}
+class Getter:
+    """A descriptor that defines only __get__, as a classproperty does, and records the function it wraps as __wrapped__."""
+
+    def __init__(self, function: Callable[..., object]) -> None:
+        self.function = function
+        self.__wrapped__ = function
+
+    def __get__(self, instance: object, owner: type) -> object:
+        return self.function(owner)
+
+
+class CallableGetter:
+    """A callable descriptor whose __get__ gives itself, with no __set__ and no __wrapped__."""
+
+    def __get__(self, instance: object, owner: type) -> "CallableGetter":
+        return self
+
+    def __call__(self, rate: int) -> str: ...
+
+
+class NoneSignedCallableGetter(CallableGetter):
+    """A CallableGetter that records the function it wraps as __wrapped__ but carries a __signature__ of None, at which inspect stops unwrapping and reads it as itself."""
+
+    __signature__ = None
+
+    def __init__(self, function: Callable[..., object]) -> None:
+        self.__wrapped__ = function
+
+
+class GetterDeleter:
+    """A descriptor whose type defines __get__ and __delete__ but no __set__."""
+
+    def __get__(self, instance: object, owner: type) -> int:
+        return 1
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+class CallableGetterDeleter(GetterDeleter):
+    """A callable GetterDeleter."""
+
+    def __call__(self, rate: int) -> str: ...
+
+
+class Giver:
+    """A descriptor whose __get__ gives the object it was made with."""
+
+    def __init__(self, given: object) -> None:
+        self.given = given
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self.given
+
+
+class CallableGiver(Giver):
+    """A callable Giver, whose type defines __get__ and __call__ but neither __set__ nor __delete__."""
+
+    def __call__(self, rate: int) -> None: ...
+
+
+class DeletingGiver(Giver):
+    """A Giver whose type also defines __delete__ but no __call__."""
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+class GetterPartial(functools.partial):
+    """A functools.partial whose own __get__ binds it to an instance as a method, as a function's binds."""
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self if instance is None else types.MethodType(self, instance)
+
+
+class SettableGetterPartial(GetterPartial):
+    """A GetterPartial whose type also defines __set__, so that no minor reads it as a method descriptor."""
+
+    def __set__(self, instance: object, value: object) -> None: ...
+
+
+class GetMixin:
+    """A class that defines __get__, for a functools.partial subclass to take it from."""
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self
+
+
+class PartialFirstGetterPartial(functools.partial, GetMixin):
+    """A functools.partial whose type takes __get__ from GetMixin, a base after functools.partial in its MRO, on Python 3.11 and 3.12, and from functools.partial's own __get__, which comes first, from 3.13."""
+
+
+def _share(receiver: object, rate: int) -> None: ...
+
+
+class ChainedCall:
+    """A class whose __call__ is a classmethod of a staticmethod, which Python 3.11 and 3.12 bind through the staticmethod's __get__ and later minors as a method of the staticmethod."""
+
+    __call__ = classmethod(staticmethod(_share))
+
+
+class DefCall:
+    """A class whose __call__ is defined with def."""
+
+    def __call__(self, share: fractions.Fraction, rate: int) -> None: ...
+
+
+CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR = (
+    pytest.param(lambda build: str.join, id="method-descriptor"),
+    pytest.param(classmethod, id="classmethod"),
+    pytest.param(property, id="property"),
+)
+
+
+def class_whose_init_is(constructor: object) -> type:
+    class Built:
+        __init__ = constructor
+
+    return Built
+
+
+def class_whose_new_is(constructor: object) -> type:
+    class Made:
+        __new__ = constructor
+
+    return Made
+
+
+def class_whose_metaclass_call_is(constructor: object) -> type:
+    class Calling(type):
+        __call__ = constructor
+
+    class Called(metaclass=Calling):
+        pass
+
+    return Called
+
+
+def object_whose_call_is(call: object) -> object:
+    class Caller:
+        __call__ = call
+
+    return Caller()
+
+
+def metaclass_whose_get_gives(given: object) -> type:
+    class Getting(type):
+        def __get__(cls, instance: object, owner: type | None = None) -> object:
+            return given
+
+    return Getting
+
+
+def metaclass_whose_mro_gives(mro: Callable[[type], tuple[type, ...]]) -> type:
+    """A metaclass whose __mro__ gives, for each class of it, what *mro* gives for that class, in place of the MRO the class records."""
+
+    class Shadowing(type):
+        @property
+        def __mro__(cls) -> tuple[type, ...]:
+            return mro(cls)
+
+    return Shadowing
+
+
+def metaclass_whose_dict_gives(namespace: Callable[[type], object]) -> type:
+    """A metaclass whose __dict__ gives, for each class of it, what *namespace* gives for that class, in place of the namespace the class holds."""
+
+    class DictShadowing(type):
+        @property
+        def __dict__(cls) -> object:
+            return namespace(cls)
+
+    return DictShadowing
+
+
+def dict_shadowing_refusal(name: str, metaclass: str = "DictShadowing") -> str:
+    """The pattern of the TypeError for the class *name*, whose metaclass *metaclass* has in its MRO a metaclass metaclass_whose_dict_gives makes, holding a __dict__ that is a property; by default, *metaclass* is that one."""
+    return (
+        rf"\.{name} has the metaclass \S*\.{metaclass}, whose MRO holds "
+        r"\S*\.DictShadowing\.__dict__, a builtins\.property, in place of the __dict__ type "
+        "gives each class"
+    )
+
+
+def metaclass_whose_getattribute_gives_dict(namespace: Callable[[type], object]) -> type:
+    """A metaclass whose __getattribute__ gives, for each class of it, what *namespace* gives for that class as its __dict__; it holds no __dict__ itself, so by inspect's rule it shadows none."""
+
+    class Intercepting(type):
+        def __getattribute__(cls, name: str) -> object:
+            return namespace(cls) if name == "__dict__" else super().__getattribute__(name)
+
+    return Intercepting
+
+
+def dict_intercepting_refusal(
+    name: str, metaclass: str = "Intercepting", holder: str = "Intercepting"
+) -> str:
+    """The pattern of the TypeError for the class *name*, whose metaclass *metaclass* has in its MRO the class *holder*, holding a __getattribute__; by default, both are the metaclass metaclass_whose_getattribute_gives_dict makes."""
+    return (
+        rf"\.{name} has the metaclass \S*\.{metaclass}, whose MRO holds "
+        rf"\S*\.{holder}\.__getattribute__, in place of the __getattribute__ type gives "
+        "each class"
+    )
+
+
+def made_not_bound_in(module: str) -> str:
+    """The pattern of the whole LookupError for a class Made whose __module__ records *module*, the name of a module read from the file *module*.py that binds nothing under 'Made', the remedy of assigning it the __module__ of the module that binds it included."""
+    escaped = re.escape(module)
+    return (
+        rf"^{escaped}\.Made is not bound under 'Made' in the module at .*\b{escaped}\.py, which "
+        rf"sys\.modules holds under the name '{escaped}': that module binds nothing there\. .*\. "
+        r"If the class's __module__ names a module that never bound it, as that of a class "
+        r"dataclasses\.make_dataclass makes on Python 3\.11 names types, assign it the "
+        r"__module__ of the module that binds it under its qualified name$"
+    )
+
+
+NEW_CLASS_MADE_SOURCE = (
+    "import types\n"
+    "from dataclasses import dataclass\n"
+    "from decimal import Decimal as Tap\n"
+    "\n"
+    "Made = dataclass(types.new_class('Made', (), {}, lambda namespace: "
+    "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n"
+)
+
+MAKE_DATACLASS_MADE_SOURCE = (
+    "from dataclasses import make_dataclass\n"
+    "from decimal import Decimal as Tap\n"
+    "\n"
+    "Made = make_dataclass('Made', [('spare', 'Tap')])\n"
+)
+
+MAKE_DATACLASS_FACTORY_SOURCE = (
+    "from dataclasses import make_dataclass\n"
+    "\n"
+    "def made() -> type:\n"
+    "    return make_dataclass('Made', [('spare', 'Tap')])\n"
+)
+
+
+def make_dataclass_factoring_source(factory: str) -> str:
+    """The source of a module that binds Tap to decimal.Decimal, and Made to what made returns, imported from the module *factory* that MAKE_DATACLASS_FACTORY_SOURCE writes."""
+    return f"from decimal import Decimal as Tap\n\nfrom {factory} import made\n\nMade = made()\n"
+
+
+def make_dataclass_records(caller: str) -> str:
+    """The __module__ dataclasses.make_dataclass records for a class that code of the module *caller* calls it to make, whichever module then binds the class: 'types' on Python 3.11, and *caller* from 3.12."""
+    return "types" if sys.version_info < (3, 12) else caller
+
+
+def with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
+    """*function*, carrying the string '(receiver, rate)' as its __signature__."""
+    function.__signature__ = "(receiver, rate)"
+    return function
+
+
+def recording_object_init(wrapper: object) -> object:
+    """*wrapper*, recording object.__init__ as its __wrapped__."""
+    wrapper.__wrapped__ = object.__init__
+    return wrapper
+
+
+GIVEN_BY_A_METACLASS_GET = (
+    pytest.param(1, id="get-giving-an-object-that-is-not-callable"),
+    pytest.param(None, id="get-giving-none"),
+)
+
+
+def _settle(self: object, rate: int) -> None: ...
+
+
+_NONE_TYPE = r"\bbuiltins\.NoneType\b"
+_SIMPLE_NAMESPACE = r"\btypes\.SimpleNamespace\b"
+
+CALLS_BOUND_TO_AN_OBJECT_THAT_IS_NOT_CALLABLE = (
+    pytest.param(None, _NONE_TYPE, id="none"),
+    pytest.param(staticmethod(None), _NONE_TYPE, id="staticmethod-of-none"),
+    pytest.param(classmethod(None), _NONE_TYPE, id="classmethod-of-none"),
+    pytest.param(Giver(None), _NONE_TYPE, id="descriptor-giving-none"),
+    pytest.param(types.SimpleNamespace(), _SIMPLE_NAMESPACE, id="object-defining-no-get"),
+    pytest.param(staticmethod(types.SimpleNamespace()), _SIMPLE_NAMESPACE, id="staticmethod"),
+    pytest.param(classmethod(types.SimpleNamespace()), _SIMPLE_NAMESPACE, id="classmethod"),
+    pytest.param(
+        Giver(Giver(_settle)), r"\.Giver\b", id="descriptor-giving-a-get-only-descriptor"
+    ),
+    pytest.param(
+        Giver(GetterDeleter()),
+        r"\.GetterDeleter\b",
+        id="descriptor-giving-a-get-delete-descriptor",
+    ),
+    pytest.param(
+        Giver(types.SimpleNamespace(__signature__="(rate)")),
+        _SIMPLE_NAMESPACE,
+        id="descriptor-giving-an-object-carrying-a-string-signature",
+    ),
+    pytest.param(
+        Giver(types.SimpleNamespace(__signature__=inspect.Signature())),
+        _SIMPLE_NAMESPACE,
+        id="descriptor-giving-an-object-carrying-a-signature",
+    ),
+)
+
+UNREADABLE_ROUTINES = (
+    pytest.param(
+        functools.partialmethod(_settle, rate=1), "functools.partialmethod", id="partialmethod"
+    ),
+    pytest.param(
+        functools.singledispatchmethod(_settle),
+        "functools.singledispatchmethod",
+        id="singledispatchmethod",
+    ),
+    pytest.param(Getter(_settle), "tests.unit.surface_forms_helper._fixtures.Getter", id="getter"),
+    pytest.param(
+        CallableGetter(),
+        "tests.unit.surface_forms_helper._fixtures.CallableGetter",
+        id="callable-getter",
+    ),
+    pytest.param(
+        NoneSignedCallableGetter(_settle),
+        "tests.unit.surface_forms_helper._fixtures.NoneSignedCallableGetter",
+        id="none-signed-callable-getter",
+    ),
+)
+
+REFUSED_ROUTINE_AND_PARTIAL_MEMBERS = (
+    *UNREADABLE_ROUTINES,
+    pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
+)
+
+
+class _Point(NamedTuple):
+    x: int
+
+
+class _Labelled(_Point):
+    @property
+    def _fields(self) -> tuple[str, ...]:
+        return ("x",)
+
+
+class Relabelled(_Labelled):
+    """A named tuple whose own body binds nothing and whose _fields holder, its base _Labelled, binds _fields to a property giving ("x",) over _Point, a typing.NamedTuple whose one field is x: its instances read ("x",), while the holder holds the property itself."""
+
+
+RELABELLED_REFUSAL = r"\.Relabelled\b.*\._Labelled\._fields\b.*\bbuiltins\.property\b"
 
 
 def imported_module(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, source: str
 ) -> types.ModuleType:
-    """The module *name*, written from *source* under *tmp_path* and imported, left in sys.modules until the test ends.
-
-    Raises ValueError naming *name* if an earlier call in this process imported it from
-    another source.
-    """
-    if _source_by_name.get(name, source) != source:
-        raise ValueError(
-            f"The module name {name!r} was already imported from another source: the "
-            "helper under test reads a module's `if TYPE_CHECKING:` imports once per "
-            "name, so give this test's module a name no other test uses"
-        )
-    _source_by_name[name] = source
+    """The module *name*, written from *source* under *tmp_path* and imported, left in sys.modules until *monkeypatch* is undone or a later call imports another module of that name."""
     path = tmp_path / f"{name}.py"
     path.write_text(source)
     spec = importlib.util.spec_from_file_location(name, path)

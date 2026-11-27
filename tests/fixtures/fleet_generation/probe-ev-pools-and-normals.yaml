@@ -1,0 +1,19 @@
+name: Probe - EV pools and normals, with a pool on each other component
+fleet_distribution:
+  n_homes: 20
+  seed: 5
+  pv:
+    capacity_kw: {type: shuffled_pool, values: [3.0, 4.0], counts: [10, 10]}
+    tilt: {type: shuffled_pool, values: [30.0, 40.0], counts: [12, 8]}
+  battery:
+    capacity_kwh: {type: shuffled_pool, values: [null, 5.0], counts: [8, 12]}
+    max_discharge_kw: {type: shuffled_pool, values: [2.5, 3.0], counts: [10, 10]}
+  load:
+    annual_consumption_kwh: {type: normal, mean: 3400, std: 600, min: 2000, max: 5000}
+    household_occupants: {type: shuffled_pool, values: [1, 2, 3, 4], counts: [4, 6, 6, 4]}
+  ev:
+    charger_type: {type: shuffled_pool, values: [null, 7kW, 3.6kW], counts: [8, 8, 4]}
+    arrival_hour: {type: normal, mean: 18, std: 1.5, min: 15, max: 22}
+    departure_hour: {type: shuffled_pool, values: [6, 7, 8], counts: [7, 7, 6]}
+    required_charge_kwh: {type: normal, mean: 12, std: 4, min: 4, max: 30}
+    smart_charging_mode: "none"

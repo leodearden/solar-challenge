@@ -25,6 +25,12 @@
 - **Approach:** **B + H**. A contract (§4) and a two-way boundary-test sketch (§10). The seam is a
   server-to-browser protocol written in two languages, and its history is a bug cluster: tasks
   533, 564, 638, 641, 648 and 649 each fixed one side of it.
+- **Amendment (2026-11-20, task 1520):** a job progress stream waits on its job between polls
+  instead of sleeping. `JobManager.wait_for_job_snapshot` returns as soon as the job moves past
+  the version the stream last read or the manager stops tracking it, and at the latest after
+  `heartbeat_seconds`. `JobStreamPolicy` loses `sleep`. The sweep page follows its points one
+  at a time (task 649), so a fixed 2 s poll added up to 2 s per point between a job's end and
+  its row; §12's first row is superseded.
 
 ---
 
@@ -127,7 +133,7 @@ line, because `json.dumps` escapes newlines inside strings (probed).
 | job | `failed` | `JobState` | version | policy | show the message, close |
 | job | `cancelled` | `JobState` | version | policy | show "Cancelled", close |
 | job | `timeout` | `StreamTimedOut(limit_seconds)` | none: the last id stands | policy | let the browser reopen quietly |
-| job | `untracked` | `JobUntracked(job_id)` | none | none | show "no longer tracked", close |
+| job | `untracked` | `JobUntracked(job_id)` | none | policy | show "no longer tracked", close |
 | chat | `delta` | `ChatDelta(text)` | none | none | append |
 | chat | `tool` | `ChatToolCall(name)` | none | none | — |
 | chat | `done` | `ChatDone()` | none | none | — |
@@ -147,8 +153,10 @@ line, because `json.dumps` escapes newlines inside strings (probed).
 - `JobManager.job_snapshot(job_id)` reads it without changing anything. `get_events`, the `events`
   deque, `JobEvent` and `JobEventType` are deleted.
 - Each stream keeps its own cursor, starting at the request's `Last-Event-ID` (absent → none).
-- On each poll the stream sends the current state if its version is newer than the cursor. A stream
-  ends with exactly one ending frame:
+- On each poll the stream sends the current state if its version is newer than the cursor.
+  Between polls it waits on `JobManager.wait_for_job_snapshot` for a version newer than the one
+  it last read, at most `heartbeat_seconds`, so every move of the job wakes it, its end included,
+  whatever the cursor (task 1520). A stream ends with exactly one ending frame:
   - the terminal state's frame, always sent even when its version equals the cursor, so a reopened
     stream on a finished job never loops;
   - `timeout`;
@@ -211,15 +219,18 @@ memory, and `mark_run_failed` refuses it in the row.
 
 ### 3.5 The limit and the reconnect (δ; D21)
 
-- `JobStreamPolicy` holds `limit_seconds=600`, `heartbeat_seconds=2`, `retry_ms`, `clock` and
-  `sleep`. It is built at the composition root and read by the route, so tests drive it with a fake
-  clock or a one-second real limit. No test patches `api.time`.
+- `JobStreamPolicy` holds `limit_seconds=600`, `heartbeat_seconds=2`, `retry_ms` and `clock`, and
+  no `sleep`: the stream waits on its job, not on the policy (task 1520). It is built at the
+  composition root and read by the route, so tests drive the limit with a fake clock or a
+  one-second real limit, and drive the wait through the job source. No test patches `api.time`.
 - At the limit, the stream sends `timeout` with `retry` and no `id`, and ends. The browser then
   fires its native `error` and reopens the stream after `retry` ms with `Last-Event-ID` (probed).
 - `job-progress-stream.js` is the job stream's only reader: `followJobProgress(jobId, {onState,
   onEnd, onReconnecting, onLost})`.
   - It opens the `EventSource`, parses each frame once, and hands the full `JobState` to `onState`.
   - On a terminal state or `untracked` it closes the stream and calls `onEnd` with the ending.
+  - A terminal frame whose state it cannot read ends in `onLost`, as a stream the browser gives up
+    does, and its parse error is rethrown for the console.
   - On `timeout` it marks the next break as expected. That break shows no reconnecting indicator,
     but task 648's give-up timer is still armed, so a server gone during the reopen still ends in
     `onLost`.
@@ -250,7 +261,7 @@ are normative.
 P = TypeVar("P", bound="DataclassInstance")
 @dataclass(frozen=True)
 class SseEvent(Generic[P]):
-    name: str                      # __post_init__ refuses "" and any CR, LF or ':'
+    name: str                      # __post_init__ refuses "" and any whitespace or ':'
     payload_type: type[P]
 def sse_frame(event: SseEvent[P], payload: P, *, event_id: int | None = None, retry_ms: int | None = None) -> str: ...
     # "event: {name}\n" ["id: {event_id}\n"] ["retry: {retry_ms}\n"] "data: {json.dumps(asdict(payload))}\n\n";
@@ -273,12 +284,16 @@ JOB_STATE_EVENTS: Mapping[JobStatus, SseEvent[JobState]]                    # ke
 @dataclass(frozen=True)
 class JobStreamPolicy:
     limit_seconds: float = 600.0
-    heartbeat_seconds: float = 2.0
+    heartbeat_seconds: float = 2.0                         # the longest wait between two polls (1520)
     retry_ms: int = 1000                                   # §13 Q1
     clock: Callable[[], float] = time.monotonic
-    sleep: Callable[[float], None] = time.sleep
-def job_progress_frames(snapshot: Callable[[], JobSnapshot | None], *, last_event_id: int | None,
-                        policy: JobStreamPolicy) -> Iterator[str]: ...
+class JobSnapshotSource(Protocol):                         # 1520; JobManager is one
+    def job_snapshot(self, job_id: str) -> JobSnapshot | None: ...
+    def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None: ...
+def job_progress_frames(jobs: JobSnapshotSource, job_id: str, *,
+                        last_event_id: int | None, policy: JobStreamPolicy) -> Iterator[str]: ...
+    # reads jobs.job_snapshot(job_id), then waits on jobs.wait_for_job_snapshot between polls;
+    # job_id is the id JOB_UNTRACKED's JobUntracked names
 
 # web/jobs.py — after S19 β (806) and θ (819)
 JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]       # θ
@@ -291,6 +306,7 @@ class JobSnapshot: version: int; state: JobState                                
 class JobManager:
     def job_state(self, job_id: str) -> JobState | None: ...                       # unchanged
     def job_snapshot(self, job_id: str) -> JobSnapshot | None: ...                 # γ; never mutates
+    def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None: ...  # 1520; a move or untracking wakes it
     # deleted: get_events (or take_events), JobEvent, JobEventType, _TrackedJob.events
 
 # web/storage.py — after S19
@@ -301,6 +317,10 @@ class RunStorage:
     def mark_run_completed(self, run_id: str) -> None: ...         # running → completed, stamps completed_at
     def mark_run_failed(self, run_id: str, message: str) -> None: ...   # running → failed; absent row: no-op
 ```
+
+`SseEvent` forbids all whitespace in an event name. The test reader `tests/_sse.parse_sse_events`
+refuses only leading or trailing whitespace and keeps an inner space as written; its docstring
+gives the reason. The difference is deliberate, so do not align the two.
 
 **Invariants (each enforced at the place named):**
 
@@ -332,8 +352,9 @@ class RunStorage:
 - **D-S20-3 Full-state payloads.** Every job-state frame carries the full `JobState`, which is the
   finding's proposal. `JobEvent.type` is deleted, because it restated the status.
 - **D-S20-4 Snapshots replace the queue** (fk-4540d657bff6's proposal). States between polls
-  collapse into the newest one, which is what the pages read. Waking streams on change instead of
-  polling every 2 s is out of scope (§12).
+  collapse into the newest one, which is what the pages read. Streams wake when their job moves
+  (task 1520), so the states a job moves through before a stream wakes still collapse into the
+  newest one.
 - **D-S20-5 The limit (D21).** The limit stays at 600 s per response and ends with `timeout`. The
   browser reopens natively, and the reader hides the indicator for that one break. Task 564's
   branch takes the other route, no limit; D21 decided against it, and §6 Q1 returns 564 to the
@@ -453,7 +474,7 @@ transitions, run rows) and the consumers (the two pages and the assistant page, 
 | B12 | Untracked | an id no manager tracks | one frame, `untracked` `{job_id}`, and the response ends | producer | δ |
 | B13 | Failed and cancelled | a failing fake; a run deleted while its job runs (θ) | `failed` and `cancelled` frames carry the full `JobState` with `id` and `retry` | producer | δ |
 | B14 | Timeout in the browser | e2e live server, policy `limit_seconds=1`, held job | the tracker follows the job through at least two timeouts, never shows "Simulation Failed", shows no "Reconnecting to server..." once each reopen lands, and shows the results link once the job is released | both | δ |
-| B15 | Endings in the browser | e2e fakes built with `sse_frame` | `failed` shows the job's message; `cancelled` shows "Cancelled"; `untracked` shows its own text; a dropped connection still shows reconnecting, then the outcome (task 648's tests stay green) | consumer | δ |
+| B15 | Endings in the browser | e2e fakes built with `sse_frame` | `failed` shows the job's message; `cancelled` shows "Cancelled"; `untracked` shows its own text; a final state the page cannot read shows the run lost, not running; a dropped connection still shows reconnecting, then the outcome (task 648's tests stay green) | consumer | δ |
 | B16 | Sweep | e2e, two points; point 1's stream times out once, point 2 fails | row 1 keeps `running` through the timeout and fetches its results on `completed`; row 2 shows `failed`; the page then draws its chart | consumer | δ |
 
 The tests go through public seams only: HTTP routes, `JobManager`'s public methods,
@@ -557,7 +578,8 @@ among its keys, and file-level `metadata.files`. Every leaf runs the verify suit
 ## 12. Out of scope
 
 - Waking streams when a job's version changes instead of polling every 2 s. The latency is
-  unchanged from today, and the pages read only the newest state.
+  unchanged from today, and the pages read only the newest state. **[Superseded 2026-11-20, task
+  1520 — see header amendment.]**
 - Interrupting a running `simulate_home` (S19 §12; frozen core surface).
 - How `create_app` injects collaborators (S16) and where the accessors live (S17); δ adds one
   collaborator in whatever form is current.

@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Helper module for fleet configuration in the web dashboard.
+"""The fleet a dashboard form's blocks describe, held to the dashboard's bounds, and the distribution preview's sampler.
 
-Provides utilities for sampling distributions, converting form data to
-fleet distribution configs and their distributions back to the form's,
-and fleet-wide overlay application for tariff/dispatch/SEG settings.
+read_form_fleet reads a form's fleet blocks as a fleet_distribution: block's are, at the
+form's own paths, with nothing invented. sample_distribution reads a distribution in the
+grammar's spelling but never runs the grammar, so it reads and bounds its own numbers.
 """
 
 from __future__ import annotations
@@ -11,115 +11,90 @@ from __future__ import annotations
 import dataclasses
 import math
 import random
-from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, TypeGuard
+from collections.abc import Callable, Mapping, Sequence
+from types import MappingProxyType
+from typing import Any
 
 
-from solar_challenge.home import HomeConfig
-from solar_challenge.web.number_fields import (
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import (
+    ComponentDistribution,
+    DistributionSpec,
+    FleetDistributionConfig,
+    ShuffledPoolDistribution,
+    WeightedDiscreteDistribution,
+    parse_fleet_distribution_config,
+)
+from solar_challenge.number_fields import (
+    Interval,
     as_finite_float,
+    as_finite_floats,
     as_whole_number,
-    as_whole_number_within,
+    as_whole_numbers,
+)
+from solar_challenge.scenario_blocks import child_path, refusal, require_mapping
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
+    FLEET_SIZE,
+    MAX_FLEET_HOMES,
+    read_fleet_seed,
+    read_fleet_size,
 )
 
-if TYPE_CHECKING:
-    from solar_challenge.config import DispatchStrategyConfig
-    from solar_challenge.seg import SEGTariff
-    from solar_challenge.tariff import TariffConfig
 
-#: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
-#: shuffled pool that holds values for more homes, and a preview that draws more values.
-MAX_FLEET_HOMES = 10_000
+def refuse_a_fleet_the_dashboard_cannot_run(fleet: FleetDistributionConfig, path: str) -> None:
+    """Refuse *fleet*, a fleet fleet_distribution.py's grammar has read from the block at *path*, when the dashboard cannot run it: more than :data:`MAX_FLEET_HOMES` homes, a seed beyond :data:`MAX_FLEET_SEED`, or a field every home needs that some home may draw null.
 
-
-def read_fleet_size(value: Any, field: str) -> int:
-    """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
+    A shuffled pool needs no bound of its own: the grammar's F6 holds every pool's counts
+    to the fleet's n_homes, so a fleet within MAX_FLEET_HOMES holds no larger pool.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
-            naming *field* and the value sent.
+        ConfigurationError: From :func:`read_fleet_size` or :func:`read_fleet_seed`, naming
+            n_homes or seed under *path* and the value read; or naming the field under *path*
+            and the null a home may draw.
     """
-    return as_whole_number_within(value, field, 1, MAX_FLEET_HOMES)
+    read_fleet_size(fleet.n_homes, child_path(path, "n_homes"))
+    if fleet.seed is not None:
+        read_fleet_seed(fleet.seed, child_path(path, "seed"))
+    _refuse_a_required_field_a_home_may_draw_null(fleet, path)
 
 
-#: The largest seed, positive or negative, a dashboard fleet holds: Number.MAX_SAFE_INTEGER,
-#: past which the JavaScript number the fleet page holds its seed in rounds some whole numbers.
-MAX_FLEET_SEED = 2**53 - 1
+def _refuse_a_required_field_a_home_may_draw_null(fleet: FleetDistributionConfig, path: str) -> None:
+    """Refuse *fleet*, read from the block at *path*, when a component gives a field its fleet row requires, other than its presence field, a spec some home may draw null from.
 
-
-def read_fleet_seed(value: Any, field: str) -> int:
-    """Read *value*, the setting named *field*, as a dashboard fleet's seed, a whole number from -:data:`MAX_FLEET_SEED` to :data:`MAX_FLEET_SEED`.
+    The grammar refuses such a draw only as it generates the homes, naming the field under
+    fleet_distribution, and a form's cleared input posts null; so it is refused before any home
+    is generated, under *path*. A presence field's null is a home without the component.
 
     Raises:
-        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
-            naming *field* and the value sent.
+        ConfigurationError: Naming the field under *path* and the null a home may draw.
     """
-    return as_whole_number_within(value, field, -MAX_FLEET_SEED, MAX_FLEET_SEED)
+    for component in FLEET_COMPONENTS.values():
+        distribution: ComponentDistribution | None = getattr(fleet, component.key)
+        if distribution is None:
+            continue
+        for key, spec in distribution.draws.items():
+            row = component.block.fleet[key]
+            null = _null_a_home_may_draw(spec)
+            if row.required and key != component.block.presence and null is not None:
+                field = child_path(child_path(path, component.key), key)
+                raise refusal(field, f"required, so no home may draw null, got {null}")
 
 
-def read_pool_counts(counts: Iterable[tuple[str, Any]], entries_field: str) -> list[int]:
-    """Read *counts*, each count of the *entries_field* shuffled pool with its field, as a dashboard fleet's pool counts: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most :data:`MAX_FLEET_HOMES`.
-
-    Raises:
-        ValueError: From :func:`~solar_challenge.web.number_fields.as_whole_number_within`,
-            naming a count's field and the value sent; or, when the counts total more than
-            MAX_FLEET_HOMES, more values than a dashboard fleet has homes to take, naming
-            *entries_field* and the total.
-    """
-    read_counts = [
-        as_whole_number_within(value, field, 0, MAX_FLEET_HOMES) for field, value in counts
-    ]
-    total = sum(read_counts)
-    if total > MAX_FLEET_HOMES:
-        raise ValueError(
-            f"{entries_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
-        )
-    return read_counts
-
-
-def apply_fleet_overlay(
-    configs: list[HomeConfig],
-    *,
-    tariff_config: TariffConfig | None = None,
-    dispatch_strategy: DispatchStrategyConfig | None = None,
-    seg_tariff: SEGTariff | None = None,
-) -> list[HomeConfig]:
-    """Apply fleet-wide tariff, dispatch strategy, and SEG overlay to all homes.
-
-    Uses :func:`dataclasses.replace` to produce new frozen :class:`HomeConfig`
-    objects; the originals are never mutated.
-
-    The dispatch strategy is applied only to homes that already have a
-    :class:`~solar_challenge.battery.BatteryConfig` (i.e. ``battery_config is
-    not None``).  Battery-less homes are left unchanged so no battery is ever
-    fabricated merely to hold a dispatch strategy.
-
-    Args:
-        configs: List of :class:`~solar_challenge.home.HomeConfig` instances to
-            overlay.  Must not be mutated by the caller after passing in.
-        tariff_config: Optional tariff to set on every home.
-        dispatch_strategy: Optional dispatch strategy to set on every home that
-            has a battery.
-        seg_tariff: Optional SEG tariff to set on every home.
-
-    Returns:
-        A new list of :class:`~solar_challenge.home.HomeConfig` with the overlay
-        applied.  Items whose overlay is a no-op are returned as-is (same
-        object, not a copy) for efficiency.
-    """
-    result: list[HomeConfig] = []
-    for home in configs:
-        replacements: dict[str, Any] = {}
-        if tariff_config is not None:
-            replacements["tariff_config"] = tariff_config
-        if seg_tariff is not None:
-            replacements["seg_tariff"] = seg_tariff
-        if dispatch_strategy is not None and home.battery_config is not None:
-            replacements["battery_config"] = dataclasses.replace(
-                home.battery_config, dispatch_strategy=dispatch_strategy
-            )
-        result.append(dataclasses.replace(home, **replacements) if replacements else home)
-    return result
+def _null_a_home_may_draw(spec: DistributionSpec) -> str | None:
+    """The null in *spec* some home may draw: 'null' for the null spec, or 'a null at values[<index>]' for the first value left null with a count or weight above 0; None when no home may draw null."""
+    if spec is None:
+        return "null"
+    if isinstance(spec, ShuffledPoolDistribution):
+        shares: tuple[float, ...] = spec.counts
+    elif isinstance(spec, WeightedDiscreteDistribution):
+        shares = spec.weights
+    else:
+        return None
+    for index, (value, share) in enumerate(zip(spec.values, shares, strict=True)):
+        if value is None and share > 0:
+            return f"a null at values[{index}]"
+    return None
 
 
 def sample_distribution(
@@ -128,11 +103,12 @@ def sample_distribution(
     """Generate sample values from a distribution for preview histogram.
 
     Args:
-        dist_type: Distribution type. One of ``'weighted_discrete'``,
-            ``'normal'``, ``'uniform'``, ``'shuffled_pool'``.
-        params: Distribution parameters (varies by type), read the way
-            :func:`_build_distribution_dict` reads a fleet form's spec, as the
-            distribution named ``params``; must be a dict.
+        dist_type: Distribution type, sent in the field ``type``. One of the types the
+            distribution editor offers: ``'normal'``, ``'uniform'``,
+            ``'weighted_discrete'``, ``'shuffled_pool'``.
+        params: The distribution's other keys, in fleet_distribution.py's spelling: a
+            weighted_discrete's values and weights lists, a shuffled_pool's values and
+            counts lists. A key sent as null is left out.
         n_samples: Number of samples to generate, a whole number from 1 to
             :data:`MAX_FLEET_HOMES`.
 
@@ -140,39 +116,38 @@ def sample_distribution(
         List of sampled values, each a finite float.
 
     Raises:
-        ValueError: If dist_type or params are ones :func:`_draw_samples` cannot draw
-            from, n_samples is not a whole number from 1 to MAX_FLEET_HOMES (see
-            :func:`~solar_challenge.web.number_fields.as_whole_number_within`), params are
-            not a dict (see :func:`_require_dict`), :func:`_build_distribution_dict`
-            refuses them, naming the field under ``params``, or params draw a sample that
-            is not a finite number, as finite params whose draws overflow a float can; that
-            error names params and the sample.
+        ConfigurationError: For an n_samples that is not a whole number from 1 to
+            MAX_FLEET_HOMES; params that are not a mapping; a type the editor does not
+            offer; params without what the type is drawn from; a parameter or list cell
+            that is not a finite number, or a count the preview cannot pool; lists of
+            unequal length; params the sampler cannot draw from; or a sample that is not a
+            finite number, as finite params whose draws overflow a float can. Each names
+            its field, n_samples, type or one under params, or the sample.
     """
-    n_samples = as_whole_number_within(n_samples, "n_samples", 1, MAX_FLEET_HOMES)
-    params = _require_dict(params, "params")
-    spec = _build_distribution_dict({**params, "type": dist_type}, "params")
+    n_samples = as_whole_number(n_samples, "n_samples", within=FLEET_SIZE)
+    spec = _preview_spec(dist_type, require_mapping("params", params))
     samples = _draw_samples(spec, n_samples)
     for sample in samples:
         if not math.isfinite(sample):
-            raise ValueError(
+            raise ConfigurationError(
                 f"params must draw samples that are finite numbers, got a sample of {sample!r}"
             )
     return samples
 
 
 def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
-    """Draw *n_samples* values from *spec*, a distribution :func:`_build_distribution_dict` built, with a fixed seed.
+    """Draw *n_samples* values from *spec*, a distribution :func:`_preview_spec` read, with a fixed seed.
 
     Raises:
-        ValueError: If the type of *spec* is unknown, or its parameters are ones it cannot
-            draw from, such as a negative std or a min above max.
+        ConfigurationError: If its parameters are ones it cannot draw from, such as a negative std
+            or a min above max.
     """
     rng = random.Random(42)
     dist_type = spec["type"]
 
     if dist_type == "normal":
         if spec["std"] < 0:
-            raise ValueError("Standard deviation cannot be negative")
+            raise ConfigurationError("Standard deviation cannot be negative")
         samples = [rng.gauss(spec["mean"], spec["std"]) for _ in range(n_samples)]
         if "min" in spec:
             samples = [max(spec["min"], s) for s in samples]
@@ -182,366 +157,178 @@ def _draw_samples(spec: dict[str, Any], n_samples: int) -> list[float]:
 
     if dist_type == "uniform":
         if spec["min"] > spec["max"]:
-            raise ValueError("min cannot be greater than max")
+            raise ConfigurationError("min cannot be greater than max")
         return [rng.uniform(spec["min"], spec["max"]) for _ in range(n_samples)]
 
     if dist_type == "weighted_discrete":
         if not spec["values"]:
-            raise ValueError("weighted_discrete requires non-empty 'values' list")
+            raise ConfigurationError("weighted_discrete requires non-empty 'values' list")
         if sum(spec["weights"]) == 0:
-            raise ValueError("Weights cannot all be zero")
+            raise ConfigurationError("Weights cannot all be zero")
         return rng.choices(spec["values"], weights=spec["weights"], k=n_samples)
 
     if dist_type == "shuffled_pool":
         if not spec["values"]:
-            raise ValueError("shuffled_pool requires non-empty 'entries' list")
+            raise ConfigurationError("shuffled_pool requires non-empty 'values' list")
         pool: list[float] = []
         for value, count in zip(spec["values"], spec["counts"]):
             pool.extend([value] * count)
         if not pool:
-            raise ValueError("shuffled_pool produced an empty pool")
+            raise ConfigurationError("shuffled_pool produced an empty pool")
         rng.shuffle(pool)
         # Cycle through pool to fill n_samples
         samples = [pool[i % len(pool)] for i in range(n_samples)]
         return samples
 
-    raise ValueError(f"Unknown distribution type: {dist_type}")
+    raise AssertionError(
+        f"_draw_samples draws each type _preview_spec reads, but has no draw for {dist_type!r}"
+    )
 
 
-def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, Any]:
-    """Convert web form data to a fleet distribution config dict.
+#: The top-level keys of a dashboard form that read_form_fleet reads: its fleet's blocks.
+FLEET_DISTRIBUTION_FORM_KEYS: frozenset[str] = frozenset({"n_homes", "seed", "pv", "battery", "load"})
 
-    The returned dict mirrors the structure of the ``fleet_distribution``
-    section in scenario YAML files and can be used with
-    :func:`solar_challenge.config.generate_homes_from_distribution`.
 
-    Its pv/battery/load blocks follow the fleet form's presence rule (see
-    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).  Its battery block sets
-    no dispatch strategy: every battery takes the form's dispatch_strategy.
+def read_form_fleet(blocks: Mapping[str, Any]) -> FleetDistributionConfig:
+    """The fleet *blocks*, a dashboard form's n_homes, seed and pv, battery and load blocks, describe: read as a fleet_distribution: block's are, at the form's own paths, with nothing invented, and held to the dashboard's bounds.
 
-    Args:
-        form_data: Form data dict from the web UI.
-
-    Returns:
-        Fleet distribution config dict.
+    A battery block may not set a dispatch strategy: every battery takes the form's.
 
     Raises:
-        ValueError: If n_homes is not a whole number from 1 to MAX_FLEET_HOMES (see
-            :func:`read_fleet_size`), seed is not a whole number from -MAX_FLEET_SEED to
-            MAX_FLEET_SEED (see :func:`read_fleet_seed`), a pv/battery/load block is
-            neither null nor a dict (see :func:`_component_block`),
-            a battery block sets a dispatch strategy (see
-            :func:`_refuse_battery_dispatch_strategy`), or
-            :func:`_parse_component_distribution` refuses a block; each refusal names its
-            field as a dot path from the form's root.
+        ConfigurationError: For a battery block setting a dispatch strategy, a block the grammar
+            refuses, or a fleet the dashboard cannot run, a cleared PV capacity among them,
+            naming the field as the form posts it.
     """
-    config: dict[str, Any] = {
-        "n_homes": read_fleet_size(form_data.get("n_homes", 100), "n_homes"),
-        "seed": read_fleet_seed(form_data.get("seed", 42), "seed"),
-    }
-
-    # Process PV distribution
-    pv_data = _component_block_or_empty(form_data, "pv")
-    config["pv"] = _parse_component_distribution(pv_data, "pv", "capacity_kw")
-
-    # Process Battery distribution
-    battery_data = _component_block(form_data, "battery")
-    if battery_data is not None:
-        _refuse_battery_dispatch_strategy(battery_data)
-        config["battery"] = _parse_component_distribution(battery_data, "battery", "capacity_kwh")
-
-    # Process Load distribution
-    load_data = _component_block_or_empty(form_data, "load")
-    config["load"] = _parse_component_distribution(load_data, "load", "annual_consumption_kwh")
-
-    return config
-
-
-def _component_block(form_data: dict[str, Any], key: str) -> dict[str, Any] | None:
-    """Return the *key* component block of *form_data*: None when it is absent or null.
-
-    Raises:
-        ValueError: If the block is neither null nor a dict (see :func:`_require_dict`).
-    """
-    block = form_data.get(key)
-    return None if block is None else _require_dict(block, key)
-
-
-def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, Any]:
-    """Return the *key* component block of *form_data*, reading an absent or null block as empty.
-
-    Raises:
-        ValueError: If the block is neither null nor a dict (see :func:`_component_block`).
-    """
-    block = _component_block(form_data, key)
-    return {} if block is None else block
+    battery = blocks.get("battery")
+    if isinstance(battery, dict):
+        _refuse_battery_dispatch_strategy(battery)
+    fleet = parse_fleet_distribution_config(dict(blocks), block_path="")
+    refuse_a_fleet_the_dashboard_cannot_run(fleet, "")
+    return fleet
 
 
 def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
-    """Refuse the fleet form's *battery* block when it sets a dispatch strategy: every battery takes the form's dispatch_strategy.
+    """Refuse a dashboard form's *battery* block when it sets a dispatch strategy: a dashboard form gives every battery one dispatch strategy, its own or the default.
 
-    config.py's grammar reads a battery block's dispatch_strategy, but the fleet form
-    spells the setting once, at its root:
-    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form` gives the form's
-    dispatch_strategy to every battery, over any the block sets.
+    fleet_distribution.py's grammar reads a battery block's dispatch_strategy, but no dashboard
+    form sets one per block: the fleet page spells the setting once, at its form's root, and the
+    scenario builder has none, so every battery takes the default.
 
     Raises:
-        ValueError: If the block's dispatch_strategy is present and not null; the error
-            names battery.dispatch_strategy, the form's dispatch_strategy and the value sent.
+        ConfigurationError: If the block's dispatch_strategy is present and not null; the error
+            names battery.dispatch_strategy, the rule and the value sent.
     """
     strategy = battery.get("dispatch_strategy")
     if strategy is not None:
-        raise ValueError(
-            "battery.dispatch_strategy must be absent or null: every battery takes the "
-            f"fleet's dispatch_strategy, got {strategy!r}"
+        raise ConfigurationError(
+            "battery.dispatch_strategy must be absent or null: a dashboard form gives every "
+            f"battery one dispatch strategy, its own or the default, got {strategy!r}"
         )
 
 
-def _require_dict(value: object, field: str) -> dict[str, Any]:
-    """Return *value*, refusing one that is not a dict.
+@dataclasses.dataclass(frozen=True)
+class _EditorRows:
+    """A distribution's rows as fleet_distribution.py's grammar spells them, parallel lists: its values, and the *paired_key* list, which the preview reads with *read_paired*."""
+
+    paired_key: str
+    #: Reads the paired list sent, under its field, for the preview, so its rule may bound
+    #: each cell or the list's total.
+    read_paired: Callable[[object, str], Sequence[float]]
+
+
+@dataclasses.dataclass(frozen=True)
+class _EditorType:
+    """A distribution type the distribution editor offers: its scalar parameters, the keys the preview draws it from, and its rows, if it has rows."""
+
+    parameters: tuple[str, ...]
+    #: The keys the preview draws the type from: the forms leave a missing one for
+    #: fleet_distribution.py's grammar to name, and only the preview, which never runs the
+    #: grammar, refuses it.
+    drawn_from: tuple[str, ...]
+    rows: _EditorRows | None = None
+
+
+def _preview_pool_counts(counts: object, counts_field: str) -> tuple[int, ...]:
+    """Read *counts*, a shuffled pool's counts list sent in *counts_field*, as the counts of the pool the preview builds: each a whole number from 0 to :data:`MAX_FLEET_HOMES`, totalling at most MAX_FLEET_HOMES.
+
+    The preview never runs fleet_distribution.py's grammar, whose F6 holds a fleet's pools to
+    its n_homes, so it bounds the pool it builds itself.
 
     Raises:
-        ValueError: If *value* is not a dict; the error names *field* and the type sent.
+        ConfigurationError: For a list or count as_whole_numbers refuses, naming its field, or
+            counts totalling more than MAX_FLEET_HOMES, naming *counts_field* and the total.
     """
-    if not isinstance(value, dict):
-        raise ValueError(f"{field} must be a mapping, got {type(value).__name__}")
-    return value
-
-
-def _named_rows(
-    spec: dict[str, Any], key: str, path: str
-) -> list[tuple[str, dict[str, Any]]]:
-    """Return each row of the *key* row list of the *path* distribution *spec* with its field, reading an absent list as empty.
-
-    A row's field is ``path.key[index]``.
-
-    Raises:
-        ValueError: If the value is not a list (the error names ``path.key`` and the type
-            sent), or a row is not a dict (see :func:`_require_dict`; the error names the
-            row's field).
-    """
-    rows_field = f"{path}.{key}"
-    rows = spec.get(key, [])
-    if not isinstance(rows, list):
-        raise ValueError(f"{rows_field} must be a list, got {type(rows).__name__}")
-    named_rows: list[tuple[str, dict[str, Any]]] = []
-    for index, row in enumerate(rows):
-        field = f"{rows_field}[{index}]"
-        named_rows.append((field, _require_dict(row, field)))
-    return named_rows
-
-
-def _parse_component_distribution(
-    data: dict[str, Any], block: str, primary_field: str
-) -> dict[str, Any]:
-    """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
-
-    Its distribution is what *data* holds at *primary_field*: a distribution (see
-    :func:`_is_distribution`), read by :func:`_build_distribution_dict`, or a fixed value
-    (see :func:`_is_fixed_value`), read by
-    :func:`~solar_challenge.web.number_fields.as_finite_float`.  A mapping without a type
-    passes as given, and an absent or null field as an empty mapping, for config.py's
-    grammar to refuse.  The block's other settings are read by :func:`_other_setting`.
-
-    Args:
-        data: Component form data dict.
-        block: The block's name in the form, ``pv``, ``battery`` or ``load``.
-        primary_field: Name of the primary distribution field.
-
-    Returns:
-        Component distribution config dict.
-
-    Raises:
-        ValueError: If *data* is itself a distribution (see
-            :func:`_refuse_block_that_is_a_distribution`), or one of those readers refuses
-            what it reads; the error names its field as a dot path under *block*.
-    """
-    _refuse_block_that_is_a_distribution(data, block, primary_field)
-    result: dict[str, Any] = {}
-    spec = data.get(primary_field)
-
-    if _is_distribution(spec):
-        result[primary_field] = _build_distribution_dict(spec, f"{block}.{primary_field}")
-    elif _is_fixed_value(spec):
-        result[primary_field] = as_finite_float(spec, f"{block}.{primary_field}")
-    else:
-        result[primary_field] = {} if spec is None else spec
-
-    for key, value in data.items():
-        if key != primary_field:
-            result[key] = _other_setting(value, f"{block}.{key}")
-
-    return result
-
-
-def _refuse_block_that_is_a_distribution(
-    data: dict[str, Any], block: str, primary_field: str
-) -> None:
-    """Refuse *data*, the fleet form's *block* component block, when it is itself a distribution: a block holds its distribution in *primary_field*.
-
-    Raises:
-        ValueError: If *data* is a distribution (see :func:`_is_distribution`), whatever
-            else it holds; the error names ``block.type``, ``block.primary_field`` and the
-            type sent.
-    """
-    if _is_distribution(data):
-        raise ValueError(
-            f"{block}.type must be absent: the {block} block's distribution goes in "
-            f"{block}.{primary_field}, got {data['type']!r}"
+    read_counts = as_whole_numbers(counts, counts_field, within=Interval(0, MAX_FLEET_HOMES))
+    total = sum(read_counts)
+    if total > MAX_FLEET_HOMES:
+        raise ConfigurationError(
+            f"{counts_field} must total at most {MAX_FLEET_HOMES}, got {total}"
         )
+    return read_counts
 
 
-def _other_setting(value: object, field: str) -> object:
-    """Return *value*, a block setting other than its distribution, as it is passed to config.py's grammar.
-
-    A distribution (see :func:`_is_distribution`) is read as the block's own is, by
-    :func:`_build_distribution_dict`.  Null, booleans (flags such as load.use_stochastic)
-    and any other mapping (a block such as battery.grid_charging) pass as given, for
-    config.py's grammar to read or refuse; any other value is read as a number, named
-    *field*.
-
-    Raises:
-        ValueError: If :func:`_build_distribution_dict` or
-            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses *value*; the
-            error names its field under *field* and what was sent.
-    """
-    if _is_distribution(value):
-        return _build_distribution_dict(value, field)
-    if value is None or isinstance(value, (bool, dict)):
-        return value
-    return as_finite_float(value, field)
+#: The distribution types the fleet pages' distribution editor holds besides a fixed value.
+_EDITOR_TYPES: Mapping[str, _EditorType] = MappingProxyType({
+    "normal": _EditorType(parameters=("mean", "std", "min", "max"), drawn_from=("mean", "std")),
+    "uniform": _EditorType(parameters=("min", "max"), drawn_from=("min", "max")),
+    "weighted_discrete": _EditorType(
+        parameters=(),
+        drawn_from=("values", "weights"),
+        rows=_EditorRows("weights", as_finite_floats),
+    ),
+    "shuffled_pool": _EditorType(
+        parameters=(),
+        drawn_from=("values", "counts"),
+        rows=_EditorRows("counts", _preview_pool_counts),
+    ),
+})
 
 
-def _is_distribution(value: object) -> TypeGuard[dict[str, Any]]:
-    """Whether *value* is a fleet form distribution: a mapping with a type."""
-    return isinstance(value, dict) and "type" in value
+def _preview_spec(dist_type: object, params: Mapping[str, Any]) -> dict[str, Any]:
+    """The spec the preview draws from: *dist_type* and *params*, a distribution in fleet_distribution.py's spelling, each parameter and list cell its type draws read under its field, ``params.<key>`` or ``params.<list>[index]``.
 
-
-def _is_fixed_value(value: object) -> bool:
-    """Whether *value* is a fleet form block's fixed value: any value but null or a mapping."""
-    return value is not None and not isinstance(value, dict)
-
-
-def _build_distribution_dict(data: dict[str, Any], path: str) -> dict[str, Any]:
-    """Build a standardised distribution dict from form input.
-
-    Args:
-        data: Dict with at least a ``type`` key.
-        path: The distribution's field, a dot path from the request body's root, such
-            as ``pv.capacity_kw`` or ``params``.
-
-    Returns:
-        Distribution specification dict.
+    A key sent as null is left out, and a key its type does not draw is ignored.
 
     Raises:
-        ValueError: If a weighted_discrete/shuffled_pool row list or row is malformed
-            (see :func:`_named_rows`), a shuffled_pool count is refused (see
-            :func:`read_pool_counts`), or a number is one
-            :func:`~solar_challenge.web.number_fields.as_finite_float` refuses; the error
-            names its field under *path*.
+        ConfigurationError: For a type the editor does not offer, naming type and the type
+            sent; params without a key the type is drawn from, naming it; a parameter, list
+            or cell those reads refuse, naming its field; or lists of unequal length, naming
+            both.
     """
-    dist_type = data["type"]
-    result: dict[str, Any] = {"type": dist_type}
-
-    if dist_type == "normal":
-        result["mean"] = _spec_number(data, "mean", 0, path)
-        result["std"] = _spec_number(data, "std", 1, path)
-        if data.get("min") is not None:
-            result["min"] = as_finite_float(data["min"], f"{path}.min")
-        if data.get("max") is not None:
-            result["max"] = as_finite_float(data["max"], f"{path}.max")
-
-    elif dist_type == "uniform":
-        result["min"] = _spec_number(data, "min", 0, path)
-        result["max"] = _spec_number(data, "max", 1, path)
-
-    elif dist_type == "weighted_discrete":
-        rows = _named_rows(data, "values", path)
-        result["values"] = [_spec_number(row, "value", 0, field) for field, row in rows]
-        result["weights"] = [_spec_number(row, "weight", 1, field) for field, row in rows]
-
-    elif dist_type == "shuffled_pool":
-        rows = _named_rows(data, "entries", path)
-        result["values"] = [_spec_number(row, "value", 0, field) for field, row in rows]
-        result["counts"] = read_pool_counts(
-            [(f"{field}.count", row.get("count", 1)) for field, row in rows], f"{path}.entries"
+    editor_type = _EDITOR_TYPES.get(dist_type) if isinstance(dist_type, str) else None
+    if editor_type is None:
+        raise ConfigurationError(
+            f"type must be one of {', '.join(_EDITOR_TYPES)}, got {dist_type!r}"
         )
-
-    return result
-
-
-def _spec_number(spec: dict[str, Any], key: str, default: float, path: str) -> float:
-    """Return the *key* number of *spec*, the distribution or row at *path*, *default* when absent.
-
-    Raises:
-        ValueError: If :func:`~solar_challenge.web.number_fields.as_finite_float` refuses
-            it; the error names ``path.key`` and the value sent.
-    """
-    return as_finite_float(spec.get(key, default), f"{path}.{key}")
-
-
-#: The distribution types the fleet page's distribution editor holds besides a fixed value.
-_EDITOR_DISTRIBUTION_TYPES: tuple[str, ...] = (
-    "normal", "uniform", "weighted_discrete", "shuffled_pool",
-)
-
-
-def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
-    """The fleet form's distribution for the config.py grammar *spec* at *path*: the inverse of the form's conversion of a block's distribution (see :func:`_parse_component_distribution`).
-
-    *spec* is one the grammar accepts.  The form's distribution is the editor's: a fixed
-    value, which the grammar spells as a number or as a fixed distribution, and which the
-    form holds as its number; a normal with both clamps; a uniform; or weighted_discrete
-    or shuffled_pool rows.  A shuffled_pool count is read by
-    :func:`~solar_challenge.web.number_fields.as_whole_number`, and any other number by
-    :func:`~solar_challenge.web.number_fields.as_finite_float`, as the form's conversion
-    reads them, except that only the conversion bounds the counts: it refuses a pool too
-    large for a dashboard fleet (see :func:`read_pool_counts`).
-
-    Raises:
-        ValueError: For a *spec* the editor cannot hold, naming *path*: an absent
-            distribution, a type the editor has no form for, a normal without both clamps,
-            a value that is not a finite number, a boolean included, or a shuffled_pool
-            count that is not a whole number.
-    """
-    if _is_fixed_value(spec):
-        return as_finite_float(spec, path)
-    if _is_distribution(spec) and spec["type"] == "fixed":
-        return as_finite_float(spec.get("value"), f"{path}.value")
-    if not _is_distribution(spec) or spec["type"] not in _EDITOR_DISTRIBUTION_TYPES:
-        raise ValueError(
-            f"{path} must be a fixed value or one of the fleet page's distributions "
-            f"({', '.join(_EDITOR_DISTRIBUTION_TYPES)}), got {spec!r}"
-        )
-    dist_type = spec["type"]
-    if dist_type == "normal":
-        return {"type": dist_type, **_form_numbers(spec, path, ("mean", "std", "min", "max"))}
-    if dist_type == "uniform":
-        return {"type": dist_type, **_form_numbers(spec, path, ("min", "max"))}
-    values = _form_number_list(spec["values"], f"{path}.values")
-    if dist_type == "weighted_discrete":
-        weights = _form_number_list(spec["weights"], f"{path}.weights")
-        return {
-            "type": dist_type,
-            "values": [{"value": value, "weight": weight} for value, weight in zip(values, weights)],
-        }
-    counts = _form_count_list(spec["counts"], f"{path}.counts")
-    return {
-        "type": dist_type,
-        "entries": [{"value": value, "count": count} for value, count in zip(values, counts)],
+    for key in editor_type.drawn_from:
+        if params.get(key) is None:
+            raise ConfigurationError(
+                f"params.{key} must be given: the preview draws a {dist_type} distribution "
+                f"from its {' and '.join(editor_type.drawn_from)}"
+            )
+    spec: dict[str, Any] = {
+        key: as_finite_float(params[key], f"params.{key}")
+        for key in editor_type.parameters
+        if params.get(key) is not None
     }
+    if editor_type.rows is not None:
+        spec.update(_preview_rows(params, editor_type.rows))
+    return {"type": dist_type, **spec}
 
 
-def _form_numbers(spec: Mapping[str, Any], path: str, keys: Iterable[str]) -> dict[str, float]:
-    """The *keys* of the *path* distribution *spec*, each read by :func:`~solar_challenge.web.number_fields.as_finite_float`, a missing one as None."""
-    return {key: as_finite_float(spec.get(key), f"{path}.{key}") for key in keys}
+def _preview_rows(params: Mapping[str, Any], rows: _EditorRows) -> dict[str, Sequence[float]]:
+    """The values list and the *rows* paired list of *params*, each cell read under ``params.<list>[index]``.
 
-
-def _form_number_list(numbers: Iterable[Any], path: str) -> list[float]:
-    """Each of *numbers*, the *path* list, read by :func:`~solar_challenge.web.number_fields.as_finite_float`."""
-    return [as_finite_float(number, f"{path}[{index}]") for index, number in enumerate(numbers)]
-
-
-def _form_count_list(counts: Iterable[Any], path: str) -> list[int]:
-    """Each of *counts*, the *path* list of shuffled_pool counts, read by :func:`~solar_challenge.web.number_fields.as_whole_number`."""
-    return [as_whole_number(count, f"{path}[{index}]") for index, count in enumerate(counts)]
+    Raises:
+        ConfigurationError: For a list or cell the reads refuse, naming its field, or lists of
+            unequal length, naming both and their lengths.
+    """
+    paired_field = f"params.{rows.paired_key}"
+    values = as_finite_floats(params["values"], "params.values")
+    paired = rows.read_paired(params[rows.paired_key], paired_field)
+    if len(values) != len(paired):
+        raise ConfigurationError(
+            f"params.values and {paired_field} must have the same length, "
+            f"got {len(values)} and {len(paired)}"
+        )
+    return {"values": values, rows.paired_key: paired}

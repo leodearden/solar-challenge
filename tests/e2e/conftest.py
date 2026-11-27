@@ -3,7 +3,10 @@
 Provides a live Flask server running in a background thread,
 configures Playwright's base_url so tests can use relative paths, and
 gives tests the server's dashboard macros, to compare a page with
-what a macro draws.
+what a macro draws. The live server's jobs simulate on the cache
+live_server_weather returns, synthetic_tmy() at each location preset
+the dashboard offers, read through PvgisTmy; a test module chooses other
+weather by overriding live_server_weather to return a WeatherCache of its own.
 
 Includes data-seeding fixtures, which save completed runs through the
 live server's own RunStorage, for tests that need pre-existing
@@ -14,29 +17,38 @@ live server's database.
 Also stubs the Run History page's runs-list API for tests that need it
 empty, unanswered or listing a run of each badge, and collects the
 errors a page reports. release_held_simulations holds the live server's
-jobs inside their simulations until the test releases them.
+jobs inside their simulations until the test releases them, and
+job_streams_time_out_after_a_second ends each of the live server's job
+progress streams about a second after it opens.
+
+Every browser context a test opens refuses each request to another origin
+than the live server's, as if the network were down, and the test errors at
+teardown, naming each refused URL.
 
 A test that fails after Chromium failed one of its requests with
 net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
 says why.
 
-It imports nothing from playwright: tests/unit/test_e2e_job_wait.py and
-tests/unit/test_e2e_network_change_reruns.py run copies of this module in
-the verify environment, which lacks the e2e extra.
+It resolves `-n auto` to no workers in any session that names tests/e2e or a
+path under it, whatever else that session collects. So the suite runs serially
+unless its command passes an explicit `-n N`.
+
+It imports playwright's and pytest-playwright's types for annotations only,
+so nothing from the e2e extra when it loads;
+tests/unit/test_e2e_conftest_needs_no_e2e_extra.py says why, and pins it.
 """
+
+from __future__ import annotations
 
 import functools
 import json
-import socket
-import sqlite3
+import re
 import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator
-from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlsplit
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import pytest
@@ -45,23 +57,25 @@ from flask import Flask
 from werkzeug.serving import make_server
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import calculate_fleet_summary
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.fleet import FleetRunner
+from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.weather import PvgisTmy, WeatherCache, WeatherProvider
+from solar_challenge.web.dashboard import dashboard_of, get_job_stream_policy
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import get_job_manager, get_storage
 from solar_challenge.web.storage import RunStorage
 
 from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._server_drawn_badges import dashboard_macros_of
-from tests._web_app import build_test_app
+from tests._synthetic_weather import synthetic_tmy
+from tests._web_app import build_test_app, database_of, run_storage_of
+from tests._web_runs import store_fleet_run, store_home_run
+from tests.e2e._run_history_requests import hold_requests, is_runs_list_request
 
-
-def _find_free_port() -> int:
-    """Find an available TCP port on localhost."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+if TYPE_CHECKING:
+    from playwright.sync_api import BrowserContext, Route
+    from pytest_playwright import CreateContextCallback
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +84,76 @@ def _find_free_port() -> int:
 
 
 @pytest.fixture(scope="session")
-def _e2e_app(tmp_path_factory: pytest.TempPathFactory) -> Flask:
-    """The Flask app the live server serves."""
-    return build_test_app(tmp_path_factory.mktemp("e2e"))
+def live_server_weather(tmp_path_factory: pytest.TempPathFactory) -> WeatherCache:
+    """The weather cache the live server's jobs simulate on: synthetic_tmy() at each location preset.
+
+    The TMY is a whole year, which a heat pump's job needs. A test module overrides this fixture to return a
+    WeatherCache of its own.
+    """
+    cache = WeatherCache(cache_dir=tmp_path_factory.mktemp("e2e-weather"))
+    tmy = synthetic_tmy()
+    for location in LOCATION_PRESETS.values():
+        cache.put(tmy, "tmy", location)
+    return cache
+
+
+class _HeldSimulations:
+    """The session's home simulator: the real simulation, except while a hold is on.
+
+    While a hold is on, each home waits until the hold is released, then returns a day in which it self-consumes
+    24 kWh, exports 48 kWh and imports 12 kWh.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._release: threading.Event | None = None
+
+    def __call__(
+        self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
+        with self._lock:
+            release = self._release
+        if release is None:
+            return simulate_home(config, start_date, end_date, weather=weather)
+        release.wait()
+        return make_sim_results(self_kwh=24.0, export_kwh=48.0, import_kwh=12.0, days=1)
+
+    def hold(self) -> Callable[[], None]:
+        """Hold every simulation that starts from now on until the returned function is called."""
+        release = threading.Event()
+        with self._lock:
+            self._release = release
+        return release.set
+
+    def stop_holding(self) -> None:
+        """Release the hold in force, if any, and let simulations run for real again."""
+        with self._lock:
+            release, self._release = self._release, None
+        if release is not None:
+            release.set()
+
+
+@pytest.fixture(scope="session")
+def _held_simulations() -> _HeldSimulations:
+    """The session's gate on the live server's home simulations."""
+    return _HeldSimulations()
+
+
+@pytest.fixture(scope="session")
+def _e2e_app(
+    tmp_path_factory: pytest.TempPathFactory, live_server_weather: WeatherCache, _held_simulations: _HeldSimulations
+) -> Flask:
+    """The Flask app the live server serves.
+
+    Its one JobManager runs each home in turn in this process, through the session's gate, on weather PvgisTmy reads
+    from live_server_weather's cache, so a job at any other site reaches the network and fails its test.
+    """
+    runner = FleetRunner(
+        weather=PvgisTmy(live_server_weather), home_simulator=_held_simulations, parallel=False
+    )
+    return build_test_app(
+        tmp_path_factory.mktemp("e2e"), jobs=functools.partial(JobManager, runner=runner)
+    )
 
 
 @pytest.fixture(scope="session")
@@ -81,22 +162,18 @@ def _e2e_storage(_e2e_app: Flask) -> RunStorage:
 
     create_app built its database schema, so a fixture can seed it before the server starts.
     """
-    with _e2e_app.app_context():
-        return get_storage()
+    return run_storage_of(_e2e_app)
 
 
 @pytest.fixture(scope="session")
 def _e2e_job_manager(_e2e_app: Flask) -> Iterator[JobManager]:
     """The JobManager that runs the live server's simulation jobs.
 
-    It lives for the whole session: the per-test drain in tests/conftest.py
-    leaves it alone, _jobs_finish_within_their_test waits for each test's jobs,
-    and this fixture shuts it down at session end.
+    It lives for the whole session: _jobs_finish_within_their_test waits for each test's jobs,
+    and this fixture closes the app's dashboard, which shuts it down, at session end.
     """
-    with _e2e_app.app_context():
-        manager = get_job_manager()
-    yield manager
-    manager.shutdown(wait=True)
+    yield dashboard_of(_e2e_app).jobs
+    dashboard_of(_e2e_app).close()
 
 
 @pytest.fixture(scope="session")
@@ -110,14 +187,14 @@ def live_server(_e2e_app: Flask, _e2e_job_manager: JobManager) -> Iterator[str]:
     _e2e_job_manager so that pytest stops this server before shutting down
     the manager its requests submit jobs to.
     """
-    port = _find_free_port()
-    server = make_server("127.0.0.1", port, _e2e_app, threaded=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    with make_server("127.0.0.1", 0, _e2e_app, threaded=True) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
 
-    yield f"http://127.0.0.1:{port}"
+        yield f"http://127.0.0.1:{server.port}"
 
-    server.shutdown()
+        server.shutdown()
+        thread.join()
 
 
 _JOBS_FINISH_TIMEOUT_S = 120
@@ -138,32 +215,37 @@ def _jobs_finish_within_their_test(_e2e_job_manager: JobManager) -> Iterator[Non
 
 
 @pytest.fixture
-def release_held_simulations(_e2e_app: Flask) -> Iterator[Callable[[], None]]:
+def release_held_simulations(
+    _held_simulations: _HeldSimulations, _e2e_job_manager: JobManager
+) -> Iterator[Callable[[], None]]:
     """Hold each job the live server runs during the test inside its simulation until the test calls the function this yields.
 
-    The jobs run on a JobManager of their own, two at a time as on the session's.
+    The held jobs run on the session's JobManager, two at a time.
     Once released, each simulates a day in which its home self-consumes 24 kWh,
-    exports 48 kWh and imports 12 kWh. Teardown releases them, waits for them
-    and puts the session's JobManager back.
+    exports 48 kWh and imports 12 kWh. Teardown releases them and waits for the manager to be idle.
     """
-    released = threading.Event()
-
-    def held_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
-        released.wait()
-        return make_sim_results(self_kwh=24.0, export_kwh=48.0, import_kwh=12.0, days=1)
-
-    session_job_manager = _e2e_app.extensions["job_manager"]
-    held_job_manager = JobManager(simulate_home=held_simulation)
-    _e2e_app.extensions["job_manager"] = held_job_manager
-    yield released.set
-    released.set()
-    finished = held_job_manager.wait_until_idle(timeout=_JOBS_FINISH_TIMEOUT_S)
-    _e2e_app.extensions["job_manager"] = session_job_manager
-    if not finished:
+    release = _held_simulations.hold()
+    yield release
+    _held_simulations.stop_holding()
+    if not _e2e_job_manager.wait_until_idle(timeout=_JOBS_FINISH_TIMEOUT_S):
         pytest.fail(
             f"jobs held by release_held_simulations were still running on the live server "
             f"{_JOBS_FINISH_TIMEOUT_S} s after it released them"
         )
+
+
+@pytest.fixture
+def job_streams_time_out_after_a_second(_e2e_app: Flask) -> Iterator[None]:
+    """Serve the live server's job progress streams under the session's policy with a one-second limit, polled every quarter second.
+
+    A stream checks its limit as it polls, so each stream of a running job ends with its timeout 1 to 1.25 s after it opens.
+    Teardown puts the session's policy back.
+    """
+    with _e2e_app.app_context():
+        session_policy = get_job_stream_policy()
+    _e2e_app.extensions["job_stream_policy"] = replace(session_policy, limit_seconds=1.0, heartbeat_seconds=0.25)
+    yield
+    _e2e_app.extensions["job_stream_policy"] = session_policy
 
 
 @pytest.fixture(scope="session")
@@ -182,6 +264,49 @@ def dashboard_macros(_e2e_app: Flask) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Requests to other origins
+# ---------------------------------------------------------------------------
+
+
+def _urls_outside(origin: str) -> re.Pattern[str]:
+    """A pattern matching every URL outside *origin*.
+
+    Playwright matches a pattern in its driver; a predicate would stop every request the browser makes to ask this process.
+    """
+    return re.compile(f"^(?!{re.escape(origin)}/)")
+
+
+@pytest.fixture
+def new_context(
+    new_context: CreateContextCallback, live_server: str, request: pytest.FixtureRequest
+) -> Iterator[Callable[..., BrowserContext]]:
+    """Wrap pytest-playwright's new_context so that each browser context it opens refuses every request to another origin than the live server's, as if the network were down.
+
+    It opens the context fixture's browser context, and so the page fixture's, as well as each one a test opens itself.
+    At teardown the test errors, naming each URL refused.
+    """
+    refused: list[str] = []
+
+    def _refuse(route: Route) -> None:
+        refused.append(route.request.url)
+        route.abort("internetdisconnected")
+
+    def new_context_refusing_other_origins(**kwargs: Any) -> BrowserContext:
+        context = new_context(**kwargs)
+        context.route(_urls_outside(live_server), _refuse)
+        return context
+
+    yield new_context_refusing_other_origins
+    if refused:
+        pytest.fail(
+            f"{request.node.nodeid} requested other origins ({', '.join(dict.fromkeys(refused))}); "
+            "an e2e test's browser reaches only the live server: serve each file a page loads from the app, "
+            "as tests/unit/test_web_page_scripts.py describes for scripts",
+            pytrace=False,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Seeded data fixtures
 # ---------------------------------------------------------------------------
 
@@ -189,12 +314,12 @@ def dashboard_macros(_e2e_app: Flask) -> Any:
 def _save_seeded_home_run(
     storage: RunStorage, run_id: str, run_name: str, results: SimulationResults
 ) -> tuple[str, str]:
-    """Save *results* as a completed run of a 5 kWh battery home named *run_name*, as a finished home job saves its run.
+    """Save *results* as a completed run named *run_name*, of a 5 kWh battery home of that name, as a finished home job saves its run.
 
     The battery gives the run's results page its battery stat cards. Returns (run_id, run_name).
     """
     home = replace(make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)), name=run_name)
-    storage.save_home_run(run_id, home, results, calculate_summary(results))
+    store_home_run(storage, run_id, home, results, name=run_name)
     return run_id, run_name
 
 
@@ -256,13 +381,7 @@ def seeded_fleet_run(_e2e_storage: RunStorage) -> tuple[str, str]:
     """
     run_id, run_name = "seed-fleet-001", "Seeded Fleet Alpha"
     fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
-    _e2e_storage.save_fleet_run(
-        run_id,
-        fleet,
-        calculate_fleet_summary(fleet),
-        [calculate_summary(home_results) for home_results in fleet.per_home_results],
-        name=run_name,
-    )
+    store_fleet_run(_e2e_storage, run_id, fleet, name=run_name)
     return run_id, run_name
 
 
@@ -289,20 +408,16 @@ def home_preset_saved_under_a_builtin_name(_e2e_app: Flask) -> Iterator[dict[str
     tests share the database, so the row is deleted at teardown.
     """
     config: dict[str, object] = {"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000}
-    preset_id = insert_saved_home_preset(_e2e_app.config["DATABASE"], "Small Urban", json.dumps(config))
+    database = database_of(_e2e_app)
+    preset_id = insert_saved_home_preset(database, "Small Urban", json.dumps(config))
     yield config
-    with closing(sqlite3.connect(_e2e_app.config["DATABASE"])) as conn:
-        with conn:
-            conn.execute("DELETE FROM config_presets WHERE id = ?", (preset_id,))
+    with database.transaction() as conn:
+        conn.execute("DELETE FROM config_presets WHERE id = ?", (preset_id,))
 
 
 # ---------------------------------------------------------------------------
 # Run History API stubs
 # ---------------------------------------------------------------------------
-
-
-def _is_runs_list_request(url: str) -> bool:
-    return urlsplit(url).path == "/api/history/runs"
 
 
 @pytest.fixture
@@ -314,7 +429,7 @@ def runs_api_returns_no_runs(page, live_server: str) -> None:
         fail_on_status_code=True,
     ).json()
     page.route(
-        _is_runs_list_request,
+        is_runs_list_request,
         lambda route: route.fulfill(json=no_runs_response),
     )
 
@@ -327,7 +442,7 @@ def runs_api_returns_a_run_of_each_badge(
 
     The pairs name every run type and every status a run is stored with, and 'queued', a status with no badge colours of its own.
     """
-    badges = [("home", "running"), ("fleet", "completed"), ("sweep", "failed"), ("home", "queued")]
+    badges = [("home", "running"), ("fleet", "completed"), ("fleet", "failed"), ("home", "queued")]
     listed = page.request.get(
         live_server + "/api/history/runs",
         params={"q": seeded_home_run[1]},
@@ -344,7 +459,7 @@ def runs_api_returns_a_run_of_each_badge(
         for n, (run_type, status) in enumerate(badges, start=1)
     ]
     page.route(
-        _is_runs_list_request,
+        is_runs_list_request,
         lambda route: route.fulfill(json={**listed, "runs": runs}),
     )
     return badges
@@ -352,13 +467,14 @@ def runs_api_returns_a_run_of_each_badge(
 
 @pytest.fixture
 def runs_api_never_answers(page) -> Iterator[None]:
-    """Hold the Run History page's runs-list requests unanswered for the whole test, then abort them."""
-    held_requests = []
-    page.route(_is_runs_list_request, lambda route: held_requests.append(route))
-    yield
-    assert held_requests, "the page made no runs-list request for runs_api_never_answers to hold"
-    for route in held_requests:
-        route.abort()
+    """Hold the Run History page's runs-list requests unanswered for the whole test, then abort each, however late Playwright hands it over.
+
+    The test errors at teardown if its page made no runs-list request within the page's default timeout of the test's start.
+    """
+    held_requests = hold_requests(page, is_runs_list_request)
+    with page.expect_request(lambda request: is_runs_list_request(request.url)):
+        yield
+    held_requests.answer_each(lambda route: route.abort())
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +560,14 @@ def pytest_runtest_makereport(item: pytest.Item) -> Generator[None, pytest.TestR
             )
         )
     return report
+
+
+# ---------------------------------------------------------------------------
+# Worker count
+# ---------------------------------------------------------------------------
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
+    """Resolve `-n auto` to no workers, so the suite runs in its session's own process; tests/unit/test_e2e_suite_runs_serially.py says why."""
+    return 0

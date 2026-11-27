@@ -1,7 +1,7 @@
 """Tests for the Flask web dashboard module."""
 
+import logging
 import uuid
-from pathlib import Path
 
 import pytest
 pytest.importorskip("flask")
@@ -13,8 +13,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import RunStatus, get_db
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RunStatus, RunStorage
 from tests._finance_builders import make_sim_results
 from tests._html_page import (
     chart_figures,
@@ -28,27 +27,10 @@ from tests._html_page import (
     texts_after,
 )
 from tests._plotly_figure import annotations_by_text
+from tests._run_summaries import home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._web_app import build_test_app
+from tests._web_app import database_of
 from tests._web_runs import store_fleet_run, store_home_run
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
-
-
-def _run_storage(app: Flask) -> RunStorage:
-    """The RunStorage *app* keeps its runs in: the one create_app registers, which its pages read."""
-    storage: RunStorage = app.extensions["storage"]
-    return storage
 
 
 def _home_config(name: str, *, battery_config: BatteryConfig | None = None) -> HomeConfig:
@@ -62,7 +44,7 @@ def _home_config(name: str, *, battery_config: BatteryConfig | None = None) -> H
 
 
 def _save_home_run(
-    app: Flask,
+    storage: RunStorage,
     name: str,
     results: SimulationResults,
     *,
@@ -70,7 +52,7 @@ def _save_home_run(
     status: RunStatus = "completed",
     battery_config: BatteryConfig | None = None,
 ) -> str:
-    """Save *results* to *app*'s store as a home run named *name*, as a finished job saves its run; return its run id.
+    """Save *results* to *storage* as a home run named *name*, as a finished job saves its run; return its run id.
 
     The run's home is _home_config's, with *battery_config*'s battery, none by default.
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
@@ -78,7 +60,7 @@ def _save_home_run(
     """
     run_id = str(uuid.uuid4())
     store_home_run(
-        _run_storage(app),
+        storage,
         run_id,
         _home_config(name, battery_config=battery_config),
         results,
@@ -90,19 +72,19 @@ def _save_home_run(
 
 
 def _save_fleet_run(
-    app: Flask,
+    storage: RunStorage,
     name: str,
     per_home_results: list[SimulationResults],
     *,
     created_at: str | None = None,
 ) -> str:
-    """Save a completed fleet run named *name* to *app*'s store, one home per item of *per_home_results*, as a finished job does; return its run id.
+    """Save a completed fleet run named *name* to *storage*, one home per item of *per_home_results*, as a finished job does; return its run id.
 
     *created_at*, an ISO timestamp, is the creation time the run is recorded with; it defaults to now.
     """
     run_id = str(uuid.uuid4())
     store_fleet_run(
-        _run_storage(app),
+        storage,
         run_id,
         FleetResults(
             per_home_results=per_home_results,
@@ -176,12 +158,12 @@ class TestDashboardRoute:
         assert texts(page).count("No simulation runs yet.") == 1
 
     def test_dashboard_lists_saved_runs_in_recent_runs_table(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """GET / with saved runs renders the Recent Runs table, one row per run showing its name, and no empty-state message."""
         run_names = ("North Roof", "South Roof")
         for run_name in run_names:
-            _save_home_run(app, run_name, make_sinusoidal_sim_results(days=1))
+            _save_home_run(storage, run_name, make_sinusoidal_sim_results(days=1))
         response = client.get("/")
         page = response.get_data(as_text=True)
         page_texts = texts(page)
@@ -190,17 +172,17 @@ class TestDashboardRoute:
         assert "No simulation runs yet." not in page_texts
 
     def test_dashboard_recent_runs_table_rows_show_each_run_newest_first(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
-        """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's home or fleet results page."""
+        """GET / lists the saved runs newest first by creation time in the Recent Runs table: each row reads the run's name, type, date and status, and its name links to the run's one results page, /results/<run_id>, whatever its kind."""
         results = make_sinusoidal_sim_results(days=1)
         fleet_run_id = _save_fleet_run(
-            app, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
+            storage, "Community Fleet", [results, results], created_at="2024-06-02T09:00:00+00:00"
         )
         failed_run_id = _save_home_run(
-            app, "South Roof", results, created_at="2024-06-03T09:00:00+00:00", status="failed"
+            storage, "South Roof", results, created_at="2024-06-03T09:00:00+00:00", status="failed"
         )
-        home_run_id = _save_home_run(app, "North Roof", results, created_at="2024-06-01T09:00:00+00:00")
+        home_run_id = _save_home_run(storage, "North Roof", results, created_at="2024-06-01T09:00:00+00:00")
         response = client.get("/")
         page = response.get_data(as_text=True)
         assert texts_after(page, "Status", 12) == [
@@ -209,21 +191,21 @@ class TestDashboardRoute:
             "North Roof", "home", "2024-06-01", "completed",
         ]
         link_by_name = {
-            "South Roof": f"/results/home/{failed_run_id}",
-            "Community Fleet": f"/results/fleet/{fleet_run_id}",
-            "North Roof": f"/results/home/{home_run_id}",
+            "South Roof": f"/results/{failed_run_id}",
+            "Community Fleet": f"/results/{fleet_run_id}",
+            "North Roof": f"/results/{home_run_id}",
         }
         for name, link in link_by_name.items():
             assert element_count(page, "a", {"href": link}) == 1, name
 
     def test_dashboard_stats_count_and_total_only_the_completed_runs(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """GET / reads Total Runs as the completed runs, Homes Simulated as their homes, each home of a fleet run counted, and Energy Modelled as those homes' total generation in MWh; a failed run adds to none of them."""
         results = make_sinusoidal_sim_results(days=1)
-        _save_home_run(app, "North Roof", results)
-        _save_fleet_run(app, "Community Fleet", [results, results])
-        _save_home_run(app, "South Roof", results, status="failed")
+        _save_home_run(storage, "North Roof", results)
+        _save_fleet_run(storage, "Community Fleet", [results, results])
+        _save_home_run(storage, "South Roof", results, status="failed")
         response = client.get("/")
         page = response.get_data(as_text=True)
         completed_homes = 3
@@ -231,6 +213,40 @@ class TestDashboardRoute:
         assert texts_after(page, "Total Runs", 1) == ["2"]
         assert texts_after(page, "Homes Simulated", 1) == [str(completed_homes)]
         assert texts_after(page, "Energy Modelled", 2) == [str(round(completed_homes_generation_mwh, 2)), "MWh"]
+
+    @pytest.mark.parametrize(
+        "damaged_summary_json",
+        [
+            pytest.param("{not json", id="summary-not-json"),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=10**400)),
+                id="summary-holds-a-generation-no-float-can-hold",
+            ),
+        ],
+    )
+    def test_dashboard_stats_count_a_completed_run_whose_summary_cannot_be_read_but_leave_out_its_generation(
+        self, storage: RunStorage, client: FlaskClient, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
+    ) -> None:
+        """One damaged run does not fail the dashboard: it counts in Total Runs and Homes Simulated, Energy Modelled leaves its generation out, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
+        results = make_sinusoidal_sim_results(days=1)
+        _save_home_run(storage, "North Roof", results)
+        _save_fleet_run(storage, "Community Fleet", [results, results])
+        damaged_run_id = _save_home_run(storage, "Damaged Roof", results)
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (damaged_summary_json, damaged_run_id))
+        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
+
+        response = client.get("/")
+
+        assert response.status_code == 200
+        page = response.get_data(as_text=True)
+        readable_homes_generation_mwh = 3 * calculate_summary(results).total_generation_kwh / 1000
+        assert texts_after(page, "Total Runs", 1) == ["3"]
+        assert texts_after(page, "Homes Simulated", 1) == ["4"]
+        assert texts_after(page, "Energy Modelled", 2) == [str(round(readable_homes_generation_mwh, 2)), "MWh"]
+        assert [record.levelno for record in caplog.records if damaged_run_id in record.getMessage()] == [
+            logging.WARNING
+        ]
 
 
 class TestSidebarCurrentPage:
@@ -275,7 +291,7 @@ class TestSidebarCurrentPage:
         self, app: Flask, client: FlaskClient
     ) -> None:
         """When the dashboard cannot read its runs, GET / answers the 500 page, which marks the Dashboard link as the current page in both sidebars: the request was routed to the dashboard, and the browser is still at its URL."""
-        with get_db(app.config["DATABASE"]) as conn:
+        with database_of(app).transaction() as conn:
             conn.execute("DROP TABLE runs")
         app.config["PROPAGATE_EXCEPTIONS"] = False
         response = client.get("/")
@@ -283,27 +299,27 @@ class TestSidebarCurrentPage:
         assert current_page_links(response.get_data(as_text=True)) == ["/", "/"]
 
     def test_the_home_results_page_marks_no_link_current(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """A saved home run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
-        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
-        response = client.get(f"/results/home/{run_id}")
+        run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         assert current_page_links(response.get_data(as_text=True)) == []
 
     def test_the_fleet_results_page_marks_no_link_current(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """A saved fleet run's results page, which no sidebar link leads to, marks no sidebar link as the current page."""
         results = make_sinusoidal_sim_results(days=1)
-        run_id = _save_fleet_run(app, "Community Fleet", [results, results])
-        response = client.get(f"/results/fleet/{run_id}")
+        run_id = _save_fleet_run(storage, "Community Fleet", [results, results])
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         assert current_page_links(response.get_data(as_text=True)) == []
 
 
 class TestHomeResultsRoute:
-    """Tests for the GET /results/home/<run_id> route."""
+    """Tests for the GET /results/<run_id> route, of a home run."""
 
     @pytest.mark.parametrize(
         "run_id",
@@ -317,22 +333,22 @@ class TestHomeResultsRoute:
 
         'bad.id' is outside [A-Za-z0-9_-], so the store refuses it, and no run can have it.
         """
-        response = client.get(f"/results/home/{run_id}", follow_redirects=True)
+        response = client.get(f"/results/{run_id}", follow_redirects=True)
 
         assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/")]
         assert "Run not found." in texts(response.get_data(as_text=True))
 
-    def test_home_results_after_simulation(self, app: Flask, client: FlaskClient) -> None:
+    def test_home_results_after_simulation(self, storage: RunStorage, client: FlaskClient) -> None:
         """A saved run's results page renders its Overview charts and energy totals.
 
         Both Overview chart containers are elements of the page, and the Total
         Generation and Total Demand cards read the saved summary's totals in kWh.
         """
         results = make_sinusoidal_sim_results(days=1)
-        run_id = _save_home_run(app, "Test Run", results)
+        run_id = _save_home_run(storage, "Test Run", results)
         summary = calculate_summary(results)
 
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         page = response.get_data(as_text=True)
         assert {"chart-sankey", "chart-daily-balance"} <= element_ids(page)
@@ -343,7 +359,7 @@ class TestHomeResultsRoute:
             assert texts_after(page, label, 2) == [f"{total_kwh:.1f}", "kWh"], label
 
     def test_home_results_stat_cards_round_each_saved_total_and_ratio_once(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Each stat card rounds its saved value once, to the card's own precision.
 
@@ -352,11 +368,11 @@ class TestHomeResultsRoute:
         move the card's last digit: 9.046 kWh would show 9.1.
         """
         run_id = _save_home_run(
-            app,
+            storage,
             "North Roof",
             make_sim_results(self_kwh=10.0, export_kwh=9.046, import_kwh=5.749, days=1),
         )
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
         assert response.status_code == 200
         page = response.get_data(as_text=True)
         expected_cards = {
@@ -374,42 +390,29 @@ class TestHomeResultsRoute:
         } == expected_cards
 
     def test_home_results_page_title_follows_a_run_history_rename(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """Renaming a run in Run History retitles its results page.
 
         The run's home keeps the name it was saved with, so the page reads the run's name, not its home's.
         """
-        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
+        run_id = _save_home_run(storage, "North Roof", make_sinusoidal_sim_results(days=1))
         rename = client.patch(f"/api/history/runs/{run_id}", json={"name": "South Roof"})
         assert rename.status_code == 200
 
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         page = response.get_data(as_text=True)
         assert headings(page)[0] == "South Roof"
         assert "Results: South Roof - Solar Challenge" in texts(page)
 
-    def test_home_results_page_of_a_run_with_no_database_row_is_titled_home_simulation(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
-        """A run whose files outlived its database row still has a title: the page's own, not its home's name."""
-        run_id = _save_home_run(app, "North Roof", make_sinusoidal_sim_results(days=1))
-        with get_db(app.config["DATABASE"]) as conn:
-            conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
-
-        response = client.get(f"/results/home/{run_id}")
-
-        assert response.status_code == 200
-        assert headings(response.get_data(as_text=True))[0] == "Home Simulation"
-
     def test_home_results_battery_soc_chart_marks_the_saved_batterys_soc_limits(
-        self, app: Flask, client: FlaskClient
+        self, storage: RunStorage, client: FlaskClient
     ) -> None:
         """10% and 95% of an 8 kWh battery at 90% SoH are 0.72 and 6.84 kWh, where 10% and 90% of its nameplate would be 0.8 and 7.2."""
         run_id = _save_home_run(
-            app,
+            storage,
             "North Roof",
             make_sinusoidal_sim_results(days=1),
             battery_config=BatteryConfig(
@@ -417,7 +420,7 @@ class TestHomeResultsRoute:
             ),
         )
 
-        response = client.get(f"/results/home/{run_id}")
+        response = client.get(f"/results/{run_id}")
 
         assert response.status_code == 200
         figure = chart_figures(response.get_data(as_text=True))["chart-battery-soc"]
@@ -425,6 +428,24 @@ class TestHomeResultsRoute:
             text: annotation["y"]
             for text, annotation in annotations_by_text(figure).items()
         } == pytest.approx({"Min SOC": 0.72, "Max SOC": 6.84})
+
+    def test_home_results_battery_soc_chart_draws_the_saved_batterys_soc_envelope(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """PRD dispatch-configuration-below-config §9 row 11: 20% and 80% of a 10 kWh battery at 70% SoH are 1.4 and 5.6 kWh."""
+        battery_config = BatteryConfig(capacity_kwh=10.0, soh=0.7, min_soc_fraction=0.2, max_soc_fraction=0.8)
+        run_id = _save_home_run(
+            storage, "East Roof", make_sinusoidal_sim_results(days=1), battery_config=battery_config
+        )
+        envelope = battery_config.soc_envelope()
+
+        response = client.get(f"/results/{run_id}")
+
+        assert response.status_code == 200
+        figure = chart_figures(response.get_data(as_text=True))["chart-battery-soc"]
+        limits_kwh = {text: annotation["y"] for text, annotation in annotations_by_text(figure).items()}
+        assert limits_kwh == pytest.approx({"Min SOC": 1.4, "Max SOC": 5.6})
+        assert limits_kwh == {"Min SOC": envelope.min_soc_kwh, "Max SOC": envelope.max_soc_kwh}
 
 
 # ---------------------------------------------------------------------------

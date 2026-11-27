@@ -13,7 +13,7 @@ Usage::
 
     macros = dashboard_macros_of(app)
     assert spans.count(server_drawn_badge(macros.run_status_badge("failed"))) == 1
-    assert "bg-red-100" in server_drawn_classes(macros.run_status_badge("failed"))
+    assert "bg-status-failed-100" in server_drawn_classes(macros.run_status_badge("failed"))
 """
 
 from __future__ import annotations

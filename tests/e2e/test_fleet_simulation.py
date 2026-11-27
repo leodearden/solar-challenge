@@ -5,10 +5,9 @@ fleet-wide Dispatch Strategy select is named by its label, and detects
 Bug B1 (Alpine race condition) and Bug B2 (wrong results URL).
 """
 
-import pytest
 from playwright.sync_api import Page, expect
 
-pytestmark = pytest.mark.e2e
+from tests.e2e._alpine_start import open_once_alpine_has_started
 
 
 # ── Page loading ─────────────────────────────────────────────────────
@@ -40,8 +39,7 @@ def test_fleet_page_no_js_errors(
     attribute before the component function is registered, which throws
     an uncaught ReferenceError.
     """
-    page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
+    open_once_alpine_has_started(page, live_server + "/simulate/fleet")
 
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
@@ -52,17 +50,16 @@ def test_fleet_page_no_js_errors(
 def test_fleet_n_homes_slider(page: Page, live_server: str) -> None:
     """The n_homes range slider and number input both exist on the page."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
 
     # Range slider
     range_input = page.locator("#n_homes_range")
     expect(range_input).to_be_visible()
-    assert range_input.get_attribute("type") == "range"
+    expect(range_input).to_have_attribute("type", "range")
 
     # Number input
     number_input = page.locator("#n_homes")
     expect(number_input).to_be_visible()
-    assert number_input.get_attribute("type") == "number"
+    expect(number_input).to_have_attribute("type", "number")
 
 
 # ── Distribution cards ───────────────────────────────────────────────
@@ -71,7 +68,6 @@ def test_fleet_n_homes_slider(page: Page, live_server: str) -> None:
 def test_fleet_distribution_cards(page: Page, live_server: str) -> None:
     """PV Capacity, Battery Capacity, and Annual Consumption cards are present."""
     page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
 
     # PV distribution card (amber accent)
     pv_card = page.locator("h3", has_text="PV Capacity")
@@ -106,19 +102,18 @@ def test_fleet_dispatch_strategy_select_is_named_by_its_label(
 
 
 def test_fleet_completed_results_url(page: Page, live_server: str) -> None:
-    """The 'View Results' link template should point to /results/fleet/<id>,
-    not /results?run_id=<id>.
+    """The 'View Results' link template should point to the submit answer's
+    results_url, not /results?run_id=<id>.
 
     We inspect the page source for the buggy URL pattern rather than
     running a full simulation.
     """
-    page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
+    open_once_alpine_has_started(page, live_server + "/simulate/fleet")
 
     content = page.content()
 
     # The buggy pattern: '/results?run_id=' + completedRunId
     assert "'/results?run_id='" not in content, (
         "Bug B2: fleet 'View Results' link uses wrong URL pattern "
-        "('/results?run_id=<id>' instead of '/results/fleet/<id>')"
+        "('/results?run_id=<id>' instead of the submit answer's results_url)"
     )

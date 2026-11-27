@@ -1,19 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What importing the errors leaf and constructing the input types costs in imports.
+"""The errors leaf's refusal type, and what importing the leaf and constructing the input types cost in imports.
+
+ConfigurationError is a ValueError, so code that catches ValueError catches every refusal.
 
 Importing solar_challenge.errors loads no other module of the package. Constructing
-the finance, grid-services and flexibility input types, valid or refused, loads
-neither the scenario grammar (solar_challenge.config) nor pvlib.
+the finance, grid-services, flexibility and dispatch-configuration input types, valid
+or refused, loads neither the scenario grammar (solar_challenge.config) nor pvlib, and
+each refuses with a ConfigurationError, as the TOU and peak-shaving strategies do.
 
-Each case runs in a fresh ``python -I`` interpreter, so the modules that earlier
-tests imported cannot hide what the case loads.
+Each import case runs in a fresh ``python -I`` interpreter, so the modules that
+earlier tests imported cannot hide what the case loads.
 """
 
 import json
 import subprocess
 import sys
+from datetime import timedelta
 
 import pytest
+
+from solar_challenge.errors import ConfigurationError
 
 _PROBE = """\
 import json
@@ -56,6 +62,42 @@ def _probe(statement: str) -> tuple[set[str], list[str] | None]:
     return set(report["loaded"]), report["refusal"]
 
 
+def test_a_configuration_error_is_a_value_error() -> None:
+    assert issubclass(ConfigurationError, ValueError)
+
+
+@pytest.mark.parametrize(
+    ("field", "requirement", "value", "message"),
+    [
+        pytest.param("tz", "a ZoneInfo", "Europe/London", "tz must be a ZoneInfo, got 'Europe/London'", id="text-is-quoted"),
+        pytest.param(
+            "duration",
+            "more than 0 and at most a day",
+            timedelta(0),
+            "duration must be more than 0 and at most a day, got datetime.timedelta(0)",
+            id="an-object-is-shown-by-repr",
+        ),
+    ],
+)
+def test_must_be_refuses_a_value_saying_what_its_field_must_be_and_what_it_got(
+    field: str, requirement: str, value: object, message: str
+) -> None:
+    """Every refusal of one field's value takes this frame; the value is shown by repr, so text is quoted."""
+    refusal = ConfigurationError.must_be(field, requirement, got=value)
+
+    assert type(refusal) is ConfigurationError
+    assert str(refusal) == message
+
+
+def test_must_be_on_a_subclass_returns_that_subclass() -> None:
+    class NarrowerRefusal(ConfigurationError):
+        pass
+
+    refusal = NarrowerRefusal.must_be("tz", "a ZoneInfo", got="Europe/London")
+
+    assert type(refusal) is NarrowerRefusal
+
+
 def test_importing_the_errors_module_loads_no_other_package_module() -> None:
     loaded, refusal = _probe("import solar_challenge.errors")
 
@@ -83,6 +125,20 @@ def test_importing_the_errors_module_loads_no_other_package_module() -> None:
             "grid_services_per_kw_gbp=1.0, total_gbp=3.0, provenance='test')",
             id="FlexibilityValueBand",
         ),
+        pytest.param(
+            "from solar_challenge.dispatch import GridChargeConfig; GridChargeConfig()",
+            id="GridChargeConfig",
+        ),
+        pytest.param(
+            "from solar_challenge.dispatch import TOUOptimizedStrategyConfig; "
+            "TOUOptimizedStrategyConfig(peak_hours=((16, 19),))",
+            id="TOUOptimizedStrategyConfig",
+        ),
+        pytest.param(
+            "from solar_challenge.dispatch import PeakShavingStrategyConfig; "
+            "PeakShavingStrategyConfig(import_limit_kw=3.0)",
+            id="PeakShavingStrategyConfig",
+        ),
     ],
 )
 def test_a_valid_construction_loads_neither_the_scenario_grammar_nor_pvlib(construction: str) -> None:
@@ -95,44 +151,54 @@ def test_a_valid_construction_loads_neither_the_scenario_grammar_nor_pvlib(const
 
 
 @pytest.mark.parametrize(
-    ("construction", "refused_as"),
+    "construction",
     [
         pytest.param(
             "solar_challenge.FinanceConfig(standing_charge_pence_per_day=50.0, vat_rate=2.0)",
-            "solar_challenge.errors.ConfigurationError",
             id="FinanceConfig",
         ),
-        pytest.param(
-            "solar_challenge.GridServicesEventsConfig(band='extreme')",
-            "solar_challenge.errors.ConfigurationError",
-            id="GridServicesEventsConfig",
-        ),
+        pytest.param("solar_challenge.GridServicesEventsConfig(band='extreme')", id="GridServicesEventsConfig"),
         pytest.param(
             "solar_challenge.EventWindow(months=(), weekdays=(0, 1, 2, 3, 4), hours=(16, 17, 18), "
             "events_per_year=12, event_hours=3.0)",
-            "solar_challenge.errors.ConfigurationError",
             id="EventWindow",
         ),
         pytest.param(
             "solar_challenge.GridServicesRateBand(availability_gbp_per_kw_per_event=-1.0, utilisation_gbp_per_mwh=0.0)",
-            "builtins.ValueError",
             id="GridServicesRateBand",
         ),
         pytest.param(
             "from solar_challenge.flex import FlexibilityValueBand; "
             "FlexibilityValueBand(name='central', time_shift_gbp=-1.0, grid_services_per_home_gbp=1.0, "
             "grid_services_per_kw_gbp=1.0, total_gbp=3.0, provenance='test')",
-            "builtins.ValueError",
             id="FlexibilityValueBand",
         ),
+        pytest.param(
+            "from solar_challenge.dispatch import GridChargeConfig; GridChargeConfig(1.5)",
+            id="GridChargeConfig",
+        ),
+        pytest.param(
+            "from solar_challenge.dispatch import TOUOptimizedStrategyConfig; "
+            "TOUOptimizedStrategyConfig(peak_hours=((20, 17),))",
+            id="TOUOptimizedStrategyConfig",
+        ),
+        pytest.param(
+            "from solar_challenge.dispatch import PeakShavingStrategyConfig; "
+            "PeakShavingStrategyConfig(import_limit_kw=0.0)",
+            id="PeakShavingStrategyConfig",
+        ),
+        pytest.param("solar_challenge.TOUOptimizedStrategy([(25, 28)])", id="TOUOptimizedStrategy"),
+        pytest.param("solar_challenge.PeakShavingStrategy(0.0)", id="PeakShavingStrategy"),
     ],
 )
-def test_a_refusal_raises_its_type_without_loading_the_scenario_grammar_or_pvlib(
-    construction: str, refused_as: str
+def test_a_refusal_is_a_configuration_error_and_loads_neither_the_scenario_grammar_nor_pvlib(
+    construction: str,
 ) -> None:
     loaded, refusal = _probe(construction)
 
-    assert refusal is not None and refused_as in refusal, f"{construction} raised {refusal}, not {refused_as}"
+    assert refusal is not None and "solar_challenge.errors.ConfigurationError" in refusal, (
+        f"{construction} raised {refusal}, not a ConfigurationError"
+    )
     assert _SCENARIO_GRAMMAR_AND_PVLIB.isdisjoint(loaded), (
         f"{construction} loaded {sorted(_SCENARIO_GRAMMAR_AND_PVLIB & loaded)}"
     )

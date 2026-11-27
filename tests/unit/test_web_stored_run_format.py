@@ -1,0 +1,567 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The stored-run format: RunStorage.load_run refuses a stored run it cannot rebuild with StoredRunUnreadable.
+
+This module holds D27 invariant 6's checkable form (docs/prds/run-store-one-owner.md §14),
+asserted through the public loader: a run stored before runs carried a format version is
+refused naming format.json's format_version; a current run whose summary.json lacks a required
+field, or holds a key no field has, is refused naming the run id, the document and the field;
+and a current run loads. Each test saves a run as a finished job saves it, or installs a
+legacy fixture of tests/_stored_run_fixtures.py, edits one of its documents, and loads it.
+
+The refusal's field is the dotted path in the document, with [i] for an item, or the column of
+a time series' refused series; None means the document as a whole.
+"""
+
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pytest
+
+pytest.importorskip("pyarrow")
+
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet import calculate_home_summaries
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import SimulationWindow
+from solar_challenge.web.field_tree import field_tree
+from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
+from tests._damaged_time_series import rewrite_time_series
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
+from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
+from tests._every_field_shape import home_of_every_field_shape
+from tests._run_storage_layout import stored_run_dir
+from tests._run_stores import empty_run_storage
+from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
+from tests._web_runs import store_fleet_run, store_home_run
+
+_HOME_RUN_ID = "home-1"
+_FLEET_RUN_ID = "fleet-1"
+
+Edit = Callable[[Any], None]
+
+
+@pytest.fixture
+def storage(tmp_path: Path) -> RunStorage:
+    """The store of no app in which each test saves or installs a run, edits one of its documents, and loads it."""
+    return empty_run_storage(tmp_path)
+
+
+def _store_home_run_of_every_shape(storage: RunStorage) -> HomeConfig:
+    """Save a day's run of home_of_every_field_shape() under _HOME_RUN_ID, and return its config."""
+    config = home_of_every_field_shape()
+    store_home_run(storage, _HOME_RUN_ID, config, make_sim_results(days=1))
+    return config
+
+
+def _store_fleet_run_of_two_homes(storage: RunStorage) -> None:
+    """Save a day's fleet run of two homes, the second with a 5 kWh battery, under _FLEET_RUN_ID."""
+    fleet = make_fleet_results_of(
+        [make_sim_results(days=1), make_sim_results(self_kwh=10.0, days=1)],
+        homes=[make_home_config(), make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0))],
+    )
+    store_fleet_run(storage, _FLEET_RUN_ID, fleet)
+
+
+def _edit_document(path: Path, edit: Edit) -> None:
+    """Rewrite the JSON document at *path* with *edit* applied to its content."""
+    document = json.loads(path.read_text())
+    edit(document)
+    path.write_text(json.dumps(document, indent=2))
+
+
+def _set(*keys: str | int, value: Any) -> Edit:
+    """An edit setting the value a document holds at *keys*, a key or an index for each level, to *value*."""
+
+    def edit(document: Any) -> None:
+        *parents, last = keys
+        for key in parents:
+            document = document[key]
+        document[last] = value
+
+    return edit
+
+
+def _delete(key: str) -> Edit:
+    """An edit deleting *key* from a document's root object."""
+
+    def edit(document: Any) -> None:
+        del document[key]
+
+    return edit
+
+
+def _refusal(storage: RunStorage, run_id: str, document: str, field: str | None) -> StoredRunUnreadable:
+    """Load run *run_id*, check that it is refused naming *document* and *field*, and return the refusal.
+
+    The refusal's message names the run id, the document and the field, when there is one.
+    """
+    with pytest.raises(StoredRunUnreadable) as refused:
+        storage.load_run(run_id)
+    refusal = refused.value
+    assert (refusal.run_id, refusal.document, refusal.field) == (run_id, document, field)
+    message = str(refusal)
+    assert run_id in message
+    assert document in message
+    if field is not None:
+        assert field in message
+    return refusal
+
+
+def _window_refusal(path: Path) -> ValueError:
+    """The ValueError with which SimulationWindow.of_index refuses the index of the time series at *path*."""
+    with pytest.raises(ValueError) as refused:
+        SimulationWindow.of_index(pd.read_parquet(path, engine="pyarrow").index)
+    return refused.value
+
+
+def _results_refusal(path: Path) -> ValueError:
+    """The ValueError with which SimulationResults.from_dataframe refuses the time series at *path*."""
+    with pytest.raises(ValueError) as refused:
+        SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name="self_consumption")
+    return refused.value
+
+
+def _column_dtype(path: Path, column: str) -> str:
+    """The name of the dtype of *column* in the time series at *path*, as pandas reads it back."""
+    return str(pd.read_parquet(path, engine="pyarrow")[column].dtype)
+
+
+def test_a_stored_run_unreadable_is_not_a_value_error() -> None:
+    """A request's bad value is a ValueError the boundary answers 400; an unreadable stored run is answered 409 or flashed."""
+    assert not issubclass(StoredRunUnreadable, ValueError)
+
+
+def test_a_current_home_run_loads_unchanged(storage: RunStorage) -> None:
+    config = home_of_every_field_shape()
+    results = make_sim_results(days=1)
+    store_home_run(storage, _HOME_RUN_ID, config, results)
+
+    loaded = storage.load_run(_HOME_RUN_ID)
+
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.config == config
+    assert loaded.summary == calculate_summary(results)
+
+
+def test_a_current_fleet_run_loads_unchanged(storage: RunStorage) -> None:
+    fleet = make_fleet_results_of(
+        [make_sim_results(days=1), make_sim_results(self_kwh=10.0, days=1)],
+        homes=[make_home_config(), home_of_every_field_shape()],
+    )
+    store_fleet_run(storage, _FLEET_RUN_ID, fleet)
+
+    loaded = storage.load_run(_FLEET_RUN_ID)
+
+    assert isinstance(loaded, StoredFleetRun)
+    assert loaded.fleet_results.home_configs == fleet.home_configs
+    assert list(loaded.home_summaries) == calculate_home_summaries(fleet)
+
+
+def test_a_run_whose_optional_fields_are_stored_as_null_loads(storage: RunStorage) -> None:
+    config = make_home_config()
+    store_home_run(storage, _HOME_RUN_ID, config, make_sim_results(days=1))
+    stored = json.loads((stored_run_dir(storage, _HOME_RUN_ID) / "config.json").read_text())
+
+    loaded = storage.load_run(_HOME_RUN_ID)
+
+    assert [stored["battery_config"], stored["seg_tariff"], stored["heat_pump_config"]] == [None, None, None]
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.config == config
+
+
+@pytest.mark.parametrize(
+    ("edit", "field"),
+    [
+        (_delete("total_generation_kwh"), "total_generation_kwh"),
+        (_set("retired_figure", value=12.5), "retired_figure"),
+    ],
+    ids=["lacks-a-required-field", "holds-an-unknown-key"],
+)
+def test_a_summary_lacking_a_required_field_or_holding_an_unknown_key_is_refused_naming_it(
+    storage: RunStorage, edit: Edit, field: str
+) -> None:
+    """Invariant 6's second and fourth clauses."""
+    _store_home_run_of_every_shape(storage)
+    _edit_document(stored_run_dir(storage, _HOME_RUN_ID) / "summary.json", edit)
+
+    _refusal(storage, _HOME_RUN_ID, "summary.json", field)
+
+
+@pytest.mark.parametrize(
+    ("edit", "field"),
+    [
+        (_set("battery_config", value="big"), "battery_config"),
+        (_set("pv_config", "capacity_kw", value="4.0"), "pv_config.capacity_kw"),
+        (_set("pv_config", "capacity_kw", value=True), "pv_config.capacity_kw"),
+        (_set("tariff_config", "periods", value="x"), "tariff_config.periods"),
+        (_set("location", value=None), "location"),
+        (_set("heat_pump_config", "heat_pump_type", value="XSHP"), "heat_pump_config.heat_pump_type"),
+        (
+            _set("battery_config", "dispatch_strategy", "peak_hours", 0, value=[16, 19, 20]),
+            "battery_config.dispatch_strategy.peak_hours[0]",
+        ),
+        (
+            _set("battery_config", "dispatch_strategy", "strategy_type", value="turbo"),
+            "battery_config.dispatch_strategy.strategy_type",
+        ),
+    ],
+    ids=[
+        "a-string-for-a-dataclass",
+        "a-string-for-a-number",
+        "a-bool-for-a-number",
+        "a-string-for-a-sequence",
+        "null-for-a-field-that-is-not-optional",
+        "a-value-its-literal-does-not-name",
+        "a-window-of-three-hours-for-a-pair",
+        "a-strategy-type-no-variant-has",
+    ],
+)
+def test_a_config_value_of_a_type_its_field_cannot_be_is_refused_naming_its_path(
+    storage: RunStorage, edit: Edit, field: str
+) -> None:
+    _store_home_run_of_every_shape(storage)
+    _edit_document(stored_run_dir(storage, _HOME_RUN_ID) / "config.json", edit)
+
+    _refusal(storage, _HOME_RUN_ID, "config.json", field)
+
+
+@pytest.mark.parametrize(
+    ("document", "edit", "field"),
+    [
+        pytest.param(
+            "summary.json",
+            _set("total_generation_kwh", value=10**400),
+            "total_generation_kwh",
+            id="a-summary-figure",
+        ),
+        pytest.param(
+            "summary.json",
+            _set("load_energy_kwh", "household", value=-(10**400)),
+            "load_energy_kwh.household",
+            id="a-load-energy-below-every-float",
+        ),
+        pytest.param(
+            "config.json",
+            _set("pv_config", "capacity_kw", value=10**400),
+            "pv_config.capacity_kw",
+            id="a-config-number",
+        ),
+    ],
+)
+def test_a_float_field_holding_a_number_no_float_can_hold_is_refused_naming_its_path(
+    storage: RunStorage, document: str, edit: Edit, field: str
+) -> None:
+    _store_home_run_of_every_shape(storage)
+    _edit_document(stored_run_dir(storage, _HOME_RUN_ID) / document, edit)
+
+    _refusal(storage, _HOME_RUN_ID, document, field)
+
+
+def test_a_tariff_whose_periods_do_not_tile_the_day_is_refused_naming_the_tariff_caused_by_its_refusal(
+    storage: RunStorage,
+) -> None:
+    """TariffConfig's own refusal is the cause: the stored values reached its __post_init__."""
+    _store_home_run_of_every_shape(storage)
+    _edit_document(
+        stored_run_dir(storage, _HOME_RUN_ID) / "config.json",
+        _set("tariff_config", "periods", 0, "end_time", value="06:30"),
+    )
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "config.json", "tariff_config")
+
+    assert isinstance(refusal.__cause__, ConfigurationError)
+
+
+def test_a_home_whose_tou_peak_hours_reach_a_cheap_minute_of_its_tariff_is_refused_naming_the_window_caused_by_its_refusal(
+    storage: RunStorage,
+) -> None:
+    """The home page's former default window, 16:00-21:00, on Economy 10, whose 20:00-21:00 is cheap: the 409 a store holding such a run answers.
+
+    Its run discharged in cheap minutes, which no configuration now accepted dispatches, so no
+    run-document step brings it forward and TOUOptimizedStrategy's own refusal is the cause.
+    """
+    _store_home_run_of_every_shape(storage)
+    config_path = stored_run_dir(storage, _HOME_RUN_ID) / "config.json"
+    window_on_economy_10 = {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]}
+    _edit_document(config_path, _set("battery_config", "dispatch_strategy", value=window_on_economy_10))
+    _edit_document(config_path, _set("battery_config", "grid_charging", value=None))
+    _edit_document(config_path, _set("tariff_config", value=field_tree(TariffConfig.economy_10())))
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "config.json", None)
+
+    assert isinstance(refusal.__cause__, ConfigurationError)
+    assert "peak_hours[0]" in str(refusal)
+    assert "20:00-21:00" in str(refusal)
+
+
+def test_a_summary_its_dataclass_refuses_is_refused_as_a_whole(storage: RunStorage) -> None:
+    """SummaryStatistics refuses a grid charge above the battery's charge; the document's root is the dataclass refusing."""
+    _store_home_run_of_every_shape(storage)
+    summary_path = stored_run_dir(storage, _HOME_RUN_ID) / "summary.json"
+    battery_charge_kwh = json.loads(summary_path.read_text())["total_battery_charge_kwh"]
+    _edit_document(summary_path, _set("total_grid_charge_kwh", value=battery_charge_kwh + 1.0))
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "summary.json", None)
+
+    assert isinstance(refusal.__cause__, ValueError)
+
+
+def test_a_summary_that_is_not_json_is_refused_as_a_whole(storage: RunStorage) -> None:
+    _store_home_run_of_every_shape(storage)
+    (stored_run_dir(storage, _HOME_RUN_ID) / "summary.json").write_text("{not json")
+
+    _refusal(storage, _HOME_RUN_ID, "summary.json", None)
+
+
+@pytest.mark.parametrize("document", ["config.json", "summary.json"])
+def test_a_document_nested_too_deeply_to_decode_is_refused_as_a_whole_caused_by_the_recursion(
+    storage: RunStorage, document: str
+) -> None:
+    _store_home_run_of_every_shape(storage)
+    (stored_run_dir(storage, _HOME_RUN_ID) / document).write_text(JSON_NESTED_TOO_DEEPLY_TO_DECODE)
+
+    refusal = _refusal(storage, _HOME_RUN_ID, document, None)
+
+    assert isinstance(refusal.__cause__, RecursionError)
+
+
+def test_a_time_series_that_is_not_parquet_is_refused_naming_its_file(storage: RunStorage) -> None:
+    _store_home_run_of_every_shape(storage)
+    (stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet").write_bytes(b"THIS IS NOT A VALID PARQUET FILE")
+
+    _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
+
+
+def test_a_time_series_whose_pages_are_damaged_is_refused_naming_its_file(storage: RunStorage) -> None:
+    """Its parquet magic and footer are intact, so the reader opens it and fails on its first page."""
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    stored = path.read_bytes()
+    path.write_bytes(stored[:4] + b"\xab" * 60 + stored[64:])
+
+    _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(lambda frame: frame.reset_index(drop=True), id="a-range-index"),
+        pytest.param(lambda frame: frame.set_axis(frame.index.astype(str)), id="a-string-index"),
+        pytest.param(lambda frame: frame.drop(frame.index[5]), id="a-gap-between-two-rows"),
+        pytest.param(lambda frame: frame.iloc[:1], id="one-row"),
+        pytest.param(lambda frame: frame.iloc[:0], id="no-rows"),
+        pytest.param(lambda frame: frame.iloc[::-1], id="its-rows-in-reverse"),
+    ],
+)
+def test_a_time_series_whose_index_simulation_results_reads_no_window_from_is_refused_naming_its_file(
+    storage: RunStorage, damage: Callable[[pd.DataFrame], pd.DataFrame]
+) -> None:
+    """SimulationWindow.of_index, or SimulationWindow itself for a negative cadence, refuses each damaged index, and its refusal is the cause.
+
+    The damages are an index of no timestamps, two ways; rows not evenly spaced; one row with
+    no freq, as parquet keeps none; no rows; and rows spaced at a negative cadence.
+    """
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(path, damage)
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
+
+    assert repr(refusal.__cause__) == repr(_window_refusal(path))
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        pytest.param("generation_kw", "x", id="a-power-of-strings"),
+        pytest.param("generation_kw", None, id="a-power-of-nulls"),
+        pytest.param("generation_kw", True, id="a-power-of-bools"),
+        pytest.param("generation_kw", pd.Timestamp("2020-01-01"), id="a-power-of-timestamps"),
+        pytest.param("generation_kw", pd.Timedelta(minutes=1), id="a-power-of-durations"),
+        pytest.param("battery_soc_kwh", "x", id="a-level-of-strings"),
+        pytest.param("heat_pump_load_kw", "x", id="an-optional-series-of-strings"),
+    ],
+)
+def test_a_time_series_holding_a_series_that_is_not_numbers_is_refused_naming_its_column(
+    storage: RunStorage, column: str, value: Any
+) -> None:
+    """SimulationResults refuses the series when it is built, one of no integer's or float's dtype, and its refusal is the cause.
+
+    The refusal's reason names the dtype the series is stored in. The run is saved without a heat
+    pump load, so that optional series' column is added, as from_dataframe reads an optional
+    column whenever it is present.
+    """
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(path, lambda frame: frame.assign(**{column: value}))
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", column)
+
+    assert _column_dtype(path, column) in refusal.reason
+    assert repr(refusal.__cause__) == repr(_results_refusal(path))
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(lambda frame: frame.assign(generation_kw=1), id="integers"),
+        pytest.param(
+            lambda frame: frame.assign(
+                generation_kw=np.r_[[np.inf, -np.inf], frame["generation_kw"].to_numpy()[2:]],
+                battery_soc_kwh=np.r_[[np.nan], frame["battery_soc_kwh"].to_numpy()[1:]],
+            ),
+            id="nan-and-infinities",
+        ),
+    ],
+)
+def test_a_time_series_whose_series_hold_integers_nan_or_infinities_loads_them_as_stored(
+    storage: RunStorage, damage: Callable[[pd.DataFrame], pd.DataFrame]
+) -> None:
+    """The boundary of the rule above: integers are numbers, and NaN and the infinities are floats, as a float field admits each.
+
+    The NaN is in a level, as SimulationResults refuses one in an amount series.
+    """
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(path, damage)
+
+    loaded = storage.load_run(_HOME_RUN_ID)
+
+    assert isinstance(loaded, StoredHomeRun)
+    pd.testing.assert_frame_equal(loaded.results.to_dataframe(), pd.read_parquet(path, engine="pyarrow"))
+
+
+def test_a_time_series_holding_a_nan_in_an_amount_series_is_refused_naming_its_column(storage: RunStorage) -> None:
+    """SimulationResults refuses a NaN in an amount series as it refuses a series that is not numbers, so the refusal names the column and SimulationResults' refusal is its cause."""
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(
+        path, lambda frame: frame.assign(generation_kw=np.r_[[np.nan], frame["generation_kw"].to_numpy()[1:]])
+    )
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", "generation_kw")
+
+    assert repr(refusal.__cause__) == repr(_results_refusal(path))
+    assert refusal.reason == refusal.__cause__.reason
+
+
+def test_a_document_that_cannot_be_read_is_refused_naming_it(storage: RunStorage) -> None:
+    """A directory in the place of its summary.json stands in for a file its permissions keep from being read, which they do not for a root user."""
+    _store_home_run_of_every_shape(storage)
+    summary_path = stored_run_dir(storage, _HOME_RUN_ID) / "summary.json"
+    summary_path.unlink()
+    summary_path.mkdir()
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "summary.json", None)
+
+    assert isinstance(refusal.__cause__, OSError)
+
+
+def test_a_fleet_homes_config_value_of_a_wrong_type_is_refused_naming_the_home(storage: RunStorage) -> None:
+    _store_fleet_run_of_two_homes(storage)
+    _edit_document(
+        stored_run_dir(storage, _FLEET_RUN_ID) / "config.json", _set("homes", 1, "pv_config", "capacity_kw", value="4.0")
+    )
+
+    _refusal(storage, _FLEET_RUN_ID, "config.json", "homes[1].pv_config.capacity_kw")
+
+
+def test_a_fleet_home_summary_lacking_a_required_field_is_refused_naming_its_document(storage: RunStorage) -> None:
+    _store_fleet_run_of_two_homes(storage)
+    _edit_document(stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_0_summary.json", _delete("total_demand_kwh"))
+
+    _refusal(storage, _FLEET_RUN_ID, "homes/home_0_summary.json", "total_demand_kwh")
+
+
+def test_a_fleet_home_s_time_series_with_a_range_index_is_refused_naming_its_file(storage: RunStorage) -> None:
+    _store_fleet_run_of_two_homes(storage)
+    path = stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_1.parquet"
+    rewrite_time_series(path, lambda frame: frame.reset_index(drop=True))
+
+    refusal = _refusal(storage, _FLEET_RUN_ID, "homes/home_1.parquet", None)
+
+    assert repr(refusal.__cause__) == repr(_window_refusal(path))
+
+
+def test_a_fleet_home_s_time_series_holding_strings_is_refused_naming_its_file_and_column(storage: RunStorage) -> None:
+    _store_fleet_run_of_two_homes(storage)
+    rewrite_time_series(
+        stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_1.parquet", lambda frame: frame.assign(demand_kw="x")
+    )
+
+    _refusal(storage, _FLEET_RUN_ID, "homes/home_1.parquet", "demand_kw")
+
+
+def test_a_saved_home_run_and_a_saved_fleet_run_carry_the_current_format_version(storage: RunStorage) -> None:
+    _store_home_run_of_every_shape(storage)
+    _store_fleet_run_of_two_homes(storage)
+
+    markers = [json.loads((stored_run_dir(storage, run_id) / "format.json").read_text()) for run_id in (_HOME_RUN_ID, _FLEET_RUN_ID)]
+
+    assert markers == [{"format_version": RUN_FORMAT_VERSION}] * 2
+
+
+@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
+def test_a_run_stored_before_runs_carried_a_format_version_is_refused_naming_format_version(
+    storage: RunStorage, name: str
+) -> None:
+    """Invariant 6's first clause: the refusal sends the user to `solar-challenge web migrate`."""
+    run_id = install_stored_run_fixture(name, storage.database, storage.data_dir)
+
+    refusal = _refusal(storage, run_id, "format.json", "format_version")
+
+    assert "solar-challenge web migrate" in str(refusal)
+
+
+@pytest.mark.parametrize(
+    ("marker", "field"),
+    [
+        (None, "format_version"),
+        ({"format_version": RUN_FORMAT_VERSION - 1}, "format_version"),
+        ({"format_version": RUN_FORMAT_VERSION + 1}, "format_version"),
+        ({"format_version": str(RUN_FORMAT_VERSION)}, "format_version"),
+        ([RUN_FORMAT_VERSION], None),
+        ({"format_version": RUN_FORMAT_VERSION, "written_by": "0.6.0"}, "written_by"),
+    ],
+    ids=["deleted", "an-older-version", "a-newer-version", "a-string-version", "not-an-object", "an-extra-key"],
+)
+def test_a_run_whose_format_marker_is_missing_or_not_the_current_version_is_refused_naming_it(
+    storage: RunStorage, marker: Any, field: str | None
+) -> None:
+    _store_home_run_of_every_shape(storage)
+    marker_path = stored_run_dir(storage, _HOME_RUN_ID) / "format.json"
+    if marker is None:
+        marker_path.unlink()
+    else:
+        marker_path.write_text(json.dumps(marker))
+
+    _refusal(storage, _HOME_RUN_ID, "format.json", field)
+
+
+def test_a_run_of_another_format_version_is_refused_naming_both_versions(storage: RunStorage) -> None:
+    _store_home_run_of_every_shape(storage)
+    (stored_run_dir(storage, _HOME_RUN_ID) / "format.json").write_text(
+        json.dumps({"format_version": RUN_FORMAT_VERSION + 1})
+    )
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "format.json", "format_version")
+
+    assert str(RUN_FORMAT_VERSION + 1) in refusal.reason
+    assert str(RUN_FORMAT_VERSION) in refusal.reason
+
+
+def test_the_format_marker_is_checked_before_any_other_document(storage: RunStorage) -> None:
+    """A document of an unknown format is not interpreted: a missing marker is the refusal, not the summary's missing field."""
+    _store_home_run_of_every_shape(storage)
+    run_dir = stored_run_dir(storage, _HOME_RUN_ID)
+    (run_dir / "format.json").unlink()
+    _edit_document(run_dir / "summary.json", _delete("total_generation_kwh"))
+
+    _refusal(storage, _HOME_RUN_ID, "format.json", "format_version")

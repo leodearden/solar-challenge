@@ -1,15 +1,26 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 r"""Collect-only probes for the lane contract tests.
 
-They collect an offline-lane job as the lane runs it, a default collection of
-tests/, and a suite by its explicit path under a mark expression.
+They collect an offline-lane job's suite step as the lane runs it, a default
+collection of tests/, a suite by its explicit path under a mark expression, and
+every test under tests/, the lane-only suites included, under a mark expression.
+
+A test reads the collection of one of the repository's offline-lane jobs from
+tests/conftest.py's fixture lane_job_collection, as the first example below
+does, rather than calling collect_lane_job or collect_lane_job_once itself; the
+fixture's docstring gives the premises each caller carries.
 
 Usage::
 
-    from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
+    from tests._lane_collection import (
+        default_collection_node_ids_under,
+        every_test_matching,
+        suite_node_ids_matching,
+        suite_tests_matching,
+    )
 
-    collection = collect_lane_job(project_root, "e2e", env=uv_probe_environment)
-    assert collection.node_ids, f"{collection.command!r} collected no tests\n{collection.outcome}"
+    collection = lane_job_collection(project_root, "e2e")
+    assert collection.node_ids(), f"{collection.command!r} collected no tests\n{collection.describe()}"
     assert not collection.node_ids_outside("tests/e2e"), f"{collection.command!r} collected tests outside tests/e2e"
 
     reached = default_collection_node_ids_under(project_root, "tests/interpreter_matrix")
@@ -17,50 +28,85 @@ Usage::
 
     fast = suite_node_ids_matching(project_root, "tests/css_build", "not slow")
     assert not fast, f"css_build tests not marked slow: {fast}"
+
+    slow_cases = suite_tests_matching(project_root, "tests/interpreter_matrix", "slow")
+    interpreters = [case.parametrize_id for case in slow_cases]
+
+    every_slow_test = every_test_matching(
+        project_root,
+        "slow",
+        pytest_invocation=("uv", "run", "--locked", "--all-extras", "pytest"),
+        env_for=shared_uv_probe_environments.for_command,
+    )
+    slow_node_ids = [test.node_id for test in every_slow_test]
 """
 
+import functools
+import hashlib
+import json
 import shlex
 import sys
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._collect_only import collected_node_ids, describe_outcome, run_collect_only
-from tests._orchestrator_config import lane_job_directory, sole_offline_lane_job
+from tests._collect_only import CollectedTest, Collection, collect
+from tests._command_runner import ShellCommand
+from tests._once_per_run import built_once
+from tests._orchestrator_config import lane_job_steps
+
+_COLLECTION_FILE = "collection.json"
 
 
-def _lies_under(node_id: str, path: str) -> bool:
-    """Return whether *node_id*'s test file is *path* or under it; *path* is relative to the rootdir, as node ids are."""
-    return PurePosixPath(node_id.partition("::")[0]).is_relative_to(path)
+def collect_lane_job(project_root: Path, name: str, *, env_for: Callable[[str], Mapping[str, str]]) -> Collection:
+    """Run the suite step of the offline-lane job *name* of *project_root* as the lane runs it, collecting only, in env_for(its command).
 
-
-@dataclass(frozen=True)
-class LaneJobCollection:
-    """What an offline-lane job's command collected: its node ids in order, and how its run ended, described for an assertion message."""
-
-    command: str
-    node_ids: tuple[str, ...]
-    outcome: str
-
-    def node_ids_outside(self, path: str) -> tuple[str, ...]:
-        """Return the node ids whose test file is neither *path* nor under it; *path* is relative to the rootdir, as node ids are."""
-        return tuple(node_id for node_id in self.node_ids if not _lies_under(node_id, path))
-
-
-def collect_lane_job(project_root: Path, name: str, *, env: Mapping[str, str]) -> LaneJobCollection:
-    """Run the offline-lane job *name*'s command verbatim in the job's directory under *project_root*, in *env*, collecting only.
+    The setup steps before it are never run. env_for is given the very command
+    that runs, so an environment keyed on it, as SharedUvEnvironments.for_command
+    keys one, fits what runs.
 
     It asserts the command collected, naming the job, its command and how the run
     ended. Whether what it collected is right is the calling lane test's own assertion.
     """
-    job = sole_offline_lane_job(project_root, name)
-    command = job["command"]
-    result = run_collect_only(command, lane_job_directory(project_root, job), env=env)
-    outcome = describe_outcome(result)
-    assert result.returncode == pytest.ExitCode.OK, f"the {name!r} lane job {command!r} failed to collect\n{outcome}"
-    return LaneJobCollection(command=command, node_ids=tuple(collected_node_ids(result.stdout)), outcome=outcome)
+    suite = lane_job_steps(project_root, name).suite
+    collection = collect(suite, env=env_for(suite.command))
+    assert collection.returncode == pytest.ExitCode.OK, (
+        f"the {suite.label} {suite.command!r} failed to collect\n{collection.describe()}"
+    )
+    return collection
+
+
+def collect_lane_job_once(
+    collections: Path, project_root: Path, name: str, *, env_for: Callable[[str], Mapping[str, str]]
+) -> Collection:
+    """Return collect_lane_job's collection of the lane job *name* of *project_root*, collected only by the first call given *collections*.
+
+    *collections* is a directory shared by every caller, in this process or
+    another, that should share one collection of each job. The first call
+    collects the job itself before it returns, so in the environment and
+    offline window of the test that made it, and saves the collection under
+    *collections*. Every call loads it back from there. collect_lane_job
+    reports a failure by assert, an Exception, so built_once records it and
+    every later call raises it rather than collecting again.
+    """
+    directory = built_once(
+        collections / _collection_directory_name(project_root, name),
+        functools.partial(_collect_lane_job_into, project_root=project_root, name=name, env_for=env_for),
+    )
+    return Collection.load(directory / _COLLECTION_FILE)
+
+
+def _collection_directory_name(project_root: Path, name: str) -> str:
+    """Return the name of the directory holding the collection of *project_root*'s lane job *name*: a digest telling both apart, a valid file name whatever the job's name holds."""
+    return hashlib.sha256(json.dumps([str(project_root), name]).encode()).hexdigest()
+
+
+def _collect_lane_job_into(
+    directory: Path, *, project_root: Path, name: str, env_for: Callable[[str], Mapping[str, str]]
+) -> None:
+    """Save collect_lane_job's collection of the lane job *name* of *project_root* in *directory*."""
+    collect_lane_job(project_root, name, env_for=env_for).save(directory / _COLLECTION_FILE)
 
 
 def default_collection_node_ids_under(project_root: Path, suite: str) -> tuple[str, ...]:
@@ -81,15 +127,15 @@ def default_collection_node_ids_under(project_root: Path, suite: str) -> tuple[s
     command = shlex.join(
         [sys.executable, "-m", "pytest", "-o", "addopts=", "tests", *(f"--ignore={sibling}" for sibling in siblings)]
     )
-    result = run_collect_only(command, project_root)
-    assert result.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
-        f"collecting tests/ failed\n{describe_outcome(result)}"
+    collection = collect(ShellCommand(command, project_root))
+    assert collection.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
+        f"collecting tests/ failed\n{collection.describe()}"
     )
-    return tuple(node_id for node_id in collected_node_ids(result.stdout) if _lies_under(node_id, suite))
+    return tuple(test.node_id for test in collection.written_report().tests if test.path.is_relative_to(suite))
 
 
-def suite_node_ids_matching(project_root: Path, suite: str, mark_expression: str) -> tuple[str, ...]:
-    """Return the node ids `-m` *mark_expression* selects when *suite* is collected by its explicit path, in order.
+def suite_tests_matching(project_root: Path, suite: str, mark_expression: str) -> tuple[CollectedTest, ...]:
+    """Return the tests `-m` *mark_expression* selects when *suite* is collected by its explicit path, in order.
 
     *suite* is relative to *project_root*, e.g. "tests/css_build". Its explicit
     path overrides tests/conftest.py's collect_ignore, as an offline-lane job's
@@ -97,8 +143,52 @@ def suite_node_ids_matching(project_root: Path, suite: str, mark_expression: str
     none of the suite's tests is no failure.
     """
     command = shlex.join([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", suite])
-    result = run_collect_only(command, project_root, "-m", mark_expression)
-    assert result.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
-        f"collecting {suite} under `-m {mark_expression!r}` failed\n{describe_outcome(result)}"
+    collection = collect(ShellCommand(command, project_root), "-m", mark_expression)
+    assert collection.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
+        f"collecting {suite} under `-m {mark_expression!r}` failed\n{collection.describe()}"
     )
-    return tuple(collected_node_ids(result.stdout))
+    return collection.written_report().tests
+
+
+def suite_node_ids_matching(project_root: Path, suite: str, mark_expression: str) -> tuple[str, ...]:
+    """Return the node ids of the tests suite_tests_matching selects, in order."""
+    return tuple(test.node_id for test in suite_tests_matching(project_root, suite, mark_expression))
+
+
+def every_test_matching(
+    project_root: Path,
+    mark_expression: str,
+    *,
+    pytest_invocation: Sequence[str],
+    env_for: Callable[[str], Mapping[str, str]],
+) -> tuple[CollectedTest, ...]:
+    """Return every test under *project_root*'s tests/ that `-m` *mark_expression* selects, in collection order.
+
+    The lane-only suites' tests are among them. The command is
+    *pytest_invocation*, e.g. ("uv", "run", "--locked", "--all-extras", "pytest"),
+    followed by each directory directly under tests/ and each test module there;
+    tests/unit/test_lane_collection_helper.py::test_every_test_matching_reaches_each_directory_and_test_module_under_tests_a_collect_ignored_suite_included
+    says why it names them and never tests/. env_for is given that command, as
+    collect_lane_job's is. It asserts that the collection ran; an expression
+    that selects no test is no failure.
+    """
+    command = shlex.join(
+        [*pytest_invocation, "-p", "no:cacheprovider", *_children_of_tests_that_may_hold_tests(project_root)]
+    )
+    collection = collect(ShellCommand(command, project_root), "-m", mark_expression, env=env_for(command))
+    assert collection.returncode in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED), (
+        f"collecting every test under tests/ under `-m {mark_expression!r}` with {command!r} failed\n"
+        f"{collection.describe()}"
+    )
+    return collection.written_report().tests
+
+
+def _children_of_tests_that_may_hold_tests(project_root: Path) -> list[str]:
+    """Return each directory directly under *project_root*'s tests/ but __pycache__, and each test_*.py module there.
+
+    Each is relative to *project_root* as a posix path, as node ids are, and they are sorted.
+    """
+    tests = project_root / "tests"
+    directories = [path for path in tests.iterdir() if path.is_dir() and path.name != "__pycache__"]
+    modules = [path for path in tests.glob("test_*.py") if path.is_file()]
+    return sorted(path.relative_to(project_root).as_posix() for path in [*directories, *modules])

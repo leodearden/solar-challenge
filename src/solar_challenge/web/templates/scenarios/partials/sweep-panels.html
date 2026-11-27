@@ -1,0 +1,3 @@
+{# The sweep page's chart panels, one per charts.SweepMetric, as POST /scenarios/sweep/chart answers them #}
+{% from "components/macros.html" import chart_panel %}
+{% for panel in panels %}{{ chart_panel(panel) }}{% endfor %}

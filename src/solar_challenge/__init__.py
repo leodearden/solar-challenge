@@ -9,28 +9,35 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # ---------------------------------------------------------------------------
-# Frozen public surface — PRD §3.1
+# Frozen public surface — docs/prds/domain-library-extraction.md §3.1
 # Adding a name is additive/back-compat; removing/renaming is a breaking change.
 # CLI (get_cli_app) is deliberately excluded — shipped but unfrozen.
 # ---------------------------------------------------------------------------
 __all__: list[str] = [
-    # --- finance / bill engine (finance.py; FinanceConfig relocated there, T2) ---
+    # --- finance / bill engine (finance.py) ---
     "bill",              # period-native billing core; bare name is intentional — mirrors householder_bill brevity, primary platform import target
     "householder_bill",
-    "solve_cost_recovery_rate",
     "bill_distribution",
     "BillBreakdown",
     "BillDistribution",
     "CostRecoverySolution",
     "FinanceConfig",
+    # --- cost-recovery solve (projection.py) ---
+    "solve_cost_recovery_rate",
     # --- signature-closure types required to call the bill engine ---
     "SummaryStatistics",   # home.py   — arg to householder_bill
     "ScenarioConfig",      # config.py — arg to solve_cost_recovery_rate
     "FleetConfig",         # fleet.py  — in solve_cost_recovery_rate's simulate signature
     "FleetResults",        # fleet.py  — return type of simulate
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner",
+    "FleetSimulator",
+    "HomeSimulator",
+    "FleetSimulate",
+    "HomesDone",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy",
     "DispatchDecision",
@@ -47,7 +54,6 @@ __all__: list[str] = [
     # --- flow (flow.py) ---
     "EnergyFlowResult",
     "simulate_timestep",
-    "simulate_timestep_tou",
     "validate_energy_balance",
     "calculate_self_consumption",
     "calculate_excess_pv",
@@ -73,6 +79,9 @@ __all__: list[str] = [
     "compute_grid_services_at_events",
     "GRID_SERVICES_RATE_BANDS",
     "DEFAULT_EVENT_WINDOWS",
+    "GridServicesBand",
+    "NoGridServices",
+    "FlatGridServices",
     # --- community (community.py) ---
     "CommunityConfig",
     "CommunityBillingConfig",
@@ -84,14 +93,13 @@ __all__: list[str] = [
     "simulate_pv_output",
     "create_model_chain",
     "create_pv_system",
-    "apply_degradation",
     "calculate_degradation_factor",
     "interpolate_to_minute_resolution",
     # --- weather (weather.py) ---
-    "get_tmy_data",
     "WeatherCache",
-    "get_weather_cache",
-    "set_weather_cache",
+    "WeatherProvider",
+    "PvgisTmy",
+    "PrefetchedWeather",
     # --- load (load.py) ---
     "LoadConfig",
     "OFGEM_TDCV_BY_OCCUPANTS",
@@ -99,27 +107,35 @@ __all__: list[str] = [
     "SEASONAL_FACTORS",
     # --- location (location.py) — required by pv/weather call signatures ---
     "Location",
+    # --- errors (errors.py) ---
+    "ConfigurationError",
 ]
 
 # ---------------------------------------------------------------------------
 # Internal mapping: public name → origin submodule
-# Invariant: set(_SYMBOL_MODULE.keys()) == set(__all__)
 # ---------------------------------------------------------------------------
 _SYMBOL_MODULE: dict[str, str] = {
     # finance
     "bill": "finance",
     "householder_bill": "finance",
-    "solve_cost_recovery_rate": "finance",
     "bill_distribution": "finance",
     "BillBreakdown": "finance",
     "BillDistribution": "finance",
     "CostRecoverySolution": "finance",
     "FinanceConfig": "finance",
+    # cost-recovery solve
+    "solve_cost_recovery_rate": "projection",
     # signature-closure types
     "SummaryStatistics": "home",
     "ScenarioConfig": "config",
     "FleetConfig": "fleet",
     "FleetResults": "fleet",
+    # fleet execution
+    "FleetRunner": "fleet",
+    "FleetSimulator": "fleet",
+    "HomeSimulator": "fleet",
+    "FleetSimulate": "fleet",
+    "HomesDone": "fleet",
     # dispatch
     "DispatchStrategy": "dispatch",
     "DispatchDecision": "dispatch",
@@ -136,7 +152,6 @@ _SYMBOL_MODULE: dict[str, str] = {
     # flow
     "EnergyFlowResult": "flow",
     "simulate_timestep": "flow",
-    "simulate_timestep_tou": "flow",
     "validate_energy_balance": "flow",
     "calculate_self_consumption": "flow",
     "calculate_excess_pv": "flow",
@@ -162,6 +177,9 @@ _SYMBOL_MODULE: dict[str, str] = {
     "compute_grid_services_at_events": "gridservices",
     "GRID_SERVICES_RATE_BANDS": "gridservices",
     "DEFAULT_EVENT_WINDOWS": "gridservices",
+    "GridServicesBand": "gridservices",
+    "NoGridServices": "gridservices",
+    "FlatGridServices": "gridservices",
     # community
     "CommunityConfig": "community",
     "CommunityBillingConfig": "community",
@@ -173,14 +191,13 @@ _SYMBOL_MODULE: dict[str, str] = {
     "simulate_pv_output": "pv",
     "create_model_chain": "pv",
     "create_pv_system": "pv",
-    "apply_degradation": "pv",
     "calculate_degradation_factor": "pv",
     "interpolate_to_minute_resolution": "pv",
     # weather
-    "get_tmy_data": "weather",
     "WeatherCache": "weather",
-    "get_weather_cache": "weather",
-    "set_weather_cache": "weather",
+    "WeatherProvider": "weather",
+    "PvgisTmy": "weather",
+    "PrefetchedWeather": "weather",
     # load
     "LoadConfig": "load",
     "OFGEM_TDCV_BY_OCCUPANTS": "load",
@@ -188,16 +205,9 @@ _SYMBOL_MODULE: dict[str, str] = {
     "SEASONAL_FACTORS": "load",
     # location
     "Location": "location",
+    # errors
+    "ConfigurationError": "errors",
 }
-
-# Sanity check at import time: every __all__ name must have a mapping.
-# Uses an explicit RuntimeError (not bare assert) so the check survives -O/-OO.
-if set(_SYMBOL_MODULE) != set(__all__):
-    raise RuntimeError(
-        f"_SYMBOL_MODULE / __all__ mismatch: "
-        f"extra={set(_SYMBOL_MODULE)-set(__all__)}, "
-        f"missing={set(__all__)-set(_SYMBOL_MODULE)}"
-    )
 
 # ---------------------------------------------------------------------------
 # Alias resolution: public name differs from the symbol name in the origin module
@@ -205,6 +215,25 @@ if set(_SYMBOL_MODULE) != set(__all__):
 _SOURCE_NAME: dict[str, str] = {
     "DispatchTariffPeriod": "TariffPeriod",   # dispatch.TariffPeriod (Enum) — collision-renamed
 }
+
+# ---------------------------------------------------------------------------
+# Import-time agreement check of the tables above
+# ---------------------------------------------------------------------------
+def _refuse_disagreeing_tables() -> None:
+    """Raise RuntimeError naming each name on which __all__, _SYMBOL_MODULE and _SOURCE_NAME disagree."""
+    exported = set(__all__)
+    offenders_by_rule = {
+        "names listed more than once in __all__": {name for name in __all__ if __all__.count(name) > 1},
+        "names in __all__ with no _SYMBOL_MODULE entry": exported - _SYMBOL_MODULE.keys(),
+        "names in _SYMBOL_MODULE but not in __all__": _SYMBOL_MODULE.keys() - exported,
+        "names aliased in _SOURCE_NAME but not in __all__": _SOURCE_NAME.keys() - exported,
+    }
+    broken = [f"{rule}: {sorted(names)}" for rule, names in offenders_by_rule.items() if names]
+    if broken:
+        raise RuntimeError(f"__all__, _SYMBOL_MODULE and _SOURCE_NAME disagree: {'; '.join(broken)}")
+
+
+_refuse_disagreeing_tables()
 
 # ---------------------------------------------------------------------------
 # PEP-562 lazy attribute loader
@@ -253,17 +282,24 @@ if TYPE_CHECKING:
     # finance
     from solar_challenge.finance import bill as bill
     from solar_challenge.finance import householder_bill as householder_bill
-    from solar_challenge.finance import solve_cost_recovery_rate as solve_cost_recovery_rate
     from solar_challenge.finance import bill_distribution as bill_distribution
     from solar_challenge.finance import BillBreakdown as BillBreakdown
     from solar_challenge.finance import BillDistribution as BillDistribution
     from solar_challenge.finance import CostRecoverySolution as CostRecoverySolution
     from solar_challenge.finance import FinanceConfig as FinanceConfig
+    # cost-recovery solve
+    from solar_challenge.projection import solve_cost_recovery_rate as solve_cost_recovery_rate
     # signature-closure types
     from solar_challenge.home import SummaryStatistics as SummaryStatistics
     from solar_challenge.config import ScenarioConfig as ScenarioConfig
     from solar_challenge.fleet import FleetConfig as FleetConfig
     from solar_challenge.fleet import FleetResults as FleetResults
+    # fleet execution
+    from solar_challenge.fleet import FleetRunner as FleetRunner
+    from solar_challenge.fleet import FleetSimulator as FleetSimulator
+    from solar_challenge.fleet import HomeSimulator as HomeSimulator
+    from solar_challenge.fleet import FleetSimulate as FleetSimulate
+    from solar_challenge.fleet import HomesDone as HomesDone
     # dispatch
     from solar_challenge.dispatch import DispatchStrategy as DispatchStrategy
     from solar_challenge.dispatch import DispatchDecision as DispatchDecision
@@ -280,7 +316,6 @@ if TYPE_CHECKING:
     # flow
     from solar_challenge.flow import EnergyFlowResult as EnergyFlowResult
     from solar_challenge.flow import simulate_timestep as simulate_timestep
-    from solar_challenge.flow import simulate_timestep_tou as simulate_timestep_tou
     from solar_challenge.flow import validate_energy_balance as validate_energy_balance
     from solar_challenge.flow import calculate_self_consumption as calculate_self_consumption
     from solar_challenge.flow import calculate_excess_pv as calculate_excess_pv
@@ -306,6 +341,9 @@ if TYPE_CHECKING:
     from solar_challenge.gridservices import compute_grid_services_at_events as compute_grid_services_at_events
     from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS as GRID_SERVICES_RATE_BANDS
     from solar_challenge.gridservices import DEFAULT_EVENT_WINDOWS as DEFAULT_EVENT_WINDOWS
+    from solar_challenge.gridservices import GridServicesBand as GridServicesBand
+    from solar_challenge.gridservices import NoGridServices as NoGridServices
+    from solar_challenge.gridservices import FlatGridServices as FlatGridServices
     # community
     from solar_challenge.community import CommunityConfig as CommunityConfig
     from solar_challenge.community import CommunityBillingConfig as CommunityBillingConfig
@@ -317,14 +355,13 @@ if TYPE_CHECKING:
     from solar_challenge.pv import simulate_pv_output as simulate_pv_output
     from solar_challenge.pv import create_model_chain as create_model_chain
     from solar_challenge.pv import create_pv_system as create_pv_system
-    from solar_challenge.pv import apply_degradation as apply_degradation
     from solar_challenge.pv import calculate_degradation_factor as calculate_degradation_factor
     from solar_challenge.pv import interpolate_to_minute_resolution as interpolate_to_minute_resolution
     # weather
-    from solar_challenge.weather import get_tmy_data as get_tmy_data
     from solar_challenge.weather import WeatherCache as WeatherCache
-    from solar_challenge.weather import get_weather_cache as get_weather_cache
-    from solar_challenge.weather import set_weather_cache as set_weather_cache
+    from solar_challenge.weather import WeatherProvider as WeatherProvider
+    from solar_challenge.weather import PvgisTmy as PvgisTmy
+    from solar_challenge.weather import PrefetchedWeather as PrefetchedWeather
     # load
     from solar_challenge.load import LoadConfig as LoadConfig
     from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS as OFGEM_TDCV_BY_OCCUPANTS
@@ -332,3 +369,5 @@ if TYPE_CHECKING:
     from solar_challenge.load import SEASONAL_FACTORS as SEASONAL_FACTORS
     # location
     from solar_challenge.location import Location as Location
+    # errors
+    from solar_challenge.errors import ConfigurationError as ConfigurationError

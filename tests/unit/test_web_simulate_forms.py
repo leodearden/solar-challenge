@@ -2,11 +2,9 @@
 """Tests of the /simulate/home and /simulate/fleet pages, which web/routes.py serves: the forms that start a home and a fleet simulation.
 
 The optional-settings tests identify a control by its Alpine binding, the form state the page's script builds its
-request from: heat pump, tariff, dispatch, PV age and SEG on /simulate/home, and the fleet-wide tariff, dispatch and
-SEG on /simulate/fleet.
+request from: heat pump, tariff, dispatch, PV age, system losses and SEG on /simulate/home, and the fleet-wide tariff,
+dispatch and SEG on /simulate/fleet.
 """
-
-from pathlib import Path
 
 import pytest
 
@@ -14,8 +12,12 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.location import LOCATION_PRESETS, Location
+from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.stored_runs import RUN_KINDS
 from tests._html_page import (
     counts_of,
     doctype,
@@ -24,20 +26,13 @@ from tests._html_page import (
     element_ids,
     headings,
     texts,
+    texts_after,
 )
-from tests._web_app import build_test_app
+from tests._html_select_options import option_texts
+from tests._web_job_days import web_job_days
 
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application with a temporary database."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
+_JOB_DAYS = web_job_days(count=1)
+bristol_june_tmy = _JOB_DAYS.bristol_tmy_fixture()
 
 
 def _options_per_seg_preset_key(page: str) -> dict[str, int]:
@@ -63,6 +58,13 @@ def _fixed_value_bounds(page: str) -> list[tuple[str | None, str | None]]:
     return bounds
 
 
+def _name_and_coordinates(preset: Location) -> str:
+    """*preset*'s name, then its latitude and longitude in degrees to two places, each with the letter of its hemisphere."""
+    latitude = f"{abs(preset.latitude):.2f}°{'N' if preset.latitude >= 0 else 'S'}"
+    longitude = f"{abs(preset.longitude):.2f}°{'E' if preset.longitude >= 0 else 'W'}"
+    return f"{preset.name} ({latitude}, {longitude})"
+
+
 class TestSimulateHomeRoute:
     """Tests for the GET /simulate/home route."""
 
@@ -81,21 +83,56 @@ class TestSimulateHomeRoute:
     def test_annual_consumption_input_is_bounded_and_stepped_as_the_fleet_load_component(
         self, client: FlaskClient
     ) -> None:
-        """GET /simulate/home renders one annual consumption input, whose step, min and max are the load component's step and fixed range."""
+        """GET /simulate/home renders one annual consumption input, whose step, min and max are the load component's step and value_range."""
         page = client.get("/simulate/home").get_data(as_text=True)
         load = FLEET_COMPONENTS["load"]
         assert [
             (attributes.get("step"), attributes.get("min"), attributes.get("max"))
             for attributes in element_attributes(page, "input")
             if attributes.get("id") == "consumption_kwh"
-        ] == [(str(load.step), str(load.fixed_range[0]), str(load.fixed_range[1]))]
+        ] == [(str(load.step), str(load.value_range.low), str(load.value_range.high))]
+
+    def test_home_page_offers_the_home_run_kinds_default_name_as_its_simulation_name_placeholder(
+        self, client: FlaskClient
+    ) -> None:
+        """The Simulation Name input's placeholder is the name a home run submitted without one runs under (RunKind.default_name)."""
+        page = client.get("/simulate/home").get_data(as_text=True)
+
+        [name_input] = [
+            attributes for attributes in element_attributes(page, "input") if attributes.get("id") == "sim_name"
+        ]
+
+        assert name_input["placeholder"] == RUN_KINDS["home"].default_name(())
+
+    @pytest.mark.usefixtures("bristol_june_tmy")
+    @pytest.mark.parametrize("blank_name", ["", "   "], ids=["empty", "only-spaces"])
+    def test_a_home_run_submitted_with_its_simulation_name_blank_completes_under_the_placeholders_name(
+        self, app: Flask, client: FlaskClient, blank_name: str
+    ) -> None:
+        """A home run posted with the Simulation Name blank, as the form posts it untouched or holding only spaces, completes and reads in Run History under the name the input's placeholder shows.
+
+        Its job runs offline, on the clear day bristol_june_tmy seeds as Bristol's TMY.
+        """
+        page = client.get("/simulate/home").get_data(as_text=True)
+        [name_input] = [
+            attributes for attributes in element_attributes(page, "input") if attributes.get("id") == "sim_name"
+        ]
+
+        submitted = client.post("/api/simulate/home", json={"location": "bristol", "days": _JOB_DAYS.count, "name": blank_name})
+        assert submitted.status_code == 201, submitted.get_json()
+        assert dashboard_of(app).jobs.wait_until_idle(timeout=120)
+        run = client.get(f"/api/history/runs/{submitted.get_json()['run_id']}").get_json()
+
+        assert (run["status"], run["name"]) == ("completed", name_input["placeholder"])
 
     def test_simulate_home_page_contains_tabs(self, client: FlaskClient) -> None:
-        """GET /simulate/home renders one tab list and, per tab, one panel shown while it is active."""
+        """GET /simulate/home draws one tab per configuration panel, PV to Period, and each tab opens its panel."""
         response = client.get("/simulate/home")
         page = response.get_data(as_text=True)
-        assert element_count(page, "nav", {"role": "tablist"}) == 1
         tab_ids = ("pv", "battery", "load", "heat_pump", "tariff", "location", "period")
+        tab_clicks = [button.get("@click") for button in element_attributes(page, "button") if button.get("role") == "tab"]
+        assert tab_clicks == [f'activeTab = "{tab_id}"' for tab_id in tab_ids]
+        assert texts_after(page, "PV", 6) == ["Battery", "Load", "Heat Pump", "Tariff", "Location", "Period"]
         panels_per_tab = {
             tab_id: element_count(
                 page, "div", {"role": "tabpanel", "x-show": f"activeTab === '{tab_id}'"}
@@ -136,7 +173,7 @@ class TestSimulateHomePageRendering:
 
 
 class TestHomeFormRender:
-    """Smoke test: GET /simulate/home renders the heat pump, tariff, dispatch, PV-age and SEG controls."""
+    """Smoke test: GET /simulate/home renders the heat pump, tariff, dispatch, PV-age, system-losses and SEG controls."""
 
     def test_home_form_shows_heat_pump_tariff_and_dispatch(
         self, client: FlaskClient
@@ -157,6 +194,21 @@ class TestHomeFormRender:
         assert element_count(page, "input", {"type": "number", "x-model.number": "formData.system_age_years"}) == 1
         assert element_count(page, "input", {"type": "number", "x-model.number": "formData.degradation_rate_per_year"}) == 1
 
+    def test_home_form_shows_a_system_losses_input_with_pvconfigs_default_as_its_placeholder(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/home renders one number input for the PV system losses, whose placeholder is PVConfig's default to the four decimal places it shows."""
+        page = client.get("/simulate/home").get_data(as_text=True)
+        [system_losses_input] = [
+            attributes
+            for attributes in element_attributes(page, "input")
+            if attributes.get("x-model.number") == "formData.system_losses"
+        ]
+        assert system_losses_input["type"] == "number"
+        assert float(system_losses_input["placeholder"]) == pytest.approx(
+            PVWATTS_DEFAULT_SYSTEM_LOSSES, abs=5e-5
+        )
+
     def test_home_form_shows_seg_section(self, client: FlaskClient) -> None:
         """GET /simulate/home renders the SEG preset select, one option per SEG preset key, and the custom rate number input."""
         resp = client.get("/simulate/home")
@@ -165,6 +217,17 @@ class TestHomeFormRender:
         assert element_count(page, "select", {"x-model": "formData.seg_preset"}) == 1
         assert _options_per_seg_preset_key(page) == dict.fromkeys(SEG_PRESETS, 1)
         assert element_count(page, "input", {"type": "number", "x-model.number": "formData.seg_rate_pence_per_kwh"}) == 1
+
+    def test_home_form_offers_each_location_preset_labelled_with_its_name_and_coordinates(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/home's location select offers each LOCATION_PRESETS key and custom coordinates; each preset's label is its Location's name, then its latitude and longitude with their hemispheres."""
+        page = client.get("/simulate/home").get_data(as_text=True)
+
+        assert option_texts(page, {"x-model": "formData.location"}) == {
+            **{key: _name_and_coordinates(preset) for key, preset in LOCATION_PRESETS.items()},
+            "custom": "Custom coordinates...",
+        }
 
 
 class TestFleetConfigRoute:
@@ -210,6 +273,18 @@ class TestFleetConfigRoute:
         assert page_texts.count("Export YAML") == 1
         assert element_count(page, "button", {"@click": "exportYaml()"}) == 1
         assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
+
+    def test_fleet_page_offers_the_fleet_run_kinds_default_name_as_its_simulation_name_placeholder(
+        self, client: FlaskClient
+    ) -> None:
+        """The Simulation Name input's placeholder is the name a fleet run submitted without one runs under (RunKind.default_name)."""
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+
+        [name_input] = [
+            attributes for attributes in element_attributes(page, "input") if attributes.get("id") == "fleet_sim_name"
+        ]
+
+        assert name_input["placeholder"] == RUN_KINDS["fleet"].default_name(())
 
 
 class TestFleetFormRender:

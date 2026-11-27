@@ -67,7 +67,7 @@ tasks:
           paths: ["src/solar_challenge/pv.py"]
           expect: present
       - name: "policy-copies-gone-from-scripts"
-        binding: "grep: _chandrupatla filters in measure_pv_performance_ratio.in_plane_irradiation and measure_mppt_window.main on main. Scoped to scripts/ at decompose (2026-10-15): B2's own test in tests/ may name the solver when it asserts the bare run's warning"
+        binding: "grep: _chandrupatla filters in measure_pv_performance_ratio.in_plane_irradiation and measure_mppt_window.main on main. Scoped to scripts/ at decompose (2026-10-15). [Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]: run_model_chain carries no filter, and B2 asserts no bare-run warning, so the scripts hold no copy"
         verdict: PASS
         delivered_check:
           kind: grep
@@ -75,7 +75,7 @@ tasks:
           paths: ["scripts/"]
           expect: absent
       - name: "broad-test-filters-gone"
-        binding: "grep: tests/unit/test_measurement_scripts._QUIET_DIODE_SOLVER and three `ignore:invalid value encountered` filterwarnings marks in tests/unit/test_pv.py on main. Pattern targets the suppressions at decompose (2026-10-15), so B2's assertion on the warning text cannot wedge it"
+        binding: "grep: tests/unit/test_measurement_scripts._QUIET_DIODE_SOLVER and three `ignore:invalid value encountered` filterwarnings marks in tests/unit/test_pv.py on main. Pattern targets the suppressions at decompose (2026-10-15). [Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]: B2 asserts under error::RuntimeWarning and adds no ignore filter, so the check stays satisfiable"
         verdict: PASS
         delivered_check:
           kind: grep
@@ -98,8 +98,8 @@ tasks:
           pattern: "ac_power = apply_degradation\\("
           paths: ["src/solar_challenge/pv.py"]
           expect: absent
-      - name: "bare-run-warns-policy-run-does-not"
-        binding: "probe: a bare run_model over synthetic_june_weather('2024-06-21') emits 39 RuntimeWarnings from scipy/optimize/_chandrupatla.py; β's test runs run_model_chain under simplefilter('error')"
+      - name: "policy-run-raises-no-runtime-warning"
+        binding: "probe: a bare run_model over synthetic_june_weather('2024-06-21') emits 39 RuntimeWarnings from scipy/optimize/_chandrupatla.py. [Amended 2026-11-26, task 810: Leo's rulings on esc-810-3 and esc-810-7]: since task 823 (84297320) a bare run emits 0, measured on main ad4b7537; β's test runs one- and two-array chains through run_model_chain under simplefilter('error', RuntimeWarning) and asserts none. [Amended 2026-11-26, task 810, review]: renamed from bare-run-warns-policy-run-does-not, which named the decompose premise"
         verdict: PASS
         delivered_check:
           kind: manual
@@ -235,7 +235,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "pv-cell-temperature\\.md"
-          paths: ["docs/domain-library-consumption.md"]
+          paths: ["docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
       - name: "rebaseline-inside-slow-guard"
         binding: "probe: Bristol 993.14 → 1012.12 kWh/kWp; ratio ≈ 0.819 inside tests/integration/test_pv_performance_ratio.py's 0.76–0.84"
@@ -317,7 +317,7 @@ tasks:
           kind: manual
           reason: "a lead action on task state, not a code check"
   - label: "η"
-    task_id: null
+    task_id: 826
     title: "Retire apply_degradation from the public surface (held for S29)"
     note: "Held: x_seam_wait = {stream: S29, contract: one coordinated frozen-surface bump (D4)}; supersedes task 609."
     capabilities:

@@ -191,7 +191,7 @@ tasks:
           kind: manual
           reason: "behavioural rule tests ζ writes; their verdict is the verify's"
   - label: "η"
-    task_id: null
+    task_id: 927
     title: "The released snapshot and the executable Unreleased-line obligation (held for S29)"
     note: "Held: x_seam_wait = {stream: S29, contract: the release commit that bumps the version and writes the one release section}; excluded from the batch's commit_planning; released by S29's session. Filed held per lead ruling L32."
     capabilities:

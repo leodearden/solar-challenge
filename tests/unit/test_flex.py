@@ -1,19 +1,22 @@
-"""Tests for flex.py flexibility value-model (banded Low/Central/High + grid-services £/kW resolver).
+"""Tests for flex.py flexibility value-model (banded Low/Central/High, read with resolve_flex_band).
 
-Canonical numbers from consulting model §1.1/§1.4 and PRD §6
-(all £/battery-home/yr unless noted).
+Canonical numbers from consulting model §1.1/§1.4 and
+docs/prds/flexibility-value-finance-integration.md §6 (all £/battery-home/yr unless noted).
 """
 
 import dataclasses
+from collections.abc import Mapping
 
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.flex import (
     FlexibilityValueBand,
     FLEX_VALUE_BANDS,
     REPRESENTATIVE_DISCHARGE_POWER_KW,
     resolve_flex_band,
-    resolve_grid_services_band,
 )
+from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 class TestFlexibilityValueBand:
@@ -50,47 +53,55 @@ class TestFlexibilityValueBand:
         """Assigning name raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            band.name = "other"  # noqa: no assignment to frozen field
+            band.name = "other"
 
     def test_time_shift_gbp_is_immutable(self):
         """Assigning time_shift_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            band.time_shift_gbp = 999.0  # noqa: no assignment to frozen field
+            band.time_shift_gbp = 999.0
 
     def test_grid_services_per_kw_gbp_is_immutable(self):
         """Assigning grid_services_per_kw_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            band.grid_services_per_kw_gbp = 0.0  # noqa: no assignment to frozen field
+            band.grid_services_per_kw_gbp = 0.0
 
     def test_total_gbp_is_immutable(self):
         """Assigning total_gbp raises FrozenInstanceError (frozen dataclass)."""
         band = self._make_band()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            band.total_gbp = 0.0  # noqa: no assignment to frozen field
+            band.total_gbp = 0.0
 
     # --- validation: negative monetary fields ---
 
-    def test_negative_time_shift_raises(self):
-        """Negative time_shift_gbp raises ValueError."""
-        with pytest.raises(ValueError, match="time_shift_gbp"):
-            self._make_band(time_shift_gbp=-1.0)
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("time_shift_gbp", -1.0),
+            ("grid_services_per_home_gbp", -0.01),
+            ("grid_services_per_kw_gbp", -5.0),
+            ("total_gbp", -1.0),
+        ],
+    )
+    def test_a_negative_amount_is_refused_naming_its_bound(self, field, value):
+        with pytest.raises(ConfigurationError) as exc_info:
+            self._make_band(**{field: value})
+        assert str(exc_info.value) == f"{field} must be at least 0, got {value!r}"
 
-    def test_negative_grid_services_per_home_raises(self):
-        """Negative grid_services_per_home_gbp raises ValueError."""
-        with pytest.raises(ValueError, match="grid_services_per_home_gbp"):
-            self._make_band(grid_services_per_home_gbp=-0.01)
+    @pytest.mark.parametrize(
+        "field", ["time_shift_gbp", "grid_services_per_home_gbp", "grid_services_per_kw_gbp", "total_gbp"]
+    )
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_an_amount_that_is_not_a_finite_number_is_refused_naming_it(self, field, value):
+        with pytest.raises(ConfigurationError) as exc_info:
+            self._make_band(**{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
 
-    def test_negative_grid_services_per_kw_raises(self):
-        """Negative grid_services_per_kw_gbp raises ValueError."""
-        with pytest.raises(ValueError, match="grid_services_per_kw_gbp"):
-            self._make_band(grid_services_per_kw_gbp=-5.0)
-
-    def test_negative_total_gbp_raises(self):
-        """Negative total_gbp raises ValueError."""
-        with pytest.raises(ValueError, match="total_gbp"):
-            self._make_band(total_gbp=-1.0)
+    def test_a_whole_amount_is_held_as_the_float_it_reads(self):
+        time_shift = self._make_band(time_shift_gbp=100).time_shift_gbp
+        assert time_shift == 100.0
+        assert type(time_shift) is float
 
     def test_zero_monetary_fields_are_valid(self):
         """Zero values for monetary fields are valid (non-negative)."""
@@ -106,20 +117,21 @@ class TestFlexibilityValueBand:
     # --- validation: empty name/provenance ---
 
     def test_empty_name_raises(self):
-        """Empty name string raises ValueError."""
-        with pytest.raises(ValueError, match="name"):
+        """Empty name string raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="name"):
             self._make_band(name="")
 
     def test_empty_provenance_raises(self):
-        """Empty provenance string raises ValueError."""
-        with pytest.raises(ValueError, match="provenance"):
+        """Empty provenance string raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="provenance"):
             self._make_band(provenance="")
 
 
 class TestFlexValueBands:
     """Test FLEX_VALUE_BANDS canonical constants and REPRESENTATIVE_DISCHARGE_POWER_KW.
 
-    Numbers from consulting §1.1/§1.4 and PRD §6 (all £/battery-home/yr).
+    Numbers from consulting §1.1/§1.4 and docs/prds/flexibility-value-finance-integration.md §6
+    (all £/battery-home/yr).
     """
 
     # --- module constant ---
@@ -128,11 +140,18 @@ class TestFlexValueBands:
         """REPRESENTATIVE_DISCHARGE_POWER_KW is 2.5 (matches BatteryConfig default)."""
         assert REPRESENTATIVE_DISCHARGE_POWER_KW == pytest.approx(2.5)
 
-    # --- FLEX_VALUE_BANDS dict structure ---
+    # --- FLEX_VALUE_BANDS mapping structure ---
 
-    def test_flex_value_bands_is_dict(self):
-        """FLEX_VALUE_BANDS is a dict."""
-        assert isinstance(FLEX_VALUE_BANDS, dict)
+    def test_flex_value_bands_is_a_read_only_mapping_keyed_by_band_in_band_order(self):
+        """FLEX_VALUE_BANDS is a read-only Mapping whose keys are the GridServicesBand members, in band order.
+
+        A str key compares equal to its member, so only the keys' type tells them apart.
+        """
+        assert isinstance(FLEX_VALUE_BANDS, Mapping)
+        with pytest.raises(TypeError):
+            FLEX_VALUE_BANDS[GridServicesBand.LOW] = FLEX_VALUE_BANDS[GridServicesBand.LOW]
+        assert list(FLEX_VALUE_BANDS) == list(GridServicesBand)
+        assert all(type(key) is GridServicesBand for key in FLEX_VALUE_BANDS)
 
     def test_has_low_band(self):
         """FLEX_VALUE_BANDS has 'low' key."""
@@ -157,7 +176,7 @@ class TestFlexValueBands:
                 f"FLEX_VALUE_BANDS['{key}'] is not a FlexibilityValueBand"
             )
 
-    # --- Per-band canonical values (consulting §1.1 + PRD §6) ---
+    # --- Per-band canonical values (consulting §1.1 + docs/prds/flexibility-value-finance-integration.md §6) ---
 
     @pytest.mark.parametrize("band,expected", [
         ("low",     {"time_shift_gbp": 100.0, "grid_services_per_home_gbp":   4.0, "grid_services_per_kw_gbp":  1.5, "total_gbp": 120.0}),  # noqa: E241
@@ -165,7 +184,10 @@ class TestFlexValueBands:
         ("high",    {"time_shift_gbp": 330.0, "grid_services_per_home_gbp": 120.0, "grid_services_per_kw_gbp": 48.0, "total_gbp": 450.0}),  # noqa: E241
     ])
     def test_band_canonical_values(self, band: str, expected: dict[str, float]) -> None:
-        """Canonical monetary fields for each band match consulting §1.1 + PRD §6."""
+        """Canonical monetary fields for each band match consulting §1.1 and the PRD.
+
+        PRD: docs/prds/flexibility-value-finance-integration.md §6.
+        """
         fb = FLEX_VALUE_BANDS[band]
         for field, value in expected.items():
             assert getattr(fb, field) == pytest.approx(value), f"{band}.{field}"
@@ -178,94 +200,46 @@ class TestFlexValueBands:
                 f"{band}: total_gbp ({fb.total_gbp}) < time_shift_gbp ({fb.time_shift_gbp})"
             )
 
+    # --- the per-kW rate is the rate table's flat rate (docs/prds/grid-services-pricing-model.md §9 P5) ---
 
-class TestResolveGridServicesBand:
-    """Test resolve_grid_services_band and resolve_flex_band resolvers.
+    @pytest.mark.parametrize("band", list(GridServicesBand))
+    def test_each_band_reads_its_per_kw_rate_from_the_rate_table(self, band: GridServicesBand) -> None:
+        """A band's grid_services_per_kw_gbp is GRID_SERVICES_RATE_BANDS' flat rate for it, and its name is the band's value."""
+        assert (
+            FLEX_VALUE_BANDS[band].grid_services_per_kw_gbp
+            == GRID_SERVICES_RATE_BANDS.resolve(band).flat_gbp_per_kw_per_year
+        )
+        assert FLEX_VALUE_BANDS[band].name == band.value
 
-    Pinned signal: resolve_grid_services_band("central") == 12.0 (PRD §6).
-    Per-home cross-check: rate × 2.5 ≈ per-home within ±£1.0 (consulting §1.1 banding).
-    """
+    # --- per-home cross-check: rate × 2.5 ≈ per-home within ±£1.0 (consulting §1.1 banding) ---
 
-    # --- resolve_grid_services_band return type and pinned values ---
+    @pytest.mark.parametrize("band", list(GridServicesBand))
+    def test_per_kw_rate_at_the_representative_power_is_the_per_home_figure(
+        self, band: GridServicesBand
+    ) -> None:
+        """grid_services_per_kw_gbp × REPRESENTATIVE_DISCHARGE_POWER_KW ≈ grid_services_per_home_gbp (±£1.0).
 
-    def test_returns_float(self):
-        """resolve_grid_services_band returns a float."""
-        result = resolve_grid_services_band("central")
-        assert isinstance(result, float)
+        Low: 1.5 × 2.5 = 3.75 ≈ 4; central (30.0) and high (120.0) are exact.
+        """
+        flex_band = FLEX_VALUE_BANDS[band]
+        assert flex_band.grid_services_per_kw_gbp * REPRESENTATIVE_DISCHARGE_POWER_KW == pytest.approx(
+            flex_band.grid_services_per_home_gbp, abs=1.0
+        )
 
-    def test_central_pinned_signal(self):
-        """Central band returns exactly £12.0/kW/yr — the PRD §6 pinned signal."""
-        assert resolve_grid_services_band("central") == pytest.approx(12.0)
 
-    def test_low_rate(self):
-        """Low band returns £1.5/kW/yr (PRD §6)."""
-        assert resolve_grid_services_band("low") == pytest.approx(1.5)
+class TestResolveFlexBand:
+    """resolve_flex_band returns FLEX_VALUE_BANDS' entry for a band, and refuses any other value naming the bands."""
 
-    def test_high_rate(self):
-        """High band returns £48.0/kW/yr (PRD §6)."""
-        assert resolve_grid_services_band("high") == pytest.approx(48.0)
+    @pytest.mark.parametrize("band", list(GridServicesBand))
+    def test_returns_the_entry_a_band_string_names(self, band: GridServicesBand) -> None:
+        assert resolve_flex_band(band.value) is FLEX_VALUE_BANDS[band]
 
-    def test_each_band_matches_flex_value_bands(self):
-        """resolve_grid_services_band(band) equals FLEX_VALUE_BANDS[band].grid_services_per_kw_gbp."""
-        for band in ("low", "central", "high"):
-            assert resolve_grid_services_band(band) == pytest.approx(
-                FLEX_VALUE_BANDS[band].grid_services_per_kw_gbp
-            ), f"Mismatch for band '{band}'"
+    @pytest.mark.parametrize("band", list(GridServicesBand))
+    def test_returns_the_entry_of_a_band_member(self, band: GridServicesBand) -> None:
+        assert resolve_flex_band(band) is FLEX_VALUE_BANDS[band]
 
-    # --- per-home cross-check: rate × 2.5 ≈ per-home within ±£1.0 ---
+    def test_refuses_an_unknown_band_naming_the_bands(self) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            resolve_flex_band("medium")
 
-    def test_low_per_home_cross_check(self):
-        """Low: rate × REPRESENTATIVE_DISCHARGE_POWER_KW ≈ grid_services_per_home_gbp (±£1.0)."""
-        rate = resolve_grid_services_band("low")
-        per_home = FLEX_VALUE_BANDS["low"].grid_services_per_home_gbp
-        assert rate * REPRESENTATIVE_DISCHARGE_POWER_KW == pytest.approx(per_home, abs=1.0)
-
-    def test_central_per_home_cross_check(self):
-        """Central: rate × REPRESENTATIVE_DISCHARGE_POWER_KW ≈ grid_services_per_home_gbp (exact)."""
-        rate = resolve_grid_services_band("central")
-        per_home = FLEX_VALUE_BANDS["central"].grid_services_per_home_gbp
-        assert rate * REPRESENTATIVE_DISCHARGE_POWER_KW == pytest.approx(per_home, abs=1.0)
-
-    def test_high_per_home_cross_check(self):
-        """High: rate × REPRESENTATIVE_DISCHARGE_POWER_KW ≈ grid_services_per_home_gbp (exact)."""
-        rate = resolve_grid_services_band("high")
-        per_home = FLEX_VALUE_BANDS["high"].grid_services_per_home_gbp
-        assert rate * REPRESENTATIVE_DISCHARGE_POWER_KW == pytest.approx(per_home, abs=1.0)
-
-    # --- unknown band raises ValueError ---
-
-    def test_unknown_band_raises_value_error(self):
-        """Unknown band name raises ValueError."""
-        with pytest.raises(ValueError):
-            resolve_grid_services_band("ultra")
-
-    def test_unknown_band_error_mentions_band(self):
-        """ValueError message mentions the unknown band name."""
-        with pytest.raises(ValueError, match="ultra"):
-            resolve_grid_services_band("ultra")
-
-    def test_unknown_band_error_lists_available(self):
-        """ValueError message lists available band names."""
-        with pytest.raises(ValueError, match="central"):
-            resolve_grid_services_band("bogus")
-
-    # --- resolve_flex_band ---
-
-    def test_resolve_flex_band_returns_flex_value_band(self):
-        """resolve_flex_band returns a FlexibilityValueBand instance."""
-        result = resolve_flex_band("central")
-        assert isinstance(result, FlexibilityValueBand)
-
-    def test_resolve_flex_band_central(self):
-        """resolve_flex_band('central') returns the central preset."""
-        assert resolve_flex_band("central") == FLEX_VALUE_BANDS["central"]
-
-    def test_resolve_flex_band_all_bands(self):
-        """resolve_flex_band resolves every band key to its preset."""
-        for band, expected in FLEX_VALUE_BANDS.items():
-            assert resolve_flex_band(band) == expected
-
-    def test_resolve_flex_band_unknown_raises(self):
-        """resolve_flex_band raises ValueError on unknown band."""
-        with pytest.raises(ValueError, match="unknown_band"):
-            resolve_flex_band("unknown_band")
+        assert str(excinfo.value) == "flexibility band must be one of low, central, high, got 'medium'"

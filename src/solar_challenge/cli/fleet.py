@@ -1,51 +1,65 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation commands."""
 
-import dataclasses
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 import pandas as pd
 import typer
+from rich.progress import Progress, TaskID
 from rich.table import Table
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
 
 from solar_challenge.cli.utils import (
+    EndOption,
+    StartOption,
     console,
     create_fleet_progress,
     create_summary_table,
+    fleet_summary_rows,
     handle_errors,
+    invocation,
     print_info,
     print_success,
     print_warning,
+    with_window_options,
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
-    SweepSpec,
+    ScenarioConfig,
+    config_variables,
     detect_fleet_sweep_spec,
+    fleet_of,
     load_community_config,
     load_config,
-    load_fleet_config,
-    parse_fleet_config,
-    parse_location_block,
-    parse_sweep_fleet_configs,
+    load_scenario,
+    parse_scenario,
+    parse_sweep_scenarios,
     substitute_config_variables,
+    sweep_point_fleet,
+    sweep_value_labels,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
-    FleetConfig,
     FleetResults,
+    HomesDone,
     calculate_fleet_summary,
-    collect_multi_sweep_results,
-    simulate_fleet_iter,
-    simulate_multi_sweep_iter,
 )
-from solar_challenge.home import SimulationResults
+from solar_challenge.fleet_distribution import SweepMode, SweepSpec, swept_parameter_path
 from solar_challenge.output import compute_community_metrics, generate_community_report
+from solar_challenge.scenario_knobs import KNOBS, Knob, KnobTarget, is_knob_name, knob_named, names_with_aliases
 
 app = typer.Typer(help="Fleet simulation commands")
+
+_HOME_KNOBS = tuple(knob for knob in KNOBS.values() if knob.target is KnobTarget.HOMES)
+
+_SWEPT_KNOBS = f"the knobs fleet sweep sweeps, each with its aliases: {names_with_aliases(_HOME_KNOBS)}"
+"""The clause naming every knob fleet sweep sweeps, those that edit homes, that its --param help and refusals end with."""
 
 
 def _export_fleet_results(results: FleetResults, output: Path) -> None:
@@ -84,8 +98,7 @@ def _print_community_section(community_results: "CommunityResults") -> None:
         "",
     )
 
-    # Community Billing rows — only when VNM billing was computed (task ε / #34)
-    # Strictly additive and guarded so the no-billing path is byte-unchanged.
+    # Community billing rows, only when VNM billing was computed
     if community_results.community_savings_gbp is not None:
         table.add_row("", "", "", "")  # separator before billing block
         table.add_row(
@@ -113,6 +126,7 @@ def _print_community_section(community_results: "CommunityResults") -> None:
 @app.command()
 @handle_errors
 def run(
+    ctx: typer.Context,
     config: Annotated[
         Path,
         typer.Argument(
@@ -121,20 +135,8 @@ def run(
             dir_okay=False,
         ),
     ],
-    start: Annotated[
-        str,
-        typer.Option(
-            "--start",
-            help="Start date (YYYY-MM-DD)",
-        ),
-    ] = "2024-01-01",
-    end: Annotated[
-        str,
-        typer.Option(
-            "--end",
-            help="End date (YYYY-MM-DD)",
-        ),
-    ] = "2024-12-31",
+    start: StartOption = None,
+    end: EndOption = None,
     output: Annotated[
         Optional[Path],
         typer.Option(
@@ -142,20 +144,6 @@ def run(
             help="Output CSV file path for aggregate results",
         ),
     ] = None,
-    workers: Annotated[
-        Optional[int],
-        typer.Option(
-            "--workers", "-w",
-            help="Number of parallel workers",
-        ),
-    ] = None,
-    sequential: Annotated[
-        bool,
-        typer.Option(
-            "--sequential",
-            help="Disable parallelization",
-        ),
-    ] = False,
     community_report: Annotated[
         Optional[Path],
         typer.Option(
@@ -170,79 +158,37 @@ def run(
     The config file should define a list of homes with their PV, battery,
     and load configurations.
     """
-    fleet_config = load_fleet_config(config)
+    cli = invocation(ctx)
+    scenario = with_window_options(load_scenario(config), start=start, end=end)
+    community_config = load_community_config(config)
+    fleet_config = fleet_of(scenario)
     n_homes = len(fleet_config.homes)
 
-    # Get location from first home for timezone
-    loc = fleet_config.homes[0].location
+    start_date, end_date = scenario.simulation_bounds()
 
-    # Parse dates
-    start_date = pd.Timestamp(start, tz=loc.timezone)
-    end_date = pd.Timestamp(end, tz=loc.timezone)
+    print_info(cli, f"Simulating fleet of {n_homes} homes for {scenario.window().days} days")
 
-    days = (end_date - start_date).days + 1
-    print_info(f"Simulating fleet of {n_homes} homes for {days} days")
-
-    results_list: list[SimulationResults | None] = [None] * n_homes
-
-    with create_fleet_progress() as progress:
+    with create_fleet_progress(cli) as progress:
         task = progress.add_task(f"Simulating {n_homes} homes...", total=n_homes)
-        for idx, result in simulate_fleet_iter(
-            fleet_config, start_date, end_date,
-            parallel=not sequential, max_workers=workers
-        ):
-            results_list[idx] = result
-            progress.update(task, advance=1)
-
-    # Build FleetResults from results_list
-    final_results: list[SimulationResults] = []
-    for r in results_list:
-        assert r is not None
-        final_results.append(r)
-
-    results = FleetResults(
-        per_home_results=final_results,
-        home_configs=fleet_config.homes,
-    )
+        results = cli.runner.simulate(fleet_config, start_date, end_date, progress=_homes_done_on(progress, task))
 
     summary = calculate_fleet_summary(results)
 
-    # Create and display summary table
-    table = create_summary_table(summary, title=f"Fleet Results: {fleet_config.name or 'Fleet'}")
-
-    # Add fleet-specific stats
-    table.add_row("", "")  # Separator
-    table.add_row(
-        "Per-Home Generation (min/max)",
-        f"{summary.per_home_generation_min_kwh:.1f} / {summary.per_home_generation_max_kwh:.1f} kWh",
+    console.print(
+        create_summary_table(fleet_summary_rows(summary), title=f"Fleet Results: {fleet_config.name or 'Fleet'}")
     )
-    table.add_row(
-        "Per-Home Generation (mean)",
-        f"{summary.per_home_generation_mean_kwh:.1f} kWh",
-    )
-    table.add_row(
-        "Self-Consumption Ratio (min/max)",
-        f"{summary.per_home_self_consumption_ratio_min:.1%} / {summary.per_home_self_consumption_ratio_max:.1%}",
-    )
-    table.add_row(
-        "Self-Consumption Ratio (mean)",
-        f"{summary.per_home_self_consumption_ratio_mean:.1%}",
-    )
-
-    console.print(table)
 
     if output is not None:
         _export_fleet_results(results, output)
-        print_success(f"Aggregate results saved to {output}")
+        print_success(cli, f"Aggregate results saved to {output}")
 
-    # Community sharing layer — strictly additive; base path is byte-unchanged
-    community_config = load_community_config(config)
+    # Community sharing layer
     if community_config is not None:
         community_results = simulate_community(results, community_config)
         _print_community_section(community_results)
         if community_report is not None:
             community_report.write_text(generate_community_report(community_results))
-            print_success(f"Community report saved to {community_report}")
+            print_success(cli, f"Community report saved to {community_report}")
     else:
         if community_report is not None:
             print_warning(
@@ -253,6 +199,7 @@ def run(
 @app.command()
 @handle_errors
 def sweep(
+    ctx: typer.Context,
     config: Annotated[
         Path,
         typer.Argument(
@@ -261,25 +208,17 @@ def sweep(
             dir_okay=False,
         ),
     ],
-    start: Annotated[
-        str,
-        typer.Option(
-            "--start",
-            help="Start date (YYYY-MM-DD)",
-        ),
-    ] = "2024-01-01",
-    end: Annotated[
-        str,
-        typer.Option(
-            "--end",
-            help="End date (YYYY-MM-DD)",
-        ),
-    ] = "2024-12-31",
+    start: StartOption = None,
+    end: EndOption = None,
     param: Annotated[
         Optional[str],
         typer.Option(
             "--param",
-            help="Variable name for CLI sweep (e.g., BATTERY_RATIO)",
+            help=(
+                "What the sweep varies: a knob, by its name or an alias, else NAME, the ${NAME} "
+                "placeholders of the document; a name with both readings is refused, and so is a knob "
+                "that edits no home; " + _SWEPT_KNOBS
+            ),
         ),
     ] = None,
     min_val: Annotated[
@@ -304,12 +243,12 @@ def sweep(
         ),
     ] = 10,
     mode: Annotated[
-        str,
+        SweepMode,
         typer.Option(
             "--mode",
-            help="Sweep mode: geometric or linear",
+            help="How the points are spaced from --min to --max: by a constant step (linear) or a constant ratio (geometric)",
         ),
-    ] = "geometric",
+    ] = SweepSpec.mode,
     output_dir: Annotated[
         Optional[Path],
         typer.Option(
@@ -317,20 +256,6 @@ def sweep(
             help="Output directory for sweep results",
         ),
     ] = None,
-    workers: Annotated[
-        Optional[int],
-        typer.Option(
-            "--workers", "-w",
-            help="Number of parallel workers per simulation",
-        ),
-    ] = None,
-    sequential: Annotated[
-        bool,
-        typer.Option(
-            "--sequential",
-            help="Disable parallelization",
-        ),
-    ] = False,
 ) -> None:
     """Run parameter sweep over fleet configuration.
 
@@ -339,8 +264,24 @@ def sweep(
     1. YAML-defined sweep: When the config contains a sweep spec in the
        battery.capacity_kwh.multiplier field, runs all sweep points.
 
-    2. CLI-driven sweep: When --param is provided, substitutes the variable
-       in the config and sweeps from --min to --max.
+    2. CLI-driven sweep: When --param is provided, it resolves through the
+       knob registry first, by a knob's name or an alias, and then as the
+       NAME of the ${NAME} or ${NAME:default} placeholders of the config,
+       each the whole value of a key; the sweep refuses a --param with both
+       readings or neither. It also refuses a knob that edits no home's
+       simulation, the SEG rate or a finance setting, because every point
+       would simulate the same fleet. A knob sweep reads the config once, each
+       placeholder at its default, and sets the knob to each point's value,
+       from --min to --max. A variable sweep replaces every placeholder of
+       NAME with the point's value; a placeholder --param does not name
+       takes its default. The sweep refuses a placeholder inside a longer
+       string, and a default that is not a finite number.
+
+    Each point is labelled <axis label>=<value> and written to
+    <axis label>_<value>.csv: the axis label is the knob's canonical name,
+    the variable's NAME, or the path of the YAML sweep's field, and the
+    value is at four decimals, or more where two points would otherwise
+    share a label.
 
     Example YAML-defined sweep:
 
@@ -356,134 +297,242 @@ def sweep(
 
     Example CLI-driven sweep:
 
-        solar_challenge fleet sweep config.yaml \\
+        battery:
+          capacity_kwh:
+            type: proportional_to
+            source: pv.capacity_kw
+            multiplier: '${BATTERY_RATIO:1.0}'
+
+        solar-challenge fleet sweep config.yaml \\
             --param BATTERY_RATIO --min 0.1 --max 4.0 --steps 10
+
+    Example knob sweep:
+
+        solar-challenge fleet sweep config.yaml \\
+            --param battery_capacity_kwh --min 5 --max 10 --steps 2
     """
+    cli = invocation(ctx)
     raw_config = load_config(config)
 
-    # Get location
-    location = parse_location_block(raw_config.get("location"))
+    if "fleet_distribution" not in raw_config:
+        raise ConfigurationError("Sweep requires fleet_distribution config")
 
-    # Parse dates
-    start_date = pd.Timestamp(start, tz=location.timezone)
-    end_date = pd.Timestamp(end, tz=location.timezone)
+    if param is None:
+        source = "YAML"
+        param_name, sweep_spec, sweep_points = _yaml_sweep(raw_config)
+    else:
+        source = "CLI"
+        param_name, sweep_spec, sweep_points = _param_sweep(
+            raw_config, param, min_val, max_val, steps, mode
+        )
+    start_date, end_date = _sweep_bounds(sweep_points, start=start, end=end)
+    print_info(
+        cli,
+        f"{source} sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
+        f"({sweep_spec.steps} steps, {sweep_spec.mode})"
+    )
+    labels = sweep_value_labels([value for value, _ in sweep_points])
+    fleets = [
+        sweep_point_fleet(param_name, label, scenario)
+        for label, (_, scenario) in zip(labels, sweep_points, strict=True)
+    ]
 
     # Create output directory if needed
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    if "fleet_distribution" not in raw_config:
-        raise ConfigurationError("Sweep requires fleet_distribution config")
-
-    # Build sweep configs upfront
-    sweep_configs: list[tuple[float, FleetConfig]] = []
-    param_name: str = "multiplier"  # Default for YAML sweep
-
-    if param is not None:
-        # CLI-driven sweep
-        if min_val is None or max_val is None:
-            raise ConfigurationError(
-                "CLI sweep requires --min and --max values"
-            )
-        sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
-        sweep_values = sweep_spec.get_values()
-        param_name = param
-        print_info(
-            f"CLI sweep: {param} from {min_val} to {max_val} "
-            f"({steps} steps, {mode})"
-        )
-
-        for val in sweep_values:
-            substituted = substitute_config_variables(raw_config, {param: val})
-            fleet_config = dataclasses.replace(
-                parse_fleet_config(substituted), name=f"{param}={val:.4f}"
-            )
-            sweep_configs.append((val, fleet_config))
-
-    else:
-        # YAML-defined sweep
-        sweep_spec = detect_fleet_sweep_spec(raw_config)  # type: ignore[assignment]
-        if sweep_spec is None:
-            raise ConfigurationError(
-                "No sweep spec found in config. "
-                "Use --param for CLI sweep or add type: sweep to multiplier."
-            )
-
-        print_info(
-            f"YAML sweep: multiplier from {sweep_spec.min} to {sweep_spec.max} "
-            f"({sweep_spec.steps} steps, {sweep_spec.mode})"
-        )
-        sweep_configs = parse_sweep_fleet_configs(raw_config)
-
     # Calculate totals
-    n_sweeps = len(sweep_configs)
-    total_homes = sum(len(cfg.homes) for _, cfg in sweep_configs)
+    n_sweeps = len(fleets)
+    total_homes = sum(len(fleet.homes) for fleet in fleets)
 
-    print_info(f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
+    print_info(cli, f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
 
-    # Run multi-sweep simulation with cross-sweep parallelism
-    results_summary: list[dict[str, Any]] = []
-
-    def on_sweep_complete(sweep_idx: int, sweep_val: float, fleet_results: FleetResults) -> None:
-        """Handle completed sweep: save results and update summary."""
-        summary = calculate_fleet_summary(fleet_results)
-        results_summary.append({
-            "sweep_value": sweep_val,
-            "param": param_name,
-            "self_consumption_ratio": summary.fleet_self_consumption_ratio,
-            "total_generation_kwh": summary.total_generation_kwh,
-            "total_consumption_kwh": summary.total_demand_kwh,
-            "grid_import_kwh": summary.total_grid_import_kwh,
-            "grid_export_kwh": summary.total_grid_export_kwh,
-        })
-
-        # Save individual result if output_dir specified
-        if output_dir is not None:
-            if param is not None:
-                output_file = output_dir / f"{param}_{sweep_val:.4f}.csv"
-            else:
-                output_file = output_dir / f"multiplier_{sweep_val:.4f}.csv"
-            _export_fleet_results(fleet_results, output_file)
-
-    with create_fleet_progress() as progress:
+    sweep_results: dict[int, FleetResults] = {}
+    with create_fleet_progress(cli) as progress:
         task = progress.add_task(
             f"Simulating {n_sweeps} sweeps ({total_homes} total homes)...",
             total=total_homes
         )
+        for index, fleet_results in cli.runner.simulate_each(
+            fleets, start_date, end_date, progress=_homes_done_on(progress, task)
+        ):
+            sweep_results[index] = fleet_results
+            if output_dir is not None:
+                _export_sweep_point(output_dir, param_name, labels[index], fleet_results)
 
-        result_iter = simulate_multi_sweep_iter(
-            sweep_configs, start_date, end_date,
-            parallel=not sequential, max_workers=workers
-        )
-
-        # Wrap iterator to update progress
-        def progress_iter() -> Any:
-            for item in result_iter:
-                progress.update(task, advance=1)
-                yield item
-
-        collect_multi_sweep_results(
-            sweep_configs,
-            progress_iter(),
-            on_sweep_complete=on_sweep_complete,
-        )
-
-    # Sort results by sweep value for consistent output
-    results_summary.sort(key=lambda x: x["sweep_value"])
+    results_summary = [
+        _sweep_summary_row(param_name, sweep_value, sweep_results[index])
+        for index, (sweep_value, _) in enumerate(sweep_points)
+    ]
 
     # Print summary table
-    _print_sweep_summary(results_summary)
+    _print_sweep_summary(labels, results_summary)
 
     # Save summary CSV
     if output_dir is not None:
         summary_df = pd.DataFrame(results_summary)
         summary_file = output_dir / "sweep_summary.csv"
         summary_df.to_csv(summary_file, index=False)
-        print_success(f"Sweep summary saved to {summary_file}")
+        print_success(cli, f"Sweep summary saved to {summary_file}")
 
 
-def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
-    """Print sweep summary table."""
+@dataclass(frozen=True)
+class _KnobAxis:
+    """A --param sweep of a knob that edits homes: each point is the document's one scenario with the knob set to the point's value."""
+
+    knob: Knob
+
+    @property
+    def label(self) -> str:
+        """The knob's canonical name, which names each point and its output file."""
+        return self.knob.name
+
+    def scenarios(self, document: dict[str, Any], values: Iterable[float]) -> list[tuple[float, ScenarioConfig]]:
+        """Each of *values* with the scenario *document* reads as, its placeholders at their defaults, and the knob set to that value."""
+        scenario = parse_scenario(substitute_config_variables(document))
+        return [(value, self.knob.apply(scenario, value)) for value in values]
+
+
+@dataclass(frozen=True)
+class _VariableAxis:
+    """A --param sweep of a variable: each point is the scenario the document reads as once the point's value replaces ${name}."""
+
+    name: str
+
+    @property
+    def label(self) -> str:
+        """The variable's name, which names each point and its output file."""
+        return self.name
+
+    def scenarios(self, document: dict[str, Any], values: Iterable[float]) -> list[tuple[float, ScenarioConfig]]:
+        """Each of *values* with the scenario *document* reads as once that value replaces ${name}."""
+        return [
+            (value, parse_scenario(substitute_config_variables(document, {self.name: value})))
+            for value in values
+        ]
+
+
+_SweepAxis = _KnobAxis | _VariableAxis
+
+
+def _param_sweep(
+    raw_config: dict[str, Any],
+    param: str,
+    min_val: Optional[float],
+    max_val: Optional[float],
+    steps: int,
+    mode: SweepMode,
+) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
+    """The label of the axis param names, its spec, and each sweep value with the scenario the axis builds from raw_config for it."""
+    if min_val is None or max_val is None:
+        raise ConfigurationError("CLI sweep requires --min and --max values")
+    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
+    axis = _sweep_axis(raw_config, param)
+    return axis.label, sweep_spec, axis.scenarios(raw_config, sweep_spec.get_values())
+
+
+def _sweep_axis(document: dict[str, Any], name: str) -> _SweepAxis:
+    """The axis --param *name* sweeps: the knob it names, else the variable of *document* it names.
+
+    Raises:
+        ConfigurationError: If *name* names both a knob and a variable of *document*, or
+            neither, listing the document's variables and the knobs fleet sweep sweeps;
+            or if it names a knob that edits no home.
+    """
+    variables = config_variables(document)
+    is_knob = is_knob_name(name)
+    is_variable = name in variables
+    if is_knob and is_variable:
+        raise ConfigurationError(
+            f"--param {name!r} names both the knob {knob_named(name).name!r} and the document's variable "
+            f"${{{name}}}; rename the variable to sweep it, or remove it to sweep the knob"
+        )
+    if is_knob:
+        return _KnobAxis(_home_knob_named(name))
+    if is_variable:
+        return _VariableAxis(name)
+    held = f"its variables: {', '.join(repr(each) for each in variables)}" if variables else "it holds no variables"
+    raise ConfigurationError(
+        f"--param {name!r} names no knob and no variable of the document; {held}; {_SWEPT_KNOBS}"
+    )
+
+
+def _home_knob_named(name: str) -> Knob:
+    """The knob *name* names, which must be one of _HOME_KNOBS, the knobs fleet sweep sweeps and lists.
+
+    Raises:
+        ConfigurationError: If the knob edits no home, so every point would
+            simulate the same fleet, naming it, what it sets and the knobs
+            fleet sweep sweeps.
+    """
+    knob = knob_named(name)
+    if knob not in _HOME_KNOBS:
+        raise ConfigurationError(
+            f"--param {name!r} names the knob {knob.name!r}, which sets {knob.target.value} and no home's "
+            f"simulation, so every point would simulate the same fleet; {_SWEPT_KNOBS}"
+        )
+    return knob
+
+
+def _yaml_sweep(
+    raw_config: Mapping[str, Any],
+) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
+    """The name of the sweep, the swept_parameter_path of its field, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the scenario that sweep builds for it."""
+    found = detect_fleet_sweep_spec(raw_config)
+    if found is None:
+        raise ConfigurationError(
+            "No sweep spec found in config. "
+            "Use --param for CLI sweep or add type: sweep to multiplier."
+        )
+    placement, sweep_spec = found
+    return swept_parameter_path(placement), sweep_spec, parse_sweep_scenarios(raw_config)
+
+
+def _sweep_bounds(
+    points: list[tuple[float, ScenarioConfig]],
+    *,
+    start: Optional[datetime],
+    end: Optional[datetime],
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The start and end every point of the sweep simulates over, which is its document's period with each flag replacing only its own day.
+
+    Every point holds that one period: a YAML sweep reads the document's blocks once, a ${VAR} stands only for a number, which is neither a day nor a timezone, and a knob edits homes, the SEG rate or finance, never the period or location.
+    """
+    return with_window_options(points[0][1], start=start, end=end).simulation_bounds()
+
+
+def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:
+    """A progress sink that shows the homes finished as task's completed count on progress."""
+
+    def homes_done(done: int, total: int) -> None:
+        progress.update(task, completed=done)
+
+    return homes_done
+
+
+def _export_sweep_point(output_dir: Path, param_name: str, value_label: str, fleet_results: FleetResults) -> None:
+    """Export a completed sweep point, labelled value_label, to its CSV under output_dir."""
+    _export_fleet_results(fleet_results, output_dir / f"{param_name}_{value_label}.csv")
+
+
+def _sweep_summary_row(
+    param_name: str, sweep_value: float, fleet_results: FleetResults
+) -> dict[str, Any]:
+    """The summary row of the sweep point at sweep_value: its fleet's self-consumption ratio and energy totals."""
+    summary = calculate_fleet_summary(fleet_results)
+    return {
+        "sweep_value": sweep_value,
+        "param": param_name,
+        "self_consumption_ratio": summary.fleet_self_consumption_ratio,
+        "total_generation_kwh": summary.total_generation_kwh,
+        "total_consumption_kwh": summary.total_demand_kwh,
+        "grid_import_kwh": summary.total_grid_import_kwh,
+        "grid_export_kwh": summary.total_grid_export_kwh,
+    }
+
+
+def _print_sweep_summary(labels: Iterable[str], results: list[dict[str, Any]]) -> None:
+    """Print sweep summary table: each point's row of results under its label."""
     table = Table(title="Sweep Results Summary")
     table.add_column("Value", justify="right")
     table.add_column("Self-Consumption", justify="right")
@@ -491,9 +540,9 @@ def _print_sweep_summary(results: list[dict[str, Any]]) -> None:
     table.add_column("Import (kWh)", justify="right")
     table.add_column("Export (kWh)", justify="right")
 
-    for r in results:
+    for label, r in zip(labels, results, strict=True):
         table.add_row(
-            f"{r['sweep_value']:.4f}",
+            label,
             f"{r['self_consumption_ratio']:.1%}",
             f"{r['total_generation_kwh']:.1f}",
             f"{r['grid_import_kwh']:.1f}",

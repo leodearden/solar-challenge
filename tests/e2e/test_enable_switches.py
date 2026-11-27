@@ -12,8 +12,6 @@ from playwright.sync_api import Locator, Page, expect
 
 from tests.e2e._home_form import open_tab
 
-pytestmark = pytest.mark.e2e
-
 
 def _assert_switch_shows_and_hides(
     switch: Locator, settings: Locator, *, flipped_by: Locator | None = None

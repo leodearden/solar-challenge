@@ -5,8 +5,13 @@ The web guards read the classes the dashboard applies through
 dashboard_applied_classes_by_source, so a source it skips or misreads goes unchecked by
 every guard. tests/_dashboard_sources.py's templates and scripts are the files the content
 globs of tailwind.config.js select, so a glob it misreads or cannot expand leaves files
-Tailwind scans unchecked by every guard.
+Tailwind scans unchecked by every guard. The palettes guard reads the token file's tailwind
+roles through tailwind_role_palettes, so a role it skips, misnames or lets another overwrite
+goes unchecked, and the role each class applies through tailwind_role_named_by, so a role it
+credits with another's class passes unapplied.
 """
+
+import json
 
 import pytest
 
@@ -19,6 +24,8 @@ from tests._dashboard_sources import (
     dashboard_template_sources,
     files_by_content_glob,
     tailwind_content_globs,
+    tailwind_role_named_by,
+    tailwind_role_palettes,
 )
 
 
@@ -140,3 +147,58 @@ def test_the_dashboard_templates_and_scripts_are_the_files_tailwind_scans() -> N
         "narrow the glob that selects them.\n"
         f"read but not scanned: {' '.join(sorted(set(read) - set(scanned)))}"
     )
+
+
+def test_tailwind_role_palettes_key_each_role_by_the_palette_name_its_classes_write_in_section_order() -> None:
+    """A grouped role is keyed by its group's key and its own joined by hyphens, at any depth, as
+    Tailwind names a nested colour; each value is the built-in palette the role names."""
+    section = {
+        "primary": "amber",
+        "status": {"running": "amber", "failed": "red"},
+        "card": {"header": {"pv": "teal"}},
+    }
+
+    assert list(tailwind_role_palettes(section).items()) == [
+        ("primary", "amber"),
+        ("status-running", "amber"),
+        ("status-failed", "red"),
+        ("card-header-pv", "teal"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [pytest.param(5, id="number"), pytest.param(["amber"], id="array"), pytest.param(None, id="null")],
+)
+def test_tailwind_role_palettes_refuse_a_value_neither_a_palette_name_nor_a_group_naming_its_dotted_path(
+    value: object,
+) -> None:
+    with pytest.raises(ValueError) as refusal:
+        tailwind_role_palettes({"status": {"running": value}})
+
+    assert "tailwind.status.running" in str(refusal.value)
+    assert json.dumps(value) in str(refusal.value)
+
+
+def test_tailwind_role_palettes_refuse_two_roles_keyed_alike_naming_both_dotted_paths() -> None:
+    """A status-running role beside the status group's running role: Tailwind would name both
+    colours status-running, so one palette would silently replace the other."""
+    with pytest.raises(ValueError) as refusal:
+        tailwind_role_palettes({"status-running": "green", "status": {"running": "amber"}})
+
+    assert "tailwind.status-running" in str(refusal.value)
+    assert "tailwind.status.running" in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    ("css_class", "role"),
+    [
+        pytest.param("bg-component-pv-50", "component-pv", id="the longer of two roles its name ends with"),
+        pytest.param("dark:text-pv-400", "pv", id="a role under a variant"),
+        pytest.param("bg-sky-500", None, id="no role"),
+    ],
+)
+def test_tailwind_role_named_by_reads_the_longest_role_a_class_names_a_shade_of(
+    css_class: str, role: str | None
+) -> None:
+    assert tailwind_role_named_by(css_class, ["pv", "component-pv"]) == role

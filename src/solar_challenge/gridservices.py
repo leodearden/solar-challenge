@@ -10,21 +10,34 @@ Key public symbols:
 * :class:`EventWindow` — frozen dataclass describing *when* grid-service events
   can occur (months, weekdays, hours), with a :meth:`~EventWindow.mask` helper
   that returns a boolean :class:`pandas.Series` selecting in-window timesteps.
+* :class:`GridServicesBand` — the one low / central / high uncertainty-band
+  vocabulary, whose :meth:`~GridServicesBand.parse` refuses any other value.
+* :class:`DeliveryBaseline` — the one operational / capacity delivery-baseline
+  vocabulary, whose :meth:`~DeliveryBaseline.parse` refuses any other value.
 * :class:`GridServicesRateBand` — frozen dataclass holding per-event availability
-  and utilisation rates for one uncertainty band.
+  and utilisation rates, and a flat rate per kW of battery discharge power per
+  year, for one uncertainty band.
 * :class:`GridServicesRateBands` — frozen container for the three canonical
   (low / central / high) bands with a :meth:`~GridServicesRateBands.resolve`
   helper.
-* :data:`GRID_SERVICES_RATE_BANDS` — module-level constant (sibling to
-  :data:`~solar_challenge.flex.FLEX_VALUE_BANDS`).
+* :data:`GRID_SERVICES_RATE_BANDS` — module-level constant holding every
+  grid-services rate per band.
 * :func:`resolve_grid_services_rate_band` — convenience helper delegating to
   the module constant.
 * :data:`DEFAULT_EVENT_WINDOWS` — default winter-weekday-16:00-19:00 schedule
   per PRD open-Q4.
 * :class:`GridServicesEventsConfig` — frozen dataclass combining band selection,
-  event windows, aggregator share, and utilisation factor.
-* :func:`compute_fleet_spare_capacity_kw` — per-event-window firm spare
-  dispatchable battery capacity (kW) summed across the fleet.
+  event windows, aggregator share, and utilisation factor; its
+  :meth:`~GridServicesEventsConfig.annual_income_gbp` prices a simulated fleet.
+* :class:`NoGridServices` — frozen pricing value under which a fleet earns no
+  grid-services income.
+* :class:`FlatGridServices` — frozen pricing value paying a flat rate per kW of
+  installed battery discharge power per year.
+* :data:`GridServicesModel` — the union of the three pricing values, each of
+  which prices a simulated fleet with ``annual_income_gbp(fleet_results)``.
+* :func:`compute_fleet_spare_capacity_kw` — per event window, the mean over
+  event days of the fleet's daily firm spare dispatchable battery capacity (kW),
+  under a named delivery baseline.
 * :class:`GridServicesAtEvents` — frozen dataclass holding the banded
   availability + utilisation income breakdown returned by
   :func:`compute_grid_services_at_events`.
@@ -33,16 +46,84 @@ Key public symbols:
   :class:`GridServicesAtEvents` breakdown.
 """
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+import math
+import warnings
+from dataclasses import dataclass, fields
+from enum import StrEnum
+from typing import TYPE_CHECKING, NamedTuple, Optional, TypeAlias, TypeVar
 
+import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
-from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import (
+    NON_NEGATIVE,
+    POSITIVE,
+    UNIT_INTERVAL,
+    Interval,
+    as_finite_float,
+    as_whole_number,
+    as_whole_numbers,
+    read_field,
+)
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
+    from solar_challenge.home import SimulationResults
+
+
+# ---------------------------------------------------------------------------
+# GridServicesBand + DeliveryBaseline: the word-valued fields' vocabularies
+# ---------------------------------------------------------------------------
+
+
+_Word = TypeVar("_Word", bound=StrEnum)
+
+
+def _member_named(vocabulary: type[_Word], value: object, *, what: str) -> _Word:
+    """The member of *vocabulary* that *value* names: a member's value, exactly, or a member itself.
+
+    Every word-valued field's ``parse`` reads through this one refusal.
+
+    Raises:
+        ConfigurationError: If *value* is anything else; the message names
+            *what*, the members' values in order and *value*.
+    """
+    if isinstance(value, str):
+        try:
+            return vocabulary(value)
+        except ValueError:
+            pass
+    raise ConfigurationError.must_be(
+        what, f"one of {', '.join(member.value for member in vocabulary)}", got=value
+    )
+
+
+class GridServicesBand(StrEnum):
+    """The three uncertainty bands every grid-services rate is quoted in, from low to high."""
+
+    LOW = "low"
+    CENTRAL = "central"
+    HIGH = "high"
+
+    @classmethod
+    def parse(cls, value: object, *, what: str) -> "GridServicesBand":
+        """Return the band *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, what=what)
+
+
+class DeliveryBaseline(StrEnum):
+    """How an event's delivery is measured: operational, the increment above the battery's own discharge, as NESO's DFS measures it; capacity, the battery's whole window discharge, as NGED baselines domestic storage."""
+
+    OPERATIONAL = "operational"
+    CAPACITY = "capacity"
+
+    @classmethod
+    def parse(cls, value: object, *, what: str) -> "DeliveryBaseline":
+        """Return the baseline *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, what=what)
 
 
 # ---------------------------------------------------------------------------
@@ -52,10 +133,10 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class GridServicesRateBand:
-    """Per-event capacity-at-events rate decomposition for one uncertainty band.
+    """One uncertainty band's grid-services rates: per event, and flat per kW of battery discharge power per year.
 
-    Mirrors :class:`~solar_challenge.flex.FlexibilityValueBand` in structure
-    but is specific to the capacity-at-events pricing model.
+    Capacity-at-events pricing reads the per-event rates; flat pricing reads
+    the flat rate.
 
     Attributes:
         availability_gbp_per_kw_per_event: Availability payment per kW of
@@ -63,30 +144,20 @@ class GridServicesRateBand:
         utilisation_gbp_per_mwh: Utilisation payment per MWh of actual energy
             dispatched during events (£/MWh).
         provenance: Source reference for these rates.
+        flat_gbp_per_kw_per_year: Flat payment per kW of installed battery
+            discharge power per year (£/kW/yr); >= 0 and finite.
     """
 
     availability_gbp_per_kw_per_event: float
     utilisation_gbp_per_mwh: float
     provenance: str = ""
+    flat_gbp_per_kw_per_year: float = 0.0
 
     def __post_init__(self) -> None:
-        """Validate non-negativity.
-
-        .. note::
-            For now this class intentionally raises ``ValueError`` rather than
-            ``ConfigurationError``, as :class:`~solar_challenge.flex.FlexibilityValueBand`
-            does; docs/prds/errors-leaf.md (contract C4) plans the conversion of both.
-        """
-        if self.availability_gbp_per_kw_per_event < 0:
-            raise ValueError(
-                "availability_gbp_per_kw_per_event must be non-negative, "
-                f"got {self.availability_gbp_per_kw_per_event}"
-            )
-        if self.utilisation_gbp_per_mwh < 0:
-            raise ValueError(
-                f"utilisation_gbp_per_mwh must be non-negative, "
-                f"got {self.utilisation_gbp_per_mwh}"
-            )
+        """Read the three rates through number_fields as finite numbers of at least 0, holding the floats read."""
+        read_field(self, "availability_gbp_per_kw_per_event", as_finite_float, NON_NEGATIVE)
+        read_field(self, "utilisation_gbp_per_mwh", as_finite_float, NON_NEGATIVE)
+        read_field(self, "flat_gbp_per_kw_per_year", as_finite_float, NON_NEGATIVE)
 
 
 @dataclass(frozen=True)
@@ -103,36 +174,35 @@ class GridServicesRateBands:
     central: GridServicesRateBand
     high: GridServicesRateBand
 
-    def resolve(self, band: str) -> GridServicesRateBand:
+    def resolve(self, band: GridServicesBand) -> GridServicesRateBand:
         """Return the band matching *band*.
 
         Args:
-            band: One of ``"low"``, ``"central"``, ``"high"``.
+            band: A :class:`GridServicesBand`; its value string
+                (``"low"``, ``"central"`` or ``"high"``) is read alike at
+                runtime.
 
         Returns:
             The matching :class:`GridServicesRateBand`.
 
         Raises:
-            ValueError: If *band* is not a known name.
+            ConfigurationError: If *band* is not a band (a ValueError).
         """
-        if band == "low":
-            return self.low
-        if band == "central":
-            return self.central
-        if band == "high":
-            return self.high
-        raise ValueError(
-            f"Unknown grid-services rate band '{band}'. Available: high, central, low"
-        )
+        match GridServicesBand.parse(band, what="grid-services rate band"):
+            case GridServicesBand.LOW:
+                return self.low
+            case GridServicesBand.CENTRAL:
+                return self.central
+            case GridServicesBand.HIGH:
+                return self.high
 
 
-# PRD open-Q2: default band rates to be calibrated in a tuning task.
-# Seeded near the flat-rate neighbourhood (central £12/kW/yr ≈ £1/kW/event
-# for ~12 events/yr).  Availability is per-kW per event; utilisation is per MWh
-# dispatched during the event.
+# The two columns are independent calibrations of the same bands (docs/cost-recovery-finance-model.md §8.1).
 _RATE_PROVENANCE = (
-    "PRD docs/prds/enhanced-grid-services-capacity-at-events.md open-Q2 "
-    "(calibrated defaults; tuning task to follow)"
+    "per-event rates: PRD docs/prds/enhanced-grid-services-capacity-at-events.md open-Q2 "
+    "(calibrated defaults; tuning task to follow); "
+    "flat rates: consulting 2026-06-16-flexibility-value-buildability-model.md §1.1 "
+    "+ docs/prds/flexibility-value-finance-integration.md §6"
 )
 
 GRID_SERVICES_RATE_BANDS: GridServicesRateBands = GridServicesRateBands(
@@ -140,34 +210,38 @@ GRID_SERVICES_RATE_BANDS: GridServicesRateBands = GridServicesRateBands(
         availability_gbp_per_kw_per_event=0.50,
         utilisation_gbp_per_mwh=30.0,
         provenance=_RATE_PROVENANCE,
+        flat_gbp_per_kw_per_year=1.5,
     ),
     central=GridServicesRateBand(
         availability_gbp_per_kw_per_event=1.00,
         utilisation_gbp_per_mwh=60.0,
         provenance=_RATE_PROVENANCE,
+        flat_gbp_per_kw_per_year=12.0,
     ),
     high=GridServicesRateBand(
         availability_gbp_per_kw_per_event=2.00,
         utilisation_gbp_per_mwh=120.0,
         provenance=_RATE_PROVENANCE,
+        flat_gbp_per_kw_per_year=48.0,
     ),
 )
 
 
-def resolve_grid_services_rate_band(band: str) -> GridServicesRateBand:
+def resolve_grid_services_rate_band(band: GridServicesBand) -> GridServicesRateBand:
     """Validate *band* and return the corresponding :class:`GridServicesRateBand`.
 
     Delegates to :meth:`GRID_SERVICES_RATE_BANDS.resolve`.
 
     Args:
-        band: One of ``"low"``, ``"central"``, ``"high"``.
+        band: A :class:`GridServicesBand`; its value string (``"low"``,
+            ``"central"`` or ``"high"``) is read alike at runtime.
 
     Returns:
         The matching :class:`GridServicesRateBand` from
         :data:`GRID_SERVICES_RATE_BANDS`.
 
     Raises:
-        ValueError: If *band* is not a known key.
+        ConfigurationError: If *band* is not a band (a ValueError).
     """
     return GRID_SERVICES_RATE_BANDS.resolve(band)
 
@@ -185,7 +259,10 @@ class EventWindow:
 
     Specifies *when* capacity-at-events payments can be earned: the set of
     eligible calendar months, week-days (ISO Monday=0), and clock hours, plus
-    aggregate statistics used by the γ income formula.
+    aggregate statistics used by the capacity-at-events income formula.
+
+    months, weekdays and hours are each read as a tuple of whole numbers, so a
+    list is held as the tuple of its elements.
 
     Attributes:
         months: Tuple of eligible months (1=Jan … 12=Dec).
@@ -193,8 +270,10 @@ class EventWindow:
         hours: Tuple of eligible hours (0 … 23); uses 24-hour clock, so
             ``hours=(16, 17, 18)`` selects 16:xx, 17:xx, and 18:xx only
             (19:00 is excluded).
-        events_per_year: Expected number of activation events per year.
-        event_hours: Duration of each activation event in hours.
+        events_per_year: Expected number of activation events per year, a
+            whole number greater than 0.
+        event_hours: Duration of each activation event in hours, a finite
+            number greater than 0.
     """
 
     months: tuple[int, ...]
@@ -204,33 +283,18 @@ class EventWindow:
     event_hours: float
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation."""
+        """Read every field through number_fields, holding what it read, then refuse an empty months, weekdays or hours, raising ConfigurationError."""
+        read_field(self, "months", as_whole_numbers, Interval(1, 12))
+        read_field(self, "weekdays", as_whole_numbers, Interval(0, 6))
+        read_field(self, "hours", as_whole_numbers, Interval(0, 23))
+        read_field(self, "events_per_year", as_whole_number, POSITIVE)
+        read_field(self, "event_hours", as_finite_float, POSITIVE)
         if not self.months:
             raise ConfigurationError("EventWindow.months must be a non-empty tuple")
         if not self.weekdays:
             raise ConfigurationError("EventWindow.weekdays must be a non-empty tuple")
         if not self.hours:
             raise ConfigurationError("EventWindow.hours must be a non-empty tuple")
-        if any(m < 1 or m > 12 for m in self.months):
-            raise ConfigurationError(
-                f"EventWindow.months values must be in 1..12, got {self.months}"
-            )
-        if any(d < 0 or d > 6 for d in self.weekdays):
-            raise ConfigurationError(
-                f"EventWindow.weekdays values must be in 0..6, got {self.weekdays}"
-            )
-        if any(h < 0 or h > 23 for h in self.hours):
-            raise ConfigurationError(
-                f"EventWindow.hours values must be in 0..23, got {self.hours}"
-            )
-        if self.events_per_year <= 0:
-            raise ConfigurationError(
-                f"EventWindow.events_per_year must be > 0, got {self.events_per_year}"
-            )
-        if self.event_hours <= 0.0:
-            raise ConfigurationError(
-                f"EventWindow.event_hours must be > 0, got {self.event_hours}"
-            )
 
     def mask(self, index: pd.DatetimeIndex) -> pd.Series:
         """Return a boolean Series selecting in-window timesteps.
@@ -245,7 +309,7 @@ class EventWindow:
         """
         arr = (
             index.month.isin(self.months)
-            & index.weekday.isin(self.weekdays)
+            & index.day_of_week.isin(self.weekdays)
             & index.hour.isin(self.hours)
         )
         return pd.Series(arr, index=index)
@@ -273,7 +337,9 @@ class GridServicesEventsConfig:
     """Configuration for the capacity-at-events grid-services pricing model.
 
     Attributes:
-        band: Uncertainty band name (``"low"``, ``"central"``, or ``"high"``).
+        band: Uncertainty band, held as the :class:`GridServicesBand` it
+            names; its value string (``"low"``, ``"central"`` or ``"high"``)
+            is read as that member.
         event_windows: Tuple of :class:`EventWindow` objects describing when
             activation events can occur.
         aggregator_share: Fraction of gross income paid to the aggregator;
@@ -286,47 +352,113 @@ class GridServicesEventsConfig:
         utilisation_gbp_per_mwh: Optional override for the utilisation rate
             (£/MWh).  If ``None``, the rate is taken from
             :data:`GRID_SERVICES_RATE_BANDS` via *band*.
+        delivery_baseline: How an event's delivery is measured, a
+            :class:`DeliveryBaseline` value (``"operational"`` or
+            ``"capacity"``).
     """
 
-    band: str = "central"
+    band: GridServicesBand = GridServicesBand.CENTRAL
     event_windows: tuple[EventWindow, ...] = DEFAULT_EVENT_WINDOWS
     aggregator_share: float = 0.25
     utilisation_factor: float = 0.6
     availability_gbp_per_kw_per_event: Optional[float] = None
     utilisation_gbp_per_mwh: Optional[float] = None
+    delivery_baseline: str = "operational"
 
     def __post_init__(self) -> None:
-        """Validate domain constraints, raising ConfigurationError on violation."""
-        _VALID_BANDS = frozenset({"low", "central", "high"})
-        if self.band not in _VALID_BANDS:
-            raise ConfigurationError(
-                f"GridServicesEventsConfig.band must be one of "
-                f"{sorted(_VALID_BANDS)}, got '{self.band}'"
-            )
+        """Read the numbers through number_fields, holding the floats read, and hold the band as the member it names, then refuse an unknown band, an unknown delivery baseline or no event windows, raising ConfigurationError."""
+        read_field(self, "aggregator_share", as_finite_float, Interval(0, 1, high_open=True))
+        read_field(self, "utilisation_factor", as_finite_float, UNIT_INTERVAL)
+        read_field(self, "availability_gbp_per_kw_per_event", as_finite_float, NON_NEGATIVE, optional=True)
+        read_field(self, "utilisation_gbp_per_mwh", as_finite_float, NON_NEGATIVE, optional=True)
+        object.__setattr__(self, "band", GridServicesBand.parse(self.band, what="GridServicesEventsConfig.band"))
+        DeliveryBaseline.parse(self.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline")
         if not self.event_windows:
             raise ConfigurationError(
                 "GridServicesEventsConfig.event_windows must be a non-empty tuple"
             )
-        if not (0.0 <= self.aggregator_share < 1.0):
-            raise ConfigurationError(
-                f"GridServicesEventsConfig.aggregator_share must be in [0, 1), "
-                f"got {self.aggregator_share}"
-            )
-        if not (0.0 <= self.utilisation_factor <= 1.0):
-            raise ConfigurationError(
-                f"GridServicesEventsConfig.utilisation_factor must be in [0, 1], "
-                f"got {self.utilisation_factor}"
-            )
-        if self.availability_gbp_per_kw_per_event is not None and self.availability_gbp_per_kw_per_event < 0:
-            raise ConfigurationError(
-                "GridServicesEventsConfig.availability_gbp_per_kw_per_event override "
-                f"must be >= 0, got {self.availability_gbp_per_kw_per_event}"
-            )
-        if self.utilisation_gbp_per_mwh is not None and self.utilisation_gbp_per_mwh < 0:
-            raise ConfigurationError(
-                "GridServicesEventsConfig.utilisation_gbp_per_mwh override "
-                f"must be >= 0, got {self.utilisation_gbp_per_mwh}"
-            )
+
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return the annual capacity-at-events income this configuration prices *fleet_results* at.
+
+        In £ per year, net of the aggregator share:
+        ``compute_grid_services_at_events(fleet_results, self).annual_income_gbp``,
+        priced on the same path without the displaced self-use that breakdown
+        also reports, so it reads no step length of the fleet's indices and
+        refuses no displaced self-use below 0.
+        """
+        per_window_totals = tuple(
+            _EventDayTotals.of(event_days) for event_days in _priced_event_days(fleet_results, self)
+        )
+        return float(sum(_net_income_per_window_gbp(self, per_window_totals)))
+
+
+# ---------------------------------------------------------------------------
+# The fleet's battery homes
+# ---------------------------------------------------------------------------
+
+
+def _battery_homes(
+    fleet_results: "FleetResults",
+) -> list[tuple["SimulationResults", BatteryConfig]]:
+    """Each home of *fleet_results* with a battery: its simulated results and its battery configuration, in fleet order.
+
+    A PV-only home (``battery_config is None``) has no battery to price.  A
+    length mismatch between ``per_home_results`` and ``home_configs`` raises
+    ValueError rather than truncating the fleet to the shorter list.
+    """
+    return [
+        (sim, home.battery_config)
+        for sim, home in zip(
+            fleet_results.per_home_results, fleet_results.home_configs, strict=True
+        )
+        if home.battery_config is not None
+    ]
+
+
+# ---------------------------------------------------------------------------
+# NoGridServices + FlatGridServices + GridServicesModel
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NoGridServices:
+    """The pricing under which a fleet earns no grid-services income."""
+
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return 0.0: no fleet earns grid-services income under this pricing."""
+        return 0.0
+
+
+@dataclass(frozen=True)
+class FlatGridServices:
+    """A flat grid-services rate per kW of installed battery discharge power per year.
+
+    Attributes:
+        income_per_kw_per_year_gbp: Income per kW of battery discharge power per
+            year, net of the aggregator share (£/kW/yr); > 0 and finite.  Zero
+            income is :class:`NoGridServices`.
+    """
+
+    income_per_kw_per_year_gbp: float
+
+    def __post_init__(self) -> None:
+        """Read the rate through number_fields as a finite number greater than 0, holding the float read."""
+        read_field(self, "income_per_kw_per_year_gbp", as_finite_float, POSITIVE)
+
+    def annual_income_gbp(self, fleet_results: "FleetResults") -> float:
+        """Return the rate × the installed discharge power of the fleet's batteries, in £ per year.
+
+        The power is the sum of ``battery_config.max_discharge_kw`` over the
+        homes of *fleet_results* that have a battery.
+        """
+        return self.income_per_kw_per_year_gbp * sum(
+            battery_config.max_discharge_kw
+            for _, battery_config in _battery_homes(fleet_results)
+        )
+
+
+GridServicesModel: TypeAlias = NoGridServices | FlatGridServices | GridServicesEventsConfig
 
 
 # ---------------------------------------------------------------------------
@@ -334,86 +466,297 @@ class GridServicesEventsConfig:
 # ---------------------------------------------------------------------------
 
 
+def _span_sums(
+    series: pd.Series, start: npt.NDArray[np.intp], stop: npt.NDArray[np.intp]
+) -> npt.NDArray[np.float64]:
+    """The sum of *series* over each span of rows from *start* up to, not including, *stop*: 0.0 for an empty span."""
+    values: npt.NDArray[np.float64] = series.to_numpy(dtype=float)
+    cumulative = np.concatenate((np.zeros(1), np.cumsum(values)))
+    return np.take(cumulative, stop) - np.take(cumulative, start)
+
+
+def _home_event_days(
+    sim: "SimulationResults",
+    battery_config: BatteryConfig,
+    floor_kwh: float,
+    window: EventWindow,
+    baseline: DeliveryBaseline,
+) -> pd.DataFrame:
+    """One battery home's event days in *window*, indexed by date in date order.
+
+    Columns: first_row and last_row, the day's first and last in-window rows of
+    the home's index; avail_kw, its firm spare capacity under *baseline* (kW), by
+    :func:`compute_fleet_spare_capacity_kw`'s formulas.  A home whose index the
+    window never enters has no event day: the frame is empty.
+    """
+    index = sim.battery_soc.index
+    rows = np.flatnonzero(window.mask(index).to_numpy())
+    above_floor = sim.battery_soc.to_numpy(dtype=float) - floor_kwh
+    days = (
+        pd.DataFrame(
+            {
+                "above_floor": above_floor[rows],
+                "discharge": sim.battery_discharge.to_numpy(dtype=float)[rows],
+                "row": rows,
+            }
+        )
+        .groupby(index[rows].date)
+        .agg(
+            min_above_floor=("above_floor", "min"),
+            max_discharge=("discharge", "max"),
+            first_row=("row", "min"),
+            last_row=("row", "max"),
+        )
+    )
+    match baseline:
+        case DeliveryBaseline.OPERATIONAL:
+            headroom_kw = battery_config.max_discharge_kw - days["max_discharge"].to_numpy()
+            energy_kwh = days["min_above_floor"].to_numpy()
+        case DeliveryBaseline.CAPACITY:
+            headroom_kw = np.full(len(days), battery_config.max_discharge_kw)
+            energy_kwh = above_floor[days["first_row"].to_numpy()]
+    avail_kw = np.maximum(0.0, np.minimum(headroom_kw, energy_kwh / window.event_hours))
+    return days[["first_row", "last_row"]].assign(avail_kw=avail_kw)
+
+
+def _home_displaced_self_use(
+    sim: "SimulationResults", days: pd.DataFrame, event_hours: float
+) -> pd.DataFrame:
+    """One battery home's displaced evening self-use on each of its event *days*, as :func:`_home_event_days` gives them, indexed by date.
+
+    Columns: displaced_kwh, and displaced_gbp, its value (£).  A day's span is its
+    rows after its last in-window row and before the first later row that
+    charges, the next event day's first in-window row or the index's end,
+    whichever comes first.  The kWh is ``min(avail_kw × event_hours, the span's
+    discharge)``; its value is that kWh at the span's mean tariff, £0 for an empty
+    span.
+
+    Raises:
+        ValueError: If the home's index has no step length to read the span's
+            discharge at (:attr:`SimulationResults.window` refuses it: its rows
+            are not evenly spaced, or it has one row and no fixed-duration freq).
+    """
+    first_rows = days["first_row"].to_numpy()
+    last_rows = days["last_row"].to_numpy()
+    rows = len(sim.battery_discharge)
+    charging = np.flatnonzero(sim.battery_charge.to_numpy(dtype=float) > 0)
+    next_charge = np.append(charging, rows)[np.searchsorted(charging, last_rows, side="right")]
+    start = last_rows + 1
+    stop = np.minimum(next_charge, np.append(first_rows[1:], rows))
+    span_rows = stop - start
+    discharge_kwh = _span_sums(sim.battery_discharge, start, stop) * sim.window.step_hours
+    mean_rate = np.divide(
+        _span_sums(sim.tariff_rate, start, stop),
+        span_rows,
+        out=np.zeros(len(span_rows)),
+        where=span_rows > 0,
+    )
+    displaced_kwh = np.minimum(days["avail_kw"].to_numpy() * event_hours, discharge_kwh)
+    return pd.DataFrame(
+        {"displaced_kwh": displaced_kwh, "displaced_gbp": displaced_kwh * mean_rate},
+        index=days.index,
+    )
+
+
+def _fleet_day_sums(home_days: list[pd.DataFrame], column: str) -> tuple[float, ...]:
+    """The fleet's total of *column* on each date of *home_days*, each one home's figures per event date: the sum over the homes on the sorted union of their dates, a home lacking a date adding 0 to it."""
+    if not home_days:
+        return ()
+    return tuple(pd.concat([days[column] for days in home_days]).groupby(level=0).sum().tolist())
+
+
+def _mean_or_zero(values: tuple[float, ...]) -> float:
+    """The mean of *values*; 0.0 when there are none."""
+    return sum(values) / len(values) if values else 0.0
+
+
+class _DisplacedSelfUse(NamedTuple):
+    """The fleet's evening self-use an event in one window displaces.
+
+    Attributes:
+        kwh_per_event: Its mean over the window's event days (kWh).
+        gbp_per_year: Its value: the mean over the event days, times the
+            window's events per year (£).
+    """
+
+    kwh_per_event: float
+    gbp_per_year: float
+
+
+@dataclass(frozen=True, eq=False)
+class _PerHomeEventDays:
+    """Each battery home's results and its event days in one event window, as :func:`_home_event_days` gives them, in fleet order.
+
+    Compared by identity, since a generated == would compare the homes' frames
+    element by element.
+
+    Attributes:
+        window: The event window.
+        homes: Each battery home's results and its event days in the window.
+    """
+
+    window: EventWindow
+    homes: tuple[tuple["SimulationResults", pd.DataFrame], ...]
+
+    @property
+    def observed(self) -> bool:
+        """Whether the window has an event day: some battery home's simulated index enters it."""
+        return any(not days.empty for _, days in self.homes)
+
+
+@dataclass(frozen=True)
+class _EventDayTotals:
+    """One event window's fleet firm spare capacity on each of its event days, in date order.
+
+    The event days are the union of the battery homes' event dates in the window; a
+    home lacking a date adds 0 to it.
+
+    Attributes:
+        window: The event window.
+        avail_kw: The fleet's firm spare capacity on each event day, A(d) (kW).
+    """
+
+    window: EventWindow
+    avail_kw: tuple[float, ...]
+
+    @classmethod
+    def of(cls, event_days: _PerHomeEventDays) -> "_EventDayTotals":
+        """Sum *event_days*' avail_kw over its homes on each event day."""
+        return cls(
+            window=event_days.window,
+            avail_kw=_fleet_day_sums([days for _, days in event_days.homes], "avail_kw"),
+        )
+
+    @property
+    def mean_avail_kw(self) -> float:
+        """The mean of A(d) over the event days, the capacity the pricing books (kW); 0.0 with no event day."""
+        return _mean_or_zero(self.avail_kw)
+
+    def avail_on_share_of_days_kw(self, percent: int) -> float:
+        """The capacity available on at least *percent* % of the event days (kW): the ⌈percent·n / 100⌉-th largest of the n values of A(d); 0.0 with no event day.
+
+        The rank is computed in whole numbers, so no rounding of percent·n / 100 can
+        move it; an interpolated percentile is never taken.
+        """
+        if not self.avail_kw:
+            return 0.0
+        rank = -(-percent * len(self.avail_kw) // 100)
+        return sorted(self.avail_kw, reverse=True)[rank - 1]
+
+
+def _displaced_self_use(event_days: _PerHomeEventDays) -> _DisplacedSelfUse:
+    """The fleet's evening self-use an event in *event_days*' window displaces, from each home-day's (:func:`_home_displaced_self_use`); 0.0 each with no event day.
+
+    Only the breakdown computes it: it reads every row of each home's discharge,
+    charge and tariff, and its index's step length.
+
+    Raises:
+        ValueError: If a battery home's index has no step length.
+    """
+    if not event_days.observed:
+        return _DisplacedSelfUse(kwh_per_event=0.0, gbp_per_year=0.0)
+    home_days = [
+        _home_displaced_self_use(sim, days, event_days.window.event_hours)
+        for sim, days in event_days.homes
+    ]
+    return _DisplacedSelfUse(
+        kwh_per_event=_mean_or_zero(_fleet_day_sums(home_days, "displaced_kwh")),
+        gbp_per_year=_mean_or_zero(_fleet_day_sums(home_days, "displaced_gbp"))
+        * event_days.window.events_per_year,
+    )
+
+
+def _per_home_event_days(
+    battery_homes: list[tuple["SimulationResults", BatteryConfig]],
+    windows: tuple[EventWindow, ...],
+    baseline: DeliveryBaseline,
+) -> tuple[_PerHomeEventDays, ...]:
+    """Each of *windows*' battery homes' event days over *battery_homes* under *baseline*, in window order.
+
+    The formulas are :func:`compute_fleet_spare_capacity_kw`'s.
+    """
+    # A battery's SOC floor depends on its configuration alone: computed once, not per window.
+    floors = [
+        (sim, battery_config, battery_config.soc_envelope().min_soc_kwh)
+        for sim, battery_config in battery_homes
+    ]
+    return tuple(
+        _PerHomeEventDays(
+            window,
+            tuple(
+                (sim, _home_event_days(sim, battery_config, floor_kwh, window, baseline))
+                for sim, battery_config, floor_kwh in floors
+            ),
+        )
+        for window in windows
+    )
+
+
 def compute_fleet_spare_capacity_kw(
     fleet_results: "FleetResults",
     windows: tuple["EventWindow", ...],
+    delivery_baseline: str = "operational",
 ) -> tuple[float, ...]:
-    """Compute firm spare dispatchable battery capacity (kW) per event window.
+    """Compute firm spare dispatchable battery capacity (kW) per event window: the mean over its event days of the fleet's daily firm spare capacity.
 
-    For each event window, sums across the fleet the firm spare battery
-    capacity derived solely from observable per-timestep SOC and net discharge
-    series — no purpose-attribution of the underlying dispatch is required.
+    The capacity is derived solely from observable per-timestep SOC and net
+    discharge series — no purpose-attribution of the underlying dispatch is
+    required.  An event day of window *w* is a calendar date, in the home's index's
+    own timezone, holding at least one of *w*'s timesteps.
 
-    **Formula** (per battery home, per window *w*):
+    **Formula** (per battery home, per event day *d* of window *w*, with
+    ``P = max_discharge_kw``, ``floor = battery_config.soc_envelope().min_soc_kwh`` and
+    ``h = w.event_hours``):
 
     .. code-block:: text
 
-        mask      = w.mask(sim.battery_soc.index)        # in-window bool Series
-        P_spare   = max_discharge_kw - max_{t in w}(battery_discharge)
-        E_spare   = min_{t in w}(battery_soc - min_soc_kwh)
-        avail(h)  = max(0.0, min(P_spare, E_spare / w.event_hours))
-        avail(w)  = Σ_h avail(h)
+        operational:  avail(home, d) = max(0, min(P − max_{t∈d∩w} discharge(t),
+                                                  min_{t∈d∩w}(soc(t) − floor) / h))
+        capacity:     avail(home, d) = max(0, min(P, (soc(t₀) − floor) / h)),
+                      t₀ the first timestep of d in w
+        A(d)        = Σ_home avail(home, d)
+        avail(w)    = mean over w's event days d of A(d)
 
-    The single ``max(0, min(P_spare, E_spare/event_hours))`` expression
-    satisfies:
+    *delivery_baseline* chooses the formula: ``"operational"`` counts the increment
+    above the battery's own discharge, as NESO's DFS measures delivery;
+    ``"capacity"`` counts the battery's whole window discharge, as NGED baselines
+    domestic storage (:class:`DeliveryBaseline`).
 
-    * **I1** — result is always ≥ 0 (the outer ``max(0,...)`` ensures this).
-    * **I2** — firmness: avail ≤ P_spare (inverter headroom throughout the
-      window) and ≤ E_spare / event_hours (energy deliverable throughout the
-      window without violating the SOC floor).
+    On every event day the ``max(0, min(...))`` expression satisfies:
 
-    **Skips** (handled transparently — contribute 0 to the sum):
+    * **I1** — the capacity is ≥ 0.
+    * **I2** — firmness: it is within that day's inverter headroom throughout the
+      window and within that day's energy above the floor over ``event_hours``.
+
+    **Skips** (contribute 0):
 
     * Homes with ``battery_config is None`` (PV-only homes in a heterogeneous
       fleet) — skipped entirely; they have no battery to dispatch.
-    * Windows absent from a home's index (``mask.any()`` is False) — skipped
-      to avoid reducing an empty Series (which would produce NaN).
+    * A date a home's index lacks — the home adds 0 to that date's A(d).  A window
+      no home's index enters has no event day and gives 0.0.
 
     Args:
         fleet_results: Simulation results for the fleet.  Accessed via
             ``fleet_results.per_home_results`` and ``fleet_results.home_configs``.
         windows: Tuple of :class:`EventWindow` objects; order is preserved in
             the output.
+        delivery_baseline: How an event's delivery is measured, a
+            :class:`DeliveryBaseline` value: ``"operational"`` (the default) or
+            ``"capacity"``.
 
     Returns:
         A :class:`tuple` of :class:`float` with one entry per window (in input
-        order).  Each value is the total firm spare dispatchable capacity in kW
-        across the fleet for that window.
-    """
-    # Pre-compute the SOC floor for each battery home once.  Battery construction
-    # is window-independent (min_soc_kwh depends only on the config), so computing
-    # it inside the window loop would redundantly allocate N_windows Battery objects
-    # per home.  We also collect (sim, battery_config) so the inner loop no longer
-    # needs to touch home_configs at all.
-    #
-    # strict=True (Python 3.10+): a length mismatch between per_home_results and
-    # home_configs raises ValueError immediately rather than silently truncating to
-    # the shorter list and under-counting spare capacity.
-    home_floors: list[Any] = []
-    for sim, home_cfg in zip(
-        fleet_results.per_home_results, fleet_results.home_configs, strict=True
-    ):
-        battery_config: Optional[BatteryConfig] = home_cfg.battery_config
-        if battery_config is None:
-            continue  # PV-only home: no battery to dispatch
-        home_floors.append((sim, battery_config, Battery(battery_config).min_soc_kwh))
+        order): the mean over the window's event days of the fleet's daily firm
+        spare capacity, in kW.
 
-    avails: list[float] = []
-    for window in windows:
-        total = 0.0
-        for sim, battery_config, min_soc_kwh in home_floors:
-            mask = window.mask(sim.battery_soc.index)
-            # Guard: skip if window is entirely absent from this home's index
-            # (avoids NaN from reducing an empty Series)
-            if not bool(mask.any()):
-                continue
-            soc_w = sim.battery_soc[mask]
-            dis_w = sim.battery_discharge[mask]
-            p_spare = battery_config.max_discharge_kw - float(dis_w.max())
-            e_spare = float((soc_w - min_soc_kwh).min())
-            total += max(0.0, min(p_spare, e_spare / window.event_hours))
-        avails.append(float(total))
-    return tuple(avails)
+    Raises:
+        ConfigurationError: If *delivery_baseline* is not a baseline (a ValueError).
+    """
+    baseline = DeliveryBaseline.parse(delivery_baseline, what="delivery_baseline")
+    return tuple(
+        _EventDayTotals.of(event_days).mean_avail_kw
+        for event_days in _per_home_event_days(_battery_homes(fleet_results), windows, baseline)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -426,34 +769,178 @@ class GridServicesAtEvents:
     """Banded availability + utilisation income breakdown from a grid-services event model.
 
     Returned by :func:`compute_grid_services_at_events`.  All income figures are
-    **net** of the aggregator share (i.e. the householder-side income).
+    **net** of the aggregator share: the CBS's grid-services revenue, which
+    :func:`~solar_challenge.projection.project_multi_year` books into fleet revenue.
 
     Attributes:
         annual_income_gbp: Total annual grid-services income across all event
             windows (£/year).  Equals ``sum(per_window_income_gbp)``.
-        per_window_avail_kw: Per-window firm spare dispatchable capacity (kW),
-            in the same order as the :attr:`GridServicesEventsConfig.event_windows`
-            tuple.  Sourced directly from
-            :func:`compute_fleet_spare_capacity_kw`.
+        per_window_avail_kw: Per-window firm spare dispatchable capacity (kW):
+            the mean over the window's event days of the fleet's daily total, in
+            the same order as the :attr:`GridServicesEventsConfig.event_windows`
+            tuple; the figures :func:`compute_fleet_spare_capacity_kw` gives for
+            the same fleet, windows and delivery baseline.
         per_window_income_gbp: Per-window net income (£), in window order.
             Each entry is the net (post-aggregator-share) availability +
             utilisation income for that window.
+        per_window_avail_p50_kw: Per-window capacity available on at least 50%
+            of event days (kW), in window order: the ⌈0.5·n⌉-th largest of the
+            window's n fleet daily totals; 0.0 for a window with no event day.
+        per_window_avail_p90_kw: Per-window capacity available on at least 90%
+            of event days (kW), in window order: the ⌈0.9·n⌉-th largest fleet
+            daily total; 0.0 for a window with no event day.
+        per_window_displaced_self_use_kwh_per_event: Per-window evening
+            self-use an event displaces (kWh), in window order: per home and
+            event day, ``min(avail × event_hours, the discharge after the window
+            until the next recharge, the next event day's window or the index
+            end)``, summed over homes and averaged over event days.  A reported
+            figure: neither *annual_income_gbp* nor *per_window_income_gbp*
+            subtracts it.
+        per_window_displaced_import_gbp_per_year: Per-window value of that
+            displaced self-use (£/year), in window order: each home-day's
+            displaced kWh at the mean tariff over its span, summed over homes,
+            averaged over event days and multiplied by ``events_per_year``.  A
+            home simulated without a tariff (``tariff_rate`` 0) adds £0, and one
+            whose import price is below 0 over its span adds a value below 0.
+            The householders import it; neither income figure subtracts it.
 
-    .. note::
-        ``sum(per_window_income_gbp) == annual_income_gbp`` is a design
-        invariant.  Consumers (**δ**, **ε**) must NOT re-apply
-        ``(1 - aggregator_share)`` to the per-window tuple — it has already
-        been applied.
+    Construction raises ValueError for a breakdown of no event window, a
+    per-window field without one entry per event window, a NaN figure, a
+    capacity, energy or income below 0, and an *annual_income_gbp* that is not
+    ``sum(per_window_income_gbp)``.
+    Consumers must NOT re-apply ``(1 - aggregator_share)`` to the per-window
+    tuple — it has already been applied.
     """
 
     annual_income_gbp: float
     per_window_avail_kw: tuple[float, ...]
     per_window_income_gbp: tuple[float, ...]
+    per_window_avail_p50_kw: tuple[float, ...]
+    per_window_avail_p90_kw: tuple[float, ...]
+    per_window_displaced_self_use_kwh_per_event: tuple[float, ...]
+    per_window_displaced_import_gbp_per_year: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        """Refuse no event window, a per-window field without one entry per window, a NaN figure, a capacity, energy or income below 0, and a total other than the window sum."""
+        windows = len(self.per_window_avail_kw)
+        if windows == 0:
+            raise ValueError(
+                "GridServicesAtEvents prices at least one event window, as GridServicesEventsConfig requires: "
+                f"got per_window_avail_kw={self.per_window_avail_kw!r}"
+            )
+        misfits = [f"{name}={entries!r}" for name in _PER_WINDOW_FIELDS if len(entries := getattr(self, name)) != windows]
+        if misfits:
+            raise ValueError(
+                f"GridServicesAtEvents holds one entry per event window in each per-window field, {windows} as "
+                f"per_window_avail_kw={self.per_window_avail_kw!r} does: got {', '.join(misfits)}"
+            )
+        figures = [("annual_income_gbp", "annual_income_gbp", self.annual_income_gbp)] + [
+            (name, f"{name}[{index}]", value)
+            for name in _PER_WINDOW_FIELDS
+            for index, value in enumerate(getattr(self, name))
+        ]
+        refused = [
+            f"{label}={value!r}"
+            for name, label, value in figures
+            if math.isnan(value) or (value < 0.0 and name not in _IMPORT_PRICE_SIGNED_FIELDS)
+        ]
+        if refused:
+            raise ValueError(
+                "GridServicesAtEvents' figures are each a number, its capacities, energies and incomes each at "
+                f"least 0: got {', '.join(refused)}"
+            )
+        total = sum(self.per_window_income_gbp)
+        if self.annual_income_gbp != total:
+            raise ValueError(
+                f"GridServicesAtEvents.annual_income_gbp must be sum(per_window_income_gbp), {total!r} for "
+                f"{self.per_window_income_gbp!r}, got {self.annual_income_gbp!r}"
+            )
+
+
+_PER_WINDOW_FIELDS = tuple(field.name for field in fields(GridServicesAtEvents) if field.name != "annual_income_gbp")
+_IMPORT_PRICE_SIGNED_FIELDS = frozenset({"per_window_displaced_import_gbp_per_year"})
 
 
 # ---------------------------------------------------------------------------
 # compute_grid_services_at_events
 # ---------------------------------------------------------------------------
+
+
+def _warn_unobserved_windows(
+    battery_homes: list[tuple["SimulationResults", BatteryConfig]],
+    per_window_event_days: tuple[_PerHomeEventDays, ...],
+) -> None:
+    """Issue one UserWarning for each window of *per_window_event_days* that no battery home's simulated index enters.
+
+    Such a window contributes £0.  A fleet without a battery home has nothing to
+    observe and does not warn.  The warning is attributed to the caller of the
+    public pricing that reached it through :func:`_priced_event_days`:
+    :func:`compute_grid_services_at_events` or
+    :meth:`GridServicesEventsConfig.annual_income_gbp`.  Its text names only the
+    window and the span of the battery homes' indices.
+    """
+    unobserved = [
+        event_days.window for event_days in per_window_event_days if not event_days.observed
+    ]
+    if not battery_homes or not unobserved:
+        return
+    first = min(sim.battery_soc.index.min() for sim, _ in battery_homes)
+    last = max(sim.battery_soc.index.max() for sim, _ in battery_homes)
+    for window in unobserved:
+        warnings.warn(
+            f"Event window months={window.months}, weekdays={window.weekdays}, "
+            f"hours={window.hours} has no timestep in the fleet's simulated index, "
+            f"{first} to {last}, so it contributes £0 to the capacity-at-events income",
+            UserWarning,
+            stacklevel=4,
+        )
+
+
+def _priced_event_days(
+    fleet_results: "FleetResults", cfg: "GridServicesEventsConfig"
+) -> tuple[_PerHomeEventDays, ...]:
+    """Each of *cfg*'s event windows' battery-home event days under *cfg*'s delivery baseline, in window order, warning of each window no battery home's index enters (:func:`_warn_unobserved_windows`)."""
+    battery_homes = _battery_homes(fleet_results)
+    baseline = DeliveryBaseline.parse(
+        cfg.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline"
+    )
+    per_window_event_days = _per_home_event_days(battery_homes, cfg.event_windows, baseline)
+    _warn_unobserved_windows(battery_homes, per_window_event_days)
+    return per_window_event_days
+
+
+def _net_income_per_window_gbp(
+    cfg: "GridServicesEventsConfig", per_window_totals: tuple[_EventDayTotals, ...]
+) -> tuple[float, ...]:
+    """The net income *cfg* prices each window of *per_window_totals* at, booking its mean firm capacity (£ a year), in window order: :func:`compute_grid_services_at_events`' rates and formula."""
+    band = resolve_grid_services_rate_band(cfg.band)
+
+    # Override precedence: use cfg field if explicitly set, else fall back to band.
+    avail_rate = (
+        cfg.availability_gbp_per_kw_per_event
+        if cfg.availability_gbp_per_kw_per_event is not None
+        else band.availability_gbp_per_kw_per_event
+    )
+    util_rate = (
+        cfg.utilisation_gbp_per_mwh
+        if cfg.utilisation_gbp_per_mwh is not None
+        else band.utilisation_gbp_per_mwh
+    )
+
+    per_window_net: list[float] = []
+    for totals in per_window_totals:
+        window, avail = totals.window, totals.mean_avail_kw
+        avail_income = avail * avail_rate * window.events_per_year
+        util_income = (
+            avail
+            * cfg.utilisation_factor
+            * window.event_hours
+            * (util_rate / 1000.0)
+            * window.events_per_year
+        )
+        gross = avail_income + util_income
+        per_window_net.append(gross * (1.0 - cfg.aggregator_share))
+    return tuple(per_window_net)
 
 
 def compute_grid_services_at_events(
@@ -463,8 +950,9 @@ def compute_grid_services_at_events(
     """Compute banded availability + utilisation income from grid-services events.
 
     Applies the capacity-at-events pricing formula per event window using the
-    firm spare capacity from :func:`compute_fleet_spare_capacity_kw` (β) and
-    the rates from :data:`GRID_SERVICES_RATE_BANDS` (resolved via *cfg.band*).
+    firm spare capacity from :func:`compute_fleet_spare_capacity_kw` under
+    *cfg.delivery_baseline* (the mean over the window's event days) and the rates
+    from :data:`GRID_SERVICES_RATE_BANDS` (resolved via *cfg.band*).
 
     **Rate resolution** (override precedence):
 
@@ -492,6 +980,9 @@ def compute_grid_services_at_events(
     NOT re-apply ``(1 - aggregator_share)`` — see
     :class:`GridServicesAtEvents`.
 
+    A window that no battery home's simulated index enters contributes £0 and
+    is named in a ``UserWarning``, once per call.
+
     Args:
         fleet_results: Simulation results for the fleet.
         cfg: Grid-services configuration (band, event windows, aggregator share,
@@ -500,40 +991,47 @@ def compute_grid_services_at_events(
     Returns:
         A :class:`GridServicesAtEvents` with:
 
-        - ``per_window_avail_kw`` — firm spare capacity per window (from β).
+        - ``per_window_avail_kw`` — firm spare capacity per window (from :func:`compute_fleet_spare_capacity_kw`).
         - ``per_window_income_gbp`` — net income per window (in window order).
         - ``annual_income_gbp`` — sum of per-window net income.
+        - ``per_window_avail_p50_kw`` and ``per_window_avail_p90_kw`` — the
+          capacity available on at least 50% and 90% of each window's event days.
+        - ``per_window_displaced_self_use_kwh_per_event`` and
+          ``per_window_displaced_import_gbp_per_year`` — the evening self-use an
+          event displaces and its value, reported beside the income, which is
+          gross of them.
+
+    Raises:
+        ValueError: If a battery home's index has no step length to read its
+            displaced self-use at (:attr:`SimulationResults.window` refuses it:
+            its rows are not evenly spaced, or it has one row and no
+            fixed-duration freq).  :func:`compute_fleet_spare_capacity_kw` and
+            :meth:`GridServicesEventsConfig.annual_income_gbp`, which report no
+            displaced self-use, read no step length.  Or if a battery home's
+            ``battery_discharge`` below 0 after an event window makes a
+            displaced self-use below 0, which :class:`GridServicesAtEvents`
+            refuses.
     """
-    avails = compute_fleet_spare_capacity_kw(fleet_results, cfg.event_windows)
-    band = resolve_grid_services_rate_band(cfg.band)
-
-    # Override precedence: use cfg field if explicitly set, else fall back to band.
-    avail_rate = (
-        cfg.availability_gbp_per_kw_per_event
-        if cfg.availability_gbp_per_kw_per_event is not None
-        else band.availability_gbp_per_kw_per_event
+    per_window_event_days = _priced_event_days(fleet_results, cfg)
+    per_window_totals = tuple(
+        _EventDayTotals.of(event_days) for event_days in per_window_event_days
     )
-    util_rate = (
-        cfg.utilisation_gbp_per_mwh
-        if cfg.utilisation_gbp_per_mwh is not None
-        else band.utilisation_gbp_per_mwh
-    )
-
-    per_window_net: list[float] = []
-    for window, avail in zip(cfg.event_windows, avails):
-        avail_income = avail * avail_rate * window.events_per_year
-        util_income = (
-            avail
-            * cfg.utilisation_factor
-            * window.event_hours
-            * (util_rate / 1000.0)
-            * window.events_per_year
-        )
-        gross = avail_income + util_income
-        per_window_net.append(gross * (1.0 - cfg.aggregator_share))
-
+    per_window_net = _net_income_per_window_gbp(cfg, per_window_totals)
+    displaced = [_displaced_self_use(event_days) for event_days in per_window_event_days]
     return GridServicesAtEvents(
         annual_income_gbp=float(sum(per_window_net)),
-        per_window_avail_kw=tuple(float(a) for a in avails),
-        per_window_income_gbp=tuple(per_window_net),
+        per_window_avail_kw=tuple(totals.mean_avail_kw for totals in per_window_totals),
+        per_window_income_gbp=per_window_net,
+        per_window_avail_p50_kw=tuple(
+            totals.avail_on_share_of_days_kw(50) for totals in per_window_totals
+        ),
+        per_window_avail_p90_kw=tuple(
+            totals.avail_on_share_of_days_kw(90) for totals in per_window_totals
+        ),
+        per_window_displaced_self_use_kwh_per_event=tuple(
+            window_displaced.kwh_per_event for window_displaced in displaced
+        ),
+        per_window_displaced_import_gbp_per_year=tuple(
+            window_displaced.gbp_per_year for window_displaced in displaced
+        ),
     )

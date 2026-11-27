@@ -2,10 +2,13 @@
 
 import dataclasses
 import functools
+import math
+import operator
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
+from zoneinfo import ZoneInfo
 
 import pytest
 import pandas as pd
@@ -15,19 +18,25 @@ from solar_challenge.flow import (
     calculate_excess_pv,
     calculate_shortfall,
     simulate_timestep,
-    simulate_timestep_tou,
     validate_energy_balance,
     EnergyFlowResult,
 )
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.tariff import TariffConfig, TariffPeriod
-from solar_challenge.config import GridChargeConfig
+from solar_challenge.tariff import PRESET_RATES, TariffConfig, TariffPeriod
 from solar_challenge.dispatch import (
     DispatchDecision,
     DispatchStrategy,
+    GridChargeConfig,
     GridChargeContext,
     TOUOptimizedStrategy,
 )
+from tests._minutes_of_a_winter_day import MINUTES_OF_A_WINTER_DAY
+from tests._over_rounding_discharges import BATTERY_THEY_OVER_ROUND_ON, OVER_ROUNDING_DISCHARGES
+from tests._same_schedule_tariffs import (
+    NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
+    NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
+)
+from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 
 @pytest.fixture
@@ -252,8 +261,9 @@ class TestBatteryChargeFromExcess:
             battery=battery,
             timestep_minutes=60,
         )
-        # Charge limited to ~1 kW * 1 hour * efficiency
-        assert result.battery_charge <= 1.0 * 0.975 + 0.01
+        # The 1 kW limit for 1 hour drawn, 0.975 kWh of it stored
+        assert result.battery_charge == pytest.approx(1.0)
+        assert battery.soc_kwh == pytest.approx(1.975)
 
 
 class TestGridExport:
@@ -480,7 +490,7 @@ HOURLY_DEMAND_KW = [
 
 @pytest.fixture
 def economy7_tariff() -> TariffConfig:
-    """Economy 7 tariff (off-peak 0.09 @ 00:30-07:30, peak 0.25)."""
+    """Economy 7 tariff at its preset rates, off-peak 00:30-07:30."""
     return TariffConfig.economy_7()
 
 
@@ -496,8 +506,7 @@ def peak_ts() -> pd.Timestamp:
     return pd.Timestamp("2024-01-01 18:00")
 
 
-@pytest.fixture
-def grid_charge_battery() -> Battery:
+def _grid_charging_battery() -> Battery:
     """Battery with grid charging enabled; initial SOC below target so gap > 0."""
     config = BatteryConfig(
         capacity_kwh=5.0,
@@ -509,8 +518,14 @@ def grid_charge_battery() -> Battery:
     return Battery(config, initial_soc_kwh=2.0)
 
 
+@pytest.fixture
+def grid_charge_battery() -> Battery:
+    """A fresh _grid_charging_battery() for each test."""
+    return _grid_charging_battery()
+
+
 class _RecordingStrategy(DispatchStrategy):
-    """Test double: records the grid_charge_ctx passed in and returns a fixed decision."""
+    """Test double: records the timestep of each call and the last grid_charge_ctx passed in, checks none of its inputs, and returns a fixed decision."""
 
     def __init__(
         self,
@@ -524,6 +539,7 @@ class _RecordingStrategy(DispatchStrategy):
             grid_charge_kw=grid_charge_kw,
         )
         self.received_ctx: Optional[GridChargeContext] = None
+        self.received_timesteps: list[float] = []
 
     @property
     def name(self) -> str:
@@ -537,21 +553,22 @@ class _RecordingStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
-        """Record grid_charge_ctx and return the pre-configured decision."""
+        """Record timestep_minutes and grid_charge_ctx, and return the pre-configured decision."""
+        self.received_timesteps.append(timestep_minutes)
         self.received_ctx = grid_charge_ctx
         return self._decision
 
 
 # ---------------------------------------------------------------------------
-# simulate_timestep_tou grid-charge split accounting
+# TOUOptimizedStrategy on the tariff's clock: grid-charge split accounting
 # ---------------------------------------------------------------------------
 
-class TestSimulateTimestepTouGridCharge:
-    """Function-path grid-charge tests using real Economy 7 + GridChargeConfig.
+class TestTouOnTheTariffClockGridCharge:
+    """Grid-charge tests of TOUOptimizedStrategy on the tariff's clock, using real Economy 7 + GridChargeConfig.
 
     Tests (a) and (b) cover grid charging itself.
     Tests (c)-(e) are forward-/backward-compat guards.
@@ -561,17 +578,17 @@ class TestSimulateTimestepTouGridCharge:
         self, economy7_tariff: TariffConfig, off_peak_ts: pd.Timestamp, grid_charge_battery: Battery
     ) -> None:
         """(a) Cheap period, gen=demand=0: battery must charge from grid."""
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.battery_charge > 0, "Battery should charge from grid during cheap period"
         assert result.grid_export == pytest.approx(0.0)
-        # shortfall=0, discharge=0 → grid_import == grid_charge_stored == battery_charge
+        # shortfall=0, discharge=0 → grid_import == grid_charge_drawn == battery_charge
         assert result.grid_import == pytest.approx(result.battery_charge)
         assert validate_energy_balance(result)
 
@@ -584,11 +601,15 @@ class TestSimulateTimestepTouGridCharge:
             capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5, grid_charging=None
         )
         bat_ref = Battery(config_no_gc, initial_soc_kwh=2.0)
-        ref = simulate_timestep_tou(
-            generation_kw=1.0, demand_kw=0.5, battery=bat_ref,
-            timestamp=off_peak_ts, tariff=economy7_tariff, timestep_minutes=60,
+        ref = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=0.5,
+            battery=bat_ref,
+            timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
-        pv_charge_stored = ref.battery_charge  # ≈ 0.4875 kWh (excess * 0.975)
+        pv_charge_drawn = ref.battery_charge  # 0.5 kWh: the battery draws the whole excess
 
         # Main run: grid charging enabled
         config_gc = BatteryConfig(
@@ -596,16 +617,20 @@ class TestSimulateTimestepTouGridCharge:
             grid_charging=GridChargeConfig(target_soc_fraction=0.9),
         )
         bat_gc = Battery(config_gc, initial_soc_kwh=2.0)
-        result = simulate_timestep_tou(
-            generation_kw=1.0, demand_kw=0.5, battery=bat_gc,
-            timestamp=off_peak_ts, tariff=economy7_tariff, timestep_minutes=60,
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=0.5,
+            battery=bat_gc,
+            timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         # Grid also topped up → total charge > pv-only
-        assert result.battery_charge > pv_charge_stored, \
+        assert result.battery_charge > pv_charge_drawn, \
             "With grid charging, battery_charge should exceed pv-only charge"
         # Export: only the PV portion reduces export (split formula)
         excess_kwh = (1.0 - 0.5) * (60 / 60)
-        assert result.grid_export == pytest.approx(max(0.0, excess_kwh - pv_charge_stored))
+        assert result.grid_export == pytest.approx(max(0.0, excess_kwh - pv_charge_drawn))
         assert validate_energy_balance(result)
 
     def test_max_charge_kw_not_exceeded(
@@ -617,16 +642,16 @@ class TestSimulateTimestepTouGridCharge:
             grid_charging=GridChargeConfig(target_soc_fraction=0.9),
         )
         battery = Battery(config, initial_soc_kwh=2.0)
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=5.0,   # well above max_charge_kw=2.5
             demand_kw=0.0,
             battery=battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         duration_hours = 60.0 / 60.0
-        # Total stored energy / dt must not exceed the hardware charge-rate limit
+        # Total drawn energy / dt must not exceed the hardware charge-rate limit
         assert result.battery_charge / duration_hours <= 2.5 + 1e-9
         assert validate_energy_balance(result)
 
@@ -639,9 +664,13 @@ class TestSimulateTimestepTouGridCharge:
         battery = Battery(config, initial_soc_kwh=2.0)
         timestamps = pd.date_range("2024-01-01 00:00", periods=24, freq="h")
         for ts, gen, dem in zip(timestamps, HOURLY_GENERATION_KW, HOURLY_DEMAND_KW):
-            result = simulate_timestep_tou(
-                generation_kw=gen, demand_kw=dem, battery=battery,
-                timestamp=ts, tariff=economy7_tariff, timestep_minutes=60,
+            result = simulate_timestep(
+                generation_kw=gen,
+                demand_kw=dem,
+                battery=battery,
+                timestep_minutes=60,
+                timestamp=ts,
+                **on_the_tariff_s_clock(economy7_tariff),
             )
             assert validate_energy_balance(result), \
                 f"Energy balance violated at {ts} (gen={gen}, dem={dem})"
@@ -650,32 +679,37 @@ class TestSimulateTimestepTouGridCharge:
         """(e) grid_charging=None: exact backward-compatible values are preserved."""
         config = BatteryConfig.default_5kwh()   # no grid_charging field
         battery = Battery(config)               # initial SOC = midpoint = 2.5 kWh
-        result = simulate_timestep_tou(
+        tariff = TariffConfig.economy_7()
+        result = simulate_timestep(
             generation_kw=3.0,
             demand_kw=1.0,
             battery=battery,
-            timestamp=off_peak_ts,
-            tariff=TariffConfig.economy_7(),
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(tariff),
         )
-        # excess = 2 kWh; battery.charge(2.0, 60) = 2.0 * 0.975 = 1.95 kWh
-        # grid_export = max(0, 2.0 - 1.95) = 0.05 kWh; shortfall=0 → grid_import=0
-        assert result.battery_charge == pytest.approx(1.95)
-        assert result.grid_export == pytest.approx(0.05)
+        # excess = 2 kWh; the battery draws all of it, battery.charge(2.0, 60) = 2.0 kWh, storing 1.95
+        # grid_export = max(0, 2.0 - 2.0) = 0 kWh; shortfall=0 → grid_import=0
+        assert result.battery_charge == pytest.approx(2.0)
+        assert result.grid_export == pytest.approx(0.0)
         assert result.grid_import == pytest.approx(0.0)
         assert result.self_consumption == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
-# simulate_timestep grid-charge strategy path
+# simulate_timestep grid charging, seen by a recording strategy
 # ---------------------------------------------------------------------------
 
 class TestSimulateTimestepGridCharge:
-    """Strategy-path grid-charge tests using _RecordingStrategy stub.
+    """Grid-charge tests using the _RecordingStrategy stub.
 
     Tests (a)-(f) cover the tariff keyword argument of simulate_timestep.
     Test (c-i) covers the case where no tariff is given, so the grid-charge
     context stays None.
+    Test (g) pins the order in which simulate_timestep runs a decision's
+    charges: PV first, then the grid.
+    Test (h) pins the clock the context reads a zoned timestamp on: its own
+    wall clock, not UTC's.
     """
 
     def test_accepts_tariff_kwarg(
@@ -715,10 +749,10 @@ class TestSimulateTimestepGridCharge:
         )
         ctx = stub.received_ctx
         assert ctx is not None, "grid_charge_ctx should have been forwarded to strategy"
-        assert ctx.current_rate == pytest.approx(0.09)
-        assert ctx.peak_rate == pytest.approx(0.25)
+        assert ctx.current_rate == pytest.approx(PRESET_RATES["economy_7"].off_peak_rate)
+        assert ctx.peak_rate == pytest.approx(PRESET_RATES["economy_7"].peak_rate)
         assert ctx.is_cheap_period is True
-        assert ctx.target_soc_fraction == pytest.approx(0.9)
+        assert ctx.target_soc_kwh == pytest.approx(4.5)
         assert ctx.max_charge_kw == pytest.approx(2.5)
         assert ctx.charge_efficiency == pytest.approx(0.975)
         assert ctx.round_trip_efficiency == pytest.approx(0.975 * 0.975)
@@ -772,9 +806,9 @@ class TestSimulateTimestepGridCharge:
             strategy=stub,
             tariff=economy7_tariff,
         )
-        # grid_charge_stored = battery.charge(1.0, 60) = 1.0 * 0.975 = 0.975 kWh
+        # grid_charge_drawn = battery.charge(1.0, 60) = 1.0 kWh, 0.975 kWh of it stored
         assert result.battery_charge > 0
-        # pv_charge_stored=0 → battery_charge == grid_charge_stored == grid_import
+        # pv_charge_drawn=0 → battery_charge == grid_charge_drawn == grid_import
         assert result.battery_charge == pytest.approx(result.grid_import)
         assert result.grid_export == pytest.approx(0.0)
         assert validate_energy_balance(result)
@@ -812,9 +846,9 @@ class TestSimulateTimestepGridCharge:
             timestamp=off_peak_ts.to_pydatetime(),
             strategy=stub_gc, tariff=economy7_tariff,
         )
-        grid_charge_stored = result_gc.battery_charge  # pv_charge=0
+        grid_charge_drawn = result_gc.battery_charge  # pv_charge=0
         assert result_gc.grid_import == pytest.approx(
-            max(0.0, 0.0 - 0.0) + grid_charge_stored
+            max(0.0, 0.0 - 0.0) + grid_charge_drawn
         )
         assert validate_energy_balance(result_gc)
 
@@ -853,6 +887,69 @@ class TestSimulateTimestepGridCharge:
         assert result_none.grid_import == pytest.approx(result_omit.grid_import)
         assert result_none.self_consumption == pytest.approx(result_omit.self_consumption)
 
+    def test_a_decision_that_charges_from_pv_and_the_grid_stores_the_pv_charge_first_when_the_battery_cannot_take_both(
+        self,
+    ) -> None:
+        """(g) The PV charge runs before the grid charge, so when the battery has room for only part of the two, PV takes it and the grid stores nothing."""
+        battery = Battery(
+            BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5),
+            initial_soc_kwh=4.0,
+        )
+        stub = _RecordingStrategy(charge_kw=1.0, grid_charge_kw=1.0)
+
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=0.0,
+            battery=battery,
+            timestep_minutes=60,
+            strategy=stub,
+        )
+
+        assert result.grid_charge == 0.0
+        assert result.grid_import == 0.0
+        assert result.battery_soc == pytest.approx(battery.max_soc_kwh)
+        assert result.grid_export < 1.0
+
+    @pytest.mark.parametrize(
+        ("timestamp", "rate", "is_cheap"),
+        [
+            pytest.param(
+                datetime(2024, 6, 21, 0, 45, tzinfo=ZoneInfo("Europe/London")),
+                PRESET_RATES["economy_7"].off_peak_rate,
+                True,
+                id="00:45_BST_off_peak-is-23:45_UTC_peak",
+            ),
+            pytest.param(
+                datetime(2024, 6, 21, 7, 45, tzinfo=ZoneInfo("Europe/London")),
+                PRESET_RATES["economy_7"].peak_rate,
+                False,
+                id="07:45_BST_peak-is-06:45_UTC_off_peak",
+            ),
+        ],
+    )
+    def test_the_context_reads_a_zoned_timestamp_at_its_own_wall_clock_minute(
+        self,
+        economy7_tariff: TariffConfig,
+        grid_charge_battery: Battery,
+        timestamp: datetime,
+        rate: float,
+        is_cheap: bool,
+    ) -> None:
+        """(h) The context prices and classifies a zoned timestamp at its own wall-clock minute, which falls in the other Economy 7 period than its UTC instant's."""
+        stub = _RecordingStrategy()
+        simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestep_minutes=1.0,
+            timestamp=timestamp,
+            strategy=stub,
+            tariff=economy7_tariff,
+        )
+        ctx = stub.received_ctx
+        assert ctx is not None
+        assert (ctx.current_rate, ctx.is_cheap_period) == (rate, is_cheap)
+
 
 # ---------------------------------------------------------------------------
 # EnergyFlowResult.grid_charge field
@@ -885,13 +982,13 @@ class TestEnergyFlowResultGridCharge:
         the kWh added to the battery from the grid.
         """
         # No PV generation or demand → all battery charge must come from the grid
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge > 0.0, (
             "grid_charge should be > 0 during cheap period when grid_charging is set"
@@ -906,13 +1003,13 @@ class TestEnergyFlowResultGridCharge:
         grid_charge_battery: Battery,
     ) -> None:
         """(c-i) Peak period: grid_charge == 0.0 (no grid-charging in peak)."""
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge == pytest.approx(0.0)
 
@@ -921,18 +1018,18 @@ class TestEnergyFlowResultGridCharge:
         economy7_tariff: TariffConfig,
         off_peak_ts: pd.Timestamp,
     ) -> None:
-        """(c-ii) simulate_timestep_tou with grid_charging=None: grid_charge == 0.0."""
+        """(c-ii) TOUOptimizedStrategy on the tariff's clock with grid_charging=None: grid_charge == 0.0."""
         config = BatteryConfig(
             capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5, grid_charging=None
         )
         battery = Battery(config, initial_soc_kwh=2.0)
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge == pytest.approx(0.0)
 
@@ -964,13 +1061,13 @@ class TestEnergyFlowResultGridCharge:
             grid_charging=GridChargeConfig(target_soc_fraction=0.9),
         )
         battery = Battery(config, initial_soc_kwh=2.0)
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=1.0,
             demand_kw=0.5,
             battery=battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge <= result.battery_charge + 1e-9
 
@@ -981,13 +1078,13 @@ class TestEnergyFlowResultGridCharge:
         grid_charge_battery: Battery,
     ) -> None:
         """(d-ii) grid_charge <= grid_import (grid-charged energy is part of import)."""
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge <= result.grid_import + 1e-9
 
@@ -1002,14 +1099,14 @@ SPREAD_FREE_TARIFFS = [
         TariffConfig.economy_7(off_peak_rate=0.25, peak_rate=0.25),
         id="two_periods_one_rate",
     ),
-    # The float mean of these six rates is 0.10000000000000002, above the shared rate.
+    # Six periods at one rate: no minute's rate is below the peak rate, so none is cheap.
     pytest.param(
         TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
         id="six_periods_one_rate",
     ),
 ]
 
-# Mean rate 0.25, so the 0.30 day rate sits above it.
+# Its duration-weighted mean rate is 0.2583, so the 0.30 day rate sits above it.
 THREE_TIER_TARIFF = TariffConfig(
     periods=(
         TariffPeriod(start_time="00:00", end_time="07:00", rate_per_kwh=0.10, name="Night"),
@@ -1022,13 +1119,13 @@ THREE_TIER_TARIFF = TariffConfig(
 
 def _tou_shortfall_step(tariff: TariffConfig, timestamp: pd.Timestamp) -> EnergyFlowResult:
     """One TOU step with a 2 kW shortfall against a fresh default battery (2.5 kWh stored)."""
-    return simulate_timestep_tou(
+    return simulate_timestep(
         generation_kw=0.0,
         demand_kw=2.0,
         battery=Battery(BatteryConfig.default_5kwh()),
-        timestamp=timestamp,
-        tariff=tariff,
         timestep_minutes=60,
+        timestamp=timestamp,
+        **on_the_tariff_s_clock(tariff),
     )
 
 
@@ -1052,6 +1149,39 @@ class TestTouDispatchOnSpreadFreeTariff:
         assert tou.battery_discharge > 0.0
         assert dataclasses.asdict(tou) == pytest.approx(dataclasses.asdict(greedy))
 
+    @pytest.mark.parametrize(
+        ("generation_kw", "demand_kw"),
+        [
+            pytest.param(0.01, 0.03, id="short-by-0.02kW"),
+            pytest.param(
+                3.9243814029178457,
+                math.nextafter(3.9243814029178457, math.inf),
+                id="short-by-an-ulp-whose-energy-rounds-to-0",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
+    def test_a_sunlit_shortfall_minute_discharges_exactly_as_self_consumption(
+        self, tariff: TariffConfig, off_peak_ts: pd.Timestamp, generation_kw: float, demand_kw: float
+    ) -> None:
+        """Both dispatches ask the battery for the same shortfall power whenever demand exceeds generation, so their flows agree to the last digit."""
+        tou = simulate_timestep(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=Battery(BatteryConfig.default_5kwh()),
+            timestep_minutes=1.0,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(tariff),
+        )
+        greedy = simulate_timestep(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=Battery(BatteryConfig.default_5kwh()),
+            timestep_minutes=1.0,
+        )
+        assert greedy.battery_discharge > 0.0
+        assert dataclasses.astuple(tou) == dataclasses.astuple(greedy)
+
     @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
     def test_day_of_dispatch_matches_self_consumption(self, tariff: TariffConfig) -> None:
         """Every hour of a day, with the state of charge carried over, equals greedy dispatch."""
@@ -1061,13 +1191,13 @@ class TestTouDispatchOnSpreadFreeTariff:
         for ts, gen, dem in zip(
             timestamps, HOURLY_GENERATION_KW, HOURLY_DEMAND_KW, strict=True
         ):
-            tou = simulate_timestep_tou(
+            tou = simulate_timestep(
                 generation_kw=gen,
                 demand_kw=dem,
                 battery=tou_battery,
-                timestamp=ts,
-                tariff=tariff,
                 timestep_minutes=60,
+                timestamp=ts,
+                **on_the_tariff_s_clock(tariff),
             )
             greedy = simulate_timestep(
                 generation_kw=gen,
@@ -1085,13 +1215,13 @@ class TestTouDispatchOnSpreadFreeTariff:
         grid_charge_battery: Battery,
     ) -> None:
         """No spread to arbitrage, so a grid-charging battery below target is not topped up."""
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=off_peak_ts,
-            tariff=tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            **on_the_tariff_s_clock(tariff),
         )
         assert result.grid_charge == 0.0
 
@@ -1102,7 +1232,7 @@ class TestTouDispatchOnSpreadFreeTariff:
         off_peak_ts: pd.Timestamp,
         grid_charge_battery: Battery,
     ) -> None:
-        """The strategy path classifies periods the same way as the TOU function path."""
+        """The context simulate_timestep offers reports no cheap period."""
         stub = _RecordingStrategy()
         simulate_timestep(
             generation_kw=0.0,
@@ -1118,8 +1248,8 @@ class TestTouDispatchOnSpreadFreeTariff:
 
 
 class TestTouDispatchOnTieredTariff:
-    """Tariffs with a rate spread keep the mean-rate classification: TOU holds the
-    battery in cheap windows and discharges elsewhere.
+    """Tariffs with a rate spread keep the duration-weighted mean-rate classification:
+    TOU holds the battery in cheap windows and discharges elsewhere.
     """
 
     @pytest.mark.parametrize(
@@ -1156,41 +1286,118 @@ class TestTouDispatchOnTieredTariff:
         assert result.battery_discharge > 0.0
 
 
+_Step = Callable[[float, float, Battery, pd.Timestamp, TariffConfig], EnergyFlowResult]
+
+
+def _step_on_the_tariff_s_clock(
+    generation_kw: float, demand_kw: float, battery: Battery, minute: pd.Timestamp, tariff: TariffConfig
+) -> EnergyFlowResult:
+    return simulate_timestep(
+        generation_kw, demand_kw, battery, 1.0, minute, **on_the_tariff_s_clock(tariff)
+    )
+
+
+def _step_on_peak_hours(
+    generation_kw: float, demand_kw: float, battery: Battery, minute: pd.Timestamp, tariff: TariffConfig
+) -> EnergyFlowResult:
+    strategy = TOUOptimizedStrategy(peak_hours=[(16, 19)])
+    return simulate_timestep(
+        generation_kw, demand_kw, battery, 1.0, minute.to_pydatetime(), strategy, tariff=tariff
+    )
+
+
+def _winter_day_of_flows(step: _Step, tariff: TariffConfig) -> list[dict[str, float]]:
+    """Each minute's flows as a fresh _grid_charging_battery() steps through MINUTES_OF_A_WINTER_DAY, each hour's generation and demand held for its 60 minutes."""
+    battery = _grid_charging_battery()
+    return [
+        dataclasses.asdict(step(float(generation), float(demand), battery, minute, tariff))
+        for minute, generation, demand in zip(
+            MINUTES_OF_A_WINTER_DAY,
+            np.repeat(HOURLY_GENERATION_KW, 60),
+            np.repeat(HOURLY_DEMAND_KW, 60),
+            strict=True,
+        )
+    ]
+
+
+class TestDispatchFollowsTheTariffSchedule:
+    """Each minute is cheap when the tariff's is_cheap_at says so, so dispatch depends on the schedule, not its period list."""
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(TariffConfig.economy_7(), id="economy_7"),
+            pytest.param(NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS, id="night_day_peak_day"),
+        ],
+    )
+    def test_the_grid_charge_context_is_cheap_at_each_minute_the_tariff_is(
+        self, tariff: TariffConfig, grid_charge_battery: Battery
+    ) -> None:
+        stub = _RecordingStrategy()
+        cheap: dict[pd.Timestamp, bool] = {}
+        for minute in MINUTES_OF_A_WINTER_DAY:
+            simulate_timestep(
+                0.0, 0.0, grid_charge_battery, 1.0, minute.to_pydatetime(), stub, tariff=tariff
+            )
+            assert stub.received_ctx is not None
+            cheap[minute] = stub.received_ctx.is_cheap_period
+
+        assert cheap == {minute: tariff.is_cheap_at(minute) for minute in MINUTES_OF_A_WINTER_DAY}
+
+    @pytest.mark.parametrize(
+        "step",
+        [
+            pytest.param(_step_on_the_tariff_s_clock, id="tou_on_the_tariff_s_clock"),
+            pytest.param(_step_on_peak_hours, id="tou_on_peak_hours"),
+        ],
+    )
+    def test_one_schedule_as_four_or_five_periods_gives_the_same_flows(self, step: _Step) -> None:
+        four = _winter_day_of_flows(step, NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS)
+        five = _winter_day_of_flows(step, NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS)
+
+        assert any(flows["grid_charge"] > 0 for flows in five)
+        assert four == five
+
+
 # ---------------------------------------------------------------------------
 # A battery whose SOC an assigned limit has moved past
 # ---------------------------------------------------------------------------
 
-# Both entries discharge for a shortfall and charge from a surplus.
+_E7 = TariffConfig.economy_7()
+
+# Self-consumption, and TOU on Economy 7's clock at its 18:00 peak rate, both discharge for a shortfall and charge from a
+# surplus.
 SELF_CONSUMING_STEPS = [
-    pytest.param(simulate_timestep, id="simulate_timestep"),
+    pytest.param(simulate_timestep, id="self_consumption"),
     pytest.param(
         functools.partial(
-            simulate_timestep_tou,
+            simulate_timestep,
             timestamp=pd.Timestamp("2024-01-01 18:00"),
-            tariff=TariffConfig.economy_7(),
+            **on_the_tariff_s_clock(_E7),
         ),
-        id="simulate_timestep_tou-peak",
+        id="tou_on_the_tariff_s_clock-peak",
     ),
 ]
 
-# Both entries top a grid-charging battery up from the grid at Economy 7's 03:00 off-peak rate.
+# TOU on peak hours 07:00 to 24:00, and TOU on Economy 7's clock, both top a grid-charging battery up from the grid at
+# Economy 7's 03:00 off-peak rate.
 GRID_CHARGING_STEPS = [
     pytest.param(
         functools.partial(
             simulate_timestep,
             timestamp=datetime(2024, 1, 1, 3),
             strategy=TOUOptimizedStrategy(peak_hours=[(7, 24)]),
-            tariff=TariffConfig.economy_7(),
+            tariff=_E7,
         ),
-        id="simulate_timestep-tou_optimized",
+        id="tou_on_peak_hours-off_peak",
     ),
     pytest.param(
         functools.partial(
-            simulate_timestep_tou,
+            simulate_timestep,
             timestamp=pd.Timestamp("2024-01-01 03:00"),
-            tariff=TariffConfig.economy_7(),
+            **on_the_tariff_s_clock(_E7),
         ),
-        id="simulate_timestep_tou-off_peak",
+        id="tou_on_the_tariff_s_clock-off_peak",
     ),
 ]
 
@@ -1217,6 +1424,7 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
             "grid_import": 2.0,
             "battery_soc": 1.0,
             "grid_charge": 0.0,
+            "battery_export": 0.0,
         }
 
     @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
@@ -1236,6 +1444,7 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
             "grid_import": 0.0,
             "battery_soc": 4.0,
             "grid_charge": 0.0,
+            "battery_export": 0.0,
         }
 
     @pytest.mark.parametrize("step", GRID_CHARGING_STEPS)
@@ -1265,11 +1474,35 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
             "grid_import": 1.0,
             "battery_soc": 4.0,
             "grid_charge": 0.0,
+            "battery_export": 0.0,
         }
 
 
 # ---------------------------------------------------------------------------
-# A flow is an energy a step moved, so never negative
+# A battery's discharge is part of the self-consumption it supplies
+# ---------------------------------------------------------------------------
+
+class TestASunlessStepsDischargeIsPartOfItsSelfConsumption:
+    """With no PV, the battery's discharge is all the self-consumption a step has, so it cannot exceed it."""
+
+    @pytest.mark.parametrize(("demand_kw", "minutes"), OVER_ROUNDING_DISCHARGES)
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_the_battery_discharges_no_more_than_the_self_consumption_it_supplies(
+        self, step: Callable[..., EnergyFlowResult], demand_kw: float, minutes: float
+    ) -> None:
+        """On the battery each shortfall here was found on, its withdrawal, less the discharge losses, rounds an ulp above the energy asked for."""
+        result = step(
+            generation_kw=0.0,
+            demand_kw=demand_kw,
+            battery=Battery(BATTERY_THEY_OVER_ROUND_ON),
+            timestep_minutes=minutes,
+        )
+        assert result.battery_discharge > 0.0
+        assert result.battery_discharge <= result.self_consumption
+
+
+# ---------------------------------------------------------------------------
+# A flow is an energy a step moved, so a finite number at least 0
 # ---------------------------------------------------------------------------
 
 # EnergyFlowResult's flows, in field order; battery_soc is a level, not a flow.
@@ -1282,32 +1515,63 @@ FLOWS = (
     "grid_export",
     "grid_import",
     "grid_charge",
+    "battery_export",
 )
 
-NEGATIVE_OR_NAN = [pytest.param(-0.5, id="negative"), pytest.param(float("nan"), id="nan")]
+NOT_A_FINITE_NUMBER_AT_LEAST_0 = [
+    pytest.param(-0.5, id="negative"),
+    pytest.param(math.nan, id="nan"),
+    pytest.param(math.inf, id="infinity"),
+    pytest.param(-math.inf, id="negative-infinity"),
+]
 
 
-class TestEnergyFlowResultRefusesANegativeFlow:
-    """Each flow is an energy the timestep moved, so construction refuses one below 0 or NaN."""
+class TestEnergyFlowResultRefusesAFlowThatIsNotAFiniteNumberAtLeast0:
+    """Each flow is an energy the timestep moved, so construction refuses one that is not a finite number at least 0."""
 
     def test_every_field_but_battery_soc_is_a_flow(self) -> None:
         names = tuple(field.name for field in dataclasses.fields(EnergyFlowResult))
         assert tuple(name for name in names if name != "battery_soc") == FLOWS
 
     @pytest.mark.parametrize("flow", FLOWS)
-    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
-    def test_a_negative_or_nan_flow_is_refused_naming_it_and_its_value(
+    @pytest.mark.parametrize("value", NOT_A_FINITE_NUMBER_AT_LEAST_0)
+    def test_a_flow_that_is_not_a_finite_number_at_least_0_is_refused_naming_it_and_its_value(
         self, flow: str, value: float
     ) -> None:
         with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
             EnergyFlowResult(**{**dict.fromkeys(FLOWS, 0.0), "battery_soc": 0.0, flow: value})
 
-    @pytest.mark.parametrize("soc", NEGATIVE_OR_NAN)
-    def test_battery_soc_is_a_level_not_a_flow_so_one_below_0_or_nan_is_accepted(
-        self, soc: float
-    ) -> None:
+    def test_the_refusal_names_every_refused_flow_in_field_order_with_the_rule(self) -> None:
+        refusal = (
+            "EnergyFlowResult's flows are the energies its timestep moved, so each is a finite number at least 0: "
+            "got generation=inf, battery_charge=-0.5, grid_export=inf"
+        )
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$") as refused:
+            EnergyFlowResult(
+                **{
+                    **dict.fromkeys(FLOWS, 0.0),
+                    "battery_soc": 0.0,
+                    "generation": math.inf,
+                    "grid_export": math.inf,
+                    "battery_charge": -0.5,
+                }
+            )
+        assert refused.type is ValueError
+
+    @pytest.mark.parametrize("soc", NOT_A_FINITE_NUMBER_AT_LEAST_0)
+    def test_battery_soc_is_a_level_not_a_flow_so_any_number_is_accepted(self, soc: float) -> None:
         result = EnergyFlowResult(**dict.fromkeys(FLOWS, 0.0), battery_soc=soc)
         assert result.battery_soc == pytest.approx(soc, nan_ok=True)
+
+
+class TestEnergyFlowResultIsAFrozenValue:
+    """A step's flows are a frozen value, so a flow construction checked cannot be assigned after it."""
+
+    def test_refuses_a_field_assignment(self) -> None:
+        result = EnergyFlowResult(**dict.fromkeys(FLOWS, 0.0), battery_soc=0.0)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            result.grid_import = -0.5  # type: ignore[misc]
 
 
 class _BatteryReportingANegativeDischarge(Battery):
@@ -1318,8 +1582,34 @@ class _BatteryReportingANegativeDischarge(Battery):
         return -0.975
 
 
-class TestStepRefusesANegativeFlow:
-    """A step raises rather than return a flow below 0 or NaN, whether a battery reports it or a power brings it."""
+class _OverflowingPowers(NamedTuple):
+    """Finite powers that pass a step's input checks, but whose energy over two hours is beyond a float."""
+
+    generation_kw: float
+    demand_kw: float
+    infinite_flows: tuple[str, ...]
+    # How a battery's SOC after the step compares with its SOC before: the step charges it from the surplus, or
+    # discharges it into the shortfall, before it checks its flows.
+    soc_moved: Callable[[float, float], bool]
+
+
+# 1e308 kW for two hours is 2e308 kWh, beyond a float, so the step computes infinite flows.
+OVERFLOWING_POWERS = [
+    pytest.param(
+        _OverflowingPowers(1e308, 0.0, ("generation=inf", "grid_export=inf"), soc_moved=operator.gt),
+        id="generation-overflows",
+    ),
+    pytest.param(
+        _OverflowingPowers(0.0, 1e308, ("demand=inf", "grid_import=inf"), soc_moved=operator.lt),
+        id="demand-overflows",
+    ),
+]
+
+
+class TestStepRefusesAFlowThatIsNotAFiniteNumberAtLeast0:
+    """A step raises rather than return a flow that is not a finite number at least 0, one its battery reports or one
+    beyond a float.
+    """
 
     @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
     def test_a_battery_reporting_a_negative_discharge_makes_the_step_raise(
@@ -1332,50 +1622,138 @@ class TestStepRefusesANegativeFlow:
         assert "self_consumption=-0.975" in message
         assert "battery_discharge=-0.975" in message
 
-    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    @pytest.mark.parametrize("powers", OVERFLOWING_POWERS)
     @pytest.mark.parametrize(
-        ("power", "flow"), [("generation_kw", "generation"), ("demand_kw", "demand")]
-    )
-    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
-    def test_a_negative_or_nan_power_makes_the_step_raise_naming_its_flow(
-        self, step: Callable[..., EnergyFlowResult], power: str, flow: str, value: float
-    ) -> None:
-        """With no battery, no dispatch strategy checks the power first."""
-        powers = {"generation_kw": 0.0, "demand_kw": 0.0, power: value}
-        with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
-            step(**powers, battery=None, timestep_minutes=60)
-
-
-# ---------------------------------------------------------------------------
-# A timestep that is not finite
-# ---------------------------------------------------------------------------
-
-
-class TestStepWithATimestepThatIsNotFinite:
-    """A step refuses a NaN or infinite timestep, naming it, before its battery moves any energy."""
-
-    @pytest.mark.parametrize(
-        "timestep_minutes",
-        [pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")],
-    )
-    @pytest.mark.parametrize(
-        ("generation_kw", "demand_kw"),
+        "new_battery",
         [
-            pytest.param(2.0, 1.0, id="surplus-charges"),
-            pytest.param(1.0, 2.0, id="shortfall-discharges"),
+            pytest.param(lambda: None, id="no-battery"),
+            pytest.param(lambda: Battery(BatteryConfig.default_5kwh()), id="battery"),
         ],
     )
-    def test_the_step_refuses_the_timestep_and_leaves_the_battery_s_soc_unchanged(
-        self, generation_kw: float, demand_kw: float, timestep_minutes: float
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_a_step_whose_energy_overflows_a_float_raises_naming_each_infinite_flow(
+        self,
+        step: Callable[..., EnergyFlowResult],
+        new_battery: Callable[[], Optional[Battery]],
+        powers: _OverflowingPowers,
+    ) -> None:
+        with pytest.raises(ValueError) as refused:
+            step(
+                generation_kw=powers.generation_kw,
+                demand_kw=powers.demand_kw,
+                battery=new_battery(),
+                timestep_minutes=120,
+            )
+        message = str(refused.value)
+        for flow in powers.infinite_flows:
+            assert flow in message
+
+    @pytest.mark.parametrize("powers", OVERFLOWING_POWERS)
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_a_step_whose_energy_overflows_a_float_raises_after_its_battery_has_moved(
+        self, step: Callable[..., EnergyFlowResult], powers: _OverflowingPowers
     ) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
+        soc_before = battery.soc_kwh
+        with pytest.raises(ValueError):
+            step(
+                generation_kw=powers.generation_kw,
+                demand_kw=powers.demand_kw,
+                battery=battery,
+                timestep_minutes=120,
+            )
+        assert powers.soc_moved(battery.soc_kwh, soc_before)
+
+
+# ---------------------------------------------------------------------------
+# A timestep that is not positive and finite
+# ---------------------------------------------------------------------------
+
+NOT_POSITIVE_AND_FINITE_MINUTES = [
+    pytest.param(math.nan, id="nan"),
+    pytest.param(math.inf, id="inf"),
+    pytest.param(-math.inf, id="-inf"),
+    pytest.param(0.0, id="zero"),
+    pytest.param(-60.0, id="negative"),
+]
+
+# Every dispatch above, self-consuming at peak and grid-charging at Economy 7's off-peak.
+EVERY_STEP = SELF_CONSUMING_STEPS + GRID_CHARGING_STEPS
+
+STEP_POWERS = [
+    pytest.param(2.0, 1.0, id="surplus"),
+    pytest.param(1.0, 2.0, id="shortfall"),
+    pytest.param(1.0, 1.0, id="balanced"),
+]
+
+NEW_BATTERIES = [
+    pytest.param(lambda: Battery(BatteryConfig.default_5kwh()), id="battery"),
+    pytest.param(_grid_charging_battery, id="grid-charging-battery"),
+]
+
+
+class TestStepWithATimestepThatIsNotPositiveAndFinite:
+    """Every step refuses a timestep that is not positive and finite, naming it, before its battery moves any energy."""
+
+    @pytest.mark.parametrize("timestep_minutes", NOT_POSITIVE_AND_FINITE_MINUTES)
+    @pytest.mark.parametrize(("generation_kw", "demand_kw"), STEP_POWERS)
+    @pytest.mark.parametrize("step", EVERY_STEP)
+    def test_a_step_without_a_battery_refuses_the_timestep_naming_it(
+        self,
+        step: Callable[..., EnergyFlowResult],
+        generation_kw: float,
+        demand_kw: float,
+        timestep_minutes: float,
+    ) -> None:
+        refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            step(
+                generation_kw=generation_kw,
+                demand_kw=demand_kw,
+                battery=None,
+                timestep_minutes=timestep_minutes,
+            )
+
+    @pytest.mark.parametrize("timestep_minutes", NOT_POSITIVE_AND_FINITE_MINUTES)
+    @pytest.mark.parametrize(("generation_kw", "demand_kw"), STEP_POWERS)
+    @pytest.mark.parametrize("new_battery", NEW_BATTERIES)
+    @pytest.mark.parametrize("step", EVERY_STEP)
+    def test_a_step_with_a_battery_refuses_the_timestep_naming_it_and_leaves_the_soc_unchanged(
+        self,
+        step: Callable[..., EnergyFlowResult],
+        new_battery: Callable[[], Battery],
+        generation_kw: float,
+        demand_kw: float,
+        timestep_minutes: float,
+    ) -> None:
+        battery = new_battery()
         soc_kwh = battery.soc_kwh
-        refusal = f"must be positive and finite, got {timestep_minutes} minutes"
-        with pytest.raises(ValueError, match=re.escape(refusal)):
-            simulate_timestep(
+        refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            step(
                 generation_kw=generation_kw,
                 demand_kw=demand_kw,
                 battery=battery,
                 timestep_minutes=timestep_minutes,
             )
+        assert battery.soc_kwh == soc_kwh
+
+    @pytest.mark.parametrize("timestep_minutes", NOT_POSITIVE_AND_FINITE_MINUTES)
+    def test_simulate_timestep_refuses_the_timestep_naming_it_before_calling_a_strategy_of_the_consumer_s_own(
+        self, timestep_minutes: float
+    ) -> None:
+        """Unlike the built-in strategies, _RecordingStrategy checks none of its inputs, so the step's own check is all that refuses the timestep."""
+        strategy = _RecordingStrategy()
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_kwh = battery.soc_kwh
+        refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            simulate_timestep(
+                generation_kw=2.0,
+                demand_kw=1.0,
+                battery=battery,
+                timestep_minutes=timestep_minutes,
+                strategy=strategy,
+            )
+        assert strategy.received_timesteps == []
         assert battery.soc_kwh == soc_kwh

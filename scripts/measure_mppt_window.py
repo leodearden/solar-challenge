@@ -12,8 +12,8 @@ pv.py's own selection, once per sizing, and each distinct pick runs one
 year-long model chain: about twelve minutes in all. --dc-kw measures a few DC
 capacities for a quick partial run, e.g. `--dc-kw 3 4 5`. The CSV holds one row
 per sizing and configuration. tests/unit/test_measurement_scripts.py runs it
-offline on a one-day TMY at one capacity; the full run is not part of the test
-suite.
+offline on a one-day TMY at one capacity, and checks the power it holds strings
+at; the full run is not part of the test suite.
 """
 
 import argparse
@@ -22,7 +22,6 @@ import functools
 import itertools
 import math
 import sys
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,17 +36,19 @@ from solar_challenge.location import Location
 from solar_challenge.pv import (
     CecInverter,
     PVConfig,
+    ac_power_kw,
     candidate_cec_inverters,
     create_model_chain,
     create_model_chain_picking_from,
     create_pv_system,
+    run_model_chain,
     usable_cec_inverters,
 )
 from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
     DEFAULT_CACHE_DIR,
+    PvgisTmy,
     WeatherCache,
-    get_tmy_data,
-    set_weather_cache,
 )
 
 DC_CAPACITIES_KW = tuple(tenths / 10 for tenths in range(3, 251))
@@ -196,15 +197,17 @@ class Year:
 
 @dataclass(frozen=True)
 class _Strings:
-    """One MPPT input's hourly string voltage and array power, with its module's diode parameters."""
+    """One MPPT input's hourly string voltage and array power, with its module's diode parameters and the fraction of DC power the chain's system losses and ageing keep."""
 
     modules_per_string: int
     strings: int
     v_mp: pd.Series
     p_mp: pd.Series
     diode: pd.DataFrame
+    kept: float
 
     def power_at(self, string_v: float) -> pd.Series:
+        """The array's power with its strings held at string_v on their IV curve, less the system losses and ageing, as p_mp is."""
         module_v = string_v / self.modules_per_string
         current = pvlib.pvsystem.i_from_v(
             module_v,
@@ -214,7 +217,7 @@ class _Strings:
             self.diode["R_sh"],
             self.diode["nNsVth"],
         )
-        return module_v * current * self.modules_per_string * self.strings
+        return module_v * current * self.modules_per_string * self.strings * self.kept
 
 
 def _per_array(result: Any) -> tuple[Any, ...]:
@@ -223,8 +226,9 @@ def _per_array(result: Any) -> tuple[Any, ...]:
 
 
 def _strings(chain: ModelChain) -> tuple[_Strings, ...]:
+    kept = chain.results.losses
     return tuple(
-        _Strings(array.modules_per_string, array.strings, dc["v_mp"], dc["p_mp"], diode)
+        _Strings(array.modules_per_string, array.strings, dc["v_mp"], dc["p_mp"], diode, kept)
         for array, dc, diode in zip(
             chain.system.arrays,
             _per_array(chain.results.dc),
@@ -234,7 +238,7 @@ def _strings(chain: ModelChain) -> tuple[_Strings, ...]:
 
 
 def _producing(chain: ModelChain) -> pd.Series:
-    """Hours with sunlight on the cells; at night the diode solver leaves p_mp at about 1e-43 W."""
+    """Hours with sunlight on the cells; under NOCT-SAM pvlib fills each sunless hour's DC with 0."""
     return _per_array(chain.results.effective_irradiance)[0] > 0
 
 
@@ -266,11 +270,11 @@ def _excursion(
 
 def measure_year(chain: ModelChain, weather: pd.DataFrame) -> Year:
     """Run the chain over the year and measure both edges of its inverter's MPPT window."""
-    chain.run_model(weather)
+    run_model_chain(chain, weather)
     strings = _strings(chain)
     inverter = chain.system.inverter_parameters
     ac_kwh = _ac_kwh([s.v_mp for s in strings], [s.p_mp for s in strings], inverter)
-    chain_ac_kwh = float(chain.results.ac.clip(lower=0).sum()) / 1000
+    chain_ac_kwh = float(ac_power_kw(chain).sum())
     if not math.isclose(ac_kwh, chain_ac_kwh, rel_tol=1e-12):
         raise RuntimeError(f"sandia_multi gives {ac_kwh} kWh, the chain {chain_ac_kwh} kWh")
     producing = _producing(chain)
@@ -466,8 +470,7 @@ def operating_voltage(
 ) -> tuple[pd.DataFrame, pd.Series]:
     """The default system's hours with module V_mp above COLD_RATIO x V_mp_ref, and its hours above V_mp_ref."""
     config = PVConfig.default_4kw()
-    chain = create_model_chain(config, location)
-    chain.run_model(weather)
+    chain = run_model_chain(create_model_chain(config, location), weather)
     (strings,) = _strings(chain)
     ratio = strings.v_mp / strings.modules_per_string / module["V_mp_ref"]
     producing = _producing(chain)
@@ -491,7 +494,7 @@ def operating_voltage(
             "string STC V_oc": pick.longest_string * module["V_oc_ref"],
             "Mppt_high V": inverter["Mppt_high"],
             "Vdcmax V": inverter["Vdcmax"],
-            "annual AC kWh": float(chain.results.ac.clip(lower=0).sum()) / 1000,
+            "annual AC kWh": float(ac_power_kw(chain).sum()),
             "producing hours": int(producing.sum()),
             "hours above V_mp_ref": int(above.sum()),
             "DC energy share above V_mp_ref": float(
@@ -577,7 +580,13 @@ def _show(title: str, body: Union[pd.DataFrame, pd.Series, str]) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument(
-        "--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help="weather cache holding the TMY"
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "weather cache holding the TMY "
+            f"(default: the directory {CACHE_DIR_VARIABLE} names, else {DEFAULT_CACHE_DIR})"
+        ),
     )
     parser.add_argument(
         "--csv", type=Path, help="write one row per sizing and configuration here"
@@ -599,15 +608,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _parser().parse_args(argv)
-    warnings.filterwarnings(
-        "ignore",
-        message="invalid value encountered",
-        category=RuntimeWarning,
-        module=r"scipy\.optimize\._chandrupatla",
-    )
-    set_weather_cache(WeatherCache(args.cache_dir))
     location = Location.bristol()
-    weather = get_tmy_data(location)
+    weather = PvgisTmy(WeatherCache(args.cache_dir)).get(location)
     module = create_pv_system(PVConfig.default_4kw()).arrays[0].module_parameters
     _show(
         "Weather",

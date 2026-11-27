@@ -14,6 +14,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
+from solar_challenge.web.run_headline import run_headline
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._plotly_figure import annotation_texts, opaque, sankey_link_colours, sankey_node_colours, traces
 
@@ -49,10 +50,10 @@ def _summary() -> SummaryStatistics:
     return calculate_summary(make_sim_results(days=1))
 
 
-def _drawn(figure: str | None) -> str:
-    """*figure*, from a builder that returns None for a run too short to chart, asserted to be drawn."""
-    assert figure is not None
-    return figure
+def _drawn(panel: charts.ChartPanel) -> str:
+    """The figure of *panel*, from a builder whose chart a run too short to chart lacks, asserted to be drawn."""
+    assert isinstance(panel.content, str), panel.content
+    return panel.content
 
 
 def _lines(figure: str) -> list[tuple[str, str]]:
@@ -66,18 +67,18 @@ def _markers(figure: str) -> list[tuple[str, str]]:
 
 
 _COLOURED_BY_FLOW: dict[str, tuple[Callable[[], list[tuple[str, str]]], tuple[str, ...]]] = {
-    "power_flow_timeline": (lambda: _lines(charts.power_flow_timeline(_year())), _FIVE_FLOWS),
-    "fleet_aggregate_timeline": (lambda: _lines(charts.fleet_aggregate_timeline(_fleet())), _FIVE_FLOWS),
-    "daily_energy_balance": (lambda: _markers(charts.daily_energy_balance(make_sim_results(days=2))), _FIVE_FLOWS),
+    "power_flow_timeline": (lambda: _lines(charts.power_flow_timeline(_year()).content), _FIVE_FLOWS),
+    "fleet_aggregate_timeline": (lambda: _lines(charts.fleet_aggregate_timeline(_fleet()).content), _FIVE_FLOWS),
+    "daily_energy_balance": (lambda: _markers(charts.daily_energy_balance(make_sim_results(days=2)).content), _FIVE_FLOWS),
     "monthly_summary": (
         lambda: _markers(_drawn(charts.monthly_summary(_year()))),
         ("Self-Consumption", "Grid Import", "Grid Export"),
     ),
-    "fleet_box_plots": (lambda: _markers(charts.fleet_box_plots([_summary()] * 2)), _FIVE_FLOWS),
-    "fleet_grid_impact": (lambda: _lines(charts.fleet_grid_impact(_fleet())), ("Grid Import", "Grid Export")),
+    "fleet_box_plots": (lambda: _markers(charts.fleet_box_plots([_summary()] * 2).content), _FIVE_FLOWS),
+    "fleet_grid_impact": (lambda: _lines(charts.fleet_grid_impact(_fleet()).content), ("Grid Import", "Grid Export")),
     "fleet_distribution_histograms": (
         # The first histogram only: the other two draw ratios, which are not flows.
-        lambda: _markers(charts.fleet_distribution_histograms([_summary()] * 2))[:1],
+        lambda: _markers(charts.fleet_distribution_histograms([_summary()] * 2).content)[:1],
         ("Generation",),
     ),
 }
@@ -91,9 +92,9 @@ def test_a_chart_coloured_by_flow_draws_each_flow_under_its_label_in_its_roles_c
 
 
 _NAMED: dict[str, tuple[Callable[[], list[str]], list[str]]] = {
-    "fleet_heatmap": (lambda: traces(charts.fleet_heatmap([_summary()] * 2))[0]["x"], list(_FIVE_FLOWS)),
+    "fleet_heatmap": (lambda: traces(charts.fleet_heatmap([_summary()] * 2).content)[0]["x"], list(_FIVE_FLOWS)),
     "comparison_bar_chart": (
-        lambda: traces(charts.comparison_bar_chart([dataclasses.asdict(_summary())], ["Run A"]))[0]["x"],
+        lambda: traces(charts.comparison_bar_chart([charts.ComparedRun("Run A", run_headline(_summary()))]).content)[0]["x"],
         list(_FIVE_FLOWS),
     ),
     "seasonal_comparison": (
@@ -101,13 +102,9 @@ _NAMED: dict[str, tuple[Callable[[], list[str]], list[str]]] = {
         # The winter bars' categories, then the summer bars'.
         ["Generation (kWh)", "Demand (kWh)", "Self-Consumption (kWh)"] * 2,
     ),
-    "overlaid_power_flows": (
-        lambda: [trace["name"] for trace in traces(charts.overlaid_power_flows([_year()], ["Run A"]))],
-        ["Run A - Generation", "Run A - Demand"],
-    ),
     "fleet_distribution_histograms_subplot_title": (
         # make_subplots writes the subplot titles as layout annotations, in subplot order.
-        lambda: annotation_texts(charts.fleet_distribution_histograms([_summary()] * 2))[:1],
+        lambda: annotation_texts(charts.fleet_distribution_histograms([_summary()] * 2).content)[:1],
         ["Generation (kWh)"],
     ),
 }
@@ -127,7 +124,7 @@ def _sankey() -> str:
         total_battery_charge_kwh=5.0,
         total_grid_charge_kwh=2.0,
     )
-    return charts.sankey_diagram(summary)
+    return charts.sankey_diagram(summary).content
 
 
 def test_the_sankey_draws_each_node_in_the_colour_of_the_flow_it_sends_or_receives_and_the_battery_in_its_own(

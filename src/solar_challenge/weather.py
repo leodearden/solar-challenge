@@ -3,14 +3,17 @@
 
 import calendar
 import hashlib
+import io
 import json
 import os
 import uuid
-from collections.abc import Iterator, Mapping
+import warnings
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Optional
+from typing import Optional, Protocol, TextIO, TypedDict
 
 import pandas as pd
 from pvlib.iotools import get_pvgis_hourly, get_pvgis_tmy
@@ -20,6 +23,9 @@ from solar_challenge.location import Location
 
 # Default cache directory
 DEFAULT_CACHE_DIR = Path(".cache/weather")
+
+CACHE_DIR_VARIABLE = "SOLAR_CHALLENGE_WEATHER_CACHE_DIR"
+"""The environment variable naming the directory WeatherCache() uses when given none."""
 
 IRRADIANCE_COLUMNS = ("ghi", "dni", "dhi")
 """The TMY's irradiance columns, in W/m²: global horizontal, direct normal and diffuse horizontal."""
@@ -47,7 +53,7 @@ PVGIS_TMY_REQUEST: Mapping[str, object] = MappingProxyType(
         "map_variables": True,
     }
 )
-"""The arguments of get_tmy_data's get_pvgis_tmy request, except the point's latitude and longitude."""
+"""The arguments of PvgisTmy's get_pvgis_tmy request, except the point's latitude and longitude."""
 
 
 class WeatherDataError(RuntimeError):
@@ -81,29 +87,124 @@ def _require_timezone_name(name: str) -> None:
         ) from e
 
 
+class _EntrySeal(TypedDict):
+    """The JSON object on the first line of a cache entry's file: the hex SHA-256 of the UTF-8 bytes of the file after that line."""
+
+    sha256: str
+
+
+class _EntryHeader(TypedDict):
+    """The JSON object on the line after a cache entry file's seal: the strs of its frame's index's timezone and frequency, None for none."""
+
+    timezone: str | None
+    freq: str | None
+
+
+def _sha256(content: str) -> str:
+    """The hex SHA-256 of content's UTF-8 bytes, as an entry file's seal holds it for the content after the seal."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _json_object(line: str, keys: frozenset[str]) -> dict[str, object]:
+    """The JSON object line holds, which must have exactly keys; else ValueError naming keys and what line holds."""
+    value = json.loads(line)
+    if not (isinstance(value, dict) and value.keys() == keys):
+        raise ValueError(
+            f"expected a line of JSON holding an object with exactly the keys {sorted(keys)}, got {value!r}"
+        )
+    return value
+
+
+def _write_entry(file: TextIO, header: _EntryHeader, data: pd.DataFrame) -> None:
+    """Write a cache entry to file: a first line of JSON sealing the rest, then header as a line of JSON, then data as CSV."""
+    content = json.dumps(header) + "\n" + data.to_csv()
+    seal: _EntrySeal = {"sha256": _sha256(content)}
+    file.write(json.dumps(seal) + "\n" + content)
+
+
+def _read_entry(file: TextIO) -> pd.DataFrame:
+    """The frame _write_entry wrote to file: its values exactly, on its index in the header's timezone and frequency, under its name.
+
+    Raises:
+        ValueError: If file's first line does not seal the rest, or the rest is not in the form _write_entry writes
+    """
+    return _decode_sealed_content(io.StringIO(_sealed_content(file)))
+
+
+def _sealed_content(file: TextIO) -> str:
+    """The rest of file after its first line, which must be an _EntrySeal holding the rest's SHA-256.
+
+    Raises:
+        ValueError: If the first line is no _EntrySeal, or the rest's SHA-256 is not the one it holds: the file was
+            cut short or changed after it was written
+    """
+    seal = _json_object(file.readline(), _EntrySeal.__required_keys__)
+    content = file.read()
+    sha256 = _sha256(content)
+    if sha256 != seal["sha256"]:
+        raise ValueError(
+            f"the file after its first line is not what put sealed there: its SHA-256 is {sha256}, the seal holds "
+            f"{seal['sha256']!r}, so the file was cut short or changed after put wrote it"
+        )
+    return content
+
+
+def _decode_sealed_content(content: TextIO) -> pd.DataFrame:
+    """The frame in an entry file's sealed content, a line of JSON that is an _EntryHeader, then the frame's CSV.
+
+    Raises:
+        ValueError: If content holds anything else: a header that is no _EntryHeader, a timezone whose str names
+            none, rows that are no CSV of instants, or rows that do not follow the header's frequency
+    """
+    header = _json_object(content.readline(), _EntryHeader.__required_keys__)
+    timezone, freq = header["timezone"], header["freq"]
+    if not ((timezone is None or isinstance(timezone, str)) and (freq is None or isinstance(freq, str))):
+        raise ValueError(
+            f"the header must hold a str or null at each of {sorted(_EntryHeader.__required_keys__)}, got {header!r}"
+        )
+    if timezone is not None:
+        _require_timezone_name(timezone)
+    frame = pd.read_csv(content, index_col=0)
+    if timezone is None:
+        instants = pd.to_datetime(frame.index)
+    else:
+        instants = pd.to_datetime(frame.index, utc=True).tz_convert(timezone)
+    return frame.set_axis(pd.DatetimeIndex(instants, freq=freq, name=frame.index.name))
+
+
+_NO_FILE_AT_PATH: tuple[type[OSError], ...] = (FileNotFoundError, NotADirectoryError)
+"""The OSErrors that opening or removing a cache file raises when no file is at its path: nothing is there, or a regular file stands where the cache directory, or one of its parents, should be."""
+
+
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
-    Stores each DataFrame as a CSV file, with a JSON sidecar recording its
-    timezone and frequency, keyed by prefix, location and an optional date range.
+    Stores each DataFrame as one file, which records its index's timezone and
+    frequency and seals its content with its SHA-256, keyed by prefix, location
+    and an optional date range.
     """
 
     cache_dir: Path
 
-    _KEY_VERSION = 2
+    _KEY_VERSION = 3
     """Part of every key: bump it whenever what an entry means changes, so that older entries are never read.
 
-    2: get_tmy_data caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
+    2: PvgisTmy.get caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
+    3: an entry is one file: a line of JSON holding the SHA-256 of the rest, a line of JSON naming its index's
+       timezone and frequency, then the frame as CSV.
     """
 
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
         """Initialize the cache.
 
         Args:
-            cache_dir: Directory for cache files. Defaults to .cache/weather/
+            cache_dir: Directory for cache files, created by the first put, not here, so that constructing a cache
+                touches no file. Given none, the directory CACHE_DIR_VARIABLE names when it is set and non-empty,
+                else DEFAULT_CACHE_DIR, under the working directory
         """
-        self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        if cache_dir is None:
+            cache_dir = Path(os.environ.get(CACHE_DIR_VARIABLE) or DEFAULT_CACHE_DIR)
+        self.cache_dir = cache_dir
 
     def _make_key(self, prefix: str, location: Location,
                   start_date: Optional[pd.Timestamp] = None,
@@ -125,17 +226,13 @@ class WeatherCache:
         return f"{prefix}_{key_hash}"
 
     def _cache_path(self, key: str) -> Path:
-        """Get path for cache file."""
+        """The path of the one file holding the entry under key."""
         return self.cache_dir / f"{key}.csv"
-
-    def _meta_path(self, key: str) -> Path:
-        """Get path for metadata file."""
-        return self.cache_dir / f"{key}.meta.json"
 
     def get(self, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
-        """Retrieve the frame put stored under the key: its values exactly, and its index in the timezone and frequency it was put in.
+        """Retrieve the frame put stored under the key: its values exactly, and its index in the timezone and frequency it was put in, under its name.
 
         Args:
             prefix: Data type prefix (e.g., 'tmy')
@@ -144,40 +241,39 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            The cached DataFrame, or None if not found
+            The cached DataFrame, or None if not found, as when the cache directory is absent or a regular file lies
+            where it, or a parent of it, should be
 
         Raises:
-            ValueError: If the entry records its timezone as a str that names none; put refuses such a timezone
+            ValueError: Naming the entry's file and how to remove it, if its first line does not seal the rest, as
+                when the file was cut short or changed after put wrote it, or if what it seals is not in the form
+                put writes: a header holding anything but a timezone and a frequency, each a str or null, a
+                timezone str that names none, which put refuses to record, rows that are no CSV of instants, or
+                rows not on the header's frequency
+            OSError: If the entry's file cannot be opened or read for a reason other than its absence, as when a
+                directory lies at its path or the process may not open files in the cache directory
         """
-        key = self._make_key(prefix, location, start_date, end_date)
-        cache_file = self._cache_path(key)
-        meta_file = self._meta_path(key)
-
-        if cache_file.exists():
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True, float_precision="round_trip")
-            # Restore timezone from metadata if available
-            if meta_file.exists():
-                with open(meta_file) as f:
-                    metadata = json.load(f)
-                tz = metadata.get("timezone")
-                if tz:
-                    _require_timezone_name(tz)
-                    df.index = pd.to_datetime(df.index, utc=True).tz_convert(tz)
-                freq = metadata.get("freq")
-                if freq:
-                    df = df.asfreq(freq)
-            return df
-        return None
+        cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
+        try:
+            with open(cache_file, encoding="utf-8", newline="") as file:
+                return _read_entry(file)
+        except _NO_FILE_AT_PATH:
+            return None
+        except ValueError as e:
+            raise ValueError(
+                f"Cannot read the weather cache entry {cache_file}: {e}. Delete the file, or call "
+                "WeatherCache.invalidate for the entry, so that get finds no entry"
+            ) from e
 
     def put(self, data: pd.DataFrame, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> None:
-        """Store data in cache, replacing any entry under the same key whole.
+        """Store data in cache, creating the cache directory, parents included, if absent, and replacing any entry under the same key whole.
 
         A get racing this put, in any thread or process, finds the previous entry (or none) or this one,
         never part of either. A put that raises part-way, as on Ctrl-C, leaves the previous entry, or none,
-        as it was. Both hold while every put under one key stores the same timezone and frequency, since
-        the CSV and its metadata are replaced one after the other.
+        as it was. The new file is flushed to disk before it replaces the entry, so that a crash of the machine
+        cannot leave the entry's file empty or cut short either.
 
         Args:
             data: DataFrame to cache
@@ -189,42 +285,33 @@ class WeatherCache:
         Raises:
             ValueError: If data's index is in a timezone get could not restore from its str, such as a dateutil
                 zone; nothing is then written
+            OSError: If the cache directory cannot be created, as under a regular file or where the process cannot
+                write, or the entry's file cannot be written; any entry under the key is then left as it was
         """
-        key = self._make_key(prefix, location, start_date, end_date)
-        cache_file = self._cache_path(key)
-        meta_file = self._meta_path(key)
+        cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
 
         tz_str = str(data.index.tz) if data.index.tz else None
         if tz_str is not None:
             _require_timezone_name(tz_str)
         freq_str = data.index.freqstr if hasattr(data.index, "freqstr") and data.index.freqstr else None
-        metadata = {
-            "prefix": prefix,
-            "latitude": location.latitude,
-            "longitude": location.longitude,
-            "start_date": start_date.isoformat() if start_date else None,
-            "end_date": end_date.isoformat() if end_date else None,
-            "timezone": tz_str,
-            "freq": freq_str,
-        }
 
-        with _staged_beside(cache_file) as staged_csv, _staged_beside(meta_file) as staged_meta:
-            data.to_csv(staged_csv)
-            staged_meta.write_text(json.dumps(metadata))
-            # Meta first: get takes the CSV as the entry, so a get that finds the new CSV also finds the new
-            # meta. A put killed between the two replaces leaves a miss in an empty cache, else the old CSV
-            # under the new meta (see the caveat in the docstring).
-            os.replace(staged_meta, meta_file)
-            os.replace(staged_csv, cache_file)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        with _staged_beside(cache_file) as staged:
+            with open(staged, "w", encoding="utf-8", newline="") as file:
+                _write_entry(file, {"timezone": tz_str, "freq": freq_str}, data)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(staged, cache_file)
 
     def clear(self) -> int:
-        """Clear all cached data.
+        """Clear all cached data: every file in the cache directory, those of entries an earlier key version wrote included.
 
         Returns:
-            Number of files removed
+            Number of files removed, 0 if the cache holds none, as when the cache directory is absent or a regular
+            file lies where it, or a parent of it, should be
         """
         count = 0
-        if self.cache_dir.exists():
+        if self.cache_dir.is_dir():
             for file in self.cache_dir.glob("*"):
                 file.unlink()
                 count += 1
@@ -242,36 +329,129 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            True if cache entry was removed, False if not found
+            True if the entry's file was removed, False if not found, as when the cache directory is absent or a
+            regular file lies where it, or a parent of it, should be
         """
-        key = self._make_key(prefix, location, start_date, end_date)
-        cache_file = self._cache_path(key)
-        meta_file = self._meta_path(key)
-        removed = False
-        if cache_file.exists():
+        cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
+        try:
             cache_file.unlink()
-            removed = True
-        if meta_file.exists():
-            meta_file.unlink()
-        return removed
+        except _NO_FILE_AT_PATH:
+            return False
+        return True
 
 
-# Global cache instance (can be replaced for testing)
-_weather_cache: Optional[WeatherCache] = None
+class WeatherProvider(Protocol):
+    """Supplies the hourly weather a simulation at a location runs on."""
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """One year of hourly weather for location: temp_air, ghi, dni and dhi at least, on a DatetimeIndex."""
+        ...
 
 
-def get_weather_cache() -> WeatherCache:
-    """Get or create the global weather cache."""
-    global _weather_cache
-    if _weather_cache is None:
-        _weather_cache = WeatherCache()
-    return _weather_cache
+@dataclass(frozen=True)
+class PvgisTmy:
+    """PVGIS's TMY for each location, scaled to the point's 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md): read from cache, else fetched and put there when it can; with no cache, fetched on every get."""
+
+    cache: WeatherCache | None
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """The scaled TMY for location, as its cache holds it, else as fetched from PVGIS.
+
+        Its ghi, dni and dhi are those of PVGIS's TMY multiplied by one factor, so that the year's GHI equals
+        the mean annual GHI of PVGIS's 2005-2020 hourly series at the point.
+
+        If its cache's put raises OSError, as where the process may not create the cache directory or a regular file
+        lies where it, or a parent of it, should be, get returns the fetched TMY uncached, with a UserWarning
+        attributed to its caller naming the directory and the error, so the next get fetches it again.
+
+        Returns:
+            DataFrame with columns including:
+            - temp_air: Ambient temperature (°C)
+            - ghi: Global horizontal irradiance (W/m²)
+            - dni: Direct normal irradiance (W/m²)
+            - dhi: Diffuse horizontal irradiance (W/m²)
+            - wind_speed: Wind speed at 10m (m/s)
+            Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
+            the timezone it was put in.
+
+        Raises:
+            WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
+                or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
+                ValueError then being the cause; nothing is then put. A WeatherDataError is a RuntimeError
+            ValueError: From its cache's get, naming the entry's file, if the entry cached for location was cut
+                short or changed after put wrote it, or is not in the form put writes; nothing is then fetched. A
+                note on it says what removing the entry, by deleting the file or with WeatherCache.invalidate,
+                leads to: the next get fetches the TMY afresh and puts it
+            OSError: From its cache's get, if the entry's file cannot be opened or read for a reason other than its
+                absence, as when a directory lies at its path or the process may not open files in the cache
+                directory; nothing is then fetched
+        """
+        if self.cache is None:
+            return _fetch_scaled_tmy(location)
+        try:
+            cached = self.cache.get("tmy", location)
+        except ValueError as e:
+            e.add_note(
+                "Once the entry is removed, the next PvgisTmy.get fetches the TMY afresh from PVGIS and puts it"
+            )
+            raise
+        if cached is not None:
+            return cached
+        tmy = _fetch_scaled_tmy(location)
+        _put_or_warn(self.cache, tmy, location)
+        return tmy
 
 
-def set_weather_cache(cache: Optional[WeatherCache]) -> None:
-    """Set the global weather cache (for testing)."""
-    global _weather_cache
-    _weather_cache = cache
+def _put_or_warn(cache: WeatherCache, tmy: pd.DataFrame, location: Location) -> None:
+    """Put tmy in cache as location's TMY; an OSError from the put becomes a UserWarning, attributed to PvgisTmy.get's caller, naming cache's directory and the error."""
+    try:
+        cache.put(tmy, "tmy", location)
+    except OSError as e:
+        warnings.warn(
+            f"Could not cache the TMY fetched for {location!r} in {cache.cache_dir}: {e}. It is returned uncached, "
+            "so the next PvgisTmy.get fetches it from PVGIS again; name a directory this process can write with "
+            f"{CACHE_DIR_VARIABLE} or WeatherCache(cache_dir=...)",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class PrefetchedWeather:
+    """Weather already in memory for the locations it holds; it pickles, so a worker reads no cache and no network.
+
+    The locations it holds are fixed at construction. Its frames are the ones it is given, not copies, so a frame
+    changed in place is changed for every later get.
+    """
+
+    frames: Mapping[Location, pd.DataFrame]
+
+    def __post_init__(self) -> None:
+        """Hold frames in a read-only mapping of its own, so that no later change adds or removes a location."""
+        object.__setattr__(self, "frames", MappingProxyType(dict(self.frames)))
+
+    def __reduce__(self) -> tuple[type["PrefetchedWeather"], tuple[dict[Location, pd.DataFrame]]]:
+        """Rebuild through the constructor from a dict of the frames, since a mappingproxy does not pickle."""
+        return (type(self), (dict(self.frames),))
+
+    def get(self, location: Location) -> pd.DataFrame:
+        """The frame held for location itself; LookupError naming location and the locations held, for any other."""
+        if location not in self.frames:
+            raise LookupError(
+                f"A PrefetchedWeather answers only for the locations it holds: asked for {location!r}, "
+                f"it holds {list(self.frames)!r}"
+            )
+        return self.frames[location]
+
+    @classmethod
+    def fetch(cls, weather: WeatherProvider, locations: Iterable[Location]) -> "PrefetchedWeather":
+        """weather.get once for each distinct location, in this process, in first-seen order."""
+        return cls({location: weather.get(location) for location in dict.fromkeys(locations)})
+
+
+def default_weather() -> PvgisTmy:
+    """The weather a composition root uses when it is given none: PvgisTmy over a new WeatherCache(), so it reads the directory CACHE_DIR_VARIABLE names at each call; docs/prds/weather-as-explicit-input.md says why, in its decisions 3 and 9."""
+    return PvgisTmy(WeatherCache())
 
 
 def scale_tmy_to_annual_ghi(tmy: pd.DataFrame, annual_ghi_kwh_per_m2: float) -> pd.DataFrame:
@@ -290,49 +470,14 @@ def scale_tmy_to_annual_ghi(tmy: pd.DataFrame, annual_ghi_kwh_per_m2: float) -> 
     return tmy.assign(**{column: tmy[column] * factor for column in IRRADIANCE_COLUMNS})
 
 
-def get_tmy_data(
-    location: Location,
-    use_cache: bool = True,
-) -> pd.DataFrame:
-    """Retrieve PVGIS's Typical Meteorological Year (TMY) for location, scaled to the point's long-term mean GHI.
-
-    The TMY's ghi, dni and dhi are multiplied by one factor so that the year's GHI equals the mean annual GHI
-    of PVGIS's 2005-2020 hourly series at the point; docs/tmy-irradiation-scaling.md has the measurements
-    and the rejected alternatives. The scaled TMY is cached, and a cached TMY is returned as stored.
-
-    Args:
-        location: Location object with latitude, longitude, and altitude
-        use_cache: Whether to use caching (default True)
-
-    Returns:
-        DataFrame with columns including:
-        - temp_air: Ambient temperature (°C)
-        - ghi: Global horizontal irradiance (W/m²)
-        - dni: Direct normal irradiance (W/m²)
-        - dhi: Diffuse horizontal irradiance (W/m²)
-        - wind_speed: Wind speed at 10m (m/s)
-        Index is a DatetimeIndex in UTC, as PVGIS supplies it; a TMY seeded with WeatherCache.put comes back in
-        the timezone it was put in.
-
-    Raises:
-        WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
-            or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
-            ValueError then being the cause; a WeatherDataError is a RuntimeError
-    """
-    if use_cache:
-        cached_data = get_weather_cache().get("tmy", location)
-        if cached_data is not None:
-            return cached_data
-
+def _fetch_scaled_tmy(location: Location) -> pd.DataFrame:
+    """PVGIS's TMY for location, scaled to the mean annual GHI of PVGIS's CLIMATE_YEARS hourly series at location."""
     pvgis_tmy = _fetch_pvgis_tmy(location)
     annual_ghi_kwh_per_m2 = _fetch_mean_annual_ghi_kwh_per_m2(location)
     try:
-        tmy = scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
+        return scale_tmy_to_annual_ghi(pvgis_tmy, annual_ghi_kwh_per_m2)
     except ValueError as e:
         raise WeatherDataError(f"Failed to scale PVGIS's TMY to its long-term mean GHI: {e}") from e
-    if use_cache:
-        get_weather_cache().put(tmy, "tmy", location)
-    return tmy
 
 
 def _fetch_pvgis_tmy(location: Location) -> pd.DataFrame:

@@ -1,0 +1,18 @@
+name: Probe - bristol_legacy pre-sampling with its pools
+fleet_distribution:
+  n_homes: 20
+  seed: 3
+  random_order: bristol_legacy
+  pv:
+    capacity_kw: {type: shuffled_pool, values: [3.0, 4.0, 5.0], counts: [6, 8, 6]}
+    tilt: {type: normal, mean: 35, std: 6, min: 20, max: 50}
+  battery:
+    capacity_kwh: {type: shuffled_pool, values: [null, 5.0, 10.0], counts: [6, 8, 6]}
+    max_charge_kw: {type: normal, mean: 3.0, std: 0.4, min: 2.0, max: 4.0}
+  load:
+    annual_consumption_kwh: {type: uniform, min: 2500, max: 4500}
+  heat_pump:
+    heat_pump_type: {type: weighted_discrete, values: [null, ASHP], weights: [3, 1]}
+  ev:
+    charger_type: {type: shuffled_pool, values: [null, 7kW], counts: [12, 8]}
+    arrival_hour: {type: normal, mean: 18, std: 1.0, min: 16, max: 21}

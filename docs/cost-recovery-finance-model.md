@@ -1,17 +1,11 @@
 # CBS Cost-Recovery Finance Model
 
 **Task**: W2-CR + task-84 §6 — authoritative specification (CR6, task/62; basis-C amendment, task/84)
-**Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/output.py`
-**Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4); `tests/integration/test_finance_bill.py::TestOverrideExactValues` (override path, §3); `tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue` (override path, §4)
+**Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/projection.py`, `src/solar_challenge/board_report.py`
+**Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_ledger.py` (one ledger per home, its pricing rules and balances, §3, §4); `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4); `tests/integration/test_finance_bill.py::TestOverrideExactValues` (override path, §3); `tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue` (override path, §4)
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
-**Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
-**Unreleased on main** (task 219): CBS revenue no longer deducts the grid-charge cost (§4); the 0.5.0 tag still does.
-**Unreleased on main** (task 271): on a simulated window under 360 days, `project_multi_year` annualises own-use, export, import and battery-discharge kWh (§4, §7.6); the 0.5.0 tag sums them over the window.
-**Unreleased on main** (task 281): with `self_consumption_override` set, each home's own-use is capped at its demand and the surplus generation is counted as export (§3, §4); the 0.5.0 tag bills override × generation uncapped.
-**Unreleased on main** (task 295): each simulated age's battery SOH counts the battery throughput from installation to that age (§4, §7.6); the 0.5.0 tag ages each seed with the throughput up to the previous seed only, so a battery fleet's mid-life battery SOH and own-use read high there.
-**Unreleased on main** (task 307): on a home with no tariff configured, the override path prices its grid import at the retail baseline rate, with the physics path's `UserWarning` (§3); the 0.5.0 tag prices that import at £0.
-**Unreleased on main** (task 308): with `self_consumption_override` set, `project_multi_year`'s own-use revenue, and so the cost-recovery solve's rate base, is each home's capped override own-use, the own-use its bill charges (§2, §4, §5); the 0.5.0 tag keeps both on basis C.
-**Unreleased on main** (task 656): `project_multi_year`, and so `solve_cost_recovery_rate`, raises `ValueError` when a simulated age, seed or bisection trial, gives a NaN or infinite value for any aggregate §4 requires to be finite, naming the age and each such aggregate with its value; the 0.5.0 tag projects a NaN own-use or revenue on a one-year asset life as 0 kWh and £0 and passes an infinity through, drops a bisection trial whose aggregate is NaN, accepts a non-finite battery discharge, and stops on a non-finite seed of a longer life in scipy's PCHIP with "`y` must contain only finite values", which names no age.
+**Version**: 0.6.0 (the review-all program's release; its finance-model changes are listed under Results that move in [domain-library-consumption.md](domain-library-consumption.md#solar-challenge-v060), *solar-challenge-v0.6.0*)
+**Changes since 0.6.0**: each change merged since the 0.6.0 tag to what a finance-model name returns has a note in `docs/unreleased/cost-recovery-finance-model/`, one file per task ([domain-library-consumption.md](domain-library-consumption.md), *Changes merged since the last tag*).
 
 ---
 
@@ -27,7 +21,7 @@ minimum cash surplus per home.
 This document specifies the cost-recovery model precisely enough that a board member
 can reproduce a live `solar-challenge finance run <scenario> --cost-recovery` run by
 hand, and that a future code-reviewer can verify any code change against this spec.
-Every equation traces to a function in `finance.py`; every reported number in §7
+Every equation traces to a function in `finance.py` or `projection.py`; every reported number in §7
 matches a live calibration run captured by
 `tests/integration/test_cost_recovery_calibration.py`.
 
@@ -42,7 +36,7 @@ relationship to the system has three components:
 |-----------|------------------|---------------|
 | Self-consumed solar | Householder pays CBS at `own_use_rate` p/kWh | `bill()` `own_use_payment_gbp` |
 | Grid export (SEG) | CBS receives; not passed to householder | `project_multi_year()` `fleet_revenue_gbp` (SEG rate reconciled from `ScenarioConfig.seg_tariff_pence_per_kwh` onto homes) |
-| Grid import (including off-peak energy a battery grid-charges) | Householder pays retailer at the home's tariff rate (`retail_baseline_rate` p/kWh fallback when no tariff is configured) | `householder_bill()` `import_cost_gbp` |
+| Grid import (including off-peak energy a battery grid-charges) | Householder pays retailer at the home's tariff rate (`retail_baseline_rate` p/kWh fallback when no tariff priced the run, i.e. `SummaryStatistics.pricing`'s import rate is None) | `householder_bill()` `import_cost_gbp` |
 
 The householder carries no debt, no capital obligation, and no export-MPAN risk.
 The CBS bears all capex, debt service, and battery-cycling costs.
@@ -92,17 +86,27 @@ total_self_consumption_kwh = demand − import + grid_charge_kwh  (B-style)
 own_use_kwh (basis C)       = demand − import                   (grid-immune)
 ```
 
+`grid_charge_kwh` is the energy the battery drew from the grid, before its charge
+losses, and grid import includes it (docs/prds/one-dispatch-engine.md §5.2), so
+basis C leaves out the whole grid draw and the round-trip loss falls on the CBS's
+own-use.
+
 The CBS bears the battery round-trip loss; this is absorbed into the headline
 own-use rate (the solver sets `r` against basis-C own-use, which is smaller, so
 the floor-binding rate is correspondingly higher).
 
-**Implementation**: `finance._cbs_own_use_kwh(summary)` returns
-`max(summary.total_demand_kwh − summary.total_grid_import_kwh, 0.0)`.
-`bill_distribution` passes it to `householder_bill` as
-annual_self_consumption_kwh, and `_simulate_age` passes it for fleet_sc.  Both
-annualise it and pass it to `_billed_energy(annual, finance, physics_own_use_kwh=…)`,
-the one physics/override switch, which replaces it with the override's own-use when
-one is set.  The physics `self_consumption` series and
+**Implementation**: `finance.basis_c_own_use_kwh(summary)` returns
+`summary.total_demand_kwh − summary.total_grid_import_kwh`, the summary's window's
+basis-C own-use, or 0.0 with a `UserWarning` when the import is above the demand.
+`bill_distribution` passes it to `householder_bill` as `window_self_consumption_kwh`,
+which scales it to the window's year and hands it to `home_ledger` (§3, *One ledger
+per home*).  The projection's `home_ledger(annualise(s), finance)` takes basis C from
+the annualised totals itself, 0.0 with no warning when the import is above the demand
+(§4;
+`tests/unit/test_finance_ledger.py::TestTheBillAndTheProjectionReadOneLedger::test_the_projection_bills_a_basis_c_clamped_at_zero_without_a_warning`).
+Both read one basis-C rule.  `home_ledger` is the one physics/override switch: it
+replaces basis C with the override's own-use when one is set.  The physics
+`self_consumption` series and
 `self_consumption_ratio` in `flow.py` / `home.py` are **not changed** — only the
 money path moves to basis C.
 
@@ -115,22 +119,59 @@ Source: `finance.py:bill()`, the bill arithmetic, and `householder_bill()`, the 
 All monetary values in GBP (£).  VAT is applied to (import + standing + own-use)
 as a block; the householder receives **no SEG deduction**.
 
+`householder_bill()` builds the home's ledger,
+`home_ledger(annualise(summary), finance, simulated_own_use_kwh=window_self_consumption_kwh × scale)`,
+and bills from it (*One ledger per home*, below).  `annualise` scales the home's window
+totals to the window's year by the window's `annualisation_scale`, `year_days / days`,
+whatever the window's length (§4, *Annual basis*), and `scale` is that factor, so the
+caller's own-use over the window joins the ledger on the yearly basis of its import.
 The equations below are `bill()`'s identities on the inputs `householder_bill()` gives
-it: a 365-day period (`period_days = 365`), the home's totals scaled to that year when
-its window is under 360 days (§4, *Annual basis*), and a baseline that prices all demand
-at the retail rate (`baseline_import_cost_gbp = demand_kwh × retail_rate / 100`).  That
+it: the window's year as the period (`period_days = window.year_days`: 365 or 366 for
+a window within one calendar year, 365.25 for one that crosses a new year), the
+ledger's own-use, import and import cost, and a baseline that prices all of the
+ledger's demand at the retail rate
+(`baseline_import_cost_gbp = demand_kwh × retail_rate / 100`).  That
 baseline makes `bill()`'s effective rate, `baseline_import_cost_gbp / demand_kwh × 100`,
 the retail rate, which is why `self_consumption_saving_gbp` below is priced at retail.
 
-`own_use_kwh` below is basis C (see §2): `own_use_kwh = total_demand_kwh − total_grid_import_kwh`.
-With `self_consumption_override` set it comes from the override instead (*Override
-(spreadsheet-assumption) path*, below).
+The window is the summary's own (`SummaryStatistics.window`, which `calculate_summary`
+sets, and without which `SummaryStatistics` refuses to be built, naming `calculate_summary`).
+It carries the days a bill is computed over (INV-8), so neither `householder_bill` nor
+`bill_distribution` takes a day count.  `bill_distribution` refuses
+summaries over different windows, naming the first position that differs and both
+windows, and names their one window in `BillDistribution.annualised_from`
+(`tests/unit/test_finance_window.py`).
+
+`window_self_consumption_kwh` is the home's own-use over the window, so it lies from 0
+to the window's demand.  `householder_bill` refuses one outside, with or without the
+override, before it scales it, raising `ValueError` naming the ledger's invariant it
+breaks and the figures as passed, whatever the window's length: L1 for an own-use
+below 0 or not finite, L2 for one above the summary's `total_demand_kwh`, naming both
+(`tests/unit/test_finance_window.py::TestOwnUseWithinTheWindowsDemand`).  With no
+override, the ledger's L3 also refuses an own-use that with the import falls short of
+the demand, such as a window's own-use beside a year's import, naming the demand, the
+own-use and the import
+(`tests/unit/test_finance_ledger.py::TestHouseholderBillRefusesALedgerThatBreaksL3`).
+
+How the run was priced is the summary's own too (`SummaryStatistics.pricing`, the
+`RunPricing` that `simulate_home` records and `calculate_summary` copies).  A home no
+tariff priced, whose `import_tariff_mean_rate_gbp_per_kwh` is None, is billed its
+import at the retail rate with a `UserWarning`, whatever it imported.  A £0 tariff
+priced its run, so its import is billed £0, with no warning.  `householder_bill` and
+`bill_distribution` raise `ValueError` for a summary whose pricing is None, naming
+`calculate_summary` (`tests/unit/test_finance_pricing.py`), and `project_multi_year`
+and the cost-recovery solve do the same for a `simulate` whose results record none
+(`tests/unit/test_finance_projection_revenue.py::TestSegIncomeAtTheHomesRate::test_results_that_record_no_pricing_are_refused_naming_calculate_summary`).
+
+`own_use_kwh` below is the ledger's: basis C (see §2), `own_use_kwh = total_demand_kwh − total_grid_import_kwh`,
+as `bill_distribution` passes it.  With `self_consumption_override` set it comes from
+the override instead (*Override (spreadsheet-assumption) path*, below).
 
 ```
 own_use_payment_gbp      = own_use_rate_pence_per_kwh × own_use_kwh / 100
                            (own_use_kwh = demand − import = CBS-supplied energy; basis C)
 
-standing_charge_gbp      = standing_charge_pence_per_day × 365 / 100
+standing_charge_gbp      = standing_charge_pence_per_day × year_days / 100
 
 vat_gbp                  = vat_rate × (import_cost_gbp
                                         + standing_charge_gbp
@@ -146,7 +187,7 @@ cbs_amount_due_gbp       = own_use_payment_gbp + own_use_vat_gbp
                            (float sum — not own_use_payment × (1 + vat_rate))
 
 baseline_bill_gbp        = (demand_kwh × retail_rate / 100
-                            + standing_charge_pence_per_day × 365 / 100) × (1 + vat_rate)
+                            + standing_charge_pence_per_day × year_days / 100) × (1 + vat_rate)
 
 saving_vs_baseline_gbp   = baseline_bill_gbp − total_outlay_gbp
 
@@ -154,12 +195,24 @@ saving_pct               = 100 × saving_vs_baseline_gbp / baseline_bill_gbp
 
 self_consumption_saving_gbp = own_use_kwh × (retail_rate − own_use_rate)
                               × (1 + vat_rate) / 100
+
+self_consumption_fraction   = own_use_kwh / generation_kwh
+                              (0.0 when generation_kwh is 0)
 ```
 
 The CBS invoices `cbs_amount_due_gbp` — the own-use payment plus VAT on it, and
 nothing else — while `total_outlay_gbp` remains the household's whole-picture
 annual outlay: import cost and standing charge are paid to the retailer and
 appear on the CBS statement as context only (Leo's ruling, 2026-09-21).
+
+`self_consumption_fraction` is the bill's own identity, not the results pages'
+Self-Consumption Ratio (`SummaryStatistics.self_consumption_ratio`, `home.py`), though
+both divide by generation and give 0.0 when it is 0.  Its numerator is the own-use the
+bill charges: basis C (§2), or the override's capped own-use (below).  The ratio's
+numerator is the physics `self_consumption` series, which counts grid-charged battery
+discharge (§2), so the two agree only on a physics-path home that never grid-charges.
+The zero-generation case is pinned by
+`tests/integration/test_finance_bill.py::TestBillCore::test_generation_zero_gives_a_zero_self_consumption_fraction`.
 
 **H3 board identity** (holds when import is priced at retail, import_kwh = demand − own_use_kwh):
 
@@ -168,39 +221,117 @@ saving_vs_baseline ≈ own_use_kwh × (retail_rate − own_use_rate) × (1 + vat
 ```
 
 **[FIN] example** (100 homes × 5.5 kWp + 5 kWh, no grid-charging, synthetic scf ≈ 0.346,
-r ≈ 12.22 p/kWh — see §7 for the full worked reconciliation):
+r ≈ 12.31 p/kWh, billed over a non-leap calendar-year window, `year_days` = 365 — see §7
+for the full worked reconciliation):
 
 ```
 own_use_kwh         = 2,000 kWh/home/yr   (no grid-charging: basis C == B-style; see §2)
 import_kwh          = 1,400 kWh/home/yr
-import_cost_gbp     = 1,400 × 23 / 100  = £322.00/yr (retail fallback; no tariff config)
+import_cost_gbp     = 1,400 × 23 / 100  = £322.00/yr (retail fallback; no tariff priced the run)
 standing_charge_gbp = 60 × 365 / 100    = £219.00/yr
-own_use_payment_gbp = 12.22 × 2,000 / 100 = £244.40/yr  (at solved rate; basis C = 2,000 here)
-own_use_vat_gbp     = 0.05 × 244.40     = £12.22/yr
-cbs_amount_due_gbp  = 244.40 + 12.22    = £256.62/yr  (invoiced by the CBS)
-vat_gbp             = 0.05 × (322 + 219 + 244.40) = £39.27/yr
-total_outlay_gbp    = (322 + 219 + 244.40) × 1.05 ≈ £824.67/yr
+own_use_payment_gbp = 12.31 × 2,000 / 100 = £246.20/yr  (at solved rate; basis C = 2,000 here)
+own_use_vat_gbp     = 0.05 × 246.20     = £12.31/yr
+cbs_amount_due_gbp  = 246.20 + 12.31    = £258.51/yr  (invoiced by the CBS)
+vat_gbp             = 0.05 × (322 + 219 + 246.20) = £39.36/yr
+total_outlay_gbp    = (322 + 219 + 246.20) × 1.05 ≈ £826.56/yr
 baseline_bill_gbp   = ((2000+1400) × 23/100 + 219) × 1.05 ≈ £1,051.05/yr
-saving_vs_baseline  ≈ £226/yr             (REPORTED; not pinned — see §7)
+saving_vs_baseline  ≈ £224/yr             (REPORTED; not pinned — see §7)
 ```
+
+### One ledger per home
+
+Source: `finance.py:home_ledger()`, the one producer of a `HomeLedger`, from the home's
+`AnnualPhysics` (`annualise(summary)`: its window totals × `annualisation_scale`,
+beside its window and its run's `RunPricing`).  `householder_bill` bills the ledger
+(above), and `project_multi_year` sums the same ledgers over each simulated fleet (§4),
+so one home's billed year is assembled once.
+
+A `HomeLedger` is one home's year as the CBS bills it, in kWh and £ a year:
+
+| Field | What it is |
+|-------|------------|
+| `basis` | `OwnUseBasis.SIMULATED`, own-use from the simulation, or `OwnUseBasis.OVERRIDE`, own-use from `self_consumption_override` |
+| `generation_kwh`, `demand_kwh` | the home's PV generation and demand |
+| `own_use_kwh` | the own-use the householder pays for and the CBS earns on |
+| `import_kwh`, `import_cost_gbp` | the grid import the householder is billed for, and what it costs them |
+| `import_at_retail` | no tariff priced the home's run, so its import is priced at the retail baseline rate |
+| `export_kwh`, `seg_income_gbp` | the grid export, and the SEG income it earns the CBS |
+| `own_use_capped` | OVERRIDE only: `override × generation` exceeded demand, so own-use was cut to demand |
+
+`home_ledger` holds every pricing rule:
+
+| Quantity | SIMULATED basis (no override) | OVERRIDE basis (`self_consumption_override` set) |
+|----------|-------------------------------|--------------------------------------------------|
+| own-use | `simulated_own_use_kwh`, or basis C, `demand − import`, when it is None (0.0 when the import is above the demand) | `min(override × generation, demand)` |
+| import, export (kWh) | the simulated flows | `demand − own-use`; `generation − own-use` |
+| import cost, priced | the simulated import cost | the override's import × the run's own price per kWh imported, simulated cost ÷ simulated import, or × the tariff's time-weighted mean rate when the run imported nothing |
+| import cost, unpriced (no tariff priced the run) | import × retail; `import_at_retail` | the override's import × retail; `import_at_retail` |
+| SEG income | export × the run's `seg_rate_pence_per_kwh` / 100, priced by `seg.calculate_seg_revenue`; 0.0 when the rate is None | the same, on the override's export |
+
+`home_ledger` warns about nothing: `householder_bill` warns its caller when the
+ledger's import is at retail and when its own-use is capped, and the projection stays
+silent.  `householder_bill` passes `simulated_own_use_kwh`, its caller's own-use scaled
+to the window's year, and `home_ledger` checks it against L1 and L2 with or without
+the override, naming it, though the override does not read it; `householder_bill` has
+already checked its caller's figure over the window against the same two (§3, above).
+
+Construction refuses a ledger whose balances break, in this order, with a `ValueError`
+naming the invariant and every value in it:
+
+- **L1.** Every figure is finite and ≥ 0: generation, demand, own-use, import, import
+  cost, export and SEG income.  One message names every figure it refuses.
+- **L2.** `own_use_kwh ≤ demand_kwh`: a home cannot own-use more than it demands.
+- **L3.** `demand_kwh ≤ own_use_kwh + import_kwh`: own-use and import cover demand.
+  Basis C meets it with equality, or with import to spare when its clamp binds; a
+  caller's B-style self-consumption (§2) meets it with the grid charge to spare; the
+  override meets it with equality.  It refuses an own-use on another time basis than
+  the import.
+- **L4.** OVERRIDE only: `own_use_kwh + import_kwh == demand_kwh` and
+  `own_use_kwh + export_kwh == generation_kwh`, each refusal naming its identity's
+  three values.
+
+It then refuses an `own_use_capped` that disagrees with the split, naming
+`own_use_capped` and the values: a capped own-use is the override's, so the ledger is
+on the OVERRIDE basis, and it is cut to demand, so `own_use_kwh == demand_kwh`.
+
+L2–L4 and the cap compare to a relative tolerance of 1e-12, the float rounding of one
+subtraction and one scaling, and nothing more
+(`tests/unit/test_finance_ledger.py::TestHomeLedgerBalances`,
+`tests/unit/test_finance_ledger.py::TestHomeLedgerPricingRules`).
 
 ### Override (spreadsheet-assumption) path
 
-Source: `finance.py:householder_bill()` via `_billed_energy()` and `_override_energy_split()`.
+Source: `finance.py:householder_bill()` via `home_ledger()` (*One ledger per home*, above).
 
-With `FinanceConfig.self_consumption_override` set (a scenario's `finance:` block, or
-`finance run --assumptions spreadsheet|both`), the bill's own-use comes from the
-override fraction instead of basis C:
+With `FinanceConfig.self_consumption_override` set, by a scenario's `finance:` block,
+the bill's own-use comes from the override fraction instead of basis C.
+`home_ledger`'s basis is `finance.own_use_basis`, the one rule: OVERRIDE when the
+override is set, else SIMULATED.  `finance run --assumptions` picks each mode's
+`FinanceConfig` through `finance.with_own_use_basis`: `physics` clears any override,
+`spreadsheet` keeps the scenario's override, else sets
+`DEFAULT_SPREADSHEET_SELF_CONSUMPTION` (0.70), and `both` renders the two.  Each
+mode's bill, projection, economics and cost-recovery solve are computed under that
+mode's `FinanceConfig`.  `optimize configs --assumptions physics|spreadsheet`
+(default `physics`) puts the scenario's `FinanceConfig` on that mode through
+`finance.with_own_use_basis` before enumerating, so every config's solve, its
+configured-rate trade-off and the sensitivity panel are computed under it; `both`
+is refused, since a ranking is computed under one assumption.  The ranking report
+opens with `Self-consumption assumption: **Physics**` or
+`Self-consumption assumption: **Spreadsheet (<x>% self-consumption)**`, named as
+`finance run` heads that mode's column and read from
+`RankedSweep.self_consumption_override`, which `run_sweep` records and requires to
+be one across configs (`tests/unit/test_board_report.py::TestARankingReportNamesItsAssumption`,
+`tests/integration/test_optimize_cli.py::TestOptimizeCLIE2EFast`).  On the override
+path:
 
 ```
 own_use_kwh = min(self_consumption_override × generation_kwh, demand_kwh)
 import_kwh  = demand_kwh − own_use_kwh
-              (priced at the home's effective import rate: physics import cost /
-               physics import kWh × 100, or retail when physics import is 0.
-               A home with no tariff configured reports a £0 physics import
-               cost; householder_bill first prices that at retail, with a
-               UserWarning, on both paths, so the home's effective rate is
-               retail too)
+              (priced at the home's own import rate: physics import cost /
+               physics import kWh, or the tariff's time-weighted mean rate,
+               RunPricing.import_tariff_mean_rate_gbp_per_kwh, when the run
+               imported nothing; at retail, with a UserWarning, only when no
+               tariff priced the run)
 ```
 
 Every other identity above is unchanged, applied to this `own_use_kwh`.  A home
@@ -211,9 +342,9 @@ override), and `householder_bill` emits a `UserWarning`.  The CBS revenue follow
 the same split (§4), so the cost-recovery solve's rate base is the own-use these
 bills charge (§5).
 
-**[FIN] override example** (`TestOverrideExactValues`; 5.5 kWp × 1,050 kWh/kWp,
-3,400 kWh demand, override 0.70, own-use 15 p/kWh, retail and effective import
-rate 23 p/kWh):
+**[FIN] override example** (`tests/integration/test_finance_bill.py::TestOverrideExactValues`; 5.5 kWp × 1,050 kWh/kWp,
+3,400 kWh demand, override 0.70, own-use 15 p/kWh, retail rate and the home's own
+import rate 23 p/kWh, over a non-leap calendar-year window, `year_days` = 365):
 
 ```
 generation_kwh       = 5.5 × 1,050 = 5,775 kWh/yr
@@ -236,14 +367,15 @@ self_consumption_fraction = 3,400 / 5,775 = 0.589  (rendered 58.9%)
 Uncapped, the 0.5.0 tag bills this home for 4,042.5 kWh: own-use
 15 × 4,042.5 / 100 = £606.375, outlay £866.64, saving £184.41.
 
-**Untariffed override example** (`TestOverrideExactValues`; 4,000 kWh generation,
-3,400 kWh demand, 1,200 kWh physics import at £0 with no tariff configured,
-override 0.70, own-use 15 p/kWh, retail 23 p/kWh):
+**Untariffed override example** (`tests/integration/test_finance_bill.py::TestOverrideExactValues`; 4,000 kWh generation,
+3,400 kWh demand, 1,200 kWh physics import that no tariff priced,
+override 0.70, own-use 15 p/kWh, retail 23 p/kWh, over a non-leap calendar-year
+window, `year_days` = 365):
 
 ```
 own_use_kwh          = min(0.70 × 4,000, 3,400) = 2,800 kWh/yr   (cap not binding)
 import_kwh           = 3,400 − 2,800 = 600 kWh/yr
-effective import rate = 23 p/kWh   (retail fallback: physics import cost is £0; warned)
+import rate          = 23 p/kWh   (retail fallback: no tariff priced the run; warned)
 import_cost_gbp      = 600 × 23 / 100 = £138.00/yr
 own_use_payment_gbp  = 15 × 2,800 / 100 = £420.00/yr
 cbs_amount_due_gbp   = 420 + 0.05 × 420 = £441.00/yr   (import is paid to the retailer, so the fallback leaves this unchanged)
@@ -261,7 +393,7 @@ The 0.5.0 tag bills this import at £0: outlay (0 + 219 + 420) × 1.05 = £670.9
 
 ## 4. CBS-Revenue Equation
 
-Source: `finance.py:project_multi_year()`.
+Source: `projection.py:project_fleet()`, which `project_multi_year()` calls on a scenario's fleet.
 
 At each projection year, the CBS fleet revenue is:
 
@@ -274,93 +406,198 @@ fleet_revenue_gbp = own_use_revenue
 Where each term is:
 
 ```
-own_use_revenue   = own_use_rate_pence_per_kwh × fleet_sc_kwh / 100
-                    (fleet_sc_kwh = Σ_homes _billed_energy(a_h, finance,
-                                      physics_own_use_kwh=k_h × _cbs_own_use_kwh(s_h)).own_use_kwh
-                                  = Σ_homes k_h × (demand − import)
-                                    with no override (basis C)
-                                  = Σ_homes min(override × k_h × generation, k_h × demand)
-                                    with self_consumption_override set)
-                    (a_h = _annualise_physics(s_h, sim_days_h), home h's window totals × k_h;
-                     k_h = _annualisation_scale(sim_days_h)
-                         = 365 / sim_days_h if sim_days_h < 360, else 1)
+own_use_revenue   = own_use_rate_pence_per_kwh × fleet_billed_own_use_kwh / 100
+                    (fleet_billed_own_use_kwh = Σ_homes ℓ_h.own_use_kwh
+                                              = Σ_homes k_h × (demand − import)
+                                                with no override (basis C, 0 where
+                                                the import is above the demand)
+                                              = Σ_homes min(override × k_h × generation, k_h × demand)
+                                                with self_consumption_override set)
+                    (ℓ_h = home_ledger(annualise(s_h), finance), home h's ledger
+                     (§3, One ledger per home): its billed own-use, import,
+                     export and SEG income, from its window totals × k_h;
+                     k_h = s_h.window.annualisation_scale = year_days_h / days_h)
 
-seg_revenue       = Σ_homes _seg_export_income_gbp(a_h, finance)
-                    (= Σ k_h × home.total_export_revenue_gbp on the physics path;
-                    both paths read the same a_h as own-use)
+seg_revenue       = Σ_homes ℓ_h.seg_income_gbp
+                  = Σ_homes export_kwh_h × seg_rate_h / 100
+                    (priced by seg.calculate_seg_revenue; export_kwh_h =
+                    ℓ_h.export_kwh, from the same ledger as own-use; seg_rate_h =
+                    s_h.pricing.seg_rate_pence_per_kwh, HomeConfig.seg_tariff's
+                    rate as simulate_home records it, 0 when None)
+
+                    Physics path: export_kwh_h = k_h × the simulated export.
+                    seg_revenue then equals Σ k_h × total_export_revenue_gbp to
+                    float precision, because simulate_home prices each minute's
+                    export at the same flat rate, so physics figures do not move.
 
                     Override path (self_consumption_override set):
-                    export_kwh = generation − min(override × generation, demand)
-                    (a_h's annual generation and demand; §3, override path),
-                    priced at the home's effective export rate = physics
-                    export revenue / physics export kWh × 100
-                    (0 when physics export is 0)
+                    export_kwh_h = generation − min(override × generation, demand)
+                    (ℓ_h's annual generation and demand; §3, override path),
+                    priced at the home's own SEG rate whatever the simulated
+                    export, 0 included
 
-                    SEG input reconciliation: project_multi_year calls
-                    _reconcile_seg_homes() immediately after _resolve_homes().
-                    When ScenarioConfig.seg_tariff_pence_per_kwh is set and a
-                    home's HomeConfig.seg_tariff is None, the scenario rate is
-                    threaded onto that home as SEGTariff(rate_pence_per_kwh=R),
-                    making per-home seg_tariff the single source of SEG maths
-                    (robust to the Task-85 export-revenue zeroing).  If a
-                    per-home seg_tariff is already set and its rate differs from
-                    the scenario rate, ValueError is raised (fail-fast).
+                    SEG input reconciliation: project_multi_year simulates
+                    scenario.simulated_homes().  When
+                    ScenarioConfig.seg_tariff_pence_per_kwh is set, each home
+                    whose HomeConfig.seg_tariff is None simulates at
+                    SEGTariff(rate_pence_per_kwh=R), so per-home seg_tariff
+                    stays the single source of SEG maths.  A scenario whose home
+                    carries its own other rate cannot be built: ScenarioConfig
+                    construction raises ConfigurationError naming the home and
+                    both rates.
 
-grid_services_income = grid_services_income_per_kw_per_year_gbp
-                       × Σ_homes battery.max_discharge_kw
-                    (field from FinanceConfig; W1 fills the non-zero value)
+grid_services_income(t) = M.annual_income_gbp(F_t)
+    M   = finance.grid_services_model, read once, before any simulation
+    F_t = the fleet simulated at age t
+  NoGridServices()    → 0
+  FlatGridServices(g) → g × Σ_{battery homes of F_t} max_discharge_kw
+  a GridServicesEventsConfig as grid_services_model:
+                      → Σ_w avail_w(F_t) × (a × N_w + u × h_w × U / 1000 × N_w) × (1 − s)
+    avail_w = compute_fleet_spare_capacity_kw(F_t, windows, delivery_baseline)[w],
+              the mean over event window w's event days of the fleet's firm
+              spare battery capacity (kW), see §8.1
+    a = availability rate (£/kW/event), U = utilisation rate (£/MWh): the band's,
+        unless the configuration overrides them
+    u = utilisation_factor, h_w = event_hours, N_w = events_per_year,
+    s = aggregator_share
 ```
+
+**Grid-services income** is priced at each simulated age from that age's own
+fleet, seed and bisection-trial ages alike.  Under the events model it follows
+battery SOH, because each battery's SOC floor scales with its SOH
+(`tests/integration/test_grid_services_events.py::test_c1_each_sampled_age_books_its_own_fleets_event_income`,
+`tests/integration/test_grid_services_events.py::test_c2_bisection_trial_ages_book_their_own_fleets_event_income`).
+With the default event window, utilisation 0.6 and aggregator share 0.25, one kW
+of firm spare capacity earns (1.00 × 12 + 0.6 × 3 h × 0.060 £/kWh × 12) × 0.75 =
+£9.972 ≈ £9.97 a year in the central band, £4.986 in the low band and £19.944 in
+the high band
+(`tests/unit/test_gridservices.py::TestWorkedCapacityAtEventsFigure::test_band_prices_one_kw_of_firm_spare_capacity`).
+An event window that the simulated period never enters prices at £0, and
+the projection (`project_fleet`, and `project_multi_year`) names it in one
+`UserWarning` per projection, attributed to its caller, however many ages it prices
+(`tests/integration/test_grid_services_events.py::test_a_projection_shows_each_unobserved_window_warning_once`).
+
+**Per-year revenue.** Each simulated age's node holds the fleet's own-use and its
+income, `seg_revenue + grid_services_income`, which reads no own-use rate.  Between
+simulated ages each follows PCHIP through its values at the simulated ages, and each
+year's revenue is
+
+```
+fleet_revenue_gbp_y = own_use_rate_pence_per_kwh × fleet_billed_own_use_kwh_y / 100 + income_y
+```
+
+Revenue itself is not interpolated, so it is affine in the own-use rate in every year,
+and at least 0 whenever the income at every simulated age is, since PCHIP never
+undershoots its values
+(`tests/unit/test_finance_multi_year_curve.py::TestPerYearRevenue`).
+
+**One ledger per home.** Each simulated age sums its homes' ledgers, the ones the §3
+bills charge: `fleet_billed_own_use_kwh`, `seg_revenue`, `YearPoint.fleet_export_kwh`
+and `YearPoint.fleet_import_kwh` are Σ_homes ℓ_h's own-use, SEG income, export and
+import, so the export a projection reports is the export its SEG revenue is priced on
+(`tests/unit/test_finance_ledger.py::TestTheBillAndTheProjectionReadOneLedger`).
+Battery discharge stays the simulated flow, and so does the throughput battery ageing
+integrates from it: discharge is physical throughput, not a billed quantity.
+
+**Node selection.** The adaptive bisection drives four metrics, the fleet's own-use,
+export, import and income, none of which reads the own-use rate, so the rate moves no
+simulated age.  It measures each one's PCHIP midpoint deviation, as a percentage,
+against a scale fixed once the seeds are simulated: own-use and income against their
+largest magnitude at the seed ages, export and import against the largest fleet
+generation and demand there, the flows they are parts of.  So a flow that is 0 at age 0,
+such as the import of an override fleet whose own-use is capped at demand, or of a fleet
+whose battery covers its demand, still converges
+(`tests/unit/test_finance_projection_adaptive.py::TestTheDeviationScaleSeesAZeroAtAgeZero`),
+and so does an income that is £0 at age 0 at a 0 p own-use rate
+(`tests/unit/test_finance_projection_adaptive.py::TestTheIncomeDeviationScaleSeesAZeroAtAgeZero`).
 
 **Override path.** With `self_consumption_override` set, the capped split (§3)
 drives both revenue terms: `own_use_revenue` prices each home's own-use,
 `min(override × generation, demand)`, and `seg_revenue` prices the export that
-own-use leaves over, `generation − own-use`.  So own-use revenue is exactly what
-the §3 override bills charge.  `YearPoint.fleet_export_kwh`, `fleet_import_kwh` and
-the battery throughput behind ageing stay the simulated flows
-(`tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue`).
+own-use leaves over, `generation − own-use`, at the home's own SEG rate, whatever
+it simulated exporting
+(`tests/unit/test_finance_projection_revenue.py::TestSegIncomeAtTheHomesRate`).  So own-use revenue is exactly what
+the §3 override bills charge.  `YearPoint.fleet_export_kwh` and `fleet_import_kwh` are
+the override's split too, Σ_homes `generation − own-use` and `demand − own-use`, while
+the battery throughput behind ageing stays the simulated flow
+(`tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue::test_override_bills_own_use_up_to_demand_and_exports_the_rest`).
 
-**Annual basis.** Every projection year is a 365-day year.  When a home's
-simulated window is under 360 days, `project_multi_year` scales that home's
-own-use, export, import and battery-discharge kWh, and its SEG income, by
-`k_h = 365 / sim_days_h`, and emits one `UserWarning` per projection.  Each home
-is annualised once (`a_h`) before the override splits it, as `householder_bill`
-annualises before it bills (§3;
-`tests/unit/test_finance_projection_short_window.py::TestProjectMultiYearAnnualisesShortWindow`).  The
-annualised discharge is the yearly throughput that battery cycle ageing
-integrates.  Grid-services income is already annual.  Full-year windows are
-unchanged (`k_h = 1`).  A short window is still one season's sample, so board
-figures want `scenario.period` to cover about one full year.
+**Annual basis.** Every projection year is the window's year.  `project_multi_year`
+scales each home's own-use, export, import and battery-discharge kWh, and its SEG
+income, by its window's annualisation scale, `k_h = year_days_h / days_h`, always:
+`year_days` is 365 or 366 for a window within one calendar year, 365.25 for one
+that crosses a new year.  There is no length threshold and no warning: three June
+days of 2024 scale by `366 / 3` (§7.6), 360 days of 2021 by `365 / 360`, and 400 days from
+2024-01-01 by `365.25 / 400`, and a window that is one whole calendar year is
+unchanged (`k_h = 1`)
+(`tests/unit/test_finance_projection_short_window.py::TestProjectMultiYearAnnualisesShortWindow`,
+`tests/unit/test_finance_window.py::TestOneAnnualisationRule`).  Each home is
+annualised once (`annualise(s_h)`) before its ledger splits it, as `householder_bill`
+annualises before it bills (§3).  The annualised discharge is the yearly
+throughput that battery cycle ageing integrates.  The grid-services term is
+annual by construction, so `k_h` never multiplies it.
+
+A projection's homes cover one window: `project_multi_year` raises `ValueError`
+for a fleet whose homes cover different windows, naming the first position that
+differs and both windows, and names the one window in
+`MultiYearCurve.annualised_from`
+(`tests/unit/test_finance_window.py::TestYearlyFiguresNameTheirWindow`).  A window
+that runs other than from 1 January to 31 December is extrapolated
+(`SimulationWindow.extrapolated`).  `annualised_from`, here and on each
+`BillDistribution` (§3), carries the window for the board reports' extrapolated
+notice, which replaces the short-period warnings
+(`docs/prds/simulation-window-and-cadence.md`, *Resolved design decisions* 7).
+`finance run`'s and `optimize configs`' reports print it under their first heading
+when their bills' window is extrapolated: the annualisation scale to three
+decimals, the window's day count and its first and last days, as in *Yearly
+figures are extrapolated ×183.000 from a 2-day window (2024-03-31 to 2024-04-01),
+not whole calendar years.* (`board_report._extrapolation_notice`;
+`tests/unit/test_board_report.py::TestExtrapolationNotice`).  A short window is still one
+season's sample, so board figures want `scenario.period` to cover whole calendar
+years.
 
 **Battery ageing.** `project_multi_year` simulates each sampled age `t` with
-every home's battery at `battery.compute_soh(t, T_h(t))`, where `T_h(t)` is the
-home's cumulative battery throughput (kWh) from installation to `t`.  Throughput
-accrues at the annualised discharge simulated at the latest seed age (0,
+every home's battery at `battery.compute_soh(t, T_h(t), U_h)`, where `T_h(t)` is
+the energy home h's battery has discharged (kWh) from installation to `t`, its
+cumulative throughput, and `U_h` is its nominal usable capacity
+(`BatteryConfig.nominal_usable_capacity_kwh`).  Throughput accrues at the
+annualised discharge simulated at the latest seed age (0,
 `asset_life_years // 2`, `asset_life_years − 1`) at or below `t`, for seed and
-bisection-trial ages alike (`_throughput_at`).  `T_h` never falls and
-`compute_soh` never rises in age or throughput, so `YearPoint.battery_soh` is
-non-increasing year on year
+bisection-trial ages alike (`_throughput_at`).  One equivalent full cycle is
+`U_h` of discharge, so the cycle fade at `t` is
+`cycle_fade_per_equivalent_full_cycle × T_h(t) / U_h`, beside the calendar fade
+`calendar_fade_rate_per_year × t`, and `compute_soh` clamps
+`1 − calendar fade − cycle fade` to `[soh_floor, 1]`
+(`tests/unit/test_finance_projection_ageing.py::TestBatterySohCountsThroughputToEachAge::test_battery_soh_falls_by_its_calendar_and_cycle_fade_in_closed_form`).
+`T_h` never falls and `compute_soh` never rises in age or throughput, so
+`YearPoint.battery_soh` is non-increasing year on year
 (`tests/unit/test_finance_projection_ageing.py::TestBatterySohCountsThroughputToEachAge`).
 A faded battery stores less, which lowers later years' basis-C own-use and its
 revenue.
 
 **Finite aggregates.** Every simulated age's fleet own-use, export, import and
-revenue, its mean PV and battery state of health, and each home's battery
-discharge and cumulative battery throughput must be finite.  `project_multi_year`
-refuses an age that breaks this, raising `ValueError` naming the age and each
-such aggregate with its value, so the PCHIP curves, each year's clips and later
-ages' battery ageing see only finite values
+income, its mean PV and battery state of health, and each home's battery
+discharge and cumulative battery throughput must be finite, so the PCHIP curves,
+each year's clips and later ages' battery ageing see only finite values.  A home's
+non-finite own-use, export or import is refused by its ledger's L1 (§3, *One ledger
+per home*), at a seed or a bisection-trial age alike, raising `ValueError` naming the
+invariant and each figure it refuses with its value; an infinite import makes basis C
+`inf − inf`, so L1 names the NaN own-use beside the import.  For the aggregates the
+ledger does not hold, the income, the mean states of health, and each home's battery
+discharge and cumulative throughput, `project_multi_year` refuses the age, raising
+`ValueError` naming the age and each such aggregate with its value
 (`tests/unit/test_finance_projection.py::TestProjectMultiYearRefusesNonFiniteAggregates`).
 
 **No-flex identity** (flat-rate fleet, grid_services = 0):
 
-When `grid_services_income_per_kw_per_year_gbp=0.0` and `export_revenue=0`
-(synthetic SEG-free fleet):
+When there is no grid-services income (`grid_services_model = NoGridServices()`) and no SEG rate priced the
+fleet's runs (`RunPricing.seg_rate_pence_per_kwh` None; synthetic SEG-free fleet):
 
 ```
-fleet_revenue_gbp = own_use_rate × fleet_sc / 100
+fleet_revenue_gbp = own_use_rate × fleet_billed_own_use / 100
 ```
 
-This identity is hard-asserted in `TestNoFlexAnchorReconciliation::test_no_flex_cbs_revenue_identity`.
+This identity is hard-asserted in `tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_no_flex_cbs_revenue_identity`.
 
 ### Grid-charge energy is householder import, not a CBS outgoing
 
@@ -390,16 +627,16 @@ each grid-charged kWh twice.
 
 ## 5. Cost-Recovery Solve + Feasibility Cases
 
-Source: `finance.py:solve_cost_recovery_rate()`.
+Source: `projection.py:run_cost_recovery()`, whose solution `solve_cost_recovery_rate()` returns for a scenario's fleet.
 
-The CBS net surplus per home is **exactly affine** in the own-use rate `r`:
+The solve reconstructs the CBS net surplus per home as an **affine** function of the own-use rate `r`:
 
 ```
-net_surplus(r) = [Σ_years (r × sc_y/100 + C_y − opex − debt_y)] / (N_years × N_homes)
+net_surplus(r) = [Σ_years (r × own_use_y/100 + C_y − opex − debt_y)] / (N_years × N_homes)
 ```
 
-where `sc_y` is the fleet own-use the bills charge at year `y`
-(`YearPoint.fleet_self_consumption_kwh`, §4's `fleet_sc_kwh` = Σ_homes `_billed_energy`
+where `own_use_y` is the fleet own-use the bills charge at year `y`
+(`YearPoint.fleet_billed_own_use_kwh`, §4's `fleet_billed_own_use_kwh` = Σ_homes `home_ledger`
 own-use: basis C, or the capped override own-use; annualised as in §4, after degradation
 interpolation), and `C_y` is rate-independent (SEG + grid-services, fixed by physics).
 `opex` is the fleet opex (`opex_per_home_per_year_gbp × N_homes`).  `debt_y` is
@@ -408,12 +645,22 @@ while the sum runs over all `N_years = asset_life_years`.  With the defaults
 (`loan_term_years` = 15, `asset_life_years` = 25) debt service is therefore paid in
 15 of the 25 years and enters the mean at 15/25 of its annual value (worked in §7.4).
 Source: `project_economics` (algorithm steps 5, 6 and 10 in its docstring).
-PCHIP interpolation and `project_economics` are both linear in per-year revenue,
-so the affine form is preserved end-to-end.
+`project_economics` is affine in per-year revenue, so shifting each year's revenue
+by `(r − r0)/100 × own_use_y` gives a surplus that is affine in `r` by construction.
+
+**Exactness.**  Node selection reads no rate, and each year's revenue is
+`r0 × own_use_y / 100 + C_y` with `C_y` the PCHIP of the income nodes (§4, *Per-year
+revenue*).  So the reconstruction `rev_y + (r − r0)/100 × own_use_y` is a re-projection
+at rate `r`, exactly, in every year, and the two-point fit's `r*` is the re-projected
+solution whatever the configured `r0` is.  On task 720's nodes (own-use
+10,000 / 9,000 / 6,000 kWh and `C` of £500 / 800 / 820 at ages 0 / 12 / 24), configured
+rates of 0, 15 and 23 p solve to one `r*`, and a re-projection at it meets the floor
+(`tests/unit/test_cost_recovery_solve.py::TestTheSolveIsExactAndIndependentOfTheConfiguredRate`).
 
 The solver uses this affine structure to avoid re-simulating for each trial rate:
 
-1. Run `project_multi_year` **once** at the configured `r0`.
+1. Run `project_fleet` **once** at the configured `r0`.  The one projection also serves
+   the economics at `r0` and the outlay below.
 2. Evaluate `s0 = net_surplus(0)`, `s_ret = net_surplus(retail)`.
 3. `slope = (s_ret − s0) / retail`.
 4. `r* = (floor − s0) / slope`  (closed-form).
@@ -424,38 +671,41 @@ The solver uses this affine structure to avoid re-simulating for each trial rate
 | `r* < 0` — project over-delivers at r = 0 | 0 | `rate_clamped_zero` | True |
 | `0 ≤ r* ≤ retail` — interior solve | `r*` | `floor` | True |
 | `r* > retail` — impossible to meet floor | `retail` | `infeasible_above_retail` | False |
-| Degenerate (no self-consumption) | 0 or retail | one of the above | as above |
+| Degenerate (no billed own-use) | 0 or retail | one of the above | as above |
 
-After the solve, a separate age-0 fleet simulation provides per-home granularity
-for the `BillDistribution` (representative median-outlay home, min/mean/median/max).
+The `BillDistribution` (representative median-outlay home, min/mean/median/max) bills
+the projection's age-0 summaries (`FleetProjection.age0_summaries`) at the solved rate.
+The projection simulated that age-0 fleet, a new install with the scenario's SEG filled,
+so the solve runs no second simulation.  `run_cost_recovery` returns the projection, its
+configured-rate economics and the solution together (`CostRecoveryRun`).
 
-**[FIN] override solve** (`TestOverrideOwnUseCappedAtDemand`; the §7.2 anchor fleet
+**[FIN] override solve** (`tests/integration/test_cost_recovery_calibration.py::TestOverrideOwnUseCappedAtDemand`; the §7.2 anchor fleet
 and finance with `self_consumption_override` 0.70: 3,400 kWh demand, 5,775 kWh
 generation, no SEG, no grid services).  The anchor's 5,000 kWh fleet caps at the same
 3,400 kWh, `min(0.70 × 5,000, 3,400)`, so both fleets solve to one rate.  Carry `r*`
-to 6 dp and the own-use payment to 4 dp: the 4-dp rate 7.1901 gives bills of
-£24,446.34, and £244.46 gives an outlay of £486.63.
+to 6 dp: the 4-dp rate 7.2414 gives bills of £24,620.76.
 
 ```
-own_use_kwh/home = min(0.70 × 5,775, 3,400)             = 3,400 kWh/yr    (capped at demand)
-fleet_sc         = 100 × 3,400                          = 340,000 kWh/yr
-required revenue = 13,100 + 14,410.5445 × 15/25 + 2,700 = 24,446.3267     = £24,446.33/yr (§7.4)
-r*               = 24,446.3267 / (340,000 / 100)        = 7.190096 p/kWh  (live solve: 7.190096)
-bills collect    = 100 × 3,400 × 7.190096 / 100         = £24,446.33/yr   (the required revenue)
+own_use_kwh/home     = min(0.70 × 5,775, 3,400)             = 3,400 kWh/yr    (capped at demand)
+fleet_billed_own_use = 100 × 3,400                          = 340,000 kWh/yr
+required revenue     = 13,100 + 14,701.4783 × 15/25 + 2,700 = 24,620.8870     = £24,620.89/yr (§7.4)
+r*                   = 24,620.8870 / (340,000 / 100)        = 7.241437 p/kWh  (live solve: 7.241437)
+bills collect        = 100 × 3,400 × 7.241437 / 100         = £24,620.89/yr   (the required revenue)
 ```
 
-On basis C the same anchor solves at 12.2232 p (§7.4).  The bills collect exactly the
+On basis C the same anchor solves at 12.3104 p (§7.4).  The bills collect exactly the
 required revenue, so they fund the £27 floor the solve reports
-(`test_surplus_is_what_the_bills_fund`).  The representative home's bill (§3):
+(`tests/integration/test_cost_recovery_calibration.py::TestOverrideOwnUseCappedAtDemand::test_surplus_is_what_the_bills_fund`).  The representative home's bill (§3):
 
 ```
-own_use_payment_gbp = 7.190096 × 3,400 / 100         = £244.4633/yr
+own_use_payment_gbp = 7.241437 × 3,400 / 100         = £246.2089/yr
 import_cost_gbp     = 0                                (import = 3,400 − 3,400 = 0)
-total_outlay_gbp    = (0 + 219 + 244.4633) × 1.05    = £486.64/yr
-saving_vs_baseline  = 1,051.05 − 486.64              = £564.41/yr   (53.7%)
+total_outlay_gbp    = (0 + 219 + 246.2089) × 1.05    = £488.47/yr
+saving_vs_baseline  = 1,051.05 − 488.47              = £562.58/yr   (53.5%)
 ```
 
-The 0.5.0 tag solves this anchor at the basis-C 12.2232 p (§7.4) and bills the
+The 0.5.0 tag, which prices the PV capex on each home's 5.5 kWp nameplate (£775,000,
+debt service £14,410.5445; §6), solves this anchor at the basis-C 12.2232 p and bills the
 uncapped 0.70 × 5,775 = 4,042.5 kWh/home (§3), so its bills collect
 100 × 4,042.5 × 12.2232 / 100 = £49,412/yr and fund (49,412 − 13,100 − 8,646.33) / 100
 = £276.66/home/yr against the £27 it reports.
@@ -464,37 +714,45 @@ uncapped 0.70 × 5,775 = 4,042.5 kWh/home (§3), so its bills collect
 
 ## 6. Capex → Debt → Required-Own-Use → Outlay Coupling (H2)
 
-Source: `finance.py:project_economics()`.
+Source: `projection.py:project_economics()`.
 
 The project capex is built up as a 4-term sum:
 
 ```
-total_capex_gbp = Σ_homes [
-    pv_kwp × pv_cost_per_kwp_gbp
-  + roof_fit_cost_gbp
-  + battery_kwh × battery_cost_per_kwh_gbp
-  + eff_inv_kw × inverter_cost_per_kw_gbp
-]
+total_capex_gbp = curve.fleet_pv_dc_kw × pv_cost_per_kwp_gbp
+  + Σ_homes [
+      roof_fit_cost_gbp
+    + battery_kwh × battery_cost_per_kwh_gbp
+    + eff_inv_kw × inverter_cost_per_kw_gbp
+  ]
 
 financed        = max(total_capex_gbp − grant_gbp, 0)
 equity_gbp      = financed × equity_fraction
 debt_gbp        = financed × (1 − equity_fraction)
 annual_debt_svc = annuity(debt_gbp, loan_rate, loan_term_years)
 
-annuity(P, r, n) = P × r / (1 − (1 + r)^−n)    (= P / n when r = 0; _annuity_payment)
+annuity(P, r, n) = P × r / (1 − (1 + r)^−n)    (= P / n when r = 0; annuity_payment)
 ```
+
+`MultiYearCurve.fleet_pv_dc_kw` is the PV DC the curve's generation came from.
+`project_fleet` sets it to Σ `pv.wired_dc_capacity_kw` of the fleet's homes, the
+whole modules of the template that the simulator wires (a 3 kWp home wires 2.803 kWp,
+a 5.5 kWp home 5.606 kWp); `spreadsheet_revenue_curve` sets it to `n_homes × pv_kwp`,
+the nameplate its generation is a yield of.  The PV term is linear in kWp, so a fleet
+total prices it.
 
 Raising capex (larger battery or PV) directly raises `annual_debt_svc`, which
 raises `s0` (the surplus deficit at r = 0), which raises `r*` (to compensate),
 which raises `own_use_payment_gbp` per home, which raises `total_outlay_gbp`.
 
 This **H2 monotonicity** is exact by the affine solve algebra.  It is
-hard-asserted in `TestStructuralInvariants::test_h2_capex_monotone_on_fin_fleet`.
+hard-asserted in `tests/integration/test_cost_recovery_calibration.py::TestStructuralInvariants::test_h2_capex_monotone_on_fin_fleet`.
 
-**[FIN] example** (100 homes × 5.5 kWp + 5 kWh, grant = £250,000):
+**[FIN] example**, the spreadsheet column (100 homes × 5.5 kWp + 5 kWh, 550 kWp on the
+curve, grant = £250,000; Capital_Stack!B6):
 
 ```
-total_capex  = 100 × (5.5×1000 + 1000 + 5.0×250) = 100 × £7,750 = £775,000
+total_capex  = 550×1000 + 100 × (1000 + 5.0×250) = £550,000 + £225,000 = £775,000
 financed     = 775,000 − 250,000 = £525,000
 equity       = 525,000 × 0.75   = £393,750
 debt         = 525,000 × 0.25   = £131,250
@@ -503,16 +761,18 @@ opex/yr      = 100 × £131       = £13,100/yr
 floor_total  = 100 × £27        = £2,700/yr
 ```
 
-§7.4 turns `debt_svc`, `opex` and `floor_total` into the solved rate for the synthetic
-[FIN] fleet (12.22 p/kWh) and shows why summing them as one year's cost
-(£30,210/yr → 15.1 p/kWh) overstates it.
+The synthetic anchor of §7.2–§7.4 solves the same 100 homes through `project_fleet`,
+so its capex prices the 560.599 kWp its homes wire: £560,599.20 + £225,000 = £785,599.20,
+financed £535,599.20, debt £133,899.80 and debt service ≈ £14,701.48/yr.  §7.4 turns
+that `debt_svc`, `opex` and `floor_total` into the anchor's solved rate (12.31 p/kWh)
+and shows why summing them as one year's cost (£30,501/yr → 15.25 p/kWh) overstates it.
 
 ---
 
 ## 7. Worked No-Flex [FEAS] Reconciliation (Corrected Premise)
 
-Source: calibration anchor from `TestNoFlexAnchorReconciliation::test_no_flex_solve_report`
-(live run: `tests/integration/test_cost_recovery_calibration.py`).
+Source: calibration anchor from the live run of
+`tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_no_flex_solve_report`.
 
 ### 7.1 Corrected False Premise
 
@@ -534,26 +794,30 @@ The correct statement is:
 ### 7.2 [FIN] Synthetic No-Flex Calibration
 
 The calibration test uses a 100-home synthetic fleet (5.5 kWp + 5 kWh, Bristol
-period 2024-01-01 to 2024-12-31) with injected energy aggregates and no PVGIS
-(fast, deterministic, no-network):
+period 2021-01-01 to 2021-12-31, the non-leap calendar year of
+`tests/_finance_builders.py::make_period`) with injected energy aggregates over that
+year and no PVGIS (fast, deterministic, no-network), so they are billed and projected
+at `k = 1` with 365 days of standing charge (§3, §4):
 
 ```
 Synthetic energy inputs (per home, annual):
-  self_kwh           = 2,000 kWh   (constant power series; B-style sc)
-  export_kwh         = 3,775 kWh   (constant power series)
-  import_kwh         = 1,400 kWh
-  grid_charge_cost   = None         (flat-rate; no battery grid-charging)
-  export_revenue     = £0           (SEG = 0, CBS retains all export)
-  grid_services      = £0/kW/yr     (no-flex)
+  self_kwh                       = 2,000 kWh   (constant power series; B-style sc)
+  export_kwh                     = 3,775 kWh   (constant power series)
+  import_kwh                     = 1,400 kWh
+  grid_charge_cost               = None         (flat-rate; no battery grid-charging)
+  export_revenue                 = £0           (SEG = 0, CBS retains all export)
+  grid_services                  = £0/kW/yr     (no-flex)
 
   Basis C (no grid-charging):
-    own_use_kwh/home = demand − import = (2000 + 1400) − 1400 = 2,000 kWh/home
+    own_use_kwh/home             = demand − import = (2000 + 1400) − 1400 = 2,000 kWh/home
     (basis C == B-style sc when grid_charge == 0; see §2)
-  fleet_sc (basis C) = 100 × 2,000 = 200,000 kWh/yr
-  synthetic scf      ≈ 0.346        (2,000 / (2,000 + 3,775))
+  fleet_billed_own_use (basis C) = 100 × 2,000 = 200,000 kWh/yr
+  synthetic scf                  ≈ 0.346        (2,000 / (2,000 + 3,775))
 ```
 
-**[FIN] finance parameters** (from `FinanceConfig` defaults / `_FIN_GOLDEN` / the [FIN] fixture builders):
+**[FIN] finance parameters** (from `tests/_fin_calibration.py::make_fin_finance`, the [FIN]
+finance θ and CR6 share; it takes the grant, equity, loan and own-use cells from `FIN_GOLDEN`
+and spells the other values, and CR6's anchor builds it with no self-consumption override):
 
 | Parameter | Value |
 |-----------|-------|
@@ -564,22 +828,22 @@ Synthetic energy inputs (per home, annual):
 | `equity_fraction` | 0.75 |
 | `loan_rate` | 7 % |
 | `loan_term_years` | 15 |
-| `asset_life_years` | 25 (`FinanceConfig` default; the [FIN] fixture sets it to 25) |
+| `asset_life_years` | 25 (`make_fin_finance` sets it to 25, which is also the `FinanceConfig` default) |
 | `opex_per_home_per_year_gbp` | £131 |
 | `own_use_rate_pence_per_kwh` | 15 p/kWh (configured; solved rate below) |
 | `retained_cash_floor_per_home_per_year_gbp` | £27 |
 | `retail_baseline_rate_pence_per_kwh` | 23 p/kWh |
 | `vat_rate` | 5 % |
-| `standing_charge_pence_per_day` | 60 p/day (required `FinanceConfig` field; set to 60 in the [FIN] fixture builders) |
-| `grid_services_income_per_kw_per_year_gbp` | £0 (no-flex) |
+| `standing_charge_pence_per_day` | 60 p/day (`make_fin_finance` sets it to 60; a required `FinanceConfig` field) |
+| `grid_services_model` | `NoGridServices()` (no-flex) |
 | PV degradation rate (`PVConfig.degradation_rate_per_year`) | 0.5 %/yr (0.005, linear; default in `calculate_degradation_factor`) |
 
 ### 7.3 Live Calibration Output (REPORTED — not pinned)
 
 ```
 [NO-FLEX ANCHOR REPORT] (synthetic scf≈0.346; assumption-dependent)
-  Solved own-use rate: 12.22 p/kWh  (target ≈15p; reported, not pinned)
-  Saving vs baseline:  £226          (target ≈£324; reported, not pinned)
+  Solved own-use rate: 12.31 p/kWh  (target ≈15p; reported, not pinned)
+  Saving vs baseline:  £224          (target ≈£324; reported, not pinned)
   Net surplus/home/yr: £27.00        (= £27 floor when binding='floor')
   Binding:             floor
   Feasible:            True
@@ -589,25 +853,27 @@ The reported **saving** follows from §3's H3 identity at the solved rate (H3 is
 here: the untariffed fixture prices import at the 23 p retail fallback):
 
 ```
-saving_vs_baseline = 2,000 × (23 − 12.2232) × 1.05 / 100 = £226.31/home/yr
+saving_vs_baseline = 2,000 × (23 − 12.3104) × 1.05 / 100 = £224.48/home/yr
 ```
 
 The [FEAS] saving of ≈£324 assumes the spreadsheet self-consumption fraction of 0.70
 (Sensitivity!B7: 5 kWh battery; see §4.1 of `docs/finance-spreadsheet-reconciliation.md`).
 The injected aggregates (self = 2,000 kWh, gen = 5,775 kWh) give scf ≈ 0.346 instead
 (§7.2), and H3 scales the saving with own-use kWh per home, so the solved saving
-(≈£226 live vs. ≈£324 target) differs.
+(≈£224 live vs. ≈£324 target) differs.
 
 ### 7.4 Why the Live Rate Differs from the Single-Year Approximation
 
 A single-year back-of-envelope gives:
 
 ```
-required revenue = opex(13,100) + debt_svc(14,410) + floor×n(2,700) = £30,210/yr
-r*_approx        = 30,210 / (200,000 / 100) = 15.1 p/kWh
+required revenue = opex(13,100) + debt_svc(14,701) + floor×n(2,700) = £30,501/yr
+r*_approx        = 30,501 / (200,000 / 100) = 15.25 p/kWh
 ```
 
-The live calibration value is **12.22 p/kWh** — lower than this approximation.
+`debt_svc` is the anchor's: its homes are solved through `project_fleet`, so its capex
+prices the 560.599 kWp they wire, £785,599.20, financed £535,599.20 with £133,899.80 of
+debt (§6).  The live calibration value is **12.31 p/kWh** — lower than this approximation.
 The whole difference is the debt schedule.
 
 **Cause.**  `project_economics` charges `annual_debt_svc` only in the loan years
@@ -622,39 +888,38 @@ For this fixture (flat curve, SEG = 0, grid services = 0), setting §5's
 `net_surplus(r*) = floor` gives:
 
 ```
-r* = (opex + debt_svc × loan_term/asset_life + floor × n_homes) / (fleet_sc / 100)
+r* = (opex + debt_svc × loan_term/asset_life + floor × n_homes) / (fleet_billed_own_use / 100)
 ```
 
-**Reproduction.**  Carry `debt_svc` to 4 dp: the 2-dp value 14,410.54 × 15/25 gives
-8,646.32, but the live figure is 8,646.33.
+**Reproduction.**  Carry `debt_svc` to 4 dp:
 
 ```
-debt_svc × 15/25 = 14,410.5445 × 15/25          = £8,646.33/yr
-required revenue = 13,100 + 8,646.33 + 2,700    = £24,446.33/yr
-r*               = 24,446.33 / (200,000 / 100)  = 12.2232 p/kWh    (live solve: 12.2232)
+debt_svc × 15/25 = 14,701.4783 × 15/25          = £8,820.89/yr
+required revenue = 13,100 + 8,820.89 + 2,700    = £24,620.89/yr
+r*               = 24,620.89 / (200,000 / 100)  = 12.3104 p/kWh    (live solve: 12.3104)
 ```
 
-At the solved rate every one of the 25 `YearPoint.fleet_revenue_gbp` values is £24,446.33,
+At the solved rate every one of the 25 `YearPoint.fleet_revenue_gbp` values is £24,620.89,
 the required revenue above, to the penny.  Equivalently,
-`(13,100 + 14,410.5445 + 2,700 − 14,410.5445 × 10/25) / 2,000 = 12.2232 p/kWh`: the
+`(13,100 + 14,701.4783 + 2,700 − 14,701.4783 × 10/25) / 2,000 = 12.3104 p/kWh`: the
 single-year sum also charges debt service in the ten debt-free years 15–24, worth
-`14,410.5445 × 10/25 / 2,000 = 2.88 p/kWh` — the whole gap between 15.1 and 12.22 p/kWh.
+`14,701.4783 × 10/25 / 2,000 = 2.94 p/kWh` — the whole gap between 15.25 and 12.31 p/kWh.
 
 **The revenue curve contributes nothing.**  The injected `simulate` returns the same
 `FleetResults` at every sampled age (0, 12, 24), so the 25 revenue points are identical
 and PCHIP returns that constant.  PV degradation (0.5 %/yr, §7.2) shows only in
 `YearPoint.pv_soh` (1.00 at year 0 → 0.88 at year 24), because the injected results
 ignore the aged home configs.  On a real-physics run, degradation lowers later-year
-generation (`_aged_homes` → `simulate_pv_output` → `apply_degradation`), which would
-raise `r*`, not lower it.
+generation (`_aged_homes` → `simulate_pv_output`, which ages each array's DC power before
+the inverter), which would raise `r*`, not lower it.
 
 **The key structural result is exact.**  At binding = 'floor' the closed-form affine solve
 returns `net_surplus_per_home_per_year_gbp == floor` to float ε, regardless of the rate
 value (£27.00 at the [FIN] anchor).  It is hard-asserted (to within 1e-6) as H1 in
-`TestStructuralInvariants::test_h1_surplus_equals_floor` (£50 floor) and in
-`TestArbitrageBasisCReconciliation::test_b_solve_binds_floor_grid_charge` (£27 floor);
-the [FIN] anchor test, `test_no_flex_solve_report`, prints its surplus and does not
-assert it.  The printed rate (12.22 p) and saving (£226) are live, code-authoritative
+`tests/integration/test_cost_recovery_calibration.py::TestStructuralInvariants::test_h1_surplus_equals_floor` (£50 floor) and in
+`tests/integration/test_cost_recovery_calibration.py::TestArbitrageBasisCReconciliation::test_b_solve_binds_floor_grid_charge` (£27 floor);
+the [FIN] anchor test, `tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_no_flex_solve_report`, prints its surplus and does not
+assert it.  The printed rate (12.31 p) and saving (£224) are live, code-authoritative
 figures reported for transparency; no test pins them to specific digits.
 
 ### 7.5 Assertion Strategy (Mirrors θ §3.3)
@@ -665,35 +930,38 @@ figures reported for transparency; no test pins them to specific digits.
 | No-flex CBS-revenue identity | **HARD asserted** | By construction (grid_services=0, SEG=0) |
 | `0 ≤ r* ≤ retail` | **HARD asserted** | Valid clamped range |
 | H1: `surplus == floor` (interior regime) | **HARD asserted** | Exact by the affine solve algebra |
-| The bills fund the solve's surplus: n × own-use payment, less opex and the mean debt service (§7.4), per home | **HARD asserted** | On the anchor and under the 0.70 override (`test_surplus_is_what_the_bills_fund`): the rate base is the own-use the bills charge (§5) |
+| The bills fund the solve's surplus: n × own-use payment, less opex and the mean debt service (§7.4), per home | **HARD asserted** | On the anchor and under the 0.70 override (`tests/integration/test_cost_recovery_calibration.py::TestNoFlexAnchorReconciliation::test_surplus_is_what_the_bills_fund` and `tests/integration/test_cost_recovery_calibration.py::TestOverrideOwnUseCappedAtDemand::test_surplus_is_what_the_bills_fund`): the rate base is the own-use the bills charge (§5) |
 | H2: capex → rate + outlay monotone | **HARD asserted** | Exact by affine algebra |
 | flex → strictly lower rate | **HARD asserted** | Monotone by affine algebra |
-| θ: capex == £775,000, min_dscr ≥ 1.20 | **HARD asserted** | 4-term build-up exact; covenant floor achievable |
-| Solved rate ≈ 15 p/kWh (no-flex anchor) | *REPORTED only* | ≈15 p matches only the single-year approximation; the solve spreads 15 years of debt service over the 25-year asset life (§7.4); live value: 12.22 p |
-| Saving ≈ £324 vs baseline (no-flex) | *REPORTED only* | Assumption-dependent (scf ≈ 0.346 vs 0.70; §7.3); live value: £226 |
+| θ: capex == £775,000, min_dscr ≥ 1.20 | **HARD asserted** | 4-term build-up exact on the spreadsheet column's 550 kWp; covenant floor achievable |
+| Solved rate ≈ 15 p/kWh (no-flex anchor) | *REPORTED only* | ≈15 p matches only the single-year approximation; the solve spreads 15 years of debt service over the 25-year asset life (§7.4); live value: 12.31 p |
+| Saving ≈ £324 vs baseline (no-flex) | *REPORTED only* | Assumption-dependent (scf ≈ 0.346 vs 0.70; §7.3); live value: £224 |
 
 ### 7.6 Why the Real-Physics Column Is Not Comparable with the Anchor
 
-Source: `TestPhysicsReconciliationColumn::test_physics_path_reported`
-(`@pytest.mark.slow`; real PVGIS weather), on the fleet
-`_make_physics_column_scenario_cr6` builds.
+Source: `tests/integration/test_cost_recovery_calibration.py::TestPhysicsReconciliationColumn::test_physics_path_reported`,
+on the fleet `tests/_fin_calibration.py::make_physics_column_scenario` builds.  The verify
+runs it offline, on the clear June days that `PHYSICS_COLUMN_DAYS` in
+`tests/_fin_calibration.py` names and that the test's module seeds as Bristol's TMY
+(`tests/_seeded_tmy.py`).
 
 The physics column solves 2 homes of 5.5 kWp + 5 kWh under the §7.2 [FIN] finance,
-simulated over three January days (2024-01-01 to 2024-01-03).  It hard-asserts only that
+simulated over three clear June days (2024-06-21 to 2024-06-23).  It hard-asserts only that
 the physics path returns a structurally valid `CostRecoverySolution`; the rate, saving
 and surplus it prints are reported, not pinned.  Its rate cannot be set against the
 anchor's (§7.3), for three reasons:
 
-- **One winter window stands in for a year.**  The window is under 360 days, so
-  `project_multi_year` scales each home's window totals to a 365-day year by
-  `k = 365 / 3 ≈ 121.67` (§4, *Annual basis*).  The rate therefore extrapolates three
-  January days to a whole year: one season's sample, where the anchor's injected
-  aggregates are already annual (`k = 1`).
+- **Three days stand in for a year.**  `project_multi_year` scales each home's
+  window totals to the window's year, 2024's 366 days, by `k = 366 / 3 = 122`
+  (§4, *Annual basis*).  The rate therefore extrapolates three
+  synthetic clear June days to a whole year: one season's sample, and not Bristol's
+  weather, where the anchor's injected aggregates are already annual (`k = 1`).
 - **The fleet carries no debt.**  Its capex,
-  `2 × (5.5 × 1,000 + 1,000 + 5 × 250) = £15,500`, is below the £250,000 [FIN] grant, so
+  the 2 × 5.606 kWp its homes wire × £1,000 + 2 × (1,000 + 5 × 250) = £15,711.98, is
+  below the £250,000 [FIN] grant, so
   financed capex, debt and equity are all zero (§6).  No debt service enters its solve,
   DSCR is `inf` and the equity IRR is `nan`, where the anchor's 100 homes finance
-  £525,000 and carry £131,250 of debt (§6, §7.4).  `TestPhysicsColumnPremises` asserts
+  £535,599.20 and carry £133,899.80 of debt (§6, §7.4).  `tests/integration/test_cost_recovery_calibration.py::TestPhysicsColumnPremises` asserts
   this premise in the fast suite.
 - **The homes age.**  The column re-simulates the fleet at sampled ages, so PV
   degradation and battery fade (§4, *Battery ageing*) lower its later-year own-use.
@@ -714,25 +982,114 @@ W1 (flexibility-value finance integration, task/52–56) reaches the model two w
 an exogenous CBS revenue term (§8.1) and endogenous physics that moves the energy
 aggregates (§8.2).
 
-### 8.1 Grid-Services Income (Exogenous £/kW/yr)
+### 8.1 Grid-Services Income (Flat £/kW/yr or Capacity at Events)
 
-`FinanceConfig.grid_services_income_per_kw_per_year_gbp` is a W1-filled field.
+Under the flat model, `FinanceConfig.grid_services_model = FlatGridServices(g)`,
+where g, the pricing's `income_per_kw_per_year_gbp`, is a W1-filled rate (£/kW/yr).
 At each projection year:
 
 ```
-grid_services_income = grid_services_income_per_kw_per_year_gbp
-                       × Σ_homes battery.max_discharge_kw
+grid_services_income = g × Σ_homes battery.max_discharge_kw
 ```
 
 A positive value increases `fleet_revenue_gbp` without changing householder
 sc_kwh, so it directly reduces the required rate:
 
 ```
-r*(flex) = r*(no-flex) − grid_services_income / (fleet_sc / 100)   [approx, single-year]
+r*(flex) = r*(no-flex) − grid_services_income / (fleet_billed_own_use / 100)   [approx, single-year]
 ```
 
 This directional property is hard-asserted in
-`TestFlexLowersSolvedRate::test_grid_services_lowers_solved_rate`.
+`tests/integration/test_cost_recovery_calibration.py::TestFlexLowersSolvedRate::test_grid_services_lowers_solved_rate`.
+
+Under a `GridServicesEventsConfig` as `grid_services_model` the income is §4's
+capacity-at-events term, priced at each projection age from that age's simulated
+fleet: £9.97 per kW of firm spare capacity per year in the central band (§4).
+
+**Firm capacity per event day.** An event day of window w is a local calendar
+date holding at least one of w's timesteps. Per battery home and event day d,
+with `P = max_discharge_kw`, `floor = Battery(battery_config).min_soc_kwh` and
+`h = event_hours`:
+
+```
+operational:  avail(home, d) = max(0, min(P − max_{t∈d∩w} discharge(t),
+                                          min_{t∈d∩w}(soc(t) − floor) / h))
+capacity:     avail(home, d) = max(0, min(P, (soc(t₀) − floor) / h)),
+              t₀ the first timestep of d in w
+A(d)        = Σ_home avail(home, d)      a home whose index lacks d adds 0
+avail_w     = mean over w's event days d of A(d)      the figure §4 prices
+```
+
+`GridServicesEventsConfig.delivery_baseline` names the baseline, and the
+scenario key `grid_services_model.delivery_baseline` sets it: `"operational"`,
+the default, or `"capacity"`; any other value is refused with a
+`ConfigurationError` naming both. Each mirrors a product. `operational` counts the
+increment above the battery's own discharge, as NESO's Demand Flexibility
+Service measures delivery against an operational baseline; `capacity` counts the
+battery's whole window discharge, as NGED baselines domestic storage at its
+capacity (`tests/unit/test_gridservices.py::TestFirmCapacityPerEventDay`).
+
+**Reliability.** Beside the booked mean, the capacity-at-events breakdown reports
+the capacity available on at least 50% and on at least 90% of event days: the
+⌈q·n⌉-th largest of the n daily totals A(d), for q = 0.5 and 0.9, the rank
+rounded up, never to the nearest. It is not an interpolated percentile: on daily
+totals (1.0, 2.0) kW the 90% figure is 1.0 kW, where numpy's linear 10th
+percentile, 1.1 kW, is available on only half the days. The 90% figure never
+exceeds the 50% figure. For a fleet whose homes share one simulated index, as
+a `FleetRunner.simulate` fan-out's do, the season minimum, the 0.5.0 tag's figure, never exceeds
+the 90% figure either (`tests/unit/test_gridservices.py::TestReliabilityRank`).
+
+**The energy ceiling.** A 5 kWh battery charged to 90% holds 4.0 kWh above its
+0.5 kWh floor: 1.33 kW over a 3 h event, against the 2.5 kW of discharge power
+the flat rate prices.
+
+**Displaced evening self-use.** The energy an event would take is energy the
+home would otherwise use that evening. Per home and event day the breakdown
+takes `min(avail(home, d) × h, the discharge after the window)`, the discharge
+counted until the next recharge, the next event day's window or the end of the
+simulated index, whichever comes first. It reports the fleet's mean over event
+days (kWh per event) and its value, each home-day's kWh at the mean tariff over
+its span, times `events_per_year` (£ a year). A home simulated without a tariff
+has a `tariff_rate` of 0, so its displaced self-use is valued at £0, where the
+bill prices that home's import at the retail baseline rate. Both are reported
+beside the income and not netted from it: the displaced energy lands on the
+householder's bill, not on CBS revenue, and netting it needs a counterfactual
+run with an event-day dispatch (docs/prds/grid-services-pricing-model.md §6
+decision 15, §11).
+
+**Where the income renders.** Whenever the scenario's pricing books grid
+services, flat or at events, with or without `--flex-band`, the finance report
+renders a Grid Services Income section after Project Economics (§9). Its model
+line names the model: for events pricing its band and its delivery baseline, for
+flat pricing its rate. When the run projects (`--project` or `--cost-recovery`),
+a table gives, per mode, the income the projection booked at year 1 and at
+year N: the first and last entries of `FleetProjection.grid_services_income_gbp`,
+which holds the income priced at every simulated age, ascending, and whose first
+and last entries are the seed ages 0 and N − 1. A table of this window's fleet
+follows, the same under every assumption: the annual fleet income and, under
+events pricing, the per-event available capacity, the two reliability rows and
+the per-event displaced row for a single event window, and — for several, since
+summed over windows they describe no set of event days; the value-per-year row
+sums the windows. A note says the income is gross of the displaced self-use, and
+that a home without a tariff values it at £0. The flexibility-value block's
+grid-services row (`--flex-band`) is that booked income per battery home and per
+kW of battery discharge, under a headline of the band's time-shift plus it; a
+scenario that prices no grid services shows the band's consulting figure there,
+labelled not booked (docs/flexibility-buildability.md §1)
+(`tests/unit/test_gridservices.py::TestDisplacedEveningSelfUse`;
+`tests/unit/test_board_report_grid_services.py`, the several-window rule in
+`tests/unit/test_board_report_grid_services.py::TestGridServicesIncomeSection::test_with_several_event_windows_no_per_window_figure_is_summed`;
+`tests/integration/test_grid_services_events.py::test_b10_finance_run_renders_the_booked_grid_services_income_with_the_economics`,
+`tests/integration/test_grid_services_events.py::test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement`).
+
+The flat rates (£1.5, £12 and £48 per kW of installed discharge power per year
+in the low, central and high bands) and the events rates are
+independent calibrations of the same three bands, held side by side in
+`gridservices.GRID_SERVICES_RATE_BANDS`. With the default window, utilisation
+0.6 and aggregator share 0.25, the events rates net £4.99, £9.97 and £19.94 per
+kW of firm spare capacity per year (§4). Neither column is derived from the
+other, and both are provisional
+(docs/prds/enhanced-grid-services-capacity-at-events.md open-Q2).
 
 ### 8.2 TOU Arbitrage / Time-Shift (Endogenous Physics) — Basis C
 
@@ -751,31 +1108,32 @@ own_use_kwh (basis C) = sc_kwh (B-style) − grid_charge_kwh
 
 So the CBS neither bills nor pays for grid-charged energy (§4) and bears only the
 battery round-trip loss, absorbed into the solved rate.  The solved rate therefore
-moves with arbitrage only through basis-C own-use (`fleet_sc` in `project_multi_year`).
+moves with arbitrage only through basis-C own-use (`YearPoint.fleet_billed_own_use_kwh`).
 
-Gates: `TestArbitrageBasisCReconciliation` pins the basis (fleet_sc is basis C on a
-grid-charging fleet, task-84 §6), and `TestGridChargeEnergyPaidOnce` pins that each
+Gates: `tests/integration/test_cost_recovery_calibration.py::TestArbitrageBasisCReconciliation` pins the basis (`YearPoint.fleet_billed_own_use_kwh` is basis C on a
+grid-charging fleet, task-84 §6), and `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` pins that each
 grid-charged kWh is paid once, on householder import.
-`TestFlexLowersSolvedRate::test_arbitrage_lowers_solved_rate` hard-asserts the
+`tests/integration/test_cost_recovery_calibration.py::TestFlexLowersSolvedRate::test_arbitrage_lowers_solved_rate` hard-asserts the
 direction on a synthetic arbitrage fleet whose basis-C own-use is higher than the
 flat-rate fleet's (2,400 vs 2,000 kWh/home), so it earns more own-use revenue and
 solves at a lower rate.
 
 ---
 
-## 9. The Rendered Cost-Recovery Report (output.py)
+## 9. The Rendered Cost-Recovery Report (board_report.py)
 
-Source: `src/solar_challenge/output.py` (`generate_finance_report()`).
+Source: `src/solar_challenge/board_report.py` (`generate_finance_report()`).
 
 Running `solar-challenge finance run <scenario> --cost-recovery`, where `<scenario>` is a
 scenario YAML with a `finance:` block, appends a `## Cost-Recovery Analysis` block to the
-markdown finance report it prints.  The block renders the `CostRecoverySolution` fields:
+markdown finance report it prints.  The block renders the `CostRecoverySolution` fields;
+under the default `--assumptions physics`:
 
 ```markdown
 ## Cost-Recovery Analysis
 
-| Item | Value |
-|------|-------|
+| Item | Physics |
+|---|---|
 | Solved Own-Use Rate              | {r:.2f} p/kWh                    |
 | Representative Householder Outlay| £{representative_outlay_gbp:.2f} |
 | Saving vs Baseline               | £{saving:.2f} ({saving_pct:.1f}%)|
@@ -784,16 +1142,80 @@ markdown finance report it prints.  The block renders the `CostRecoverySolution`
 
 ## Per-Home Total Outlay at Solved Rate (£)
 
-| Metric | Value |
-|--------|-------|
+| Metric | Physics |
+|---|---|
 | Min    | £{min:.2f}    |
 | Mean   | £{mean:.2f}   |
 | Median | £{median:.2f} |
 | Max    | £{max:.2f}    |
 ```
 
+Every table of the bill, project-economics and cost-recovery blocks, the bill, its
+distribution, the project economics and these two, has one value column per
+`--assumptions` mode, in `OwnUseBasis` order: *Physics* for SIMULATED, then *Spreadsheet*
+for OVERRIDE, followed by the override that column was computed under.  No heading names
+a mode.  The flexibility-value block (`--flex-band`), which no mode changes, renders once
+with its own columns.  Under `--assumptions both` each table has
+both columns, each mode's figures solved under its own `FinanceConfig` (§3, *Override
+(spreadsheet-assumption) path*):
+
+```markdown
+| Item | Physics | Spreadsheet (70% self-consumption) |
+|---|---|---|
+| Solved Own-Use Rate | {r_physics:.2f} p/kWh | {r_spreadsheet:.2f} p/kWh |
+```
+
+`generate_finance_report` takes one `board_report.AssumptionSection` per mode, keyed by
+the `own_use_basis` of its finance, and refuses an empty mapping, a key its section's
+finance is not on, sections carrying different computations, and bills annualised
+from different windows (`tests/unit/test_board_report_sections.py`).
+
+The blocks render in this order: the householder bill, its distribution, Project
+Economics, Grid Services Income, Cost-Recovery Analysis, the outlay at the solved
+rate, and the flexibility value. The Grid Services Income section renders whenever
+the scenario's pricing books grid services (`board_report.GridServicesIncome`, which
+`finance run` builds from the bill run's fleet), and its booked table whenever the
+run projects (§8.1). Under the board scenario's events pricing over 25 years:
+
+```markdown
+## Grid Services Income
+
+Model: **capacity at events, central band, operational delivery baseline**
+
+### Booked by the projection (£ a year)
+
+| Year | Physics | Spreadsheet (70% self-consumption) |
+|---|---|---|
+| Year 1 | £{income at age 0:,.0f} | £{income at age 0:,.0f} |
+| Year 25 | £{income at age 24:,.0f} | £{income at age 24:,.0f} |
+
+### This window's fleet, the same under every assumption
+
+| Metric | Value |
+|---|---|
+| Annual fleet income | £{annual_income_gbp:,.0f} |
+| Per-event available capacity | {kW:.1f} kW |
+| ... | ... |
+```
+
+The rows' labels come from one asset life, so sections whose projections span
+different years are refused, naming each mode's years. The flexibility-value
+block's grid-services row reads the booked figure, per battery home and per kW, or,
+when the scenario prices no grid services, the band's consulting figure labelled
+not booked (`tests/unit/test_board_report_grid_services.py`).
+
 The `representative` outlay is the home whose `total_outlay_gbp` is closest to the
 fleet median — the board's single-home summary figure.
+
+The Feasibility row labels the solution's `binding` (§5): `floor` as *✔ Surplus meets
+floor*, `rate_clamped_zero` as *✔ Over-feasible (rate clamped to 0, surplus > floor)* and
+`infeasible_above_retail` as *✘ INFEASIBLE: required rate exceeds retail*, the labels
+`optimize configs`' ranking gives each config's binding too. A binding outside those three
+is refused with a `ValueError` naming it, in both reports
+(`tests/unit/test_board_report.py::TestABindingOutsideTheLabelTableIsRefused`).
+
+A report whose bills come from a window other than whole calendar years opens, under
+its title, with the extrapolated notice (§4, *Annual basis*).
 
 ---
 
@@ -801,17 +1223,19 @@ fleet median — the board's single-home summary figure.
 
 | Concept | Equation | Code location |
 |---------|----------|---------------|
-| Basis-C own-use energy | `own_use_kwh = demand − import` (≥ 0; see §2) | `_cbs_own_use_kwh()` |
-| Annual bill | `bill()` over a 365-day period, on the annualised totals, with the baseline at retail (§3) | `householder_bill()` |
+| Basis-C own-use energy | `own_use_kwh = demand − import` (≥ 0; see §2) | `basis_c_own_use_kwh()`, `home_ledger()` |
+| One ledger per home | `ℓ_h = home_ledger(annualise(s_h), finance)`: own-use, import, export, their pricing, and the balances L1–L4 (§3) | `home_ledger()`, `HomeLedger` |
+| Annual bill | `bill()` over the window's year (`period_days = window.year_days`), on the annualised totals (window totals × `annualisation_scale`), with the baseline at retail (§3) | `householder_bill()` |
 | Own-use payment | `own_use_rate × own_use_kwh / 100` (basis C) | `bill()` |
-| Override own-use | `min(override × generation, demand)`; surplus generation → export (§3, §4, §5) | `householder_bill()`, `_seg_export_income_gbp()`, `_billed_energy()` |
+| Override own-use | `min(override × generation, demand)`; surplus generation → export (§3, §4, §5) | `home_ledger()`, read by `householder_bill()` and `project_multi_year()` |
 | VAT | `vat_rate × (import + standing + own_use_payment)` | `bill()` |
 | Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `bill()` |
 | Saving | `baseline_bill − total_outlay` | `bill()` |
-| CBS revenue (no-flex) | `own_use_rate × fleet_sc / 100` (fleet_sc = Σ_homes `_billed_energy` own-use: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
+| CBS revenue (no-flex) | `own_use_rate × fleet_billed_own_use_kwh / 100` (`YearPoint.fleet_billed_own_use_kwh` = Σ_homes `home_ledger` own-use: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
 | CBS revenue (full) | `own_use_rev + seg_rev + gs_income` | `project_multi_year()` |
+| Per-year revenue | `own_use_rate × fleet_billed_own_use_kwh_y / 100 + income_y`, income_y the PCHIP of the income nodes (§4) | `project_fleet()` |
 | Grid-charge energy | in householder `import_cost_gbp`; no CBS term (§4) | `householder_bill()` |
-| Solve rate-base | `fleet_sc` = Σ_homes `_billed_energy` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `_simulate_age()` |
+| Solve rate-base | `YearPoint.fleet_billed_own_use_kwh` = Σ_homes `home_ledger` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `project_multi_year()` |
 | Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
-| Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost + eff_inv_kw×inv_cost)` | `project_economics()` |
+| Capex | `fleet_pv_dc_kw×pv_cost + Σ(roof_fit + batt_kwh×batt_cost + eff_inv_kw×inv_cost)` | `project_economics()`, `MultiYearCurve.fleet_pv_dc_kw` |
 | Net surplus | `mean(surplus_y) / n_homes` over 25 yr | `project_economics()` |

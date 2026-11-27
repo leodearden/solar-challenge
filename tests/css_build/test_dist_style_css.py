@@ -1,17 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Check that the web package's static/dist/ holds what its committed sources and locked npm packages make.
 
-Tailwind compiles static/dist/style.css from tailwind.config.js,
+Tailwind compiles static/dist/style.css from tailwind.config.js, the
+tailwind section of static/src/theme-tokens.json that it reads,
 static/src/input.css, and the templates and scripts it scans.
 tests/unit/test_web_compiled_css.py checks only class names, so a theme or
 input edit committed without a rebuild passes it. This module rebuilds the
 stylesheet in a scratch copy of the web package, with the committed
-package-lock.json, and compares bytes.
+package-lock.json, and compares bytes. It also checks that a token file fails
+the stylesheet build, naming the roles at fault, when a tailwind role names no
+built-in Tailwind palette or two roles would take one Tailwind colour name.
+
+build-favicon.js draws static/dist/favicon.svg, the brand sun, in the theme's
+primary-500, so the browser tab's icon follows the accent. This module rebuilds
+it the same way and compares bytes. It also checks that an accent token edit
+redraws every mark, and that a theme without primary-500 fails the build.
 
 Each license text beside the stylesheet is a verbatim copy of the tailwindcss
 file tests/_tailwindcss_license_copies.py names. This module compares each copy
 byte for byte with that file of the version package-lock.json locks, so a
-Tailwind version change that leaves a copy stale fails. Both checks share one
+Tailwind version change that leaves a copy stale fails. Every check shares one
 npm ci.
 
 The orchestrator's offline lane runs this module after each merge to main, as
@@ -22,7 +30,7 @@ ci installs Tailwind from registry.npmjs.org.
 
 Manual run::
 
-    uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider
+    uv run --locked --extra dev pytest -n 0 tests/css_build -p no:cacheprovider
 """
 
 import difflib
@@ -32,51 +40,77 @@ import os
 import shlex
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
+from tests._own_time import run_on_own_time
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
 
 pytestmark = pytest.mark.slow
 
-# Module-scoped fixtures cannot request the function-scoped project_root fixture.
-_WEB_PACKAGE = Path(__file__).resolve().parents[2] / "src" / "solar_challenge" / "web"
+_WEB_PACKAGE = REPOSITORY_ROOT / "src" / "solar_challenge" / "web"
 
 # Relative to the web package, in the checkout and in its scratch copies alike.
 _DIST = Path("static", "dist")
 _DIST_STYLESHEET = _DIST / "style.css"
+_DIST_FAVICON = _DIST / "favicon.svg"
+_THEME_TOKENS = Path("static", "src", "theme-tokens.json")
 _TAILWINDCSS_PACKAGE = Path("node_modules", "tailwindcss")
 
-# Only so a hung npm fails the tests by name: both npm steps' timeouts together fit inside the css-build
-# lane job's `timeout` (dark-factory-orchestrator.yaml), whose kill would file css-build::nonzero-exit.
-_NPM_TIMEOUT_SECS = 120
+# The built-in palette the recolour test names as the accent.
+_RECOLOURED_ACCENT = "blue"
 
-# The most lines of the rule diff a failure shows.
+# Only so a hung npm or node fails the tests by name. Each bound is a budget of the child's own time
+# (tests/_own_time.py), so time the lane's nice-19 run spends queued for a CPU never counts. npm ci downloads every
+# package the lock records, while a run, such as a build or a palette read, only runs installed ones, so each has its
+# own budget. When the module's run is not queued, npm ci's budget and every run's together fit inside the css-build
+# lane job's `timeout -k 60 600` (dark-factory-orchestrator.yaml), so a hung child fails by name before that kill,
+# which would file css-build::unconfirmable. Under queueing, a budget of own time takes longer than its seconds of wall
+# time to spend, so the lane's wall-clock kill, not a budget, may end a hung run.
+_NPM_CI_OWN_TIME_SECS = 240
+_RUN_OWN_TIME_SECS = 40
+
+# The most lines of a diff a failure shows.
 _DIFF_LINES = 40
 
 
-def _npm(args: list[str], cwd: Path, cache: Path) -> None:
-    """Run npm with *args* in *cwd*, with *cache* as its cache, and fail unless it succeeds.
+def _npm_run(
+    args: list[str], cwd: Path, cache: Path, *, own_time_secs: float = _RUN_OWN_TIME_SECS
+) -> subprocess.CompletedProcess[str]:
+    """Run npm with *args* in *cwd*, with *cache* as its cache, on a budget of *own_time_secs* of its own time.
 
-    npm_config_cache reaches both npm calls and the npx that build:css runs, so
+    Return the finished run, its output as text.
+    """
+    return run_on_own_time(
+        ["npm", *args], cwd=cwd, env={**os.environ, "npm_config_cache": str(cache)}, budget_secs=own_time_secs
+    )
+
+
+def _npm(args: list[str], cwd: Path, cache: Path, *, own_time_secs: float = _RUN_OWN_TIME_SECS) -> None:
+    """Run npm with *args* in *cwd*, with *cache* as its cache, and fail unless it succeeds within *own_time_secs*
+    of its own time.
+
+    npm_config_cache reaches every npm call and the npx that build:css runs, so
     nothing writes ~/.npm, which a sandboxed agent cannot write. A missing npm
     raises FileNotFoundError, which fails the tests: a skip would leave the lane
-    green with the stylesheet and its license texts unchecked.
+    green with static/dist unchecked.
     """
     command = shlex.join(["npm", *args])
-    result = subprocess.run(
-        ["npm", *args],
-        cwd=cwd,
-        env={**os.environ, "npm_config_cache": str(cache)},
-        capture_output=True,
-        text=True,
-        timeout=_NPM_TIMEOUT_SECS,
-    )
+    result = _npm_run(args, cwd, cache, own_time_secs=own_time_secs)
     assert result.returncode == 0, (
         f"`{command}` exited {result.returncode} in a scratch copy of the web package; "
         f"npm's stderr:\n{result.stderr}\nnpm's stdout:\n{result.stdout}"
     )
+
+
+def _diff(committed: list[str], rebuilt: list[str]) -> str:
+    """Return the first _DIFF_LINES lines of a unified diff of a committed file's pieces with its rebuild's."""
+    diff = difflib.unified_diff(committed, rebuilt, "committed", "rebuilt", lineterm="", n=0)
+    return "\n".join(itertools.islice(diff, _DIFF_LINES))
 
 
 def _rule_diff(committed: str, rebuilt: str) -> str:
@@ -84,8 +118,31 @@ def _rule_diff(committed: str, rebuilt: str) -> str:
 
     Minified CSS is one line, so a plain diff is useless.
     """
-    diff = difflib.unified_diff(committed.split("}"), rebuilt.split("}"), "committed", "rebuilt", lineterm="", n=0)
-    return "\n".join(itertools.islice(diff, _DIFF_LINES))
+    return _diff(committed.split("}"), rebuilt.split("}"))
+
+
+def _drawn_colours(svg: Path) -> set[str]:
+    """Every fill and stroke attribute value of *svg*'s elements, but "none".
+
+    A colour set through style or CSS is not read, so such a favicon fails the recolour test rather than passing it.
+    """
+    return {
+        colour
+        for element in ElementTree.parse(svg).iter()
+        for attribute in ("fill", "stroke")
+        if (colour := element.get(attribute, "none")) != "none"
+    }
+
+
+def _built_in_palette_500(palette: str, web_package: Path) -> str:
+    """Return the 500 shade of Tailwind's built-in *palette*, read from the tailwindcss installed in *web_package*."""
+    command = ["node", "--print", f'require("tailwindcss/colors")[{json.dumps(palette)}][500]']
+    result = run_on_own_time(command, budget_secs=_RUN_OWN_TIME_SECS, cwd=web_package)
+    assert result.returncode == 0, (
+        f"`{shlex.join(command)}` exited {result.returncode} in a scratch copy of the web package; "
+        f"node's stderr:\n{result.stderr}"
+    )
+    return result.stdout.strip()
 
 
 def _copy_web_package(destination: Path) -> Path:
@@ -96,6 +153,35 @@ def _copy_web_package(destination: Path) -> Path:
     return web_package
 
 
+def _build_copy(scratch_web_package: Path, destination: Path) -> Path:
+    """Copy the web package to destination/web for one build, linking *scratch_web_package*'s node_modules.
+
+    A build writes into the package it runs in, so each build gets its own copy and
+    shares only the installed node_modules. Never build in the fixture's copy.
+    """
+    web_package = _copy_web_package(destination)
+    (web_package / "node_modules").symlink_to(scratch_web_package / "node_modules")
+    return web_package
+
+
+def _build_css_with_tailwind_keys(
+    scratch_web_package: Path, destination: Path, keys: Mapping[str, object]
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    """Run `npm run build:css` in a build copy whose token file's tailwind section takes *keys*.
+
+    Return the finished run and whether it wrote static/dist/style.css, which the copy's build starts without.
+    """
+    web_package = _build_copy(scratch_web_package, destination)
+    token_file = web_package / _THEME_TOKENS
+    tokens = json.loads(token_file.read_text(encoding="utf-8"))
+    tokens["tailwind"].update(keys)
+    token_file.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+    stylesheet = web_package / _DIST_STYLESHEET
+    stylesheet.unlink()
+    result = _npm_run(["run", "build:css"], web_package, destination / "npm-cache")
+    return result, stylesheet.exists()
+
+
 @pytest.fixture(scope="module")
 def scratch_web_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Return a scratch copy of the web package in which `npm ci` installed what package-lock.json locks.
@@ -104,15 +190,13 @@ def scratch_web_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     scratch = tmp_path_factory.mktemp("css-build")
     web_package = _copy_web_package(scratch)
-    _npm(["ci", "--no-audit", "--no-fund"], web_package, scratch / "npm-cache")
+    _npm(["ci", "--no-audit", "--no-fund"], web_package, scratch / "npm-cache", own_time_secs=_NPM_CI_OWN_TIME_SECS)
     return web_package
 
 
 def test_dist_style_css_matches_a_fresh_build_of_its_sources(scratch_web_package: Path, tmp_path: Path) -> None:
     """static/dist/style.css is byte for byte what `npm run build:css` makes of its committed sources."""
-    # The build writes into the package it runs in, so it gets its own copy; only the installed node_modules is shared.
-    web_package = _copy_web_package(tmp_path)
-    (web_package / "node_modules").symlink_to(scratch_web_package / "node_modules")
+    web_package = _build_copy(scratch_web_package, tmp_path)
     rebuilt_stylesheet = web_package / _DIST_STYLESHEET
     # A build that stops writing the stylesheet must not pass by comparing the committed copy with itself.
     rebuilt_stylesheet.unlink()
@@ -126,10 +210,128 @@ def test_dist_style_css_matches_a_fresh_build_of_its_sources(scratch_web_package
     rebuilt = rebuilt_stylesheet.read_bytes()
     assert rebuilt == committed, (
         "static/dist/style.css is not what its sources build to: a tailwind.config.js, "
-        "static/src/input.css, template or script change was committed without a rebuild. Rebuild "
+        "static/src/theme-tokens.json (its tailwind section), static/src/input.css, template or "
+        "script change was committed without a rebuild. Rebuild "
         "with `cd src/solar_challenge/web && npm ci && npm run build:css` and commit "
         f"static/dist/style.css. The rules that differ:\n{_rule_diff(committed.decode(), rebuilt.decode())}"
     )
+
+
+@pytest.mark.parametrize(
+    ("tailwind_key", "written", "role", "name"),
+    [
+        pytest.param("status", {"running": "ambr"}, "status.running", "ambr", id="status-running-ambr"),
+        pytest.param("warning", "black", "warning", "black", id="warning-black"),
+    ],
+)
+def test_a_tailwind_role_naming_no_built_in_palette_fails_the_build_naming_the_role_and_the_name(
+    scratch_web_package: Path, tmp_path: Path, tailwind_key: str, written: str | dict[str, str], role: str, name: str
+) -> None:
+    """A token file whose tailwind *role* names *name*, no built-in Tailwind palette, fails the build, naming both.
+
+    *name* is either no Tailwind colour at all, as in a grouped role naming "ambr", or a single colour with no
+    shades, such as black.
+    """
+    result, wrote_stylesheet = _build_css_with_tailwind_keys(scratch_web_package, tmp_path, {tailwind_key: written})
+
+    assert result.returncode != 0 and f"tailwind.{role}" in result.stderr and name in result.stderr, (
+        f"`npm run build:css` exited {result.returncode} for a token file whose tailwind.{role} names {name!r}, "
+        "which is no built-in Tailwind palette, where it must fail naming the role and the name: Tailwind silently "
+        "drops a palette it cannot resolve, and every class that names it, so tailwind.config.js must refuse such "
+        f"a token file. npm's stderr:\n{result.stderr}"
+    )
+    assert not wrote_stylesheet, (
+        f"`npm run build:css` wrote static/dist/style.css for a token file whose tailwind.{role} names {name!r}"
+    )
+
+
+def test_two_tailwind_roles_of_one_tailwind_colour_name_fail_the_build_naming_both(
+    scratch_web_package: Path, tmp_path: Path
+) -> None:
+    """A token file with a status-running role beside the status group's running role fails the build, naming both.
+
+    Tailwind names both colours status-running, so one palette would silently replace the other.
+    """
+    roles = ("tailwind.status.running", "tailwind.status-running")
+
+    result, wrote_stylesheet = _build_css_with_tailwind_keys(
+        scratch_web_package, tmp_path, {"status": {"running": "amber"}, "status-running": "green"}
+    )
+
+    assert result.returncode != 0 and all(role in result.stderr for role in roles), (
+        f"`npm run build:css` exited {result.returncode} for a token file with the roles {' and '.join(roles)}, "
+        "which Tailwind would both name status-running, where it must fail naming both: one palette would silently "
+        f"replace the other, so tailwind.config.js must refuse such a token file. npm's stderr:\n{result.stderr}"
+    )
+    assert not wrote_stylesheet, (
+        f"`npm run build:css` wrote static/dist/style.css for a token file with the roles {' and '.join(roles)}, "
+        "which Tailwind would both name status-running"
+    )
+
+
+def test_dist_favicon_svg_matches_a_fresh_build_of_its_sources(scratch_web_package: Path, tmp_path: Path) -> None:
+    """static/dist/favicon.svg is byte for byte what `npm run build:favicon` draws from the committed theme."""
+    web_package = _build_copy(scratch_web_package, tmp_path)
+    rebuilt_favicon = web_package / _DIST_FAVICON
+    # A build that stops writing the favicon must not pass by comparing the committed copy with itself.
+    rebuilt_favicon.unlink(missing_ok=True)
+
+    _npm(["run", "build:favicon"], web_package, tmp_path / "npm-cache")
+
+    assert rebuilt_favicon.is_file(), (
+        "`npm run build:favicon` no longer writes static/dist/favicon.svg, the icon base.html links"
+    )
+    committed = (_WEB_PACKAGE / _DIST_FAVICON).read_bytes()
+    rebuilt = rebuilt_favicon.read_bytes()
+    assert rebuilt == committed, (
+        "static/dist/favicon.svg is not what build-favicon.js draws from the committed theme: the theme's "
+        "primary palette (static/src/theme-tokens.json's tailwind.primary, through tailwind.config.js) or "
+        "build-favicon.js changed without a rebuild. Rebuild with "
+        "`cd src/solar_challenge/web && npm ci && npm run build:favicon` and commit static/dist/favicon.svg. "
+        f"The lines that differ:\n{_diff(committed.decode().splitlines(), rebuilt.decode().splitlines())}"
+    )
+
+
+def test_an_accent_token_edit_redraws_every_mark_of_the_favicon_in_the_new_accent(
+    scratch_web_package: Path, tmp_path: Path
+) -> None:
+    """Naming another built-in palette as the token file's accent draws every mark of the favicon in its 500 shade."""
+    web_package = _build_copy(scratch_web_package, tmp_path)
+    token_file = web_package / _THEME_TOKENS
+    tokens = json.loads(token_file.read_text(encoding="utf-8"))
+    assert tokens["tailwind"]["primary"] != _RECOLOURED_ACCENT, (
+        f"{_THEME_TOKENS.as_posix()} already names {_RECOLOURED_ACCENT} as the accent, so this recolour would "
+        "prove nothing: name another built-in palette in _RECOLOURED_ACCENT"
+    )
+    tokens["tailwind"]["primary"] = _RECOLOURED_ACCENT
+    token_file.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+
+    _npm(["run", "build:favicon"], web_package, tmp_path / "npm-cache")
+
+    drawn = _drawn_colours(web_package / _DIST_FAVICON)
+    accent_500 = _built_in_palette_500(_RECOLOURED_ACCENT, web_package)
+    assert drawn == {accent_500}, (
+        f"with {_RECOLOURED_ACCENT} as the accent, the favicon draws {sorted(drawn)}, where every mark must be "
+        f"{_RECOLOURED_ACCENT}-500, {accent_500} in the installed tailwindcss: build-favicon.js must draw every "
+        "mark in the theme's primary-500, so that an accent change reaches the browser tab's icon"
+    )
+
+
+def test_the_favicon_build_refuses_a_theme_without_primary_500(scratch_web_package: Path, tmp_path: Path) -> None:
+    """A theme whose resolved colours have no primary-500 fails the favicon build, naming primary-500."""
+    web_package = _build_copy(scratch_web_package, tmp_path)
+    # Tailwind's default colours, which this config resolves to, have no primary palette.
+    (web_package / "tailwind.config.js").write_text("module.exports = {content: [], theme: {}};\n", encoding="utf-8")
+    favicon = web_package / _DIST_FAVICON
+    favicon.unlink(missing_ok=True)
+
+    result = _npm_run(["run", "build:favicon"], web_package, tmp_path / "npm-cache")
+
+    assert result.returncode != 0 and "primary-500" in result.stderr, (
+        f"`npm run build:favicon` exited {result.returncode} for a theme without primary-500, where it must fail "
+        f"naming primary-500, the colour it draws the favicon in; npm's stderr:\n{result.stderr}"
+    )
+    assert not favicon.exists(), "`npm run build:favicon` wrote static/dist/favicon.svg for a theme without primary-500"
 
 
 @pytest.mark.parametrize("license_copy", list(TAILWINDCSS_LICENSE_COPIES))

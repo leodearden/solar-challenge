@@ -1,0 +1,762 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Tests for solar_challenge.number_fields, the package's number readers."""
+
+import copy
+import dataclasses
+import math
+import pickle
+from collections.abc import Callable, Iterable
+from decimal import Decimal
+from fractions import Fraction
+from typing import Any
+
+import numpy as np
+import pytest
+
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import (
+    FRACTION,
+    NON_NEGATIVE,
+    POSITIVE,
+    UNIT_INTERVAL,
+    Interval,
+    as_finite_float,
+    as_finite_floats,
+    as_finite_real,
+    as_list_elements,
+    as_whole_number,
+    as_whole_numbers,
+    read_field,
+)
+from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
+from tests._unusable_numbers import UNUSABLE_NUMBERS
+
+
+def test_importing_the_module_loads_only_errors_boolean_fields_and_whole_numbers_from_the_package() -> None:
+    """A fresh interpreter that imports the readers loads no other package module, so any module can import them."""
+    assert package_modules_loaded_by_importing("solar_challenge.number_fields") == {
+        "solar_challenge",
+        "solar_challenge.boolean_fields",
+        "solar_challenge.errors",
+        "solar_challenge.number_fields",
+        "solar_challenge.whole_numbers",
+    }
+
+
+OPEN_INFINITE = Interval(-math.inf, math.inf, low_open=True, high_open=True)
+
+ADMISSION_CASES = [
+    pytest.param(POSITIVE, 5e-324, True, id="positive-smallest-float"),
+    pytest.param(POSITIVE, True, True, id="positive-true"),
+    pytest.param(POSITIVE, math.nan, False, id="positive-nan"),
+    pytest.param(POSITIVE, math.inf, False, id="positive-infinity"),
+    pytest.param(POSITIVE, -math.inf, False, id="positive-negative-infinity"),
+    pytest.param(POSITIVE, 0, False, id="positive-zero"),
+    pytest.param(POSITIVE, False, False, id="positive-false"),
+    pytest.param(NON_NEGATIVE, 0, True, id="non-negative-zero"),
+    pytest.param(NON_NEGATIVE, -0.0, True, id="non-negative-negative-zero"),
+    pytest.param(NON_NEGATIVE, 5e-324, True, id="non-negative-smallest-float"),
+    pytest.param(NON_NEGATIVE, 1e308, True, id="non-negative-large-float"),
+    pytest.param(NON_NEGATIVE, 10**400, True, id="non-negative-huge-int"),
+    pytest.param(NON_NEGATIVE, np.float64(2.5), True, id="non-negative-numpy-float"),
+    pytest.param(NON_NEGATIVE, np.int64(3), True, id="non-negative-numpy-int"),
+    pytest.param(NON_NEGATIVE, -5e-324, False, id="non-negative-negative-smallest-float"),
+    pytest.param(NON_NEGATIVE, -(10**400), False, id="non-negative-negative-huge-int"),
+    pytest.param(NON_NEGATIVE, math.inf, False, id="non-negative-infinity"),
+    pytest.param(NON_NEGATIVE, -math.inf, False, id="non-negative-negative-infinity"),
+    pytest.param(NON_NEGATIVE, math.nan, False, id="non-negative-nan"),
+    pytest.param(NON_NEGATIVE, np.float64("nan"), False, id="non-negative-numpy-nan"),
+    pytest.param(NON_NEGATIVE, np.float64("inf"), False, id="non-negative-numpy-infinity"),
+    pytest.param(FRACTION, 1, True, id="fraction-high-bound"),
+    pytest.param(FRACTION, 0, False, id="fraction-low-bound"),
+    pytest.param(UNIT_INTERVAL, True, True, id="unit-interval-true"),
+    pytest.param(UNIT_INTERVAL, False, True, id="unit-interval-false"),
+    pytest.param(Interval(0, 360), 0, True, id="closed-low-bound"),
+    pytest.param(Interval(0, 360), 360, True, id="closed-high-bound"),
+    pytest.param(Interval(0, 360), -0.5, False, id="closed-below"),
+    pytest.param(Interval(0, 360), 360.5, False, id="closed-above"),
+    pytest.param(Interval(0, 360), 10**400, False, id="closed-huge-int"),
+    pytest.param(Interval(0, 360), math.inf, False, id="closed-infinity"),
+    pytest.param(Interval(0, 360), -math.inf, False, id="closed-negative-infinity"),
+    pytest.param(Interval(0, 360), math.nan, False, id="closed-nan"),
+    pytest.param(Interval(0, 1, high_open=True), 0, True, id="open-above-low-bound"),
+    pytest.param(Interval(0, 1, high_open=True), 1, False, id="open-above-high-bound"),
+    pytest.param(Interval(5, 5), 5, True, id="closed-at-one-number"),
+    pytest.param(Interval(2, 3), True, False, id="two-to-three-true"),
+    pytest.param(Interval(0, 10**400), 10**400, True, id="huge-high-bound-itself"),
+    pytest.param(Interval(0, 10**400), 10**400 + 1, False, id="huge-high-bound-plus-one"),
+    pytest.param(Interval(0, 10**400), math.inf, False, id="huge-high-bound-infinity"),
+    pytest.param(Interval(-500), -500, True, id="low-bound-only-its-bound"),
+    pytest.param(Interval(-500), 10**400, True, id="low-bound-only-huge-int"),
+    pytest.param(Interval(-500), math.inf, False, id="low-bound-only-infinity"),
+    pytest.param(Interval(-500), math.nan, False, id="low-bound-only-nan"),
+    pytest.param(Interval(-500), -500.5, False, id="low-bound-only-below-it"),
+    pytest.param(Interval(high=23), -(10**400), True, id="high-bound-only-negative-huge-int"),
+    pytest.param(Interval(high=23), 23, True, id="high-bound-only-its-bound"),
+    pytest.param(Interval(high=23), -math.inf, False, id="high-bound-only-negative-infinity"),
+    pytest.param(Interval(high=23), math.nan, False, id="high-bound-only-nan"),
+    pytest.param(Interval(high=23), 23.5, False, id="high-bound-only-above-it"),
+    pytest.param(Interval(), -1e308, True, id="unbounded-large-negative"),
+    pytest.param(Interval(), 10**400, True, id="unbounded-int-too-large-for-a-float"),
+    pytest.param(Interval(), math.nan, False, id="unbounded-nan"),
+    pytest.param(Interval(), math.inf, False, id="unbounded-infinity"),
+    pytest.param(Interval(), -math.inf, False, id="unbounded-negative-infinity"),
+    pytest.param(OPEN_INFINITE, 0, True, id="open-infinite-zero"),
+    pytest.param(OPEN_INFINITE, math.inf, False, id="open-infinite-infinity"),
+    pytest.param(OPEN_INFINITE, -math.inf, False, id="open-infinite-negative-infinity"),
+    pytest.param(OPEN_INFINITE, math.nan, False, id="open-infinite-nan"),
+]
+
+
+class TestInterval:
+    """An Interval is a frozen value: it admits the finite numbers inside its bounds, and its str() phrases them for a refusal."""
+
+    @pytest.mark.parametrize(
+        ("interval", "text"),
+        [
+            pytest.param(Interval(), "", id="unbounded"),
+            pytest.param(POSITIVE, "greater than 0", id="positive"),
+            pytest.param(NON_NEGATIVE, "at least 0", id="non-negative"),
+            pytest.param(FRACTION, "greater than 0 and at most 1", id="fraction"),
+            pytest.param(UNIT_INTERVAL, "between 0 and 1", id="unit-interval"),
+            pytest.param(Interval(0, 360), "between 0 and 360", id="closed"),
+            pytest.param(Interval(0, 1, high_open=True), "at least 0 and less than 1", id="open-above"),
+            pytest.param(
+                Interval(-1, 0, low_open=True, high_open=True),
+                "greater than -1 and less than 0",
+                id="open-at-both-ends",
+            ),
+            pytest.param(Interval(-500), "at least -500", id="low-bound-only"),
+            pytest.param(Interval(high=23), "at most 23", id="high-bound-only"),
+            pytest.param(Interval(high=0, high_open=True), "less than 0", id="open-high-bound-only"),
+        ],
+    )
+    def test_an_interval_phrases_its_bounds(self, interval: Interval, text: str) -> None:
+        """A closed interval with two finite bounds reads "between", any other names each finite bound it has, and one with neither reads empty."""
+        assert str(interval) == text
+
+    @pytest.mark.parametrize(
+        ("interval", "text"),
+        [
+            pytest.param(Interval(0.5, 20), "between 0.5 and 20", id="fraction-and-int"),
+            pytest.param(Interval(0.0, 1.0), "between 0.0 and 1.0", id="integral-floats"),
+            pytest.param(
+                Interval(-(2**53 - 1), 2**53 - 1),
+                "between -9007199254740991 and 9007199254740991",
+                id="ints-beyond-six-digits",
+            ),
+        ],
+    )
+    def test_a_bound_prints_as_the_number_given(self, interval: Interval, text: str) -> None:
+        """Each bound prints as str() prints it, so an integral float keeps its .0 and a large int prints in full."""
+        assert str(interval) == text
+
+    def test_intervals_with_the_same_bounds_are_equal_and_hash_alike(self) -> None:
+        assert Interval(0, 1) == UNIT_INTERVAL
+        assert hash(Interval(0, 1)) == hash(UNIT_INTERVAL)
+
+    def test_an_interval_is_frozen(self) -> None:
+        interval = Interval(0, 1)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            interval.low = 0.5
+
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            pytest.param(1, 0, id="low-above-high"),
+            pytest.param(math.nan, 1, id="nan-low"),
+            pytest.param(0, math.nan, id="nan-high"),
+        ],
+    )
+    def test_an_interval_whose_low_bound_is_not_at_most_its_high_bound_is_refused_naming_both(
+        self, low: float, high: float
+    ) -> None:
+        """Bounds are written by code, so broken ones are a defect, refused with a plain ValueError rather than a ConfigurationError."""
+        with pytest.raises(ValueError) as exc_info:
+            Interval(low, high)
+        assert exc_info.type is ValueError
+        assert repr(low) in str(exc_info.value)
+        assert repr(high) in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("low", "high", "low_open", "high_open"),
+        [
+            pytest.param(math.inf, math.inf, False, False, id="low-bound-at-infinity"),
+            pytest.param(-math.inf, -math.inf, False, False, id="high-bound-at-negative-infinity"),
+            pytest.param(0, 0, True, False, id="equal-bounds-open-below"),
+            pytest.param(0, 0, False, True, id="equal-bounds-open-above"),
+        ],
+    )
+    def test_an_interval_whose_equal_bounds_admit_no_finite_number_is_refused_naming_it(
+        self, low: float, high: float, low_open: bool, high_open: bool
+    ) -> None:
+        """Equal bounds hold one number, so an infinite bound, or one either end leaves out, leaves the interval empty: a defect, refused with a plain ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            Interval(low, high, low_open=low_open, high_open=high_open)
+        assert exc_info.type is ValueError
+        assert (
+            f"Interval(low={low!r}, high={high!r}, low_open={low_open!r}, high_open={high_open!r})"
+            in str(exc_info.value)
+        )
+
+    @pytest.mark.parametrize(("interval", "number", "admitted"), ADMISSION_CASES)
+    def test_an_interval_decides_each_kind_of_number_by_comparing_it_with_its_bounds(
+        self, interval: Interval, number: float, admitted: bool
+    ) -> None:
+        """A closed bound admits itself and an open one refuses itself; NaN and ±inf are refused by every interval, an unbounded one included; every other number is compared exactly with the bounds, a huge int, a numpy number and a bool (as 0 or 1) included. A Python number is answered with a real bool, a numpy number with a bool or a numpy.bool_."""
+        answer = interval.admits(number)
+        assert answer == admitted
+        answer_types = (bool, np.bool_) if isinstance(number, np.generic) else (bool,)
+        assert type(answer) in answer_types
+
+    def test_a_replaced_interval_admits_by_its_new_bounds(self) -> None:
+        """A replaced interval decides by the bounds it was replaced with, not by those it was copied from."""
+        assert dataclasses.replace(POSITIVE, low_open=False).admits(0) is True
+        assert dataclasses.replace(NON_NEGATIVE, high=1).admits(1.5) is False
+        assert dataclasses.replace(Interval(0, 1), high=math.inf).admits(math.inf) is False
+
+    def test_an_interval_reprs_as_its_four_bounds(self) -> None:
+        """The equal-bounds refusal prints the interval's repr, which names its four bounds as given and nothing derived from them."""
+        assert repr(NON_NEGATIVE) == "Interval(low=0, high=inf, low_open=False, high_open=False)"
+        assert repr(Interval(0, 1, low_open=True)) == "Interval(low=0, high=1, low_open=True, high_open=False)"
+
+    @pytest.mark.parametrize(
+        "copy_of",
+        [
+            pytest.param(copy.copy, id="copy"),
+            pytest.param(copy.deepcopy, id="deepcopy"),
+            pytest.param(lambda interval: pickle.loads(pickle.dumps(interval)), id="pickle"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "interval",
+        [
+            pytest.param(POSITIVE, id="positive"),
+            pytest.param(NON_NEGATIVE, id="non-negative"),
+            pytest.param(FRACTION, id="fraction"),
+            pytest.param(Interval(-500), id="low-bound-only"),
+            pytest.param(Interval(high=23), id="high-bound-only"),
+        ],
+    )
+    def test_a_copy_of_an_interval_is_equal_and_admits_the_same_numbers(
+        self, interval: Interval, copy_of: Callable[[Interval], Interval]
+    ) -> None:
+        """A copy, a deep copy and a pickle round trip of an interval equal it, hash like it and admit what it admits."""
+        duplicate = copy_of(interval)
+        assert duplicate == interval
+        assert hash(duplicate) == hash(interval)
+        for number in (-1, 0, 0.5, 1, 10**400, math.inf, -math.inf, math.nan):
+            assert duplicate.admits(number) is interval.admits(number)
+
+
+class TestIntervalRefused:
+    """refused answers admits for many numbers in one call, returning those it does not admit by their keys."""
+
+    @pytest.mark.parametrize(("interval", "number", "admitted"), ADMISSION_CASES)
+    def test_refused_agrees_with_admits_for_every_kind_of_number(
+        self, interval: Interval, number: float, admitted: bool
+    ) -> None:
+        """An admitted number is left out and a refused one returned as the very object given, never converted, so NaN, a numpy number and a huge int come back as given."""
+        answer = interval.refused({"number": number})
+        if admitted:
+            assert answer == {}
+            assert not answer
+        else:
+            assert list(answer) == ["number"]
+            assert answer["number"] is number
+
+    def test_refused_returns_each_refused_entry_by_its_key_in_the_mapping_s_order(self) -> None:
+        numbers: dict[str, float] = {
+            "a": 1.0,
+            "b": -0.5,
+            "c": math.inf,
+            "d": 0,
+            "e": math.nan,
+            "f": 10**400,
+            "g": -math.inf,
+        }
+        refused = NON_NEGATIVE.refused(numbers)
+        assert list(refused) == ["b", "c", "e", "g"]
+        for key in refused:
+            assert refused[key] is numbers[key]
+
+    def test_refused_names_any_hashable_key(self) -> None:
+        assert UNIT_INTERVAL.refused({0: 0.5, (1, "x"): 1.5}) == {(1, "x"): 1.5}
+
+    def test_refused_of_no_numbers_is_empty(self) -> None:
+        assert POSITIVE.refused({}) == {}
+
+    def test_refused_answers_by_the_interval_s_own_bounds(self) -> None:
+        """A replaced interval refuses by the bounds it was replaced with, not by those it was copied from."""
+        assert dataclasses.replace(POSITIVE, low_open=False).refused({"z": 0}) == {}
+        assert dataclasses.replace(NON_NEGATIVE, high=1).refused({"x": 1.5}) == {"x": 1.5}
+
+
+class TestAsFiniteFloat:
+    """as_finite_float reads a value as float() reads it, and refuses a boolean or one that is not a finite number."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(4, 4.0, id="integer"),
+            pytest.param(4.5, 4.5, id="float"),
+            pytest.param("4.5", 4.5, id="numeric-string"),
+            pytest.param(0, 0.0, id="zero"),
+            pytest.param(-3, -3.0, id="negative"),
+        ],
+    )
+    def test_a_finite_number_is_read_as_float_reads_it(
+        self, value: object, expected: float
+    ) -> None:
+        """A finite number, or a string float() reads as one, is returned as that float."""
+        number = as_finite_float(value, "pv_kw")
+        assert number == expected
+        assert isinstance(number, float)
+
+    def test_with_no_interval_any_finite_number_is_read(self) -> None:
+        assert as_finite_float(-1e308, "x") == -1e308
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(None, id="null"),
+            pytest.param([4], id="array"),
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param(float("-inf"), id="negative-infinity"),
+            pytest.param(float("nan"), id="nan"),
+            pytest.param("inf", id="infinity-string"),
+            pytest.param(10**400, id="integer-too-large-for-a-float"),
+            pytest.param(True, id="true"),
+            pytest.param(False, id="false"),
+            pytest.param(np.True_, id="numpy-true"),
+            pytest.param(np.False_, id="numpy-false"),
+        ],
+    )
+    def test_a_value_that_is_not_a_finite_number_is_refused_naming_the_field_and_the_value(
+        self, value: object
+    ) -> None:
+        """A boolean, Python's or numpy's, a value float() cannot read, one too large for a float, and ±inf or NaN are refused alike."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_float(value, "pv_kw")
+        assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
+
+
+class TestAsFiniteFloatWithAnInterval:
+    """as_finite_float given an interval reads a value as it does without one, and refuses a number outside the interval, phrasing it."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [pytest.param(0.5, 0.5, id="low"), pytest.param(20, 20.0, id="high")],
+    )
+    def test_a_closed_interval_admits_its_bounds_and_a_value_is_read_as_a_float(
+        self, value: object, expected: float
+    ) -> None:
+        """Both bounds of a closed interval are admitted, each returned as a float, an integer sent included."""
+        number = as_finite_float(value, "pv_kw", within=Interval(0.5, 20))
+        assert number == expected
+        assert isinstance(number, float)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(0.49, id="below"),
+            pytest.param(20.5, id="above"),
+            pytest.param("25", id="numeric-string-above"),
+        ],
+    )
+    def test_a_value_outside_the_interval_is_refused_naming_the_field_the_interval_and_the_value_sent(
+        self, value: object
+    ) -> None:
+        """The refusal shows the value as sent ('25' in quotes), not the float it converts to."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_float(value, "pv_kw", within=Interval(0.5, 20))
+        assert str(exc_info.value) == f"pv_kw must be between 0.5 and 20, got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("value", "field", "within", "message"),
+        [
+            pytest.param(0, "capacity_kw", POSITIVE, "capacity_kw must be greater than 0, got 0", id="positive"),
+            pytest.param(
+                "1",
+                "share",
+                Interval(0, 1, high_open=True),
+                "share must be at least 0 and less than 1, got '1'",
+                id="open-above",
+            ),
+        ],
+    )
+    def test_a_refusal_phrases_an_open_interval(
+        self, value: object, field: str, within: Interval, message: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_float(value, field, within=within)
+        assert str(exc_info.value) == message
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(True, id="true"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_value_that_is_not_a_finite_number_gets_the_finite_number_refusal(
+        self, value: object
+    ) -> None:
+        """A value that is not a finite number is refused as such, before the interval is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_float(value, "pv_kw", within=Interval(0.5, 20))
+        assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
+
+
+class TestAsFiniteReal:
+    """as_finite_real reads a numbers.Real as as_finite_float does, and refuses any other value, text that float() reads as a number included, with as_finite_float's refusal."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(4, 4.0, id="integer"),
+            pytest.param(4.5, 4.5, id="float"),
+            pytest.param(np.float32(0.5), 0.5, id="numpy-float32"),
+            pytest.param(np.int64(3), 3.0, id="numpy-int64"),
+            pytest.param(Fraction(1, 2), 0.5, id="fraction"),
+        ],
+    )
+    def test_a_finite_real_number_is_read_as_a_float(self, value: object, expected: float) -> None:
+        number = as_finite_real(value, "pdc0")
+        assert number == expected
+        assert type(number) is float
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("300", id="numeric-string"),
+            pytest.param(np.str_("300"), id="numpy-numeric-string"),
+            pytest.param(b"300", id="numeric-bytes"),
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(Decimal("300"), id="decimal"),
+            pytest.param(None, id="null"),
+            pytest.param([300], id="list"),
+            pytest.param(np.True_, id="numpy-true"),
+        ],
+    )
+    def test_a_value_that_is_not_a_real_number_gets_the_finite_number_refusal(self, value: object) -> None:
+        """Text, bytes and a Decimal that float() reads as 300 are refused as a value it cannot read is."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_real(value, "pdc0")
+        assert str(exc_info.value) == f"pdc0 must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
+    def test_a_real_number_as_finite_float_refuses_is_refused_alike(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_real(value, "pdc0")
+        assert str(exc_info.value) == f"pdc0 must be a finite number, got {value!r}"
+
+    def test_a_real_number_outside_the_interval_is_refused_naming_the_interval(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_real(0, "pdc0", within=POSITIVE)
+        assert str(exc_info.value) == "pdc0 must be greater than 0, got 0"
+
+    def test_text_is_refused_before_the_interval_is_checked(self) -> None:
+        """Text that float() reads as a number outside the interval is refused as text, not as out of range."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_real("25", "pdc0", within=Interval(0.5, 20))
+        assert str(exc_info.value) == "pdc0 must be a finite number, got '25'"
+
+
+class TestAsWholeNumber:
+    """as_whole_number reads a value as as_finite_float does, as the int it equals, and refuses one with a fractional part."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(7, 7, id="integer"),
+            pytest.param(7.0, 7, id="whole-float"),
+            pytest.param("7", 7, id="numeric-string"),
+            pytest.param("7.0", 7, id="whole-float-string"),
+            pytest.param(-3, -3, id="negative"),
+        ],
+    )
+    def test_a_whole_number_is_read_as_the_int_it_equals(
+        self, value: object, expected: int
+    ) -> None:
+        """A whole number, or a string float() reads as one, is returned as the int it equals, not as a float."""
+        number = as_whole_number(value, "n_homes")
+        assert number == expected
+        assert type(number) is int
+
+    def test_with_no_interval_any_whole_number_is_read(self) -> None:
+        assert as_whole_number(-(10**15), "x") == -(10**15)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(2**53 + 1, id="python-int"),
+            pytest.param(np.int64(2**62 + 1), id="numpy-int64"),
+            pytest.param(np.uint64(2**64 - 1), id="numpy-uint64"),
+        ],
+    )
+    def test_an_integer_beyond_a_floats_precision_is_read_as_itself(
+        self, value: int | np.integer[Any]
+    ) -> None:
+        """An integer, Python's or numpy's, is returned as the int it is, never rounded through a float."""
+        number = as_whole_number(value, "seed")
+        assert number == int(value)
+        assert type(number) is int
+
+    @pytest.mark.parametrize(
+        "value", [pytest.param(2.5, id="float"), pytest.param("2.5", id="numeric-string")]
+    )
+    def test_a_number_with_a_fractional_part_is_refused_naming_the_field_and_the_value(
+        self, value: object
+    ) -> None:
+        """A number with a fractional part is refused, not truncated."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_number(value, "n_homes")
+        assert str(exc_info.value) == f"n_homes must be a whole number, got {value!r}"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(True, id="true"),
+            pytest.param(np.True_, id="numpy-true"),
+        ],
+    )
+    def test_a_value_that_is_not_a_finite_number_gets_the_as_finite_float_refusal(
+        self, value: object
+    ) -> None:
+        """A value as_finite_float refuses is refused as it refuses it, before any whole-number check."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_number(value, "n_homes")
+        assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
+
+
+class TestAsWholeNumberWithAnInterval:
+    """as_whole_number given an interval reads a value as it does without one, and refuses a number outside the interval, phrasing it."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(1, 1, id="low"),
+            pytest.param(10, 10, id="high"),
+            pytest.param(10.0, 10, id="high-as-a-whole-float"),
+        ],
+    )
+    def test_a_closed_interval_admits_its_bounds_and_a_value_is_read_as_the_int_it_equals(
+        self, value: object, expected: int
+    ) -> None:
+        """Both bounds of a closed interval are admitted, each returned as the int it equals, not as a float."""
+        number = as_whole_number(value, "n_homes", within=Interval(1, 10))
+        assert number == expected
+        assert type(number) is int
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(0, id="below"),
+            pytest.param(11, id="above"),
+            pytest.param(1e300, id="huge-float"),
+        ],
+    )
+    def test_a_value_outside_the_interval_is_refused_naming_the_field_the_interval_and_the_value_sent(
+        self, value: object
+    ) -> None:
+        """The refusal shows the value as sent (1e300 reads 1e+300), not the int it converts to."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_number(value, "n_homes", within=Interval(1, 10))
+        assert str(exc_info.value) == f"n_homes must be between 1 and 10, got {value!r}"
+
+    def test_a_refusal_phrases_an_open_interval(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_number(0, "n_homes", within=POSITIVE)
+        assert str(exc_info.value) == "n_homes must be greater than 0, got 0"
+
+    @pytest.mark.parametrize(
+        "value", [pytest.param(2.5, id="inside"), pytest.param(0.5, id="outside")]
+    )
+    def test_a_number_with_a_fractional_part_gets_the_whole_number_refusal(
+        self, value: object
+    ) -> None:
+        """A number with a fractional part is refused as such, before the interval is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_number(value, "n_homes", within=Interval(1, 10))
+        assert str(exc_info.value) == f"n_homes must be a whole number, got {value!r}"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(float("inf"), id="infinity"),
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(True, id="true"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_value_that_is_not_a_finite_number_gets_the_finite_number_refusal(
+        self, value: object
+    ) -> None:
+        """A value that is not a finite number is refused as such, before the whole-number rule or the interval is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_number(value, "n_homes", within=Interval(1, 10))
+        assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
+
+
+#: One value of each kind that is not a list, which every list reader refuses.
+_NOT_LISTS = [
+    pytest.param("1,2", id="string"),
+    pytest.param(b"12", id="bytes"),
+    pytest.param({"a": 1}, id="mapping"),
+    pytest.param({1, 2}, id="set"),
+    pytest.param(frozenset({1, 2}), id="frozenset"),
+    pytest.param(5, id="int"),
+    pytest.param(2.5, id="float"),
+    pytest.param(None, id="null"),
+]
+
+
+class TestListReaders:
+    """as_finite_floats and as_whole_numbers read a list as a tuple, each element i as as_finite_float or as_whole_number reads it under the name {field}[{i}]."""
+
+    def test_as_finite_floats_reads_each_element_as_a_float(self) -> None:
+        numbers = as_finite_floats([1, "2.5", 3.0], "rates")
+        assert numbers == (1.0, 2.5, 3.0)
+        assert all(type(number) is float for number in numbers)
+
+    def test_as_whole_numbers_reads_each_element_as_the_int_it_equals(self) -> None:
+        numbers = as_whole_numbers([1, 2.0, "3"], "months")
+        assert numbers == (1, 2, 3)
+        assert all(type(number) is int for number in numbers)
+
+    @pytest.mark.parametrize(
+        "make_values",
+        [
+            pytest.param(lambda: (1, 2, 3), id="tuple"),
+            pytest.param(lambda: (number for number in (1, 2, 3)), id="generator"),
+            pytest.param(lambda: range(1, 4), id="range"),
+        ],
+    )
+    def test_any_iterable_of_numbers_is_read(self, make_values: Callable[[], Iterable[int]]) -> None:
+        assert as_whole_numbers(make_values(), "months") == (1, 2, 3)
+
+    @pytest.mark.parametrize(
+        "read", [pytest.param(as_finite_floats, id="floats"), pytest.param(as_whole_numbers, id="whole-numbers")]
+    )
+    def test_an_empty_list_reads_as_an_empty_tuple(self, read: Callable[[object, str], tuple[object, ...]]) -> None:
+        assert read([], "months") == ()
+
+    def test_an_element_with_a_fractional_part_is_refused_naming_its_index_and_the_element(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_numbers([1, 2.5], "months")
+        assert str(exc_info.value) == "months[1] must be a whole number, got 2.5"
+
+    def test_an_element_that_is_not_a_finite_number_is_refused_naming_its_index_and_the_element(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_floats([1.0, math.nan], "rates")
+        assert str(exc_info.value) == "rates[1] must be a finite number, got nan"
+
+    def test_the_interval_applies_to_each_element(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_whole_numbers([1, 13], "months", Interval(1, 12))
+        assert str(exc_info.value) == "months[1] must be between 1 and 12, got 13"
+
+    @pytest.mark.parametrize("value", _NOT_LISTS)
+    @pytest.mark.parametrize(
+        ("read", "field", "kind"),
+        [
+            pytest.param(as_finite_floats, "rates", "finite numbers", id="floats"),
+            pytest.param(as_whole_numbers, "months", "whole numbers", id="whole-numbers"),
+        ],
+    )
+    def test_a_value_that_is_not_a_list_is_refused_naming_the_field_and_the_value(
+        self, read: Callable[[object, str], tuple[object, ...]], field: str, kind: str, value: object
+    ) -> None:
+        """Text, a mapping and a set are iterable, but none is a list of numbers, a set having no order to index its elements by, so each is refused as a number is."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            read(value, field)
+        assert str(exc_info.value) == f"{field} must be a list of {kind}, got {value!r}"
+
+
+class TestAsListElements:
+    """as_list_elements reads a list setting's shape alone: it returns the tuple of the list's elements as given, reading none of them, and refuses a value that is not a list."""
+
+    def test_the_elements_are_returned_as_given(self) -> None:
+        elements = as_list_elements(["a", 1, None, "2.5"], "values")
+        assert elements == ("a", 1, None, "2.5")
+        assert [type(element) for element in elements] == [str, int, type(None), str]
+
+    @pytest.mark.parametrize(
+        "make_values",
+        [
+            pytest.param(lambda: (1, 2, 3), id="tuple"),
+            pytest.param(lambda: (number for number in (1, 2, 3)), id="generator"),
+            pytest.param(lambda: range(1, 4), id="range"),
+        ],
+    )
+    def test_any_iterable_is_read(self, make_values: Callable[[], Iterable[int]]) -> None:
+        assert as_list_elements(make_values(), "values") == (1, 2, 3)
+
+    def test_an_empty_list_reads_as_an_empty_tuple(self) -> None:
+        assert as_list_elements([], "values") == ()
+
+    @pytest.mark.parametrize("value", _NOT_LISTS)
+    def test_a_value_that_is_not_a_list_is_refused_naming_the_field_and_the_value(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_list_elements(value, "values")
+        assert str(exc_info.value) == f"values must be a list, got {value!r}"
+
+    def test_the_refusal_names_what_the_field_must_be(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_list_elements(5, "rates", "a list of finite numbers")
+        assert str(exc_info.value) == "rates must be a list of finite numbers, got 5"
+
+
+@dataclasses.dataclass(frozen=True)
+class _Settings:
+    """A frozen input type that reads each number field with read_field, as the package's input types do."""
+
+    number: Any
+    count: Any = 1
+    numbers: Any = (1,)
+    optional_number: Any = None
+
+    def __post_init__(self) -> None:
+        read_field(self, "number", as_finite_float, POSITIVE)
+        read_field(self, "count", as_whole_number)
+        read_field(self, "numbers", as_whole_numbers)
+        read_field(self, "optional_number", as_finite_float, optional=True)
+
+
+class TestReadField:
+    """read_field reads a field of an instance under construction with a reader, and stores in it what the reader returns."""
+
+    def test_what_each_reader_returns_is_stored_in_the_frozen_instance(self) -> None:
+        settings = _Settings(number="4", count=7.0, numbers=[1, 2.0])
+
+        assert (settings.number, settings.count, settings.numbers) == (4.0, 7, (1, 2))
+        assert type(settings.number) is float
+        assert type(settings.count) is int
+        assert [type(number) for number in settings.numbers] == [int, int]
+
+    def test_the_interval_is_passed_to_the_reader(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            _Settings(number=0)
+        assert str(exc_info.value) == "number must be greater than 0, got 0"
+
+    def test_none_is_refused_where_the_field_is_not_optional(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            _Settings(number=None)
+        assert str(exc_info.value) == "number must be a finite number, got None"
+
+    def test_an_optional_field_left_none_stays_none(self) -> None:
+        assert _Settings(number=1).optional_number is None
+
+    def test_an_optional_field_given_a_value_stores_what_was_read(self) -> None:
+        assert _Settings(number=1, optional_number="2.5").optional_number == 2.5
+
+    def test_an_optional_field_given_a_value_that_is_not_a_finite_number_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            _Settings(number=1, optional_number=math.nan)
+        assert str(exc_info.value) == "optional_number must be a finite number, got nan"

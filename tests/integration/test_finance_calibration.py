@@ -5,142 +5,75 @@
 H6 integration gate: verifies that the financial layer matches the investor
 spreadsheet under identical [FIN] inputs.
 
-Golden constants are transcribed from named cells in:
-  finance/Forecast Model for Community Owned Solar_INVESTOR_PITCH_v3.xlsm
-  (read 2026-06-16 via openpyxl data_only; .xlsm NOT git-tracked; NOT read at runtime).
+The golden constants are tests/_fin_calibration.py's FIN_GOLDEN, transcribed from
+the spreadsheet's named cells; their provenance is recorded there.
 
 Layout:
-  - Fast (no-network) classes:
-      TestSpreadsheetRevenueCurve — pure helper unit tests
-      TestFinCalibrationScenarioParses — YAML scenario parsing
-      TestCalibrationCapexMethodAgreement — H6 capex gate
-      TestCalibrationDscrIrrMethodAgreement — H6 DSCR/IRR gate
-      TestCalibrationG6Guards — G6 premise guards
-  - @pytest.mark.slow class:
-      TestCalibrationPhysicsColumn — real-PVGIS physics column (reported, not asserted ==)
-
-NOTE: This file mixes fast and slow tests; it must NOT be added to
-test_marker_registration.py's INTEGRATION_FILES list.
+  - TestSpreadsheetRevenueCurve — pure helper unit tests
+  - TestFinCalibrationScenarioParses — YAML scenario parsing
+  - TestCalibrationCapexMethodAgreement — H6 capex gate
+  - TestCalibrationDscrIrrMethodAgreement — H6 DSCR/IRR gate
+  - TestCalibrationG6Guards — G6 premise guards
+  - TestCalibrationPhysicsColumn — the physics column on a simulated fleet (reported, not asserted ==)
 """
 from __future__ import annotations
 
-import dataclasses
 import math
 from pathlib import Path
 
 import pytest
 
-from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
     load_fleet_config,
-    parse_finance_config,
 )
-from solar_challenge.finance import (
-    FinanceConfig,
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.projection import (
     MultiYearCurve,
     ProjectEconomics,
     project_economics,
     project_multi_year,
+    scenario_fleet,
     spreadsheet_revenue_curve,
 )
-from solar_challenge.home import HomeConfig
-from solar_challenge.load import LoadConfig
-from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    parse_finance_config,
+    parse_seg_rate,
+)
+from tests._fin_calibration import (
+    FIN_GOLDEN,
+    FIN_SCF,
+    PHYSICS_COLUMN_DAYS,
+    make_fin_finance,
+    make_fin_spreadsheet_curve,
+    make_physics_column_scenario,
+    simulate_physics_column,
+)
+from tests._finance_builders import make_scenario_of, make_sized_home
+from tests._install_capex import fleet_wired_dc_kw
+from tests._repository_paths import SCENARIOS_DIR
 
 
 # ---------------------------------------------------------------------------
-# Golden constants — transcribed from named .xlsm cells (NOT read at runtime)
-# Source: finance/Forecast Model for Community Owned Solar_INVESTOR_PITCH_v3.xlsm
-# Read: 2026-06-16 via `uv run --with openpyxl` (openpyxl not in dev env)
+# Helper builders; the homes and scenarios come from tests/_finance_builders.py,
+# the [FIN] finance from tests/_fin_calibration.py
 # ---------------------------------------------------------------------------
-
-_FIN_GOLDEN = {
-    # Sensitivity sheet — named solver inputs
-    "inp_kWp": 5.5,              # Sensitivity!B6  (inp_kWp)
-    "inp_Batt_kWh": 5.0,         # Sensitivity!B7  (inp_Batt_kWh) — 5 kWh basis
-    "inp_kWhPerkWp": 1050.0,     # Sensitivity!B8  (inp_kWhPerkWp)
-    "out_MinCash_WithBatt": 96334.55,    # Sensitivity!B10
-    "out_RetSurplus_WithBatt": 207841.20, # Sensitivity!B12
-    # Capital Stack
-    "capital_stack_b6": 775000.0,        # Capital_Stack!B6 — Total Capex at 5 kWh
-    #   100 × (5.5×£1000 + £1000 + 5kWh×£250) = 100 × £7,750 = £775,000
-    # Workings sheet — per-roof build-up at 10 kWh basis
-    "workings_c57": 9000.0,      # Workings!C57 — £9,000/roof at 10 kWh
-    #   5.5×1000 + 1000 + 10×250 = 5500+1000+2500 = £9,000
-    "workings_c94": 900000.0,    # Workings!C94 — 100 × £9,000 = £900,000 (10 kWh basis)
-    # §2.3 delta: £900,000 − £775,000 = £125,000 = 100 × 5kWh × £250 (battery size, NOT error)
-    # Debt Analytics
-    "min_dscr": 2.10378435678433,   # Debt_Analytics!B16 (Presentation Funders!E8, Stress_Test!B9)
-    "avg_dscr": 3.1735282491711,    # Debt_Analytics!B17
-    # Equity IRR: no single labelled cell; from Debt_Analytics row 13 'Cash for IRR'
-    #   B13=-244821, C13=155947, D13=163911, E13=172837, ...
-    #   The sheet's equity is net of formation costs / fundraising fees / dividend deferral,
-    #   so the sheet equity_irr (~69% prose estimate) differs from our model (~11%).
-    #   G6 fallback: assert structural floor equity_irr > 0.
-    "equity_irr_floor": 0.0,  # G6 fallback: assert > 0
-    # [FIN] cost/rate assumptions
-    "own_use_rate_pence_per_kwh": 15.0,
-    "export_rate_pence_per_kwh": 6.0,
-    "grant_gbp": 250000.0,
-    "equity_fraction": 0.75,
-    "loan_term_years": 15,
-    "loan_rate": 0.07,
-}
-
-# [FIN] self-consumption fraction assumption (spreadsheet uses 0.70 for with-battery)
-_FIN_SCF = 0.70
-
-
-# ---------------------------------------------------------------------------
-# Helper builders (mirrors test_finance_economics.py pattern)
-# ---------------------------------------------------------------------------
-
-
-def _make_home_config_fin(
-    pv_kwp: float = 5.5,
-    battery_kwh: float = 5.0,
-) -> HomeConfig:
-    """Build a [FIN]-aligned HomeConfig (5.5 kWp + 5.0 kWh, Bristol defaults)."""
-    pv = PVConfig(capacity_kw=pv_kwp, azimuth=180, tilt=35)
-    load = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False, seed=1)
-    batt = BatteryConfig(capacity_kwh=battery_kwh) if battery_kwh > 0.0 else None
-    return HomeConfig(pv_config=pv, load_config=load, battery_config=batt)
 
 
 def _make_scenario_fin(
     n_homes: int = 100,
-    pv_kwp: float = 5.5,
-    battery_kwh: float = 5.0,
+    battery_kwh: float = FIN_GOLDEN["inp_Batt_kWh"],
 ) -> ScenarioConfig:
-    """Build a homogeneous [FIN]-aligned ScenarioConfig for calibration tests."""
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-    homes = [_make_home_config_fin(pv_kwp=pv_kwp, battery_kwh=battery_kwh)
-             for _ in range(n_homes)]
-    return ScenarioConfig(name="FIN-Calibration", period=period, homes=homes)
-
-
-def _make_finance_fin(
-    *,
-    self_consumption_override: float = _FIN_SCF,
-) -> FinanceConfig:
-    """Build the [FIN]-aligned FinanceConfig with named-cell defaults."""
-    return FinanceConfig(
-        standing_charge_pence_per_day=60.0,
-        pv_cost_per_kwp_gbp=1000.0,
-        roof_fit_cost_gbp=1000.0,
-        battery_cost_per_kwh_gbp=250.0,
-        inverter_cost_per_kw_gbp=0.0,
-        grant_gbp=_FIN_GOLDEN["grant_gbp"],
-        equity_fraction=_FIN_GOLDEN["equity_fraction"],
-        loan_term_years=_FIN_GOLDEN["loan_term_years"],
-        loan_rate=_FIN_GOLDEN["loan_rate"],
-        opex_per_home_per_year_gbp=131.0,
-        asset_life_years=25,
-        self_consumption_override=self_consumption_override,
+    """make_scenario_of's scenario of *n_homes* homes of the [FIN] PV array, each with a *battery_kwh* kWh battery."""
+    return make_scenario_of(
+        [make_sized_home(pv_kwp=FIN_GOLDEN["inp_kWp"], battery_kwh=battery_kwh)] * n_homes
     )
+
+
+def _make_finance_fin() -> FinanceConfig:
+    """The [FIN] finance at the spreadsheet's FIN_SCF self-consumption override."""
+    return make_fin_finance(self_consumption_override=FIN_SCF)
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +82,7 @@ def _make_finance_fin(
 
 
 class TestSpreadsheetRevenueCurve:
-    """Fast tests for finance.spreadsheet_revenue_curve (task/48 step-1).
+    """Fast tests for projection.spreadsheet_revenue_curve (task/48 step-1).
 
     spreadsheet_revenue_curve builds a flat [FIN]-assumption fleet-revenue
     MultiYearCurve without running the physics simulator.
@@ -229,6 +162,11 @@ class TestSpreadsheetRevenueCurve:
         curve = self._call()
         assert curve.interp_error_estimate == pytest.approx(0.0)
 
+    def test_its_pv_basis_is_the_fleets_nameplate(self) -> None:
+        """fleet_pv_dc_kw is n_homes × pv_kwp, the nameplate its generation (pv_kwp × kwh_per_kwp) came from."""
+        assert self._call().fleet_pv_dc_kw == 550.0
+        assert self._call(n_homes=200, pv_kwp=3.0).fleet_pv_dc_kw == 600.0
+
     def test_deterministic(self) -> None:
         """Two calls with same inputs must return bit-identical results."""
         curve1 = self._call()
@@ -236,7 +174,7 @@ class TestSpreadsheetRevenueCurve:
         assert len(curve1.points) == len(curve2.points)
         for pt1, pt2 in zip(curve1.points, curve2.points):
             assert pt1.fleet_revenue_gbp == pt2.fleet_revenue_gbp
-            assert pt1.fleet_self_consumption_kwh == pt2.fleet_self_consumption_kwh
+            assert pt1.fleet_billed_own_use_kwh == pt2.fleet_billed_own_use_kwh
             assert pt1.fleet_export_kwh == pt2.fleet_export_kwh
         assert curve1.interp_error_estimate == curve2.interp_error_estimate
         assert curve1.sampled_ages == curve2.sampled_ages
@@ -256,7 +194,7 @@ class TestSpreadsheetRevenueCurve:
             assert pt2.fleet_revenue_gbp == pytest.approx(2.0 * pt1.fleet_revenue_gbp, rel=1e-10)
 
     def test_energy_fields_consistent_with_scf(self) -> None:
-        """fleet_self_consumption_kwh and fleet_export_kwh must reflect scf."""
+        """fleet_billed_own_use_kwh and fleet_export_kwh must reflect scf."""
         n_homes = 100
         pv_kwp = 5.5
         kwh_per_kwp = 1050.0
@@ -267,7 +205,7 @@ class TestSpreadsheetRevenueCurve:
         )
         fleet_gen = float(n_homes) * pv_kwp * kwh_per_kwp
         for pt in curve.points:
-            assert pt.fleet_self_consumption_kwh == pytest.approx(scf * fleet_gen, rel=1e-10)
+            assert pt.fleet_billed_own_use_kwh == pytest.approx(scf * fleet_gen, rel=1e-10)
             assert pt.fleet_export_kwh == pytest.approx((1.0 - scf) * fleet_gen, rel=1e-10)
 
 
@@ -276,122 +214,70 @@ class TestSpreadsheetRevenueCurve:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Work in tmp_path, not the repo root, so the test shows it finds the committed scenario it reads from any working directory."""
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.mark.usefixtures("in_tmp_path")
 class TestFinCalibrationScenarioParses:
     """Fast tests for scenarios/bristol-fin-calibration.yaml loading (step-3).
 
-    The scenario uses fleet_distribution format (100 identical homes), which is
-    parsed via load_fleet_config (matching how the finance CLI loads scenarios).
-    Finance block is parsed separately via parse_finance_config + load_config,
-    exactly as the finance CLI does internally.
+    The fleet (fleet_distribution format, parsed with load_fleet_config as the
+    finance CLI parses it) is 100 homes, each with FIN_GOLDEN's install.
+    The finance block is parsed with load_config and parse_finance_config, as the
+    finance CLI parses it, and checked as one equality with θ's [FIN] finance,
+    _make_finance_fin().
+    The seg block is parsed with load_config and parse_seg_rate, as the finance
+    CLI parses it, and its rate is FIN_GOLDEN's [FIN] export rate.
     """
 
-    _SCENARIO_PATH = "scenarios/bristol-fin-calibration.yaml"
+    _SCENARIO_PATH = SCENARIOS_DIR / "bristol-fin-calibration.yaml"
 
     def _load_finance(self) -> FinanceConfig:
         """Parse the finance block from the calibration scenario YAML."""
-        path = Path(self._SCENARIO_PATH)
-        if not path.exists():
-            pytest.fail(
-                f"Scenario file not found: {self._SCENARIO_PATH}. "
-                "Create it with step-4 impl."
-            )
-        raw = load_config(path)
+        raw = load_config(self._SCENARIO_PATH)
         finance = parse_finance_config(raw.get("finance"))
         assert finance is not None, "Expected finance block in scenario, got None"
         return finance
 
     def _load_homes(self) -> list:
         """Parse the fleet homes from the calibration scenario YAML."""
-        path = Path(self._SCENARIO_PATH)
-        if not path.exists():
-            pytest.fail(
-                f"Scenario file not found: {self._SCENARIO_PATH}. "
-                "Create it with step-4 impl."
-            )
-        fleet = load_fleet_config(path)
+        fleet = load_fleet_config(self._SCENARIO_PATH)
         return list(fleet.homes)
 
     def test_scenario_file_exists(self) -> None:
         """scenarios/bristol-fin-calibration.yaml must exist on disk."""
-        assert Path(self._SCENARIO_PATH).exists(), (
-            f"{self._SCENARIO_PATH} not found — create it in step-4"
+        assert self._SCENARIO_PATH.exists(), (
+            f"{self._SCENARIO_PATH} not found"
         )
 
-    def test_finance_parses_without_error(self) -> None:
-        """The scenario YAML must parse finance block without raising exceptions."""
-        finance = self._load_finance()
-        assert finance is not None
-
-    def test_scenario_has_finance_block(self) -> None:
-        """Parsed scenario must have a finance block (not None)."""
-        finance = self._load_finance()
-        assert finance is not None
-
-    def test_finance_self_consumption_override(self) -> None:
-        """finance.self_consumption_override must be 0.70 ([FIN] with-battery assumption)."""
-        finance = self._load_finance()
-        assert finance.self_consumption_override == pytest.approx(_FIN_SCF), (
-            f"Expected self_consumption_override=0.70, "
-            f"got {finance.self_consumption_override}"
+    def test_finance_block_is_the_fin_finance_at_fin_scf(self) -> None:
+        """The finance block is θ's [FIN] finance: make_fin_finance at the spreadsheet's FIN_SCF override."""
+        assert self._load_finance() == _make_finance_fin(), (
+            f"{self._SCENARIO_PATH}'s finance block is not the [FIN] finance at FIN_SCF"
         )
 
-    def test_finance_grant_gbp(self) -> None:
-        """finance.grant_gbp must be £250,000 ([FIN] grant)."""
-        finance = self._load_finance()
-        assert finance.grant_gbp == pytest.approx(_FIN_GOLDEN["grant_gbp"])
-
-    def test_finance_equity_fraction(self) -> None:
-        """finance.equity_fraction must be 0.75 ([FIN] equity split)."""
-        finance = self._load_finance()
-        assert finance.equity_fraction == pytest.approx(_FIN_GOLDEN["equity_fraction"])
-
-    def test_finance_loan_term_years(self) -> None:
-        """finance.loan_term_years must be 15 ([FIN] loan term)."""
-        finance = self._load_finance()
-        assert finance.loan_term_years == _FIN_GOLDEN["loan_term_years"]
-
-    def test_finance_loan_rate(self) -> None:
-        """finance.loan_rate must be 0.07 ([FIN] loan interest rate)."""
-        finance = self._load_finance()
-        assert finance.loan_rate == pytest.approx(_FIN_GOLDEN["loan_rate"])
-
-    def test_finance_pv_cost_per_kwp(self) -> None:
-        """finance.pv_cost_per_kwp_gbp must be £1000 ([FIN] PV cost)."""
-        finance = self._load_finance()
-        assert finance.pv_cost_per_kwp_gbp == pytest.approx(1000.0)
-
-    def test_finance_battery_cost_per_kwh(self) -> None:
-        """finance.battery_cost_per_kwh_gbp must be £250 ([FIN] battery cost)."""
-        finance = self._load_finance()
-        assert finance.battery_cost_per_kwh_gbp == pytest.approx(250.0)
-
-    def test_finance_asset_life_years(self) -> None:
-        """finance.asset_life_years must be 25."""
-        finance = self._load_finance()
-        assert finance.asset_life_years == 25
+    def test_seg_rate_is_the_fin_export_rate(self) -> None:
+        """The seg block's rate is the [FIN] export price: FIN_GOLDEN's export_rate_pence_per_kwh."""
+        seg_rate = parse_seg_rate(load_config(self._SCENARIO_PATH).get("seg"))
+        assert seg_rate == FIN_GOLDEN["export_rate_pence_per_kwh"], (
+            f"{self._SCENARIO_PATH}'s seg rate is not FIN_GOLDEN's [FIN] export rate"
+        )
 
     def test_fleet_is_100_homes(self) -> None:
         """Fleet must have exactly 100 homes ([FIN] n_homes=100)."""
         homes = self._load_homes()
         assert len(homes) == 100, f"Expected 100 homes, got {len(homes)}"
 
-    def test_fleet_is_homogeneous_5_5kwp(self) -> None:
-        """All homes must have pv_kwp=5.5 ([FIN] inp_kWp=5.5)."""
-        homes = self._load_homes()
-        assert len(homes) == 100, f"Expected 100 homes, got {len(homes)}"
-        for i, h in enumerate(homes):
-            assert h.pv_config.capacity_kw == pytest.approx(5.5), (
-                f"Home {i}: expected pv_kwp=5.5, got {h.pv_config.capacity_kw}"
-            )
-
-    def test_fleet_is_homogeneous_5kwh_battery(self) -> None:
-        """All homes must have battery_kwh=5.0 ([FIN] inp_Batt_kWh=5)."""
-        homes = self._load_homes()
-        for i, h in enumerate(homes):
-            assert h.battery_config is not None, f"Home {i}: no battery config"
-            assert h.battery_config.capacity_kwh == pytest.approx(5.0), (
-                f"Home {i}: expected battery_kwh=5.0, got {h.battery_config.capacity_kwh}"
-            )
+    def test_every_home_has_the_fin_install(self) -> None:
+        """Every home has the [FIN] install: FIN_GOLDEN's inp_kWp of PV and an inp_Batt_kWh kWh battery."""
+        fin_install = (FIN_GOLDEN["inp_kWp"], FIN_GOLDEN["inp_Batt_kWh"])
+        for i, home in enumerate(self._load_homes()):
+            assert home.battery_config is not None, f"Home {i}: no battery config"
+            install = (home.pv_config.capacity_kw, home.battery_config.capacity_kwh)
+            assert install == fin_install, f"Home {i}: (PV kWp, battery kWh) is not the [FIN] install"
 
 
 # ---------------------------------------------------------------------------
@@ -402,24 +288,12 @@ class TestFinCalibrationScenarioParses:
 class TestCalibrationCapexMethodAgreement:
     """H6 capex method-agreement tests (fast, no PVGIS) (task/48 step-5).
 
-    project_economics(spreadsheet_revenue_curve(...), scenario, finance) must
+    project_economics(spreadsheet_revenue_curve(...), scenario_fleet(scenario), finance) must
     reproduce the spreadsheet capex cells exactly:
     - Capital_Stack!B6 = £775,000 at 5 kWh per home (inp_Batt_kWh=5)
     - Workings!C94 = £900,000 at 10 kWh per home (Workings build-up)
     - Delta = £125,000 = 100 × 5 kWh × £250 (pure battery-size, §2.3)
     """
-
-    def _make_spreadsheet_curve(self, asset_life_years: int = 25) -> MultiYearCurve:
-        """Build the [FIN]-assumption spreadsheet revenue curve."""
-        return spreadsheet_revenue_curve(
-            n_homes=100,
-            pv_kwp=_FIN_GOLDEN["inp_kWp"],
-            kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-            export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
-            asset_life_years=asset_life_years,
-        )
 
     def test_capex_5kwh_matches_capital_stack_b6(self) -> None:
         """Capex for 100 × 5.5kWp + 5kWh must equal Capital_Stack!B6 = £775,000 exactly.
@@ -427,26 +301,26 @@ class TestCalibrationCapexMethodAgreement:
         Arithmetic: 100 × (5.5×£1000 + £1000 + 5.0kWh×£250) = 100×£7,750 = £775,000
         Cell ref: Capital_Stack!B6 = £775,000
         """
-        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        scenario = _make_scenario_fin()
         finance = _make_finance_fin()
-        curve = self._make_spreadsheet_curve()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert econ.total_capex_gbp == pytest.approx(
-            _FIN_GOLDEN["capital_stack_b6"], abs=1.0
+            FIN_GOLDEN["capital_stack_b6"], abs=1.0
         ), (
-            f"Capex (5 kWh) expected Capital_Stack!B6=£{_FIN_GOLDEN['capital_stack_b6']:,.2f}, "
+            f"Capex (5 kWh) expected Capital_Stack!B6=£{FIN_GOLDEN['capital_stack_b6']:,.2f}, "
             f"got £{econ.total_capex_gbp:,.2f}"
         )
 
     def test_capex_5kwh_exact_arithmetic(self) -> None:
         """Exact arithmetic check: 100×(5.5×1000+1000+5×250)=775000 matches cell."""
-        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
+        scenario = _make_scenario_fin()
         finance = _make_finance_fin()
-        curve = self._make_spreadsheet_curve()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         # Verify the arithmetic manually
         expected = 100.0 * (5.5 * 1000.0 + 1000.0 + 5.0 * 250.0)
@@ -460,24 +334,16 @@ class TestCalibrationCapexMethodAgreement:
         Cell ref: Workings!C94 = £900,000
         """
         # 10 kWh fleet (Workings build-up basis)
-        scenario_10kwh = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=10.0)
+        scenario_10kwh = _make_scenario_fin(battery_kwh=10.0)
         finance = _make_finance_fin()
-        curve = spreadsheet_revenue_curve(
-            n_homes=100,
-            pv_kwp=5.5,
-            kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0,
-            export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ_10kwh = project_economics(curve, scenario_10kwh, finance)
+        econ_10kwh = project_economics(curve, scenario_fleet(scenario_10kwh), finance)
 
         assert econ_10kwh.total_capex_gbp == pytest.approx(
-            _FIN_GOLDEN["workings_c94"], abs=1.0
+            FIN_GOLDEN["workings_c94"], abs=1.0
         ), (
-            f"Capex (10 kWh) expected Workings!C94=£{_FIN_GOLDEN['workings_c94']:,.0f}, "
+            f"Capex (10 kWh) expected Workings!C94=£{FIN_GOLDEN['workings_c94']:,.0f}, "
             f"got £{econ_10kwh.total_capex_gbp:,.2f}"
         )
 
@@ -487,16 +353,11 @@ class TestCalibrationCapexMethodAgreement:
         This is the §2.3 '£775k ↔ £900k' reconciliation:
         Pure battery-size difference (inp_Batt_kWh=5 vs Workings 10 kWh), NOT an error.
         """
-        curve = spreadsheet_revenue_curve(
-            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
         finance = _make_finance_fin()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ_5 = project_economics(curve, _make_scenario_fin(battery_kwh=5.0), finance)
-        econ_10 = project_economics(curve, _make_scenario_fin(battery_kwh=10.0), finance)
+        econ_5 = project_economics(curve, scenario_fleet(_make_scenario_fin()), finance)
+        econ_10 = project_economics(curve, scenario_fleet(_make_scenario_fin(battery_kwh=10.0)), finance)
 
         delta = econ_10.total_capex_gbp - econ_5.total_capex_gbp
         expected_delta = 100.0 * 5.0 * 250.0  # 100 homes × 5 kWh × £250/kWh
@@ -523,7 +384,7 @@ class TestCalibrationDscrIrrMethodAgreement:
     (vs Debt_Analytics!B16 = 2.10378). The discrepancy is EXPECTED and DOCUMENTED:
     the spreadsheet's lower DSCR results from equity-fundraising fees, formation
     costs, dividend deferral, and grant timing that the pure financial layer
-    abstracts away. Per PRD §13 / task G6 latitude:
+    abstracts away. Per docs/prds/financial-layer-battery-fidelity.md §13 (θ numeric premise) latitude:
       - HARD assert: min_dscr ≥ 1.20 (covenant floor)
       - HARD assert: equity_irr > 0 (structural sanity)
       - REPORTED: actual values vs spreadsheet cells (Debt_Analytics!B16/B17)
@@ -533,18 +394,10 @@ class TestCalibrationDscrIrrMethodAgreement:
 
     def _build_econ(self) -> ProjectEconomics:
         """Build [FIN]-assumption ProjectEconomics for DSCR/IRR tests."""
-        curve = spreadsheet_revenue_curve(
-            n_homes=100,
-            pv_kwp=_FIN_GOLDEN["inp_kWp"],
-            kwh_per_kwp=_FIN_GOLDEN["inp_kWhPerkWp"],
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=_FIN_GOLDEN["own_use_rate_pence_per_kwh"],
-            export_rate_pence_per_kwh=_FIN_GOLDEN["export_rate_pence_per_kwh"],
-            asset_life_years=25,
-        )
-        scenario = _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0)
         finance = _make_finance_fin()
-        return project_economics(curve, scenario, finance)
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
+        scenario = _make_scenario_fin()
+        return project_economics(curve, scenario_fleet(scenario), finance)
 
     def test_min_dscr_meets_covenant_floor(self) -> None:
         """min_dscr must be ≥ 1.20 (covenant floor) under [FIN]-assumption inputs.
@@ -569,7 +422,7 @@ class TestCalibrationDscrIrrMethodAgreement:
         """
         econ = self._build_econ()
         assert not math.isnan(econ.equity_irr), "equity_irr must not be NaN"
-        assert econ.equity_irr > _FIN_GOLDEN["equity_irr_floor"], (
+        assert econ.equity_irr > FIN_GOLDEN["equity_irr_floor"], (
             f"equity_irr={econ.equity_irr:.4f} must be > 0 (structural sanity)"
         )
 
@@ -599,17 +452,9 @@ class TestCalibrationG6Guards:
 
     def _build_spreadsheet_econ(self) -> ProjectEconomics:
         """Build spreadsheet-input ProjectEconomics."""
-        curve = spreadsheet_revenue_curve(
-            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
-        return project_economics(
-            curve,
-            _make_scenario_fin(n_homes=100, pv_kwp=5.5, battery_kwh=5.0),
-            _make_finance_fin(),
-        )
+        finance = _make_finance_fin()
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
+        return project_economics(curve, scenario_fleet(_make_scenario_fin()), finance)
 
     def test_spreadsheet_column_produces_project_economics(self) -> None:
         """spreadsheet_revenue_curve → project_economics returns a ProjectEconomics."""
@@ -620,7 +465,7 @@ class TestCalibrationG6Guards:
         """Spreadsheet column: capex IS hard-asserted (the primary gate)."""
         econ = self._build_spreadsheet_econ()
         # This is the canonical hard assertion
-        assert abs(econ.total_capex_gbp - _FIN_GOLDEN["capital_stack_b6"]) < 1.0
+        assert abs(econ.total_capex_gbp - FIN_GOLDEN["capital_stack_b6"]) < 1.0
 
     def test_capex_delta_reported_not_asserted_equal(self) -> None:
         """§2.3 capex delta is a REPORTED value — assert it is non-zero (not equal).
@@ -628,15 +473,10 @@ class TestCalibrationG6Guards:
         The delta (£125k) must NOT be asserted as zero. It is the reconciliation
         between the 5 kWh (Capital_Stack!B6) and 10 kWh (Workings!C94) bases.
         """
-        curve = spreadsheet_revenue_curve(
-            n_homes=100, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
         finance = _make_finance_fin()
-        econ_5 = project_economics(curve, _make_scenario_fin(battery_kwh=5.0), finance)
-        econ_10 = project_economics(curve, _make_scenario_fin(battery_kwh=10.0), finance)
+        curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
+        econ_5 = project_economics(curve, scenario_fleet(_make_scenario_fin()), finance)
+        econ_10 = project_economics(curve, scenario_fleet(_make_scenario_fin(battery_kwh=10.0)), finance)
 
         delta = econ_10.total_capex_gbp - econ_5.total_capex_gbp
 
@@ -656,7 +496,7 @@ class TestCalibrationG6Guards:
         documented expected range so regressions in either direction are caught.
         """
         econ = self._build_spreadsheet_econ()
-        spreadsheet_dscr = _FIN_GOLDEN["min_dscr"]
+        spreadsheet_dscr = FIN_GOLDEN["min_dscr"]
         model_dscr = econ.min_dscr
 
         # Report for reconciliation note
@@ -675,57 +515,52 @@ class TestCalibrationG6Guards:
 
 
 # ---------------------------------------------------------------------------
-# Step-7 slow: TestCalibrationPhysicsColumn — real PVGIS (reported only)
+# Step-7: TestCalibrationPhysicsColumn — simulated physics column (reported only)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
+bristol_june_tmy = PHYSICS_COLUMN_DAYS.bristol_tmy_fixture()
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestCalibrationPhysicsColumn:
-    """Real-PVGIS physics column for calibration (REPORTED, not asserted == spreadsheet).
+    """Physics column for calibration (REPORTED, not asserted == spreadsheet).
 
-    Runs a small 2-home fleet over a 3-day January window to smoke-test the
-    physics path alongside the spreadsheet column. This does NOT document the
-    §2.3 annual self-consumption tension: a short winter window cannot show an
-    annual self-consumption fraction, and its DSCR/IRR are degenerate for a
-    2-home fleet because the [FIN] grant exceeds the 2-home capex (financed
-    capex, debt and equity are all zero). The printed physics values are
-    reported for inspection only and are not pinned.
+    Runs a small 2-home fleet over three days to smoke-test the physics path
+    alongside the spreadsheet column. The days are PHYSICS_COLUMN_DAYS, which
+    bristol_june_tmy seeds as Bristol's TMY. This does NOT document the §2.3
+    annual self-consumption tension: three days cannot show an annual
+    self-consumption fraction, and its DSCR/IRR are degenerate for a 2-home fleet
+    because the [FIN] grant exceeds the 2-home capex (financed capex, debt and
+    equity are all zero). The printed physics values are reported for inspection
+    only and are not pinned.
 
-    Marked @pytest.mark.slow — excluded from -m 'not slow' runs.
+    tests/integration/test_cost_recovery_calibration.py::TestPhysicsColumnPremises
+    asserts that no-debt premise.
     """
 
     def test_physics_column_structural_sanity(self) -> None:
-        """Physics column: capex still input-driven (2 homes × £7,750).
+        """Physics column: capex prices the PV DC its curve's generation came from.
 
         The physics column uses the real project_multi_year simulation (2 homes,
         3-day window) with no self_consumption_override, so it prices the
-        simulated own-use. Only STRUCTURAL checks: capex == £15,500, physics scf MAY
-        differ from 0.70, no physics==spreadsheet assertion.
+        simulated own-use. Only STRUCTURAL checks: the physics capex prices the
+        2 × 5.606 kWp the homes wire (about £15,711.98), the spreadsheet column's
+        the 2 × 5.5 kWp nameplate (£15,500), physics scf MAY differ from 0.70, no
+        physics==spreadsheet assertion.
         """
-        # Small fleet, short window for speed
-        homes = [_make_home_config_fin(pv_kwp=5.5, battery_kwh=5.0)] * 2
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-03")
-        scenario = ScenarioConfig(
-            name="FIN-Cal-Physics-Test",
-            period=period,
-            homes=homes,
-        )
+        scenario = make_physics_column_scenario()
         finance = _make_finance_fin()
-        physics_finance = dataclasses.replace(finance, self_consumption_override=None)
+        physics_finance = make_fin_finance(self_consumption_override=None)
 
-        # Physics column (real PVGIS)
-        physics_curve = project_multi_year(scenario, physics_finance)
-        physics_econ = project_economics(physics_curve, scenario, physics_finance)
+        # Physics column (simulated fleet)
+        physics_curve = project_multi_year(scenario, physics_finance, simulate=simulate_physics_column)
+        physics_econ = project_economics(physics_curve, scenario_fleet(scenario), physics_finance)
 
         # Spreadsheet column (analytic)
-        ss_curve = spreadsheet_revenue_curve(
-            n_homes=2, pv_kwp=5.5, kwh_per_kwp=1050.0,
-            self_consumption_fraction=_FIN_SCF,
-            own_use_rate_pence_per_kwh=15.0, export_rate_pence_per_kwh=6.0,
-            asset_life_years=25,
-        )
+        ss_curve = make_fin_spreadsheet_curve(n_homes=2, asset_life_years=finance.asset_life_years)
         # Adjust scenario to match 2 homes for capex assertion
-        ss_econ = project_economics(ss_curve, scenario, finance)
+        ss_econ = project_economics(ss_curve, scenario_fleet(scenario), finance)
 
         # REPORT both columns
         print(
@@ -736,24 +571,26 @@ class TestCalibrationPhysicsColumn:
             f"  Physics DSCR:            {physics_econ.min_dscr:.4f}\n"
             f"  Spreadsheet IRR:         {ss_econ.equity_irr*100:.2f}%\n"
             f"  Physics IRR:             {physics_econ.equity_irr*100:.2f}%\n"
-            f"  Physics self_cons_kwh:   {physics_curve.points[0].fleet_self_consumption_kwh:.1f}"
+            f"  Physics billed own-use:  {physics_curve.points[0].fleet_billed_own_use_kwh:.1f}"
             " kWh/yr (window annualised)\n"
             f"  Physics export_kwh:      {physics_curve.points[0].fleet_export_kwh:.1f}"
             " kWh/yr (window annualised)\n"
-            f"  Spreadsheet scf=0.70 (named inp: {_FIN_SCF})\n"
+            f"  Spreadsheet scf=0.70 (named inp: {FIN_SCF})\n"
             f"  Note: grant > 2-home capex (no debt, no equity), so DSCR/IRR in both\n"
             f"  columns are degenerate. The 3-day physics values are a smoke report\n"
             f"  of the physics path, not the annual §2.3 tension."
         )
 
         # STRUCTURAL assertions only (no physics==spreadsheet assertions)
-        # Capex is input-driven: assert against the concrete golden value, not the other column
-        # 2 homes × (5.5kWp×£1000 + £1000 + 5.0kWh×£250) = 2 × £7,750 = £15,500
-        _two_home_capex_gbp = 2.0 * (5.5 * 1000.0 + 1000.0 + 5.0 * 250.0)  # = 15500.0
-        assert physics_econ.total_capex_gbp == pytest.approx(_two_home_capex_gbp, abs=1.0), (
-            f"Physics capex (2 homes × £7,750) expected £{_two_home_capex_gbp:,.2f}, "
-            f"got £{physics_econ.total_capex_gbp:,.2f}"
+        # The physics curve's PV basis is the DC its 2 homes wire, not their 2 × 5.5 kWp nameplate
+        assert physics_curve.fleet_pv_dc_kw == pytest.approx(fleet_wired_dc_kw(scenario_fleet(scenario).homes))
+        assert physics_curve.fleet_pv_dc_kw != pytest.approx(11.0)
+        # Physics capex: that PV DC × £1000 + 2 × (£1000 + 5.0kWh×£250)
+        assert physics_econ.total_capex_gbp == pytest.approx(
+            physics_curve.fleet_pv_dc_kw * 1000.0 + 2 * (1000.0 + 5.0 * 250.0), abs=1e-6
         )
+        # The spreadsheet column keeps its nameplate: 2 × (5.5kWp×£1000 + £1000 + 5.0kWh×£250) = £15,500
+        assert ss_econ.total_capex_gbp == pytest.approx(15_500.0, abs=1.0)
         # Physics DSCR must be positive, or inf when debt-free (structural sanity)
         assert physics_econ.min_dscr > 0.0 or physics_econ.min_dscr == float("inf")
         # Physics IRR: just check it's a float (nan when no equity is invested, as here)

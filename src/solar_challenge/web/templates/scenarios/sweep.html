@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import bound_run_status_badge %}
+{% from "components/macros.html" import bound_run_status_badge, chart_scripts, location_preset_options, panel %}
 
 {% block title %}Parameter Sweep{% endblock %}
 
@@ -21,11 +21,7 @@
     class="space-y-6"
 >
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- Sweep Configuration Card -->
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-            <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
-                <h3 class="font-semibold text-slate-800 dark:text-white">Sweep Configuration</h3>
-            </div>
+        {% call panel(title='Sweep Configuration') %}
             <div class="p-5 space-y-5">
                 <!-- Parameter Selection -->
                 <div>
@@ -52,7 +48,7 @@
                     </div>
                     <div>
                         <label for="sweep_steps" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Steps</label>
-                        <input id="sweep_steps" type="number" min="2" max="50" x-model="steps"
+                        <input id="sweep_steps" type="number" min="2" max="{{ sweep_max_steps }}" x-model="steps"
                             class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                     </div>
                 </div>
@@ -88,15 +84,12 @@
                                 <label for="sweep_base_location" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Location</label>
                                 <select id="sweep_base_location" x-model="baseConfig.location"
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                    <option value="bristol">Bristol</option>
-                                    <option value="london">London</option>
-                                    <option value="edinburgh">Edinburgh</option>
-                                    <option value="manchester">Manchester</option>
+                                    {{ location_preset_options(location_presets) }}
                                 </select>
                             </div>
                             <div>
                                 <label for="sweep_base_days" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Days</label>
-                                <input id="sweep_base_days" type="number" min="1" max="{{ max_window_days }}" x-model="baseConfig.days"
+                                <input id="sweep_base_days" type="number" min="{{ page_limits.window_days.low }}" max="{{ page_limits.window_days.high }}" x-model="baseConfig.days"
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>
@@ -113,18 +106,13 @@
                     <span x-show="submitting" x-cloak>Submitting...</span>
                 </button>
 
-                <!-- Error display -->
-                <div x-show="errorMsg" x-cloak class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm"
+                <!-- Error display: :hidden, not x-show, which shows only at an animation frame (tests/e2e/test_parameter_sweep.py::test_the_page_says_why_it_lost_track_of_a_sweep_while_the_browser_renders_no_frame) -->
+                <div hidden :hidden="!errorMsg" class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm"
                     x-text="errorMsg"></div>
             </div>
-        </div>
+        {% endcall %}
 
-        <!-- Sweep Point Preview Card -->
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-            <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
-                <h3 class="font-semibold text-slate-800 dark:text-white">Sweep Point Preview</h3>
-                <p class="text-xs text-slate-400 mt-1" x-text="previewValues.length + ' values will be tested'"></p>
-            </div>
+        {% call panel(title='Sweep Point Preview', subtitle_expression="previewValues.length + ' values will be tested'") %}
             <div class="p-5">
                 <div x-show="previewValues.length > 0" class="space-y-3">
                     <!-- Visual representation -->
@@ -160,46 +148,45 @@
                     Set valid min, max and steps to see preview
                 </div>
             </div>
-        </div>
+        {% endcall %}
     </div>
 
-    <!-- Results Table -->
-    <div x-show="sweepResults.length > 0" x-cloak class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
-        <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
-            <h3 class="font-semibold text-slate-800 dark:text-white">Sweep Results</h3>
-            <p class="text-xs text-slate-400 mt-1">Sweep ID: <span x-text="sweepId"></span></p>
-        </div>
-        <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="bg-slate-50 dark:bg-slate-700/50">
-                        <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300" x-text="currentParam.label">Parameter</th>
-                        <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Generation (kWh)</th>
-                        <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Self-Consumption (%)</th>
-                        <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Grid Import (kWh)</th>
-                        <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Status</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                    <template x-for="(row, idx) in sweepResults" :key="idx">
-                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                            <td class="px-5 py-3 font-mono text-slate-700 dark:text-slate-300" x-text="row.value"></td>
-                            <td class="px-5 py-3 text-slate-600 dark:text-slate-400" x-text="row.generation"></td>
-                            <td class="px-5 py-3 text-slate-600 dark:text-slate-400" x-text="row.self_consumption"></td>
-                            <td class="px-5 py-3 text-slate-600 dark:text-slate-400" x-text="row.grid_import"></td>
-                            <td class="px-5 py-3">{{ bound_run_status_badge('row.status') }}</td>
+    <!-- Sweep Results: :hidden, not x-show, which shows only at an animation frame (tests/e2e/test_parameter_sweep.py::test_the_sweep_results_table_shows_each_points_row_while_the_browser_renders_no_frame) -->
+    <div hidden :hidden="sweepResults.length === 0">
+        {% call panel(title='Sweep Results') %}
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50 dark:bg-slate-700/50">
+                            <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300" x-text="sweptParameterLabel">Parameter</th>
+                            <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Generation (kWh)</th>
+                            <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Self-Consumption (%)</th>
+                            <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Grid Import (kWh)</th>
+                            <th class="px-5 py-3 text-left font-medium text-slate-600 dark:text-slate-300">Status</th>
                         </tr>
-                    </template>
-                </tbody>
-            </table>
-        </div>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        <template x-for="(row, idx) in sweepResults" :key="idx">
+                            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                                <td class="px-5 py-3 font-mono text-slate-700 dark:text-slate-300" x-text="row.value"></td>
+                                <td class="px-5 py-3 text-slate-600 dark:text-slate-400" x-text="row.generation"></td>
+                                <td class="px-5 py-3 text-slate-600 dark:text-slate-400" x-text="row.self_consumption"></td>
+                                <td class="px-5 py-3 text-slate-600 dark:text-slate-400" x-text="row.grid_import"></td>
+                                <td class="px-5 py-3">{{ bound_run_status_badge('row.status') }}</td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        {% endcall %}
     </div>
 
-    <!-- Sweep Chart Placeholder -->
-    <div x-show="sweepResults.length > 0 && sweepResults.some(r => r.status === 'completed')" x-cloak
-        class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-5">
-        <div id="sweep-chart" class="w-full h-96"></div>
-    </div>
+    <!-- Sweep Charts: the chart panels POST /scenarios/sweep/chart answers once every point has finished, shown as they are added (tests/e2e/test_parameter_sweep.py::test_the_sweep_charts_region_is_shown_and_its_charts_drawn_as_its_panels_are_added says why it is not x-show) -->
+    <section aria-label="Sweep charts" hidden :hidden="!sweepCharts" x-html="sweepCharts" class="space-y-6"></section>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+{{ chart_scripts() }}
 {% endblock %}

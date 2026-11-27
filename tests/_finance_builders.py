@@ -5,9 +5,10 @@
 Tests of ``project_multi_year`` and ``solve_cost_recovery_rate`` inject their own
 ``simulate``, so they need fleet results whose totals they choose rather than a
 PVGIS-driven simulation.  This module is the one place those fixtures are spelled:
-a default 4 kWp Bristol home, with or without a battery, scenarios of n such homes,
-and ``SimulationResults`` whose ``calculate_summary`` totals are exactly the kWh and
-£ the caller passes.
+a default 4 kWp Bristol home, with or without a battery, or fitted with a given
+install, scenarios of n such homes or of given homes, and ``SimulationResults``
+whose ``calculate_summary`` totals are exactly the kWh the caller passes, their
+flows priced as simulate_home prices them at the ``RunPricing`` it passes.
 
 Usage::
 
@@ -17,6 +18,9 @@ Usage::
     fleet = make_fleet_results(n_homes=2, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
     curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet)
 
+A home whose export earns SEG income at 5 p/kWh is priced
+``pricing=RunPricing(None, 5.0)``; by default no tariff and no SEG priced the run.
+
 A simulate that answers each aged fleet it is asked for pairs its results with
 those homes: ``simulate=lambda fc, s, e: make_fleet_results(homes=fc.homes, ...)``.
 
@@ -24,21 +28,29 @@ A fleet of homes whose results differ is
 ``make_fleet_results_of([make_sim_results(...), make_sim_results(...)])``, each
 result on a default home unless ``homes=`` is given.
 
+The window a result covers is ``make_window(days=..., first_day=..., cadence=...)``
+of the same arguments, which a hand-built ``SummaryStatistics`` names as its window.
+make_scenario's period is ``make_period()``, the default window at ONE_MINUTE, so a
+builder scenario's ``simulate`` is asked for the window its default results cover.
+
 """
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
+from datetime import date, timedelta
 
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.home import HomeConfig, RunPricing, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
 
 def make_pv_config() -> PVConfig:
@@ -69,24 +81,73 @@ def make_home_config(*, battery_config: BatteryConfig | None = None) -> HomeConf
     )
 
 
+def make_sized_home(
+    *,
+    pv_kwp: float,
+    battery_kwh: float | None = None,
+    inverter_kw: float | None = None,
+) -> HomeConfig:
+    """make_home_config's home fitted with the install project_economics prices.
+
+    make_pv_config's array is resized to *pv_kwp* kWp on an *inverter_kw* kW
+    inverter, sized to the array by default, and the home has a *battery_kwh* kWh
+    battery, none by default.
+    """
+    battery = None if battery_kwh is None else BatteryConfig(capacity_kwh=battery_kwh)
+    return dataclasses.replace(
+        make_home_config(battery_config=battery),
+        pv_config=dataclasses.replace(make_pv_config(), capacity_kw=pv_kwp, inverter_capacity_kw=inverter_kw),
+    )
+
+
+# 2021 is not a leap year, so the default window's 365 days are its whole calendar year.
+_DEFAULT_WINDOW_FIRST_DAY = date(2021, 1, 1)
+_DEFAULT_WINDOW_DAYS = 365
+_DEFAULT_WINDOW_CADENCE = timedelta(hours=1)
+
+
+def make_window(
+    *,
+    days: int = _DEFAULT_WINDOW_DAYS,
+    first_day: date = _DEFAULT_WINDOW_FIRST_DAY,
+    cadence: timedelta = _DEFAULT_WINDOW_CADENCE,
+) -> SimulationWindow:
+    """The Europe/London window over *days* local dates from *first_day*, both counted, its rows *cadence* apart, hourly by default."""
+    return SimulationWindow(first_day, first_day + timedelta(days=days - 1), cadence, "Europe/London")
+
+
+def make_period() -> SimulationWindow:
+    """make_window() at ONE_MINUTE: a scenario's period over the year make_sim_results covers by default."""
+    return dataclasses.replace(make_window(), cadence=ONE_MINUTE)
+
+
 def make_scenario(
     *,
     n_homes: int = 1,
     seg_tariff_pence_per_kwh: float | None = None,
     battery_config: BatteryConfig | None = None,
+    finance: FinanceConfig | None = None,
 ) -> ScenarioConfig:
-    """A 2020 scenario of *n_homes* make_home_config homes, each with *battery_config*.
+    """A scenario over make_period() of *n_homes* make_home_config homes, each with *battery_config*.
 
-    The scenario-level SEG rate is *seg_tariff_pence_per_kwh*.  By default the
-    homes have no battery and the scenario has no SEG rate.
+    The scenario-level SEG rate is *seg_tariff_pence_per_kwh*.  Its finance block
+    is *finance*, which enumerate_configs copies into each config and run_sweep
+    reads.  By default the homes have no battery and the scenario has no SEG rate
+    or finance block.
     """
     return ScenarioConfig(
         name="test-scenario",
-        period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+        period=make_period(),
         description="Unit test scenario",
-        homes=[make_home_config(battery_config=battery_config) for _ in range(n_homes)],
+        homes=tuple(make_home_config(battery_config=battery_config) for _ in range(n_homes)),
         seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
+        finance=finance,
     )
+
+
+def make_scenario_of(homes: Sequence[HomeConfig]) -> ScenarioConfig:
+    """make_scenario's scenario, holding exactly *homes*."""
+    return dataclasses.replace(make_scenario(), homes=tuple(homes))
 
 
 def make_scenario_and_finance(
@@ -108,34 +169,69 @@ def make_scenario_and_finance(
     return make_scenario(n_homes=n_homes, battery_config=battery_config), finance
 
 
+_UNPRICED = RunPricing(None, None)
+"""How simulate_home records a run that no tariff and no SEG priced."""
+
+
+def _rates_gbp_per_kwh(pricing: RunPricing | None) -> tuple[float | None, float | None]:
+    """The £ each kWh of import costs and each kWh of export earns at *pricing*'s rates: None for a flow it leaves unpriced, and for both without pricing."""
+    if pricing is None:
+        return None, None
+    seg_rate = pricing.seg_rate_pence_per_kwh
+    return pricing.import_tariff_mean_rate_gbp_per_kwh, (None if seg_rate is None else seg_rate / 100.0)
+
+
+def _priced(kwh: float, rate_gbp_per_kwh: float | None, rows: pd.DatetimeIndex) -> pd.Series:
+    """Each of *rows*' equal share of *kwh* priced at *rate_gbp_per_kwh*, or 0.0 in every row when no rate priced it."""
+    if rate_gbp_per_kwh is None:
+        return pd.Series(0.0, index=rows)
+    return pd.Series(kwh * rate_gbp_per_kwh / len(rows), index=rows)
+
+
 def make_sim_results(
     *,
     self_kwh: float = 24.0,
     export_kwh: float = 48.0,
     import_kwh: float = 12.0,
     discharge_kwh: float = 0.0,
-    export_revenue_gbp: float = 0.0,
-    days: int = 365,
+    pricing: RunPricing | None = _UNPRICED,
+    days: int = _DEFAULT_WINDOW_DAYS,
+    first_day: date = _DEFAULT_WINDOW_FIRST_DAY,
+    cadence: timedelta = _DEFAULT_WINDOW_CADENCE,
 ) -> SimulationResults:
-    """Constant-power SimulationResults for one home over *days* days, a full year by default.
+    """Constant-power SimulationResults for one home over *days* local dates from *first_day*.
 
     ``calculate_summary`` of the result totals exactly the arguments: the kWh of
-    self-consumption, export, import and battery discharge, and the £ of export
-    revenue, the physics SEG income.  Generation is self + export, demand is
-    self + import - discharge, and ``simulation_days`` is *days*.
+    self-consumption, export, import and battery discharge.  Generation is
+    self + export, demand is self + import - discharge, ``simulation_days`` is
+    *days*, and the window is ``make_window(days=days, first_day=first_day,
+    cadence=cadence)``.  By default that is make_window()'s window, one whole
+    calendar year: annualisation scale 1, a whole year's standing charge.
 
-    Hourly steps suffice because ``calculate_summary`` integrates each row over
-    the hour it lasts and takes ``simulation_days`` from the index span: each
-    total is spread over the 24 * *days* steps as kW = kWh / (24 * *days*).
+    The flows are priced as simulate_home prices them, and the results record
+    *pricing*: the import costs its import rate, each row's tariff_rate, and the
+    export earns its SEG rate.  A flow whose rate is None, or both when *pricing*
+    is None, costs or earns nothing, at a tariff_rate of 0.0.  By default no tariff
+    and no SEG priced the run, as simulate_home records RunPricing(None, None) for
+    a home with neither.
+
+    The rows are *cadence* apart, hourly by default, which suffices because
+    ``calculate_summary`` integrates each row over the time it lasts.  The rows
+    are the window's, fewer or more of them on a day the clocks change: each kWh
+    total is spread over the window's hours as a constant kW = kWh / hours, and
+    each row holds an equal share of the £ of import cost and of export revenue.
     """
-    n_steps = 24 * days
-    idx = pd.date_range("2020-01-01", periods=n_steps, freq="1h", tz="Europe/London")
-    sc_kw = self_kwh / n_steps
-    exp_kw = export_kwh / n_steps
-    imp_kw = import_kwh / n_steps
-    dis_kw = discharge_kwh / n_steps
+    window = make_window(days=days, first_day=first_day, cadence=cadence)
+    idx = window.rows()
+    n_steps = len(idx)
+    hours = n_steps * window.step_hours
+    sc_kw = self_kwh / hours
+    exp_kw = export_kwh / hours
+    imp_kw = import_kwh / hours
+    dis_kw = discharge_kwh / hours
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw - dis_kw
+    import_rate, export_rate = _rates_gbp_per_kwh(pricing)
 
     zeros = pd.Series(0.0, index=idx)
 
@@ -148,9 +244,10 @@ def make_sim_results(
         battery_soc=zeros.copy(),
         grid_import=pd.Series(imp_kw, index=idx),
         grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=pd.Series(export_revenue_gbp / n_steps, index=idx),
-        tariff_rate=zeros.copy(),
+        import_cost=_priced(import_kwh, import_rate, idx),
+        export_revenue=_priced(export_kwh, export_rate, idx),
+        tariff_rate=pd.Series(0.0 if import_rate is None else import_rate, index=idx),
+        pricing=pricing,
     )
 
 
@@ -165,7 +262,7 @@ def make_fleet_results_of(
     """
     if homes is None:
         homes = [make_home_config() for _ in per_home_results]
-    return FleetResults(per_home_results=list(per_home_results), home_configs=list(homes))
+    return FleetResults(per_home_results=tuple(per_home_results), home_configs=tuple(homes))
 
 
 def make_fleet_results(
@@ -176,10 +273,10 @@ def make_fleet_results(
     export_kwh: float = 48.0,
     import_kwh: float = 12.0,
     discharge_kwh: float = 0.0,
-    export_revenue_gbp: float = 0.0,
-    days: int = 365,
+    pricing: RunPricing | None = _UNPRICED,
+    days: int = _DEFAULT_WINDOW_DAYS,
 ) -> FleetResults:
-    """Each home of a fleet paired with make_sim_results of the given totals over *days* days.
+    """Each home of a fleet paired with make_sim_results of the given totals over *days* days, priced at *pricing*.
 
     The fleet is *homes*, such as the aged ``fleet_config.homes`` an injected
     simulate receives, or else *n_homes* default homes, one by default.
@@ -197,7 +294,7 @@ def make_fleet_results(
                 export_kwh=export_kwh,
                 import_kwh=import_kwh,
                 discharge_kwh=discharge_kwh,
-                export_revenue_gbp=export_revenue_gbp,
+                pricing=pricing,
                 days=days,
             )
             for _ in range(n_results)

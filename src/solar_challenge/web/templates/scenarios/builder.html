@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
 {% from "components/distribution-editor.html" import distribution_editor %}
+{% from "components/macros.html" import location_preset_options, panel %}
 
 {# One fleet component's distribution card: a group, named by its heading, editing scenarioBuilder's dists.<key> #}
 {% macro distribution_card(component) %}
@@ -17,7 +18,8 @@
 
 {# One accordion section: its header button opens the panel, closing whichever section was open, and exposes that open state and the panel it controls to assistive technology #}
 {% macro accordion_section(key, title, spacing_class='space-y-4') %}
-<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+{% set body = caller() %}
+{% call panel(classes='overflow-hidden') %}
     <button type="button"
         @click="accordionOpen = accordionOpen === '{{ key }}' ? '' : '{{ key }}'"
         :aria-expanded="accordionOpen === '{{ key }}'"
@@ -30,9 +32,9 @@
         </svg>
     </button>
     <div id="builder_section_{{ key }}" x-show="accordionOpen === '{{ key }}'"{% if key != initial_section %} x-cloak{% endif %} x-collapse class="px-5 pb-5 {{ spacing_class }}">
-        {{ caller() }}
+        {{ body }}
     </div>
-</div>
+{% endcall %}
 {% endmacro %}
 
 {% block title %}Scenario Builder{% endblock %}
@@ -54,7 +56,7 @@
 ) }}
 
 <div
-    x-data='scenarioBuilder({{ initial_section|tojson }}, {{ script_components|tojson }})'
+    x-data='scenarioBuilder({{ initial_section|tojson }})'
     class="grid grid-cols-1 lg:grid-cols-5 gap-6"
 >
     <!-- Left Pane: Structured Form (60%) -->
@@ -75,11 +77,9 @@
 
         {% call accordion_section('period', 'Period') %}
                 <div class="flex flex-wrap gap-2 mb-3">
-                    <button @click="setPeriod('full-year')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Full Year</button>
-                    <button @click="setPeriod('summer')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Summer</button>
-                    <button @click="setPeriod('winter')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Winter</button>
-                    <button @click="setPeriod('month')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">1 Month</button>
-                    <button @click="setPeriod('week')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">1 Week</button>
+                    {% for title in page_limits.period_presets %}
+                    <button @click='setPeriod({{ title|tojson }})' class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">{{ title }}</button>
+                    {% endfor %}
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
@@ -100,10 +100,7 @@
                     <label for="builder_location_preset" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location Preset</label>
                     <select id="builder_location_preset" x-model="location_preset"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
-                        <option value="bristol">Bristol, UK</option>
-                        <option value="london">London, UK</option>
-                        <option value="edinburgh">Edinburgh, UK</option>
-                        <option value="manchester">Manchester, UK</option>
+                        {{ location_preset_options(location_presets) }}
                         <option value="custom">Custom Location</option>
                     </select>
                 </div>
@@ -129,11 +126,11 @@
         {% call accordion_section('fleet', 'Fleet Distribution', spacing_class='space-y-5') %}
                 <div>
                     <label for="builder_n_homes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Number of Homes</label>
-                    <input id="builder_n_homes" type="number" min="1" max="10000" x-model="n_homes"
+                    <input id="builder_n_homes" type="number" min="{{ page_limits.fleet_size.low }}" max="{{ page_limits.fleet_size.high }}" x-model="n_homes"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
 
-                {% for component in fleet_components.values() %}
+                {% for component in page_limits.components.values() %}
                 {{ distribution_card(component) }}
                 {% endfor %}
         {% endcall %}
@@ -256,7 +253,7 @@
 
     <!-- Right Pane: YAML Preview (40%) -->
     <div class="lg:col-span-2">
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 sticky top-24">
+        {% call panel(classes='sticky top-24') %}
             <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200 dark:border-slate-700">
                 <h3 class="font-semibold text-slate-800 dark:text-white text-sm">YAML Preview</h3>
                 <span class="text-xs text-slate-400">Auto-updates on change</span>
@@ -264,7 +261,7 @@
             <div class="p-4 overflow-auto max-h-[calc(100vh-12rem)]">
                 <pre class="text-sm font-mono text-slate-700 dark:text-slate-300 whitespace-pre-wrap leading-relaxed" x-text="yamlPreview"></pre>
             </div>
-        </div>
+        {% endcall %}
     </div>
 </div>
 

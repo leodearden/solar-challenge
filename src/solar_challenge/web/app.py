@@ -1,24 +1,45 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask application factory for the Solar Challenge web dashboard."""
 
-import atexit
 import logging
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, render_template
+from flask import Config, Flask, render_template
 
+from solar_challenge.fleet import default_runner
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
-from solar_challenge.web.database import init_db
+from solar_challenge.web.dashboard import Dashboard, JobManagerFactory, attach_dashboard
+from solar_challenge.web.fleet_components import PageLimits, page_limits
 from solar_challenge.web.history import bp as history_bp
-from solar_challenge.web.jobs import JobManager, recover_stale_jobs
+from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.plotly_js import bp as plotly_js_bp
 from solar_challenge.web.routes import bp as routes_bp
+from solar_challenge.web.schema import open_database
 from solar_challenge.web.scenarios import bp as scenarios_bp
+from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.store_lock import acquire_store_lock
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StoreLocation:
+    """Where a dashboard store is: its data directory, which holds its run files and its lock, and its database file."""
+
+    data_dir: Path
+    database: Path
+
+
+def default_store_location() -> StoreLocation:
+    """The store create_app opens unless its config names another, which `solar-challenge web start` serves and `solar-challenge web migrate` migrates: ~/.solar-challenge, and the solar-challenge.db in it."""
+    data_dir = Path.home() / ".solar-challenge"
+    return StoreLocation(data_dir=data_dir, database=data_dir / "solar-challenge.db")
 
 
 def _get_secret_key(data_dir: Path) -> str:
@@ -60,24 +81,46 @@ def _packaged_folder(name: str) -> Path:
     return folder
 
 
-def create_app(test_config: dict[str, Any] | None = None) -> Flask:
+def default_jobs(storage: RunStorage) -> JobManager:
+    """The JobManager over *storage* whose jobs run through default_runner() as it resolves at this call, each fleet's homes in parallel: the jobs factory solar_challenge.web.create_app() builds its app with."""
+    return JobManager(storage, runner=default_runner())
+
+
+def create_app(test_config: Mapping[str, Any] | None = None, *, jobs: JobManagerFactory) -> Flask:
     """Create and configure the Flask web dashboard application.
 
     Uses the application factory pattern to allow multiple instances
     and easy testing with different configurations.
 
     .. note::
-        This application requires single-worker deployment because the
-        JobManager uses in-memory state (job tracking dicts and SSE event
-        queues) that is not shared across processes.  Multi-worker
-        deployment (e.g. ``gunicorn -w 2+``) will cause jobs to appear
-        missing from workers that did not create them.
+        One process per store: create_app takes the lock on DATA_DIR's
+        dashboard.lock before it opens the database or fails interrupted
+        runs, and the app's Dashboard holds it until
+        ``dashboard_of(app).close()``, which the root that built the app
+        calls once it stops, or the end of the process. A second
+        create_app on the store, in this process or another, raises
+        StoreLocked naming the lock file and the holder's pid.
+        The server must still run single-worker: a process forked after
+        create_app shares its lock, so a host that forks workers from one
+        built app (e.g. ``gunicorn --preload -w 2``) gets past it, and a
+        job, whose state is in memory, goes missing from the workers that
+        did not create it.
+
+    .. note::
+        *jobs* is called once, when create_app runs, after the store is
+        open and before the runs an earlier server left running are
+        failed. So default_jobs resolves default_runner(), and the weather
+        it simulates on, then: a weather cache installed, or
+        SOLAR_CHALLENGE_WEATHER_CACHE_DIR set, after it does not reach the
+        app's jobs.
 
     Args:
-        test_config: Optional configuration dict to override defaults.
+        test_config: Optional configuration mapping to override defaults.
             Useful for testing.  A ``SECRET_KEY`` given here is used as is,
             and the key persisted under ``~/.solar-challenge`` is then
             neither read nor written.
+        jobs: Builds the JobManager the app's jobs run on, over the app's
+            RunStorage; default_jobs is production's.
 
     Returns:
         Flask: The configured Flask application instance.
@@ -85,6 +128,19 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     Raises:
         FileNotFoundError: If the installed package lacks the dashboard's
             templates or static folder.
+        StoreLocked: If another app, in this process or another, holds
+            the store's lock.
+        StoreLockUnsupported: If this platform has no POSIX flock.
+        SchemaVersionMismatch: If the store's database is at a schema
+            version other than this solar-challenge's, naming the file and
+            both versions; the store is left as it was, and its lock is
+            released.
+        StoreUnreadable: If the store's database file cannot be read as a
+            database, naming it; the file is left as it was, and the
+            store's lock is released.
+        Whatever *jobs* raises, the store's lock then released; and
+        whatever reading the persisted secret key or failing the
+        interrupted runs raises, the app's Dashboard then closed.
     """
     app = Flask(
         __name__,
@@ -92,9 +148,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         static_folder=_packaged_folder("static"),
     )
 
-    # Default data directory configuration
-    default_data_dir = Path.home() / ".solar-challenge"
-    default_db_path = default_data_dir / "solar-challenge.db"
+    default_location = default_store_location()
 
     # Default configuration.  Why the session cookie is not Secure:
     # tests/unit/test_web_app.py::test_the_session_cookie_is_not_marked_secure
@@ -102,39 +156,16 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=False,
-        DATA_DIR=str(default_data_dir),
-        DATABASE=str(default_db_path),
+        DATA_DIR=str(default_location.data_dir),
+        DATABASE=str(default_location.database),
     )
 
     if test_config is not None:
         # Override with test-specific configuration when provided
         app.config.from_mapping(test_config)
 
-    # Consult the persisted key only when no config source supplied one
-    if app.secret_key is None:
-        app.secret_key = _get_secret_key(default_data_dir)
-
-    # Initialize database with configured path
-    db_path = app.config["DATABASE"]
-    init_db(db_path)
-
-    # Initialize RunStorage singleton
-    storage = RunStorage(db_path=db_path, data_dir=app.config["DATA_DIR"])
-    app.extensions["storage"] = storage
-
-    # Initialize JobManager for background simulation execution
-    job_manager = JobManager()
-    app.extensions["job_manager"] = job_manager
-
-    # Recover jobs stuck from previous server shutdown
-    recovered = recover_stale_jobs(db_path)
-    if recovered:
-        logger.info("Recovered %d stale jobs on startup", recovered)
-
-    # Register shutdown handler
-    atexit.register(job_manager.shutdown)
-
     _register_blueprints(app)
+    app.context_processor(_page_limits_context)
 
     # Register custom error handlers
     @app.errorhandler(404)
@@ -145,18 +176,50 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     def internal_server_error(e: Exception) -> tuple[str, int]:
         return render_template("errors/500.html"), 500
 
+    app.extensions["job_stream_policy"] = JobStreamPolicy()
+
+    dashboard = _open_dashboard(app.config, jobs)
+    attach_dashboard(app, dashboard)
+    try:
+        # Consult the persisted key only when no config source supplied one; a build refused its store never does
+        if app.secret_key is None:
+            app.secret_key = _get_secret_key(default_location.data_dir)
+        _fail_interrupted_runs(dashboard.storage)
+    except BaseException:
+        dashboard.close()
+        raise
     return app
 
 
+def _open_dashboard(config: Config, jobs: JobManagerFactory) -> Dashboard:
+    """The Dashboard of the store *config* names: the lock on its DATA_DIR, which this process then holds, the database at its DATABASE, the RunStorage over it, and the JobManager *jobs* builds over that storage; a failure once the lock is taken releases it."""
+    lock = acquire_store_lock(Path(config["DATA_DIR"]))
+    try:
+        database = open_database(Path(config["DATABASE"]))
+        storage = RunStorage(database, config["DATA_DIR"])
+        return Dashboard(storage=storage, jobs=jobs(storage), database=database, lock=lock)
+    except BaseException:
+        lock.release()
+        raise
+
+
+def _fail_interrupted_runs(storage: RunStorage) -> None:
+    """Fail the runs in *storage* whose jobs an earlier server left running when it stopped."""
+    interrupted = storage.fail_interrupted_runs()
+    if interrupted:
+        logger.info("Marked %d runs interrupted by a server restart failed on startup", interrupted)
+
+
+def _page_limits_context() -> dict[str, PageLimits]:
+    """What every template is given: page_limits, the one value every dashboard form's bounds and starting values render from, which base.html writes into each page as #page-limits."""
+    return {"page_limits": page_limits()}
+
+
 def _register_blueprints(app: Flask) -> None:
-    """Register the blueprint of each feature area on *app*."""
+    """Register each of the dashboard's blueprints on *app*."""
     app.register_blueprint(routes_bp)
     app.register_blueprint(history_bp, url_prefix="/history")
     app.register_blueprint(scenarios_bp, url_prefix="/scenarios")
     app.register_blueprint(api_bp)
     app.register_blueprint(assistant_bp, url_prefix="/assistant")
-
-
-if __name__ == "__main__":
-    application = create_app()
-    application.run(debug=True)
+    app.register_blueprint(plotly_js_bp)

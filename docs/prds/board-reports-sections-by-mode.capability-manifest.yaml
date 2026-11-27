@@ -1,0 +1,248 @@
+# Machine-readable twin of board-reports-sections-by-mode.capability-manifest.md
+# Schema: dark-factory shared/src/shared/capability_manifest.py (CapabilityManifestDoc).
+# task_id stays null until commit_planning stamps it. α is the pre-existing task 705, re-scoped in place
+# at decompose. ζ is held for S29 (x_seam_wait). Every grep check's polarity was run on main dfcbde8,
+# and again at decompose on main beb1d91 and every task/* branch ahead of main touching the leaves' files.
+prd: docs/prds/board-reports-sections-by-mode.md
+schema_version: 1
+signal_leaves: ["α", "δ", "ε"]
+tasks:
+  - label: "α"
+    task_id: 705
+    title: "Summary tables are typed per summary type; fleet run prints its fleet's ratios and net cost"
+    capabilities:
+      - name: "no-attribute-name-probes"
+        binding: "grep:cli/utils.py::create_summary_table makes 8 hasattr/getattr probes at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'hasattr\(summary|getattr\(summary'
+          paths: ["src/solar_challenge/cli/utils.py"]
+          expect: absent
+      - name: "typed-row-builders"
+        binding: "producer:task-705 (branch task/705)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def (home|fleet)_summary_rows\('
+          paths: ["src/solar_challenge/cli/utils.py"]
+          expect: present
+      - name: "fleet-table-rows"
+        binding: "B1: a real FleetSummary renders its ratios and net cost"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "asserted by tests/unit/test_cli_summary_tables.py rendering a real FleetSummary"
+  - label: "β"
+    task_id: 970
+    title: "The board reports live in board_report.py with one binding table and one formatter set; output.py is per-run output"
+    capabilities:
+      - name: "reports-leave-output"
+        binding: "grep:output.py defines both reports at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def generate_finance_report\(|^def generate_config_ranking_report\('
+          paths: ["src/solar_challenge/output.py"]
+          expect: absent
+      - name: "reports-in-board-report"
+        binding: "producer:β — new module"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def generate_config_ranking_report\('
+          paths: ["src/solar_challenge/board_report.py"]
+          expect: present
+      - name: "output-imports-no-board-type"
+        binding: "grep:output.py imports finance, flex, gridservices and optimize types under TYPE_CHECKING (4 lines)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'from solar_challenge\.(finance|flex|gridservices|optimize|projection) import'
+          paths: ["src/solar_challenge/output.py"]
+          expect: absent
+      - name: "dead-ratio-wrappers-gone"
+        binding: "grep:output.py defines 3 wrappers with no src caller; task 724's branch deletes them first (β depends on 724)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def calculate_(self_consumption|grid_dependency|export)_ratio\('
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "one-binding-label-table"
+        binding: "grep:output.py::generate_finance_report's if/elif chain (2 comparisons)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'binding == "floor"|binding == "rate_clamped_zero"'
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "one-formatter-set"
+        binding: "grep:output.py formats IRR and DSCR inline in the economics block (2 hits)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'math\.isnan\(economics|math\.isinf\(economics'
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "unknown-binding-refused"
+        binding: "rejection mechanism authored in β; B3"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behaviour asserted by tests/unit/test_board_report.py (B3) against both reports"
+  - label: "γ"
+    task_id: 973
+    title: "Each --assumptions mode drives every computation from its own finance configuration; the report is one column per mode"
+    capabilities:
+      - name: "mode-resolution"
+        binding: "producer:γ — finance.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^def (own_use_basis|with_own_use_basis)\('
+          paths: ["src/solar_challenge/finance.py"]
+          expect: present
+      - name: "sections-keyed-by-mode"
+        binding: "producer:γ — board_report.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^class AssumptionSection\b'
+          paths: ["src/solar_challenge/board_report.py"]
+          expect: present
+      - name: "no-positional-physics-slot"
+        binding: "grep: bill_physics appears 11 times in src at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'bill_physics'
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "no-physics-heading"
+        binding: "grep:output.py prints '## Householder Bill (Physics Assumptions)'"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'Physics Assumptions'
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "every-computation-follows-the-mode"
+        binding: "B6-B8 through the CLI with a fake simulator; S8 930, S16 890, S6 reader (task 959) upstream"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behaviour asserted by tests/integration/test_finance_run_cli.py (B6-B8) and tests/unit/test_board_report_sections.py (B9)"
+  - label: "δ"
+    task_id: 974
+    title: "The grid-services income renders with the economics it changes, under its model, band and delivery baseline"
+    capabilities:
+      - name: "income-value"
+        binding: "producer:δ — board_report.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^class GridServicesIncome\b'
+          paths: ["src/solar_challenge/board_report.py"]
+          expect: present
+      - name: "node-income-field"
+        binding: "producer:δ — projection.py (S8 ε's FleetProjection), written by _simulate_node"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '^    grid_services_income_gbp: tuple'
+          paths: ["src/solar_challenge/projection.py"]
+          expect: present
+      - name: "delivery-baseline-named"
+        binding: "producer:task-837 (GridServicesEventsConfig.delivery_baseline); δ renders it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'delivery_baseline'
+          paths: ["src/solar_challenge/board_report.py"]
+          expect: present
+      - name: "planning-pointer-gone"
+        binding: "grep:output.py renders '(PRD §6)' into the flex block"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '\(PRD §6\)'
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "events-income-with-the-economics"
+        binding: "B10-B13 through the CLI and the projection"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "behaviour asserted by tests/integration/test_grid_services_events.py, test_finance_flex_cli.py (B10-B12) and tests/unit/test_finance_projection.py (B13)"
+  - label: "ε"
+    task_id: 975
+    title: "One export-revenue figure: the SEG recomputation leaves the summaries, the reports and the CLI"
+    capabilities:
+      - name: "fleet-seg-pair-gone"
+        binding: "grep: 8 hits of the FleetSummary pair in src at dfcbde8, all in fleet.py; web/stored_runs.py is left out because ε's own RunDocumentStep spells both keys"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'total_seg_revenue_gbp|per_home_seg_revenue_mean_gbp'
+          paths: ["src/solar_challenge/fleet.py", "src/solar_challenge/cli/", "src/solar_challenge/output.py"]
+          expect: absent
+      - name: "no-rate-argument-to-summaries"
+        binding: "grep: 6 calculate_summary(<r>, seg_tariff_pence_per_kwh=...) calls in src at dfcbde8"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'calculate_summary\(\w+, seg_tariff_pence_per_kwh='
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "no-second-seg-section"
+        binding: "grep: '## SEG Revenue' twice in output.py"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '## SEG Revenue'
+          paths: ["src/solar_challenge"]
+          expect: absent
+      - name: "no-seg-revenue-table-row"
+        binding: "grep:cli/utils.py has the 'SEG Revenue' row (also on task/705's _money_rows)"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: '"SEG Revenue"'
+          paths: ["src/solar_challenge/cli/utils.py"]
+          expect: absent
+      - name: "summary-report-takes-no-rate"
+        binding: "grep:output.py::generate_summary_report's seg_tariff_pence_per_kwh parameter (and aggregate_annual's, which 780 deletes); replaces the 'counted twice' comment check, which task 741 can turn green before ε"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'seg_tariff_pence_per_kwh'
+          paths: ["src/solar_challenge/output.py"]
+          expect: absent
+      - name: "stored-fleet-runs-migrate"
+        binding: "producer:task-822 (RUN_DOCUMENT_STEPS); B15"
+        verdict: PASS
+        delivered_check:
+          kind: manual
+          reason: "asserted by S19's step fixture tests with a fleet run saved before ε (B15)"
+  - label: "ζ"
+    task_id: 976
+    title: "Held for S29: SummaryStatistics.seg_revenue_gbp is retired"
+    note: "x_seam_wait = {stream: S29, contract: the surface bump release window}; excluded from the batch's commit_planning"
+    capabilities:
+      - name: "frozen-field-gone"
+        binding: "grep: 20 hits of seg_revenue_gbp in src at dfcbde8; web/stored_runs.py is left out because ζ's own RunDocumentStep spells the key"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'seg_revenue_gbp'
+          paths: ["src/solar_challenge/home.py", "src/solar_challenge/fleet.py", "src/solar_challenge/output.py", "src/solar_challenge/cli/", "src/solar_challenge/finance.py", "src/solar_challenge/projection.py", "src/solar_challenge/optimize.py"]
+          expect: absent
+      - name: "surface-form-updated"
+        binding: "grep:tests/unit/test_public_api_surface.py FROZEN_SURFACE['SummaryStatistics'] carries the field's form; the pattern is the form, under tests/, so it holds wherever S23 moves the table, and B16's keyword test does not match it"
+        verdict: PASS
+        delivered_check:
+          kind: grep
+          pattern: 'seg_revenue_gbp: float \| None = None'
+          paths: ["tests/"]
+          expect: absent

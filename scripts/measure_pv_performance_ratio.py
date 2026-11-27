@@ -6,9 +6,9 @@ the repository root:
 
     uv run --locked --extra dev python scripts/measure_pv_performance_ratio.py [--cache-dir DIR]
 
-For each of fourteen UK sites it reads PVGIS's TMY through get_tmy_data, which the weather
+For each of fourteen UK sites it reads PVGIS's TMY through PvgisTmy, which the weather
 cache serves when it holds it, and fetches PVGIS's own hourly estimate for the same system
-at PVGIS's 14% loss over the climate years, from the release get_tmy_data uses, so it needs
+at PVGIS's 14% loss over the climate years, from the release PvgisTmy uses, so it needs
 network access to PVGIS; it takes about five minutes. It simulates PVConfig.default_4kw() with
 its system losses and without them. tests/unit/test_measurement_scripts.py runs measure
 offline on synthetic weather; the PVGIS fetches and the full run are not part of the test
@@ -17,7 +17,6 @@ suite.
 
 import argparse
 import dataclasses
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,22 +24,24 @@ from typing import Optional
 
 import pandas as pd
 from pvlib.iotools import get_pvgis_hourly
+from pvlib.modelchain import ModelChain
 
 from solar_challenge.location import Location
 from solar_challenge.pv import (
     PVConfig,
+    ac_power_kw,
     create_model_chain,
-    simulate_pv_output,
+    run_model_chain,
     wired_dc_capacity_kw,
 )
 from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
     CLIMATE_YEARS,
     DEFAULT_CACHE_DIR,
     PVGIS_API_URL,
     PVGIS_TIMEOUT_S,
+    PvgisTmy,
     WeatherCache,
-    get_tmy_data,
-    set_weather_cache,
 )
 
 # docs/pv-annual-yield-benchmark.md §3's sites, at its points.
@@ -105,30 +106,27 @@ class PvgisEstimate:
         return self.kwh_per_kwp / self.poa_kwh_per_m2
 
 
-def in_plane_irradiation(location: Location, tmy: pd.DataFrame) -> float:
-    """CONFIG's in-plane irradiation over tmy in kWh/m², from its model chain's first array; every array shares the mount."""
-    chain = create_model_chain(CONFIG, location)
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="invalid value encountered",
-            category=RuntimeWarning,
-            module=r"scipy\.optimize\._chandrupatla",
-        )
-        chain.run_model(tmy)
+def in_plane_irradiation(chain: ModelChain) -> float:
+    """A run chain's in-plane irradiation in kWh/m², from its first array; every array shares the mount."""
     in_plane = chain.results.total_irrad
     first_array = in_plane[0] if isinstance(in_plane, tuple) else in_plane
     return float(first_array["poa_global"].sum()) / 1000.0
 
 
-def annual_ac_kwh(config: PVConfig, location: Location, weather: pd.DataFrame) -> float:
-    """config's AC energy over hourly weather."""
-    return float(simulate_pv_output(config, location, weather).sum())
+def annual_ac_kwh(chain: ModelChain) -> float:
+    """A run chain's AC energy in kWh over its hourly weather."""
+    return float(ac_power_kw(chain).sum())
 
 
 def measure(name: str, location: Location, tmy: pd.DataFrame) -> SiteMeasurement:
-    """Measure CONFIG over one site's TMY, without its system losses and with them."""
-    poa_kwh_per_m2 = in_plane_irradiation(location, tmy)
+    """Measure CONFIG over one site's TMY, without its system losses and with them, from one run of each.
+
+    The in-plane irradiation is CONFIG's run's: the system losses act on the DC
+    power, after the irradiance reaches the plane.
+    """
+    with_losses = run_model_chain(create_model_chain(CONFIG, location), tmy)
+    lossless = run_model_chain(create_model_chain(LOSSLESS, location), tmy)
+    poa_kwh_per_m2 = in_plane_irradiation(with_losses)
     wired_kwp = wired_dc_capacity_kw(CONFIG)
     return SiteMeasurement(
         name=name,
@@ -136,8 +134,8 @@ def measure(name: str, location: Location, tmy: pd.DataFrame) -> SiteMeasurement
         ghi_kwh_per_m2=float(tmy["ghi"].sum()) / 1000.0,
         poa_kwh_per_m2=poa_kwh_per_m2,
         wired_kwp=wired_kwp,
-        lossless=Yield.of(annual_ac_kwh(LOSSLESS, location, tmy), wired_kwp, poa_kwh_per_m2),
-        with_losses=Yield.of(annual_ac_kwh(CONFIG, location, tmy), wired_kwp, poa_kwh_per_m2),
+        lossless=Yield.of(annual_ac_kwh(lossless), wired_kwp, poa_kwh_per_m2),
+        with_losses=Yield.of(annual_ac_kwh(with_losses), wired_kwp, poa_kwh_per_m2),
     )
 
 
@@ -199,14 +197,20 @@ def print_table(rows: Sequence[tuple[SiteMeasurement, PvgisEstimate]]) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument(
-        "--cache-dir", type=Path, default=DEFAULT_CACHE_DIR, help="weather cache holding the TMYs"
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "weather cache holding the TMYs "
+            f"(default: the directory {CACHE_DIR_VARIABLE} names, else {DEFAULT_CACHE_DIR})"
+        ),
     )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _parser().parse_args(argv)
-    set_weather_cache(WeatherCache(args.cache_dir))
+    weather = PvgisTmy(WeatherCache(args.cache_dir))
     print(
         f"PVGIS {PVGIS_API_URL}, climate years {CLIMATE_YEARS[0]}-{CLIMATE_YEARS[-1]};"
         f" PVConfig.default_4kw(), {CONFIG.capacity_kw} kW at tilt {CONFIG.tilt} and azimuth"
@@ -214,7 +218,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         f" {PVGIS_LOSS_PERCENT}% loss; PR = AC / (in-plane irradiation x wired kWp)"
     )
     rows = [
-        (measure(name, location, get_tmy_data(location)), fetch_pvgis_estimate(location))
+        (measure(name, location, weather.get(location)), fetch_pvgis_estimate(location))
         for name, location in SITES.items()
     ]
     print_table(rows)

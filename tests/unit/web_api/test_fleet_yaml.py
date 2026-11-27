@@ -1,23 +1,34 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the fleet page's scenario-file endpoints, POST /api/fleet/export-yaml, POST /api/fleet/import-yaml and GET /api/fleet/presets/<name>, and for its Load Preset menu, which offers the presets GET /api/fleet/presets/<name> loads."""
 
-import dataclasses
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import NonCallableMagicMock
 
-import pandas as pd
 import pytest
 import yaml
 
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
-from solar_challenge.config import DispatchStrategyConfig, load_fleet_config, parse_seg_rate
+from solar_challenge.config import load_scenario, parse_scenario
+from solar_challenge.dispatch import TOUOptimizedStrategyConfig
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import parse_fleet_distribution_config
 from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES
-from tests._fleet_form import FLEET_FORM_BLOCKS
+from solar_challenge.tariff import PRESET_RATES, TariffConfig
+from tests._default_pv_pool_fleet import (
+    DEFAULT_PV_POOL_FLEET_FORM,
+    DEFAULT_PV_POOL_FLEET_HOMES,
+    DEFAULT_PV_POOL_FLEET_YAML,
+)
+from tests._error_records import error_records
+from tests._falsy_json_values import FALSY_SENT_VALUES
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
+from tests._fleet_form import FLEET_FORM_BLOCKS, FLEET_FORM_COMPONENT_BLOCKS
 from tests._html_page import element_attributes
+from tests._repository_paths import SCENARIOS_DIR
 
 
 #: A fleet page form with every value away from the form converter's defaults and every overlay set.
@@ -28,38 +39,26 @@ _FLEET_FORM_BODY: dict = {
     "location": "london",
     "start": "2024-07-01",
     "end": "2024-07-03",
-    "pv": {
-        "capacity_kw": {
-            "type": "weighted_discrete",
-            "values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 2}],
-        }
-    },
-    "battery": {
-        "capacity_kwh": {
-            "type": "shuffled_pool",
-            "entries": [{"value": 0, "count": 2}, {"value": 5.0, "count": 2}],
-        }
-    },
+    "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [1.0, 2.0]}},
+    "battery": {"capacity_kwh": {"type": "shuffled_pool", "values": [0.0, 5.0], "counts": [2, 2]}},
     "load": {
-        "annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800, "min": 2000, "max": 6000}
+        "annual_consumption_kwh": {"type": "normal", "mean": 3400.0, "std": 800.0, "min": 2000.0, "max": 6000.0}
     },
     "tariff": {"type": "economy_7", "peak_rate": 0.3, "off_peak_rate": 0.1},
     "seg": {"rate_pence_per_kwh": 5.5},
     "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
 }
 
+_NAMELESS_FLEET_FORM_BODY: dict = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "name"}
+
 
 class TestExportFleetYAML:
     """POST /api/fleet/export-yaml writes the fleet scenario the fleet page's form describes."""
 
-    def test_export_loads_back_through_load_fleet_config_as_the_fleet_simulate_runs(
+    def test_export_reads_back_through_load_scenario_as_the_homes_simulate_runs(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
     ) -> None:
-        """The exported file, read as `finance run` reads it, is the fleet POST /api/simulate/fleet-from-distribution runs for the same form: its homes, name and dates.
-
-        load_fleet_config does not read seg: yet (task 185), so the SEG rate is threaded onto
-        its homes as cli/finance.py threads it, as tests/unit/test_scenario_writer.py does.
-        """
+        """The exported file, read as load_scenario reads it, is the fleet POST /api/simulate/fleet-from-distribution runs for the same form: its homes, its SEG rate among them, its name and dates."""
         export = client.post("/api/fleet/export-yaml", json=_FLEET_FORM_BODY)
         assert export.status_code == 200, export.get_data(as_text=True)
         assert "text/yaml" in export.content_type
@@ -68,10 +67,7 @@ class TestExportFleetYAML:
         path = tmp_path / "fleet.yaml"
         path.write_text(text, encoding="utf-8")
 
-        fleet = load_fleet_config(path)
-        document = yaml.safe_load(text)
-        seg_tariff = SEGTariff(name="", rate_pence_per_kwh=parse_seg_rate(document["seg"]))
-        loaded = [dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet.homes]
+        scenario = load_scenario(path)
 
         simulate = client.post("/api/simulate/fleet-from-distribution", json=_FLEET_FORM_BODY)
         assert simulate.status_code == 201, simulate.get_data(as_text=True)
@@ -80,7 +76,7 @@ class TestExportFleetYAML:
         batteries = [home.battery_config for home in homes if home.battery_config is not None]
         assert 0 < len(batteries) < len(homes)
         assert all(
-            battery.dispatch_strategy == DispatchStrategyConfig("tou_optimized", peak_hours=[(16, 21)])
+            battery.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 21),))
             for battery in batteries
         )
         assert all(
@@ -89,29 +85,20 @@ class TestExportFleetYAML:
             for home in homes
         )
 
-        assert loaded == homes
-        assert fleet.name == submitted["name"]
-        timezone = homes[0].location.timezone
-        period = document["period"]
-        assert (
-            pd.Timestamp(period["start_date"], tz=timezone),
-            pd.Timestamp(period["end_date"], tz=timezone),
-        ) == (submitted["start_date"], submitted["end_date"])
+        assert scenario.simulated_homes() == tuple(homes)
+        assert scenario.simulation_bounds() == (submitted["start_date"], submitted["end_date"])
+        assert scenario.name == submitted["name"]
 
     def test_export_writes_a_blocks_other_settings_and_loads_back_as_the_fleet_simulate_runs(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
     ) -> None:
-        """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in config.py's grammar, and the file loads back as the fleet the simulate endpoint runs.
-
-        The form sets no seg, which load_fleet_config does not read yet (task 185).
-        """
+        """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in fleet_distribution.py's grammar, and the file loads back as the fleet the simulate endpoint runs."""
         tilt = {"type": "uniform", "min": 10.0, "max": 20.0}
         grid_charging = {"target_soc_fraction": 0.5}
-        without_seg = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "seg"}
         body = {
-            **without_seg,
-            "pv": {**without_seg["pv"], "tilt": tilt},
-            "battery": {**without_seg["battery"], "grid_charging": grid_charging},
+            **_FLEET_FORM_BODY,
+            "pv": {**_FLEET_FORM_BODY["pv"], "tilt": tilt},
+            "battery": {**_FLEET_FORM_BODY["battery"], "grid_charging": grid_charging},
         }
 
         export = client.post("/api/fleet/export-yaml", json=body)
@@ -126,29 +113,34 @@ class TestExportFleetYAML:
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert simulate.status_code == 201, simulate.get_data(as_text=True)
         homes = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
-        assert load_fleet_config(path).homes == homes
+        assert load_scenario(path).simulated_homes() == tuple(homes)
 
-    def test_export_names_a_nameless_fleet_as_simulate_runs_it(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(_NAMELESS_FLEET_FORM_BODY, id="no-name"),
+            pytest.param({**_NAMELESS_FLEET_FORM_BODY, "name": None}, id="null"),
+            pytest.param({**_NAMELESS_FLEET_FORM_BODY, "name": ""}, id="empty"),
+            pytest.param({**_NAMELESS_FLEET_FORM_BODY, "name": " \t"}, id="blank"),
+        ],
+    )
+    def test_a_nameless_fleet_is_exported_without_a_name_and_submitted_with_none(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, body: dict
     ) -> None:
-        """A form without a name is exported under the name its simulation runs as."""
-        body = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "name"}
-
+        """A form whose name cannot name a run, the empty one the fleet page sends for a blank Simulation Name included, is exported with no name and submitted with none, so its run takes its kind's default name (RunKind.default_name)."""
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
         assert (export.status_code, simulate.status_code) == (200, 201)
-        assert (
-            yaml.safe_load(export.get_data(as_text=True))["name"]
-            == mock_job_manager.submit_fleet_job.call_args.kwargs["name"]
-        )
+        assert "name" not in yaml.safe_load(export.get_data(as_text=True))
+        assert mock_job_manager.submit_fleet_job.call_args.kwargs["name"] is None
 
     @pytest.mark.parametrize(
         ("patch", "reason"),
         [
             pytest.param(
                 {"tariff": {"type": "flat_rate"}},
-                "flat_rate tariff requires 'rate_per_kwh' field",
+                "tariff: requires 'rate_per_kwh'",
                 id="tariff-the-loaders-refuse",
             ),
             pytest.param(
@@ -173,8 +165,33 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {**_FLEET_FORM_BODY["battery"], "enabled": False}},
-                "Unrecognised keys in fleet_distribution.battery: 'enabled'",
+                "battery: unrecognised keys 'enabled'",
                 id="battery-enabled-false",
+            ),
+            pytest.param(
+                {"n_homes": 5},
+                "the top level: battery.capacity_kwh: shuffled_pool counts must total n_homes",
+                id="battery-pool-short-of-n-homes",
+            ),
+            pytest.param(
+                {"heat_pump": "ASHP"},
+                "Unrecognised fleet form keys: 'heat_pump';",
+                id="unrecognised-key",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "uniform"}}},
+                "battery.capacity_kwh: requires 'min', 'max'",
+                id="battery-uniform-without-its-range",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal", "mena": 4.0, "std": 1.0}}},
+                "pv.capacity_kw: unrecognised keys 'mena'",
+                id="pv-normal-with-a-misspelt-mean",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal", "mean": True, "std": 1.0}}},
+                "pv.capacity_kw",
+                id="pv-normal-boolean-mean",
             ),
         ],
     )
@@ -192,7 +209,7 @@ class TestExportFleetYAML:
         assert (export.status_code, export.get_json()) == (simulate.status_code, simulate.get_json())
         mock_job_manager.submit_fleet_job.assert_not_called()
 
-    @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
+    @pytest.mark.parametrize(("value", "type_name"), FALSY_SENT_VALUES)
     @pytest.mark.parametrize("key", FLEET_FORM_BLOCKS)
     def test_export_refuses_a_falsy_block_other_than_null_with_the_simulate_endpoints_answer(
         self,
@@ -202,13 +219,18 @@ class TestExportFleetYAML:
         value: object,
         type_name: str,
     ) -> None:
-        """A falsy block other than null, any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent: only null reads as absent. No YAML is written and no job is queued."""
+        """A falsy block other than null or "", any of the six, gets from the export the 400 the simulate endpoint gives it, naming the block and the type sent, a component block's in the grammar's words: only null and "" read as absent. No YAML is written and no job is queued."""
         body = {**_FLEET_FORM_BODY, key: value}
 
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
-        refusal = (400, {"error": f"{key} must be a mapping, got {type_name}"})
+        expected = (
+            f"{key}: must be a mapping, got {type_name}"
+            if key in FLEET_FORM_COMPONENT_BLOCKS
+            else non_mapping_block_refusal(key, type_name)
+        )
+        refusal = (400, {"error": expected})
         assert (export.status_code, export.get_json()) == refusal
         assert (simulate.status_code, simulate.get_json()) == refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
@@ -257,12 +279,12 @@ class TestImportFleetYAML:
         [
             pytest.param(
                 {"n_homes": float("inf")},
-                "fleet_distribution.n_homes must be a finite number, got inf",
+                "fleet_distribution: n_homes must be a finite number, got inf",
                 id="infinite-fleet-size",
             ),
             pytest.param(
                 {"seed": 1.5},
-                "fleet_distribution.seed must be a whole number, got 1.5",
+                "fleet_distribution: seed must be a whole number, got 1.5",
                 id="fractional-seed",
             ),
         ],
@@ -270,7 +292,7 @@ class TestImportFleetYAML:
     def test_a_fleet_size_or_seed_that_is_not_a_whole_number_is_refused_naming_the_scenarios_setting(
         self, client: FlaskClient, settings: dict, message: str
     ) -> None:
-        """A scenario file whose n_homes or seed is not a whole number gets a 400 the fleet page shows, naming the scenario's setting and the value as written."""
+        """A scenario file whose n_homes or seed is not a whole number gets a 400 the fleet page shows: the loaders' own refusal, naming the setting under fleet_distribution and the value as written."""
         fleet = {
             "n_homes": 25,
             "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
@@ -284,8 +306,122 @@ class TestImportFleetYAML:
             content_type="text/yaml",
         )
 
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+        assert str(loader_refusal.value) == message
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}
+
+    def test_a_scenario_with_a_key_no_scenario_reads_is_refused_naming_it(self, client: FlaskClient) -> None:
+        """A scenario file with a misspelt finance: block gets a 400 carrying parse_scenario's refusal, which names the key, rather than a 200 listing it as not loaded."""
+        document = {
+            "fleet_distribution": {
+                "n_homes": 25,
+                "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
+                "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2500, "max": 4500}},
+            },
+            "finanse": {"standing_charge_pence_per_day": 60.0},
+        }
+        with pytest.raises(ConfigurationError) as reader_refusal:
+            parse_scenario(document)
+
+        resp = client.post(
+            "/api/fleet/import-yaml", data=yaml.safe_dump(document), content_type="text/yaml"
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(reader_refusal.value)}
+        assert "'finanse'" in resp.get_json()["error"]
+
+    @pytest.mark.parametrize(
+        "counts",
+        [pytest.param([2, 1], id="short of n_homes"), pytest.param([2, 3], id="beyond n_homes")],
+    )
+    def test_a_shuffled_pool_not_sized_to_the_fleet_is_refused_with_the_loaders_refusal(
+        self, client: FlaskClient, counts: list[int]
+    ) -> None:
+        """A scenario file whose shuffled pool does not hold one value for each of its 4 homes gets a 400 carrying the loaders' refusal, which the fleet page shows."""
+        fleet = {
+            "n_homes": 4,
+            "pv": {"capacity_kw": {"type": "shuffled_pool", "values": [3.0, 4.0], "counts": counts}},
+            "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2500, "max": 4500}},
+        }
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+
+        resp = client.post(
+            "/api/fleet/import-yaml",
+            data=yaml.safe_dump({"fleet_distribution": fleet}),
+            content_type="text/yaml",
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(loader_refusal.value)}
+
+    def test_an_ev_charger_type_that_names_no_charger_type_is_refused_with_the_loaders_refusal(
+        self, client: FlaskClient
+    ) -> None:
+        """A scenario file whose ev block lists a charger type no charger has gets a 400 carrying the loaders' refusal, which names fleet_distribution.ev.charger_type.
+
+        The import used to answer 200 for it, listing fleet_distribution.ev as not loaded.
+        """
+        fleet = {
+            "n_homes": 1,
+            "pv": {"capacity_kw": 4.0},
+            "load": {"annual_consumption_kwh": 3400.0, "use_stochastic": False},
+            "ev": {
+                "charger_type": {"type": "weighted_discrete", "values": ["11kW"], "weights": [1]},
+                "arrival_hour": 18,
+            },
+        }
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+
+        resp = client.post(
+            "/api/fleet/import-yaml",
+            data=yaml.safe_dump({"fleet_distribution": fleet}),
+            content_type="text/yaml",
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(loader_refusal.value)}
+        assert "fleet_distribution.ev.charger_type" in resp.get_json()["error"]
+
+    @pytest.mark.parametrize(
+        ("component", "block", "named"),
+        [
+            pytest.param(
+                "battery",
+                {"capacity_kwh": {"type": "proportional_to", "source": "pv.capacity"}},
+                ["fleet_distribution.battery.capacity_kwh", "'pv.capacity'"],
+                id="a proportional_to source no earlier field is",
+            ),
+            pytest.param(
+                "heat_pump",
+                {"heat_pump_type": "XSHP"},
+                ["fleet_distribution.heat_pump.heat_pump_type", "'XSHP'"],
+                id="a heat pump type outside its choices",
+            ),
+        ],
+    )
+    def test_a_fleet_the_grammar_cannot_draw_is_refused_with_the_loaders_refusal_naming_its_path_and_value(
+        self, client: FlaskClient, component: str, block: dict, named: list[str]
+    ) -> None:
+        """A scenario file whose fleet no home could be drawn from gets a 400 carrying the loaders' refusal, which names the key's path and the value as written."""
+        fleet = {"n_homes": 2, "pv": {"capacity_kw": 4.0}, component: block}
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+
+        resp = client.post(
+            "/api/fleet/import-yaml",
+            data=yaml.safe_dump({"fleet_distribution": fleet}),
+            content_type="text/yaml",
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(loader_refusal.value)}
+        for each in named:
+            assert each in resp.get_json()["error"], (each, resp.get_json())
 
     @pytest.mark.parametrize(
         ("text", "reason"),
@@ -318,7 +454,7 @@ class TestImportFleetYAML:
 _BUILTIN_SCENARIO_STEMS = sorted(
     {
         path.stem
-        for path in (Path(__file__).resolve().parents[3] / "scenarios").iterdir()
+        for path in SCENARIOS_DIR.iterdir()
         if path.suffix in (".yaml", ".yml") and path.is_file()
     }
 )
@@ -330,19 +466,20 @@ class TestFleetPresetEndpoint:
     def test_a_fleet_preset_answers_its_form_and_what_was_not_loaded(
         self, client: FlaskClient
     ) -> None:
-        """bristol-phase1 loads its PV pool and SEG rate, and names its random order, which the form has no control for."""
+        """bristol-phase1 loads its PV and battery pools as the grammar's specs, its battery pool's null as null, a home without a battery, and its SEG rate, and names its random order, which the form has no control for."""
         resp = client.get("/api/fleet/presets/bristol-phase1")
 
         assert resp.status_code == 200, resp.get_data(as_text=True)
         answer = resp.get_json()
         assert answer["form"]["pv"]["capacity_kw"] == {
             "type": "shuffled_pool",
-            "entries": [
-                {"value": 3.0, "count": 20},
-                {"value": 4.0, "count": 40},
-                {"value": 5.0, "count": 30},
-                {"value": 6.0, "count": 10},
-            ],
+            "values": [3.0, 4.0, 5.0, 6.0],
+            "counts": [20, 40, 30, 10],
+        }
+        assert answer["form"]["battery"]["capacity_kwh"] == {
+            "type": "shuffled_pool",
+            "values": [None, 5.0, 10.0],
+            "counts": [40, 40, 20],
         }
         assert answer["form"]["seg"] == {"rate_pence_per_kwh": 4.1}
         assert "fleet_distribution.random_order" in answer["not_loaded"]
@@ -384,7 +521,7 @@ class TestFleetPresetEndpoint:
                     "fleet_distribution.battery.max_discharge_kw",
                     "fleet_distribution.battery.grid_charging",
                     "fleet_distribution.load.use_stochastic",
-                    "fleet_distribution.dispatch_strategy",
+                    "fleet_distribution.battery.dispatch_strategy",
                 ),
                 id="bristol-phase1-flex",
             ),
@@ -404,6 +541,19 @@ class TestFleetPresetEndpoint:
         answer = resp.get_json()
         assert {block: answer["form"][block] for block in fixed_blocks} == fixed_blocks
         assert [path for path in named_not_loaded if path not in answer["not_loaded"]] == []
+
+    def test_the_board_flex_preset_loads_its_rate_less_economy_7_at_the_preset_rates(
+        self, client: FlaskClient
+    ) -> None:
+        """bristol-phase1-flex names Economy 7 and no rate, so the form holds PRESET_RATES' Economy 7 rates."""
+        resp = client.get("/api/fleet/presets/bristol-phase1-flex")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["form"]["tariff"] == {
+            "type": "economy_7",
+            "peak_rate": PRESET_RATES["economy_7"].peak_rate,
+            "off_peak_rate": PRESET_RATES["economy_7"].off_peak_rate,
+        }
 
     @pytest.mark.parametrize("name", _BUILTIN_SCENARIO_STEMS)
     def test_every_builtin_scenario_loads_or_is_refused_with_a_reason(
@@ -439,3 +589,27 @@ class TestFleetPagePresetMenu:
 
         assert loadable, "no built-in scenario file loads, so the menu's choice goes untested"
         assert offered == loadable
+
+
+@pytest.mark.parametrize(
+    "send",
+    [
+        pytest.param(lambda client: client.post("/api/fleet/export-yaml", json=DEFAULT_PV_POOL_FLEET_FORM), id="export"),
+        pytest.param(
+            lambda client: client.post(
+                "/api/fleet/import-yaml", data=DEFAULT_PV_POOL_FLEET_YAML, content_type="text/yaml"
+            ),
+            id="import",
+        ),
+    ],
+)
+def test_the_fleet_pages_default_pv_pool_with_200_homes_is_answered_400_naming_the_pool(
+    client: FlaskClient, caplog: pytest.LogCaptureFixture, send: Callable[[FlaskClient], TestResponse]
+) -> None:
+    """Row R4: the pool holds 100 values for 200 homes, a refusal, not a defect."""
+    response = send(client)
+
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert "pv.capacity_kw" in error and str(DEFAULT_PV_POOL_FLEET_HOMES) in error, error
+    assert error_records(caplog) == []

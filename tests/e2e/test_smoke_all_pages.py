@@ -8,7 +8,11 @@ regressions in routing, template rendering, and static-asset delivery.
 import pytest
 from playwright.sync_api import Page
 
-pytestmark = pytest.mark.e2e
+from tests.e2e._alpine_start import open_once_alpine_has_started
+from tests.e2e._fetches_handled import (
+    record_fetches_started_and_handled,
+    wait_until_the_page_has_handled_every_fetch_it_started,
+)
 
 
 # ── Individual page-load tests ─────────────────────────────────────────
@@ -97,11 +101,13 @@ def test_all_pages_have_css(page: Page, live_server: str) -> None:
 def test_page_loads_without_js_errors(
     page: Page, live_server: str, page_errors: list[str], path: str
 ) -> None:
-    """The page logs no console error and throws no uncaught exception while it loads.
+    """By the time the page has loaded and Alpine has started on it, it has logged no console error and thrown no uncaught exception, each error Alpine's start threw included.
 
+    It also waits until the page has handled the answer to each fetch it started, so an error logged or thrown handling one is read too.
     /simulate/fleet, /scenarios/sweep and /scenarios/builder are checked by the no-JS-errors tests in their own e2e files.
     """
-    page.goto(live_server + path)
-    page.wait_for_load_state("networkidle")
+    record_fetches_started_and_handled(page)
+    open_once_alpine_has_started(page, live_server + path)
+    wait_until_the_page_has_handled_every_fetch_it_started(page)
 
     assert page_errors == [], f"Errors on {path}: {page_errors}"

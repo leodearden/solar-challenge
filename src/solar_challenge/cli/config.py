@@ -14,20 +14,25 @@ from solar_challenge.cli.utils import (
     console,
     error_console,
     handle_errors,
+    invocation,
     print_success,
 )
 from solar_challenge.config import load_config
-from solar_challenge.location import Location
+from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Configuration management commands")
 
 
 # Template configurations
-HOME_TEMPLATE = """\
+HOME_TEMPLATE = f"""\
 # Single home simulation configuration
-# All fields are optional - defaults will be used if not specified
+# Any block may be deleted entirely, or any key left out of it, to take its
+# default, except that a location: block that sets any key must set both
+# latitude and longitude
 
-# Geographic location (defaults to Bristol, UK)
+# Geographic location: Bristol, UK if the block is deleted; timezone and
+# altitude default to Bristol's
 location:
   latitude: 51.45
   longitude: -2.58
@@ -37,8 +42,8 @@ location:
 
 # Simulation period
 period:
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
+  start_date: "{DEFAULT_FIRST_DAY.isoformat()}"
+  end_date: "{DEFAULT_LAST_DAY.isoformat()}"
 
 # Home configuration
 home:
@@ -61,11 +66,6 @@ home:
     annual_consumption_kwh: 3400.0  # Target annual consumption
     household_occupants: 3          # Used if consumption not specified
     use_stochastic: true            # Use stochastic model if available
-
-# Output configuration (optional)
-output:
-  csv_path: results.csv
-  include_summary: true
 """
 
 FLEET_TEMPLATE = """\
@@ -108,7 +108,7 @@ homes:
       annual_consumption_kwh: 4200.0
 """
 
-SCENARIO_TEMPLATE = """\
+SCENARIO_TEMPLATE = f"""\
 # Scenario configuration
 # Can define single home or fleet with simulation period
 
@@ -121,8 +121,8 @@ location:
   timezone: Europe/London
 
 period:
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
+  start_date: "{DEFAULT_FIRST_DAY.isoformat()}"
+  end_date: "{DEFAULT_LAST_DAY.isoformat()}"
 
 # Single home scenario (use 'homes' instead for fleet)
 home:
@@ -134,10 +134,6 @@ home:
     capacity_kwh: 5.0
   load:
     annual_consumption_kwh: 3400.0
-
-output:
-  csv_path: scenario_results.csv
-  include_summary: true
 """
 
 
@@ -165,12 +161,13 @@ def show(
         ),
     ],
 ) -> None:
-    """Display a parsed configuration file.
+    """Display a configuration file and its keys.
 
-    Shows the configuration with syntax highlighting and validates
-    that it can be parsed correctly.
+    Shows the file with syntax highlighting and a summary of its keys as
+    YAML or JSON reads them; ${VAR} placeholders are shown as written. It
+    does not check the keys against the scenario grammar: a file shown here
+    may still be refused by the run commands. Use `validate config` for that.
     """
-    # Load to validate
     config_data = load_config(config_file)
 
     # Read raw content for display
@@ -189,7 +186,7 @@ def show(
     console.print(syntax)
 
     # Show summary
-    console.print(Text.assemble("\n", ("Parsed Summary:", "bold")))
+    console.print(Text.assemble("\n", ("Keys as written:", "bold")))
     table = Table()
     table.add_column("Key", style="cyan")
     table.add_column("Value")
@@ -202,6 +199,7 @@ def show(
 @app.command()
 @handle_errors
 def template(
+    ctx: typer.Context,
     template_type: Annotated[
         str,
         typer.Argument(
@@ -221,7 +219,7 @@ def template(
     Available templates:
     - home: Single home configuration
     - fleet: Multiple homes configuration
-    - scenario: Full scenario with period and output settings
+    - scenario: Full scenario with its simulation period
     """
     templates = {
         "home": HOME_TEMPLATE,
@@ -244,7 +242,7 @@ def template(
 
     if output is not None:
         output.write_text(content)
-        print_success(f"Template written to {output}")
+        print_success(invocation(ctx), f"Template written to {output}")
     else:
         syntax = Syntax(content, "yaml", theme="monokai")
         console.print(syntax)
@@ -253,7 +251,7 @@ def template(
 @app.command()
 @handle_errors
 def locations() -> None:
-    """List known locations and custom location format.
+    """List the location presets --location accepts, and its coordinate form.
 
     Shows built-in location presets and explains how to specify
     custom locations.
@@ -267,24 +265,23 @@ def locations() -> None:
     table.add_column("Timezone")
     table.add_column("Altitude (m)")
 
-    # Bristol
-    bristol = Location.bristol()
-    table.add_row(
-        "bristol",
-        f"{bristol.latitude:.2f}",
-        f"{bristol.longitude:.2f}",
-        bristol.timezone,
-        f"{bristol.altitude:.0f}",
-    )
+    for name, preset in LOCATION_PRESETS.items():
+        table.add_row(
+            name,
+            f"{preset.latitude:.2f}",
+            f"{preset.longitude:.2f}",
+            preset.timezone,
+            f"{preset.altitude:.0f}",
+        )
 
     console.print(table)
 
     console.print("\n[bold]Custom Location Format[/bold]\n")
     console.print("Use the --location option with coordinates:\n")
     console.print("  [cyan]--location 'lat,lon'[/cyan]")
-    console.print("  Example: --location '51.50,-0.12'  (London)\n")
+    console.print("  Example: --location '51.48,-3.18'  (Cardiff)\n")
     console.print("  [cyan]--location 'lat,lon,altitude'[/cyan]")
-    console.print("  Example: --location '51.50,-0.12,11'\n")
+    console.print("  Example: --location '51.48,-3.18,10'\n")
 
     console.print("[bold]In Config Files[/bold]\n")
     console.print("  location:")

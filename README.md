@@ -96,8 +96,8 @@ This project follows test-driven development (TDD).
 
 ## Data Sources
 
-- **PVGIS** (EU JRC): Solar irradiance data via pvlib integration
-- **Ofgem TDCV**: UK average household consumption benchmarks (3,400 kWh/year)
+- **PVGIS** (EU JRC): Solar irradiance data via pvlib integration. `tests/fixtures/weather_cache` holds a copy of Bristol's TMY from PVGIS v5.3 (© European Union), which the tests read offline.
+- **Household consumption**: the annual total each home's configuration sets, or else the simulator's own default for its household size (`OFGEM_TDCV_BY_OCCUPANTS` in `src/solar_challenge/load.py`)
 - **Elexon Profile Classes**: Load shape validation data
 
 ## License

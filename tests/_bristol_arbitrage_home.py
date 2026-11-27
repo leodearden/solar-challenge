@@ -8,16 +8,16 @@ is the scenario's own and cannot drift from it.
 Usage::
 
     from tests._bristol_arbitrage_home import bristol_arbitrage_home
+    from tests._synthetic_weather import weather_for
 
-    results = simulate_home(bristol_arbitrage_home(), start, end, weather_data=weather)
+    results = simulate_home(bristol_arbitrage_home(), start, end, weather=weather_for(bristol_arbitrage_home(), weather))
 """
-
-from pathlib import Path
 
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.home import HomeConfig
+from tests._repository_paths import SCENARIOS_DIR
 
-_SCENARIO = Path(__file__).resolve().parents[1] / "scenarios" / "bristol-arbitrage.yaml"
+_SCENARIO = SCENARIOS_DIR / "bristol-arbitrage.yaml"
 
 
 def bristol_arbitrage_home() -> HomeConfig:

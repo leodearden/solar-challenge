@@ -53,7 +53,7 @@ What a user observes:
 - **Two tests pin the memo.** `test_compute_once_event_figure_reused_across_ages` and `test_compute_once_memo_reused_on_bisection_path` monkeypatch `gridservices.compute_grid_services_at_events` and assert `call_count == 1`. They pass only while the import stays function-local, so a layering fix that hoists it fails them.
 - **Silent no-ops in optimize.**
   - `cli/optimize.configs --grid-services-kw` writes the flat field. Under capacity_at_events nothing reads it.
-  - The `grid_services` sensitivity alias sweeps the same field through `optimize._build_axis_configs`. Under capacity_at_events every swept value prices identically, so the panel reports the axis as rank-stable.
+  - The `grid_services` sensitivity alias sweeps the same field through `optimize.apply_knob`. Under capacity_at_events every swept value prices identically, so the panel reports the axis as rank-stable.
 - **The band vocabulary is written four times:**
   - `flex.FLEX_VALUE_BANDS` keys, with `resolve_flex_band`;
   - `GridServicesRateBands`' fields and `resolve`'s if-chain;
@@ -214,7 +214,7 @@ Each refusal names the fields involved and their values.
 - **Warning.** `compute_grid_services_at_events` emits one `UserWarning` per call for each window with no timestep in the fleet's simulated index. It names the window's months, weekdays and hours, and the index's first and last timestamp.
 - **Figure unchanged.** That window still contributes £0.
 - **No warning without batteries.** A fleet with no battery home does not warn, because its £0 means no batteries.
-- **Repeats are collapsed.** Under per-age pricing the same text repeats once per simulated age, and Python's default filter shows it once.
+- **Repeats are collapsed.** Under per-age pricing the same text is raised at every simulated age, seed and bisection trial alike. `project_multi_year` collapses them itself: it keeps each distinct warning its pricing raises and shows it once per call, after the march, attributed to its own caller (`tests/integration/test_grid_services_events.py::test_a_projection_shows_each_unobserved_window_warning_once`).
 
 ### 5.5 Band vocabulary and rate table (γ)
 
@@ -257,7 +257,7 @@ class GridServicesRateBand:                # frozen; gains a last field (additiv
   - Omitted, the default is retained_floor plus grid_services when the pricing is none or flat.
   - Under the events model the default is retained_floor only, with a printed line naming the omitted grid_services axis and why.
   - An explicit `--sensitivity` naming grid_services under the events model is refused before any simulation.
-- **`optimize._build_axis_configs`.** Rebuilding a `FinanceConfig` with a flat rate under the events model raises β's refusal, so library callers of `sensitivity_panel` get it too.
+- **`optimize.apply_knob`.** Rebuilding a `FinanceConfig` with a flat rate under the events model raises β's refusal, so library callers of `sensitivity_panel` get it too.
 
 ### 5.7 Scenario grammar (ε)
 

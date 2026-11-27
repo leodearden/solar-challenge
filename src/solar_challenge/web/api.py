@@ -6,64 +6,92 @@ streaming progress via SSE, retrieving results, and consolidated history
 and scenarios API endpoints under the /api/ prefix.
 """
 
-import json
 import logging
 import math
-import time
-import uuid
 from collections.abc import Mapping
 from dataclasses import asdict
-from types import MappingProxyType
-from typing import Any, Generator, assert_never
+from datetime import date
+from typing import Any
 
 import yaml as _yaml
 import pandas as pd
-from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
+from flask import Blueprint, Response, jsonify, request, url_for
+from werkzeug.exceptions import InternalServerError
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
-from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
+from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
-from solar_challenge.web.database import JobStatus, PresetType, get_db
+from solar_challenge.web.dashboard import get_database, get_job_manager, get_job_stream_policy, get_storage
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
-    FLEET_FORM_REFUSALS,
     ImportedFleetForm,
     fleet_form_from_yaml,
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.jobs import JobEvent, JobEventType
 from solar_challenge.web.presets import (
     PresetNameTaken,
+    PresetType,
+    SavedPresetUnreadable,
     home_preset_named,
     home_presets,
     save_config_preset,
+    saved_fleet_preset_named,
+    saved_fleet_presets,
 )
-from solar_challenge.web.shared import (
-    NotAJsonObject,
-    get_job_manager,
-    get_storage,
+from solar_challenge.web.request_boundary import (
+    answer_refusal,
+    answer_server_error,
+    read_optional_string,
+    read_string,
     request_json_object,
     require_json_object,
 )
+from solar_challenge.web.run_names import read_run_name
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
-from solar_challenge.web.storage import RUN_LABELS, stored_fleet_home_configs, stored_home_config
+from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
+from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
+from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
+from solar_challenge.web.text_options import read_one_of
+from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
 logger = logging.getLogger(__name__)
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 
-@api_bp.errorhandler(NotAJsonObject)
-def _refuse_a_value_that_is_not_a_json_object(refusal: NotAJsonObject) -> tuple[Response, int]:
-    """Answer HTTP 400 with the refusal of a request value that must be a JSON object and is not one.
+# answer_refusal answers a ValueError an endpoint of this blueprint raises, and answer_server_error any other
+# exception that no handler below names
+api_bp.register_error_handler(ValueError, answer_refusal)
+api_bp.register_error_handler(InternalServerError, answer_server_error)
 
-    Any endpoint of this blueprint that reads such a value is answered this way.
+
+@api_bp.errorhandler(SavedPresetUnreadable)
+def _answer_a_saved_preset_that_cannot_be_read(unreadable: SavedPresetUnreadable) -> tuple[Response, int]:
+    """Answer HTTP 500 with the error naming a saved preset that cannot be read, logged at ERROR with its traceback.
+
+    Any endpoint of this blueprint that looks a saved preset up is answered this way.
     """
-    return jsonify({"error": str(refusal)}), 400
+    logger.error("%s", unreadable, exc_info=unreadable)
+    return jsonify({"error": str(unreadable)}), 500
+
+
+# Any endpoint of this blueprint that reads a stored run it cannot read answers 409 (D-S19-9)
+api_bp.register_error_handler(StoredRunUnreadable, answer_stored_run_unreadable)
+
+
+def _submitted_job_answer(job_id: str, run_id: str) -> tuple[Response, int]:
+    """Answer HTTP 201 with a submitted job's job_id and run_id, and as results_url the path of its run's results page."""
+    return jsonify({
+        "job_id": job_id,
+        "run_id": run_id,
+        "results_url": url_for("main.run_results", run_id=run_id),
+    }), 201
 
 
 @api_bp.route("/simulate/home", methods=["POST"])
@@ -73,27 +101,20 @@ def simulate_home_api() -> tuple[Response, int]:
     Expects a JSON body with simulation parameters.
 
     Returns:
-        JSON with job_id and run_id, HTTP 201 on success.
+        JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
-    try:
-        home_config, start_date, end_date, name = parse_home_config(data)
-    except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
+    home_config, start_date, end_date, name = parse_home_config(data)
     job_manager = get_job_manager()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
 
     job_id, run_id = job_manager.submit_home_job(
         config=home_config,
         start_date=start_date,
         end_date=end_date,
-        db_path=db_path,
-        data_dir=data_dir,
         name=name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/simulate/fleet", methods=["POST"])
 def simulate_fleet_api() -> tuple[Response, int]:
@@ -102,41 +123,34 @@ def simulate_fleet_api() -> tuple[Response, int]:
     Expects a JSON body with a non-empty array of home configs under the 'homes' key.
 
     Returns:
-        JSON with job_id and run_id, HTTP 201 on success.
+        JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
+    name = read_optional_string(data.get("name"), "name")
     homes_data = data.get("homes", [])
     if not isinstance(homes_data, list):
         return jsonify({"error": f"homes must be a JSON array, got {type(homes_data).__name__}"}), 400
     if not homes_data:
         return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400
-    try:
-        configs = []
-        # Use first home's date config for the fleet
-        first_config, start_date, end_date, _ = parse_home_config(homes_data[0])
-        configs.append(first_config)
+    configs = []
+    # Use first home's date config for the fleet
+    first_config, start_date, end_date, _ = parse_home_config(homes_data[0])
+    configs.append(first_config)
 
-        for home_data in homes_data[1:]:
-            config, _, _, _ = parse_home_config(home_data)
-            configs.append(config)
-    except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
-    fleet_name = data.get("name", "Fleet Simulation")
+    for home_data in homes_data[1:]:
+        config, _, _, _ = parse_home_config(home_data)
+        configs.append(config)
 
     job_manager = get_job_manager()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
 
     job_id, run_id = job_manager.submit_fleet_job(
         configs=configs,
         start_date=start_date,
         end_date=end_date,
-        db_path=db_path,
-        data_dir=data_dir,
-        name=fleet_name,
+        name=name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/jobs/<job_id>", methods=["GET"])
 def get_job_status(job_id: str) -> tuple[Response, int]:
@@ -156,45 +170,15 @@ def get_job_status(job_id: str) -> tuple[Response, int]:
     return jsonify(asdict(state)), 200
 
 
-def _job_event_payload(event: JobEvent) -> dict[str, object]:
-    """The fields of *event*'s state that the browser reads for an event of its type, in the order the progress stream sends them."""
-    state = event.state
-    if event.type == "progress":
-        return {
-            "progress_pct": state.progress_pct,
-            "current_step": state.current_step,
-            "message": state.message,
-            "status": state.status,
-        }
-    if event.type == "complete":
-        return {
-            "status": state.status,
-            "progress_pct": state.progress_pct,
-            "current_step": state.current_step,
-            "message": state.message,
-            "run_id": state.run_id,
-        }
-    if event.type == "error":
-        return {"status": state.status, "message": state.message}
-    assert_never(event.type)
-
-
-def _job_event_frame(event: JobEvent) -> str:
-    """The SSE frame the progress stream sends for *event*: named by its type, with its payload as JSON."""
-    return f"event: {event.type}\ndata: {json.dumps(_job_event_payload(event))}\n\n"
-
-
-_FINAL_EVENT_TYPE_BY_STATUS: Mapping[JobStatus, JobEventType] = MappingProxyType({
-    "completed": "complete",
-    "failed": "error",
-})
-
-
 @api_bp.route("/jobs/<job_id>/progress", methods=["GET"])
 def get_job_progress(job_id: str) -> Response:
-    """SSE endpoint for streaming job progress events.
+    """Stream the job's snapshots as Server-Sent Events, as web/sse.py's job_progress_frames sends them.
 
-    Sends heartbeat every 2 seconds and streams progress/completion events.
+    A stream sends the job's current state at once and each newer state as the job
+    reports it, under the app's job stream policy. It ends with the job's final state, with
+    a timeout once it has been open past the policy's limit, or with untracked when the
+    server tracks no such job. A reopened stream resumes after the version its
+    Last-Event-ID header names.
 
     Args:
         job_id: Unique job identifier.
@@ -203,44 +187,13 @@ def get_job_progress(job_id: str) -> Response:
         text/event-stream response.
     """
     job_manager = get_job_manager()
-
-    def generate_events() -> Generator[str, None, None]:
-        """Generate SSE events for the job."""
-        start_time = time.time()
-        max_duration = 600  # 10 minutes
-        while True:
-            if time.time() - start_time > max_duration:
-                yield "event: error\ndata: {\"error\": \"SSE stream timed out after 10 minutes\"}\n\n"
-                return
-            # Check if job exists
-            state = job_manager.job_state(job_id)
-            if state is None:
-                yield "event: error\ndata: {\"error\": \"Job not found\"}\n\n"
-                return
-
-            # Drain event queue
-            for event in job_manager.get_events(job_id):
-                yield _job_event_frame(event)
-                if event.type == "complete" or event.type == "error":
-                    return
-
-            # The job finished and another stream drained its events
-            final_event_type = _FINAL_EVENT_TYPE_BY_STATUS.get(state.status)
-            if final_event_type is not None:
-                yield _job_event_frame(JobEvent(final_event_type, state))
-                return
-
-            # Send heartbeat
-            yield ":heartbeat\n\n"
-            time.sleep(2)
-
-    return Response(
-        stream_with_context(generate_events()),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+    return event_stream(
+        job_progress_frames(
+            job_manager,
+            job_id,
+            last_event_id=parse_last_event_id(request.headers.get("Last-Event-ID")),
+            policy=get_job_stream_policy(),
+        )
     )
 
 
@@ -252,7 +205,10 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         job_id: Unique job identifier.
 
     Returns:
-        JSON with summary data, or 404/409 on error.
+        JSON with the job's run's id, name, type and creation time, and as ``summary`` its
+        record's RunRecord.summary_tree(); or 404/409 on error. A run whose summary
+        cannot be read is answered 409 with its refusal, as the blueprint answers a
+        StoredRunUnreadable.
     """
     job_manager = get_job_manager()
     state = job_manager.job_state(job_id)
@@ -271,14 +227,13 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
-    summary = json.loads(run.summary_json) if run.summary_json else {}
 
     return jsonify({
         "run_id": run_id,
         "name": run.name,
         "type": run.type,
         "created_at": run.created_at,
-        "summary": summary,
+        "summary": run.summary_tree(),
     }), 200
 
 # ---------------------------------------------------------------------------
@@ -292,17 +247,30 @@ def list_presets() -> tuple[Response, int]:
     Returns:
         JSON array of preset objects, HTTP 200.
     """
-    return jsonify(home_presets(current_app.config["DATABASE"])), 200
+    return jsonify(home_presets(get_database())), 200
+
+def _read_preset_name(data: Mapping[str, Any], what: str) -> str:
+    """The name a preset save body *data* sends, stripped; *what* names the preset kind in the refusal of a blank name.
+
+    Raises:
+        ConfigurationError: From read_string, naming name, for a name that is not a JSON string
+            or holds a lone surrogate; "<what> name is required" for a name not sent or blank.
+    """
+    name = read_string(data.get("name", ""), "name").strip()
+    if not name:
+        raise ConfigurationError(f"{what} name is required")
+    return name
+
 
 def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str, Any]) -> tuple[Response, int]:
-    """Save *config* as the *preset_type* preset *name*, answering as both preset save endpoints do.
+    """Save *config* as the *preset_type* preset *name*, a name _read_preset_name has read, answering as both preset save endpoints do.
 
     Returns:
-        JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 409 for a
-        name another preset holds, HTTP 500 for a database fault.
+        JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 409 for a name
+        another preset holds, HTTP 500 for a database fault.
     """
     try:
-        preset_id = save_config_preset(current_app.config["DATABASE"], name, preset_type, config)
+        preset_id = save_config_preset(get_database(), name, preset_type, config)
     except PresetNameTaken as taken:
         return jsonify({"error": str(taken)}), 409
     except Exception as exc:  # noqa: BLE001
@@ -318,13 +286,12 @@ def save_preset() -> tuple[Response, int]:
 
     Returns:
         JSON confirmation with the preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400 for an empty name or a type other than 'home', HTTP 409 for a name a built-in
-        home preset or a saved fleet preset holds.
+        HTTP 400, before any database access, for a name that is not a JSON string, a blank
+        name, a name holding a lone surrogate or a type other than 'home', HTTP 409 for a
+        name a built-in home preset or a saved fleet preset holds.
     """
     data = request_json_object()
-    name = data.get("name", "").strip()
-    if not name:
-        return jsonify({"error": "Preset name is required"}), 400
+    name = _read_preset_name(data, "Preset")
     preset_type = data.get("type", "home")
     if preset_type != "home":
         return jsonify(
@@ -337,18 +304,20 @@ def save_preset() -> tuple[Response, int]:
 
 @api_bp.route("/presets/<name>", methods=["GET"])
 def get_preset(name: str) -> tuple[Response, int]:
-    """Get the home preset GET /api/presets lists under *name*.
+    """Get the home preset named *name*, as GET /api/presets lists it when the database can be read.
 
-    A built-in preset's name therefore answers the built-in preset, and a name only a
-    saved fleet preset holds is not found.
+    A built-in preset's name answers the built-in preset, even when the database cannot be
+    read, and a name only a saved fleet preset holds is not found.
 
     Args:
         name: The preset name to look up.
 
     Returns:
-        JSON preset object, HTTP 200; or the ``error``, HTTP 404, when GET /api/presets lists none under the name.
+        JSON preset object, HTTP 200; or the ``error``: HTTP 404 when the database was read
+        and GET /api/presets lists none under the name; HTTP 500, with the fault logged, when
+        the name is not a built-in preset's and the database cannot be read.
     """
-    preset = home_preset_named(current_app.config["DATABASE"], name)
+    preset = home_preset_named(get_database(), name)
     if preset is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return jsonify(preset), 200
@@ -374,10 +343,7 @@ def preview_distribution() -> tuple[Response, int]:
     params = data.get("params", {})
     n_samples = data.get("n_samples", 100)
 
-    try:
-        samples = sample_distribution(dist_type, params, n_samples)
-    except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
+    samples = sample_distribution(dist_type, params, n_samples)
     return jsonify({"samples": samples}), 200
 
 @api_bp.route("/simulate/fleet-from-distribution", methods=["POST"])
@@ -388,48 +354,39 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
     :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
 
     Returns:
-        JSON with ``job_id`` and ``run_id``, HTTP 201 on success; or the ``error``,
+        JSON with ``job_id``, ``run_id`` and ``results_url``, HTTP 201 on success; or the ``error``,
         HTTP 400, for a form parse_fleet_form refuses.
     """
     data = request_json_object()
 
     job_manager = get_job_manager()
 
-    try:
-        fleet = parse_fleet_form(data)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
-
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
+    fleet = parse_fleet_form(data)
 
     job_id, run_id = job_manager.submit_fleet_job(
         configs=list(fleet.homes),
         start_date=fleet.start_date,
         end_date=fleet.end_date,
-        db_path=db_path,
-        data_dir=data_dir,
         name=fleet.name,
     )
 
-    return jsonify({"job_id": job_id, "run_id": run_id}), 201
+    return _submitted_job_answer(job_id, run_id)
 
 @api_bp.route("/fleet/export-yaml", methods=["POST"])
 def export_fleet_yaml() -> Response | tuple[Response, int]:
-    """Export the fleet page's form as the fleet scenario load_fleet_config reads back.
+    """Export the fleet page's form as the fleet scenario load_scenario reads back as the homes POST /api/simulate/fleet-from-distribution runs.
 
     Expects the JSON body the fleet page posts to /api/simulate/fleet-from-distribution.
+    Both endpoints read the form with
+    :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`, whose homes are
+    config.parse_scenario's reading of the document written here.
 
     Returns:
         The scenario's YAML file as a download, HTTP 200; or the ``error``, HTTP 400, for a
-        form the simulate endpoint refuses, with its message: both read the form with
-        :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`.
+        form the simulate endpoint refuses, with its message.
     """
     data = request_json_object()
-    try:
-        document = scenario_from_fleet_form(data)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
+    document = scenario_from_fleet_form(data)
     return Response(
         scenario_yaml(document),
         mimetype="text/yaml",
@@ -450,10 +407,7 @@ def import_fleet_yaml() -> tuple[Response, int]:
     yaml_text = request.get_data(as_text=True)
     if not yaml_text:
         return jsonify({"error": "Empty request body"}), 400
-    try:
-        imported = fleet_form_from_yaml(yaml_text)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
+    imported = fleet_form_from_yaml(yaml_text)
     return _loaded_fleet_form_answer(imported)
 
 
@@ -468,10 +422,7 @@ def fleet_preset(name: str) -> tuple[Response, int]:
         (:func:`~solar_challenge.web.fleet_presets.fleet_preset_names`); HTTP 404 when no
         built-in scenario file is named *name*.
     """
-    try:
-        imported = fleet_preset_form(name)
-    except FLEET_FORM_REFUSALS as exc:
-        return jsonify({"error": str(exc)}), 400
+    imported = fleet_preset_form(name)
     if imported is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
     return _loaded_fleet_form_answer(imported)
@@ -498,6 +449,9 @@ _SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
     "annual_consumption_kwh": "consumption_kwh",
 }
 
+#: The most steps a sweep may have, which the sweep page's Steps input offers.
+SWEEP_MAX_STEPS = 50
+
 #: The days each point of a sweep runs when its base_config sends no window of its own.
 _SWEEP_DEFAULT_DAYS = 7
 
@@ -507,14 +461,14 @@ def simulate_sweep() -> tuple[Response, int]:
     """Submit a parameter sweep for background execution.
 
     Generates a set of sweep points (linear or geometric) and submits one
-    background home-simulation job per point.  Returns the sweep id, the
-    rounded sweep values and the ids of the submitted jobs.
+    background home-simulation job per point.  Returns the rounded sweep
+    values and the ids of the submitted jobs.
 
     Expects a JSON object whose fields are all optional, so ``{}`` runs the default sweep:
       - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
-      - min: float
-      - max: float
-      - steps: int (>= 2)
+      - min: finite number (default 1.0)
+      - max: finite number (default 10.0)
+      - steps: whole number, 2 to SWEEP_MAX_STEPS (default 5)
       - mode: "linear" | "geometric"
       - base_config: JSON object (optional, default {}), the home config
         every sweep point starts from.  A window it sends is read as
@@ -522,11 +476,14 @@ def simulate_sweep() -> tuple[Response, int]:
         with_default_days reads a body, runs _SWEEP_DEFAULT_DAYS days.
 
     Returns:
-        JSON with sweep_id, parameter, values and job_ids, HTTP 201.
+        JSON with parameter, values and job_ids, HTTP 201.
         HTTP 400 for an unsupported parameter (the error lists the supported
-        ones), an invalid range, a base_config that is not a JSON object (the
-        error names the type sent), or a point whose home config is invalid,
-        a window parse_home_config refuses included.
+        ones), a min, max or steps it cannot use, or a steps outside 2 to
+        SWEEP_MAX_STEPS (the error names the field and the value sent), an
+        invalid range, a min and max too far apart for the sweep's points to
+        be computed (the error names both), a base_config that is not a JSON
+        object (the error names the type sent), or a point whose home config
+        is invalid, a window parse_home_config refuses included.
         Every 400 comes before any job is submitted.
     """
     data = request_json_object()
@@ -537,14 +494,9 @@ def simulate_sweep() -> tuple[Response, int]:
         return jsonify({
             "error": f"Unsupported sweep parameter {parameter!r}; supported parameters: {supported}",
         }), 400
-    try:
-        min_val = float(data.get("min", 1.0))
-        max_val = float(data.get("max", 10.0))
-        steps = int(data.get("steps", 5))
-    except (ValueError, TypeError) as exc:
-        return jsonify({"error": f"Invalid numeric parameter: {exc}"}), 400
-    if steps < 2:
-        return jsonify({"error": "Steps must be at least 2"}), 400
+    min_val = as_finite_float(data.get("min", 1.0), "min")
+    max_val = as_finite_float(data.get("max", 10.0), "max")
+    steps = as_whole_number(data.get("steps", 5), "steps", within=Interval(2, SWEEP_MAX_STEPS))
     if min_val >= max_val:
         return jsonify({"error": "Min must be less than max"}), 400
     mode = str(data.get("mode", "linear"))
@@ -554,11 +506,17 @@ def simulate_sweep() -> tuple[Response, int]:
     if mode == "geometric":
         if min_val <= 0:
             return jsonify({"error": "Min must be positive for geometric sweep"}), 400
-        log_min = math.log(min_val)
-        log_max = math.log(max_val)
-        values = [math.exp(log_min + (log_max - log_min) * i / (steps - 1)) for i in range(steps)]
+        ratio = max_val / min_val
+        values = [min_val * ratio ** (i / (steps - 1)) for i in range(steps)]
     else:
         values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
+    if not all(math.isfinite(v) for v in values):
+        return jsonify({
+            "error": (
+                f"min {min_val!r} and max {max_val!r} are too far apart to sweep:"
+                " computing the points between them overflows a float"
+            ),
+        }), 400
 
     rounded_values = [round(v, 3) for v in values]
 
@@ -569,15 +527,12 @@ def simulate_sweep() -> tuple[Response, int]:
         point_config = {**point_base_config, home_config_key: val}
         try:
             home_config, start_date, end_date, _ = parse_home_config(point_config)
-        except (ValueError, TypeError) as exc:
-            return jsonify({"error": f"Invalid config for {parameter}={val}: {exc}"}), 400
+        except ConfigurationError as refusal:
+            raise ConfigurationError(f"Invalid config for {parameter}={val}: {refusal}") from refusal
         point_homes.append((val, home_config, start_date, end_date))
 
     # Submit one home job per sweep point
-    sweep_id = str(uuid.uuid4())
     job_manager = get_job_manager()
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
 
     job_ids: list[str] = []
     for val, home_config, start_date, end_date in point_homes:
@@ -585,14 +540,11 @@ def simulate_sweep() -> tuple[Response, int]:
             config=home_config,
             start_date=start_date,
             end_date=end_date,
-            db_path=db_path,
-            data_dir=data_dir,
             name=f"Sweep {parameter}={val}",
         )
         job_ids.append(job_id)
 
     return jsonify({
-        "sweep_id": sweep_id,
         "parameter": parameter,
         "values": rounded_values,
         "job_ids": job_ids,
@@ -605,146 +557,135 @@ def simulate_sweep() -> tuple[Response, int]:
 
 
 @api_bp.route("/history/runs")
-def history_list_runs() -> Response:
-    """Paginated, filterable run list API.
+def history_list_runs() -> Response | tuple[Response, int]:
+    """One page of the run list, filtered and sorted as the query parameters ask.
 
-    Query parameters:
-        page: Page number (default 1)
-        per_page: Items per page (default 20)
-        sort: Sort column (default 'created_at')
-        order: Sort order 'asc' or 'desc' (default 'desc')
-        type: Filter by run type (home, fleet, sweep)
-        q: Search query (searches name and notes)
-        date_from: Filter runs created on or after this date
-        date_to: Filter runs created on or before this date
+    Query parameters, each optional:
+        page: The page, numbered from 1 (default 1).
+        per_page: The runs a page lists, from 1 to 100 (default 20).
+        sort: The column the runs are sorted by, one of RUN_SORTS (default 'created_at').
+        order: 'asc' or 'desc' (default 'desc').
+        type: Keep only the runs of this type, one of RUN_TYPES.
+        q: Keep only the runs whose name or notes hold this text, in any ASCII case.
+        date_from: Keep only the runs created on or after this date, YYYY-MM-DD.
+        date_to: Keep only the runs created on or before this date, YYYY-MM-DD.
+    A filter sent empty keeps every run.
 
     Returns:
-        JSON response with ``runs`` list and ``pagination`` metadata.
+        JSON with ``runs``, the row _history_row answers for each run on the page, and
+        ``pagination``. HTTP 400 with the refusal as ``error`` when a value is not one the run
+        list answers: a page below 1, a per_page outside 1 to 100, a page or per_page that is
+        not a whole number, a sort, order or type that is none of its options, or a date_from
+        or date_to that is not a date.
     """
-    page = request.args.get("page", 1, type=int)
-    per_page = request.args.get("per_page", 20, type=int)
-    sort_col = request.args.get("sort", "created_at")
-    order = request.args.get("order", "desc")
-    run_type = request.args.get("type")
-    search_q = request.args.get("q")
-    date_from = request.args.get("date_from")
-    date_to = request.args.get("date_to")
-
-    # Clamp per_page
-    per_page = max(1, min(per_page, 100))
-    page = max(1, page)
-
-    # Whitelist sort columns to prevent injection
-    allowed_sorts = {"created_at", "name", "type", "status", "duration_seconds", "n_homes"}
-    if sort_col not in allowed_sorts:
-        sort_col = "created_at"
-
-    order_dir = "ASC" if order.lower() == "asc" else "DESC"
-
-    db_path = current_app.config["DATABASE"]
-
-    with get_db(db_path) as conn:
-        cursor = conn.cursor()
-
-        # Build WHERE clause
-        conditions: list[str] = []
-        params: list[Any] = []
-
-        if run_type:
-            conditions.append("type = ?")
-            params.append(run_type)
-
-        if search_q:
-            conditions.append("(name LIKE ? OR notes LIKE ?)")
-            like_q = f"%{search_q}%"
-            params.extend([like_q, like_q])
-
-        if date_from:
-            conditions.append("created_at >= ?")
-            params.append(date_from)
-
-        if date_to:
-            conditions.append("created_at <= ?")
-            params.append(date_to + "T23:59:59")
-
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
-
-        # Count total matching rows
-        count_query = f"SELECT COUNT(*) as cnt FROM runs WHERE {where_clause}"
-        cursor.execute(count_query, params)
-        total = cursor.fetchone()["cnt"]
-
-        # Fetch paginated results
-        offset = (page - 1) * per_page
-        data_query = (
-            f"SELECT id, name, type, status, created_at, completed_at, "
-            f"duration_seconds, n_homes, notes, summary_json "
-            f"FROM runs WHERE {where_clause} "
-            f"ORDER BY {sort_col} {order_dir} "
-            f"LIMIT ? OFFSET ?"
-        )
-        cursor.execute(data_query, params + [per_page, offset])
-        rows = cursor.fetchall()
-
-    # Build response
-    runs_list: list[dict[str, Any]] = []
-    for row in rows:
-        run_dict = dict(row)
-        # Parse summary_json to extract key metrics for the table
-        summary = {}
-        if run_dict.get("summary_json"):
-            try:
-                summary = json.loads(run_dict["summary_json"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-        run_dict["total_generation_kwh"] = summary.get("total_generation_kwh")
-        run_dict["self_consumption_ratio"] = summary.get("self_consumption_ratio")
-        # Remove the full JSON from the list response to save bandwidth
-        run_dict.pop("summary_json", None)
-        runs_list.append(run_dict)
-
-    total_pages = max(1, (total + per_page - 1) // per_page)
-
+    query = _run_query_from(request.args)
+    page = get_storage().page_runs(query)
     return jsonify({
-        "runs": runs_list,
-        "pagination": {
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "has_next": page < total_pages,
-            "has_prev": page > 1,
-        },
+        "runs": [_history_row(record) for record in page.records],
+        "pagination": _pagination(query, page.total),
     })
+
+
+def _run_query_from(args: Mapping[str, str]) -> RunQuery:
+    """The page of the run list the History list's query parameters *args* ask for, as history_list_runs reads them.
+
+    Raises:
+        ConfigurationError: A parameter's value is not one the run list answers; the message
+            names the parameter and the value sent.
+    """
+    run_type = args.get("type")
+    return RunQuery(
+        run_type=read_one_of(run_type, RUN_TYPES, "type") if run_type else None,
+        text=args.get("q") or None,
+        created_from=_date_parameter(args, "date_from"),
+        created_to=_date_parameter(args, "date_to"),
+        sort=read_one_of(args.get("sort", "created_at"), RUN_SORTS, "sort"),
+        descending=read_one_of(args.get("order", "desc"), ("asc", "desc"), "order") == "desc",
+        page=as_whole_number(args.get("page", 1), "page"),
+        per_page=as_whole_number(args.get("per_page", 20), "per_page"),
+    )
+
+
+def _date_parameter(args: Mapping[str, str], name: str) -> date | None:
+    """The date the query parameter *name* of *args* sends as YYYY-MM-DD; None when it is not sent or sent empty.
+
+    Raises:
+        ConfigurationError: The value sent is not a date; the message names *name* and the value.
+    """
+    value = args.get(name)
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as refusal:
+        raise ConfigurationError(f"{name} is {value!r}, not a date in the form YYYY-MM-DD") from refusal
+
+
+def _history_row(record: RunRecord) -> dict[str, Any]:
+    """The History list's row for *record*'s run: its columns but its documents and error, its headline_figures, unreadable among them, and its results page's path."""
+    return {
+        "id": record.id,
+        "name": record.name,
+        "type": record.type,
+        "status": record.status,
+        "created_at": record.created_at,
+        "completed_at": record.completed_at,
+        "duration_seconds": record.duration_seconds,
+        "n_homes": record.n_homes,
+        "notes": record.notes,
+        **headline_figures(record),
+        "results_url": url_for("main.run_results", run_id=record.id),
+    }
+
+
+def _pagination(query: RunQuery, total: int) -> dict[str, int | bool]:
+    """Where *query*'s page sits among the pages of the *total* runs it keeps, at least one page however few runs there are."""
+    total_pages = max(1, math.ceil(total / query.per_page))
+    return {
+        "page": query.page,
+        "per_page": query.per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "has_next": query.page < total_pages,
+        "has_prev": query.page > 1,
+    }
 
 
 @api_bp.route("/history/runs/<run_id>")
 def history_get_run(run_id: str) -> Response | tuple[Response, int]:
-    """Get full run detail including summary and config.
+    """A run's detail: each column of its row, with its summary and its homes read through its kind.
 
     Args:
         run_id: Unique run identifier.
 
     Returns:
-        JSON response with full run detail, or 404 if not found.
+        JSON of each column of the run's row, plus, once the run has them, ``summary``, its
+        summary's field tree, and ``home_configs``, the HomeConfig field tree of each of its
+        homes, in order. 404 if no run has the id; 409 {error, run_id, document, field} if its
+        summary or its config cannot be read, as the blueprint answers a StoredRunUnreadable,
+        the document being runs.summary_json or runs.config_json.
     """
     run = get_storage().run_record(run_id)
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    run_dict = asdict(run)
-    if run.config_json:
-        run_dict["config"] = run.decoded_config()
-    if run.summary_json:
-        run_dict["summary"] = run.decoded_summary()
+    summary = run.summary()
+    homes = run.home_configs()
 
-    return jsonify(run_dict)
+    detail = asdict(run)
+    if summary is not None:
+        detail["summary"] = field_tree(summary)
+    if homes is not None:
+        detail["home_configs"] = [asdict(home) for home in homes]
+    return jsonify(detail)
 
 
 @api_bp.route("/history/runs/<run_id>", methods=["DELETE"])
 def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
-    """Delete a run and its associated files.
+    """Delete a run and its associated files, cancelling the run's queued or running job first.
+
+    The job then cannot write the run back (contract C8, docs/prds/run-store-one-owner.md §3.7).
 
     Args:
         run_id: Unique run identifier.
@@ -756,8 +697,23 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     if storage.run_record(run_id) is None:
         return jsonify({"error": "Run not found"}), 404
 
+    get_job_manager().cancel_run(run_id)
     storage.delete_run(run_id)
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
+
+
+def _read_labels(data: Mapping[str, Any]) -> dict[RunLabel, str | None]:
+    """The run labels the PATCH body *data* sends, each refused before any is written: a label that read_optional_string refuses, or a name that cannot name a run.
+
+    Raises:
+        ConfigurationError: From read_optional_string, naming the label, for a label that is
+            neither a JSON string nor null, or holds a lone surrogate; from read_run_name, for
+            a null or blank name.
+    """
+    labels = {label: read_optional_string(data[label], label) for label in RUN_LABELS if label in data}
+    if "name" in labels:
+        read_run_name(labels["name"])
+    return labels
 
 
 @api_bp.route("/history/runs/<run_id>", methods=["PATCH"])
@@ -770,7 +726,10 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
         run_id: Unique run identifier.
 
     Returns:
-        JSON response with updated run data, or 404 if not found.
+        JSON response with updated run data, or 404 if not found. 400 with the refusal as
+        ``error``, naming ``name``, for a null or blank name, which read_run_name refuses;
+        and naming the label, for a name or notes that is neither a JSON string nor null, or
+        holds a lone surrogate. Each is refused before any label is written.
     """
     data = request_json_object()
     storage = get_storage()
@@ -778,7 +737,7 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     if storage.run_record(run_id) is None:
         return jsonify({"error": "Run not found"}), 404
 
-    labels = {label: data[label] for label in RUN_LABELS if label in data}
+    labels = _read_labels(data)
     if not labels:
         return jsonify({"error": "No fields to update"}), 400
 
@@ -797,7 +756,8 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
         run_id: Unique run identifier.
 
     Returns:
-        CSV file response, or 404 if not found.
+        CSV file response, or 404 if not found; 409 {error, run_id, document, field} if a file of
+        the run cannot be read, as the blueprint answers a StoredRunUnreadable.
     """
     storage = get_storage()
     run = storage.run_record(run_id)
@@ -808,13 +768,7 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
     run_name = run.name or "run"
 
     try:
-        if run.type == "home":
-            _config, results, _summary = storage.load_home_run(run_id)
-            df = results.to_dataframe()
-        else:
-            # For fleet runs, export the aggregate (sum across all homes)
-            fleet_results, _fleet_summary, _per_home = storage.load_fleet_run(run_id)
-            df = fleet_results.to_aggregate_dataframe()
+        df = storage.load_run(run_id).export_frame()
     except FileNotFoundError:
         return jsonify({"error": "Run data files not found"}), 404
 
@@ -833,39 +787,29 @@ def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
 def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     """Export a run's config as the scenario YAML that `home run` or load_fleet_config reads back.
 
+    The run's kind builds the scenario from the config the run's record holds, so the export
+    reads none of the run's files.
+
     Args:
         run_id: Unique run identifier.
 
     Returns:
-        YAML file response; 404 if the run or its config is missing, 500 if the
-        stored config does not decode, 422 if the scenario grammar cannot express it.
+        YAML file response; 404 if the run or its config is missing; 409 {error, run_id,
+        document, field} if its record names no run kind or its config cannot be read, as the
+        blueprint answers a StoredRunUnreadable; 422 if the scenario grammar cannot express it.
     """
     run = get_storage().run_record(run_id)
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
 
-    if not run.config_json:
+    homes = run.home_configs()
+    if homes is None:
         return jsonify({"error": "No config data available"}), 404
-
-    try:
-        config = json.loads(run.config_json)
-    except (json.JSONDecodeError, TypeError):
-        return jsonify({"error": "Invalid config data"}), 500
-
-    is_fleet = run.type == "fleet"
-    try:
-        homes = stored_fleet_home_configs(config) if is_fleet else [stored_home_config(config)]
-    except (TypeError, ValueError, KeyError, AttributeError, ConfigurationError) as exc:
-        return jsonify({"error": f"Invalid config data: {exc}"}), 500
 
     run_name = run.name or "run"
     try:
-        document = (
-            fleet_scenario(homes, name=run_name)
-            if is_fleet
-            else home_scenario(homes[0], name=run_name)
-        )
+        document = run.kind.scenario_document(homes, run_name)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 422
 
@@ -895,16 +839,13 @@ def scenarios_preview_yaml() -> tuple[Response, int]:
         form the builder does not send.
     """
     data = request_json_object()
-    try:
-        document = scenario_from_builder_form(data)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    document = scenario_from_builder_form(data)
     return jsonify({"yaml": scenario_yaml(document)}), 200
 
 
 @api_bp.route("/scenarios/validate", methods=["POST"])
 def scenarios_validate_scenario() -> tuple[Response, int]:
-    """Validate a builder form against the dashboard's limits and the scenario readers.
+    """Validate a builder form against the dashboard's limits and config.parse_scenario.
 
     Expects a JSON body with the scenario builder's form fields.
 
@@ -920,67 +861,53 @@ def scenarios_validate_scenario() -> tuple[Response, int]:
 def scenarios_save_scenario() -> tuple[Response, int]:
     """Save a scenario configuration as a fleet preset.
 
-    Expects a JSON body with at least ``name`` and ``config`` fields.
+    Expects a JSON body with a ``name`` and a ``config``, a JSON object; a body that sends
+    no ``config`` is itself the config, but for its name and type.
 
     Returns:
         JSON confirmation with preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400 for an empty name, HTTP 409 for a name a saved home preset holds.
+        HTTP 400, before any database access, for a name that is not a JSON string, a blank
+        name, a name holding a lone surrogate or a sent config that is not a JSON object,
+        HTTP 409 for a name a saved home preset holds.
     """
     data = request_json_object()
-    name = str(data.get("name", "")).strip()
-    if not name:
-        return jsonify({"error": "Scenario name is required"}), 400
-    config_payload = data.get("config", {})
-    if not config_payload:
-        # Accept flat form data as config
+    name = _read_preset_name(data, "Scenario")
+    if "config" in data:
+        config_payload = require_json_object(data["config"], "config")
+    else:
         config_payload = {k: v for k, v in data.items() if k not in ("name", "type")}
     return _answer_preset_save(name, "fleet", config_payload)
 
 
 @api_bp.route("/scenarios/presets", methods=["GET"])
 def scenarios_list_presets() -> tuple[Response, int]:
-    """List built-in (from scenarios/ dir) and saved scenario presets.
+    """List the built-in scenario files, then the saved fleet presets, each by name.
+
+    When the database cannot be read, the built-in files are listed alone and
+    saved_fleet_presets logs the fault.
 
     Returns:
-        JSON with ``presets`` array containing built-in and saved items.
+        JSON with the ``presets`` array, HTTP 200.
     """
-    presets: list[dict[str, Any]] = []
-
-    for name, path in builtin_scenario_files().items():
-        presets.append({"name": name, "source": "builtin", "filename": path.name})
-
-    # Saved presets from database
-    db_path = current_app.config["DATABASE"]
-    try:
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name, config_json, created_at FROM config_presets WHERE type = 'fleet' ORDER BY name"
-            )
-            for row in cursor.fetchall():
-                presets.append({
-                    "name": row["name"],
-                    "source": "saved",
-                    "created_at": row["created_at"],
-                })
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to load saved scenario presets", exc_info=True)
-
+    presets: list[dict[str, Any]] = [
+        {"name": name, "source": "builtin", "filename": path.name}
+        for name, path in builtin_scenario_files().items()
+    ]
+    presets.extend(saved_fleet_presets(get_database()))
     return jsonify({"presets": presets}), 200
 
 
 @api_bp.route("/scenarios/presets/<name>", methods=["GET"])
 def scenarios_get_preset(name: str) -> tuple[Response, int]:
-    """Load a specific preset by name (from file or DB).
-
-    Checks the scenarios/ directory first for built-in YAML files,
-    then falls back to saved presets in the database.
+    """Get the built-in scenario file named *name*, else the saved fleet preset named *name*.
 
     Args:
         name: The preset name to look up.
 
     Returns:
-        JSON preset object, or 404 if not found.
+        JSON preset object, HTTP 200; or the ``error``: HTTP 404 when neither is named *name*,
+        so a saved home preset's name is not found; HTTP 500 for a built-in file that does not
+        parse; HTTP 500, with the fault logged, for a saved preset that cannot be read.
     """
     # Try built-in scenarios directory
     path = builtin_scenario_files().get(name)
@@ -994,26 +921,7 @@ def scenarios_get_preset(name: str) -> tuple[Response, int]:
             }), 200
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
-    # Try database
-    db_path = current_app.config["DATABASE"]
-    try:
-        with get_db(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name, config_json, created_at FROM config_presets WHERE name = ?",
-                (name,),
-            )
-            row = cursor.fetchone()
-
-        if row:
-            cfg = json.loads(row["config_json"]) if row["config_json"] else {}
-            return jsonify({
-                "name": row["name"],
-                "source": "saved",
-                "config": cfg,
-                "created_at": row["created_at"],
-            }), 200
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to load preset '%s' from database", name, exc_info=True)
-
-    return jsonify({"error": f"Preset '{name}' not found"}), 404
+    preset = saved_fleet_preset_named(get_database(), name)
+    if preset is None:
+        return jsonify({"error": f"Preset '{name}' not found"}), 404
+    return jsonify(preset), 200

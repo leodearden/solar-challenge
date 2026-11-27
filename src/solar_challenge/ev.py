@@ -1,17 +1,46 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Electric vehicle charging configuration and load profile generation."""
 
+import itertools
+import math
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from enum import Enum
+from datetime import timedelta
+from enum import StrEnum
+from typing import TypeAlias, TypeVar
 
 import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
+
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number, read_field
+from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, LocalDay, SimulationWindow, minutes_of_day
+
+_Word = TypeVar("_Word", bound=StrEnum)
 
 
-class EVChargerType(str, Enum):
-    """Standard UK domestic EV charger types.
+def _member_named(vocabulary: type[_Word], value: object, *, field: str) -> _Word:
+    """The member of *vocabulary* that *value* names: a member's value, exactly, or a member itself.
 
-    Values represent typical charging power ratings:
+    Raises:
+        ConfigurationError: If *value* is anything else; the message names *field*,
+            the members' values in order and *value*.
+    """
+    if isinstance(value, str):
+        try:
+            return vocabulary(value)
+        except ValueError:
+            pass
+    raise ConfigurationError.must_be(
+        field, f"one of {', '.join(member.value for member in vocabulary)}", got=value
+    )
+
+
+class EVChargerType(StrEnum):
+    """Standard UK domestic EV charger types, each valued as its rating's label.
+
     - SLOW: 3.6 kW single-phase (slow/granny charger)
     - FAST: 7 kW single-phase (typical home wallbox)
     - RAPID: 22 kW three-phase (high-power home installation)
@@ -21,104 +50,110 @@ class EVChargerType(str, Enum):
     FAST = "7kW"
     RAPID = "22kW"
 
+    @classmethod
+    def parse(cls, value: object, *, field: str) -> "EVChargerType":
+        """Return the charger type *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, field=field)
 
-class SmartChargingMode(str, Enum):
-    """Smart charging scheduling strategies.
+    @property
+    def power_kw(self) -> float:
+        """The charger's power rating in kW."""
+        return _CHARGER_POWER_KW[self]
 
-    - NONE: Dumb charging - start immediately on arrival
-    - SOLAR: Solar-aware - shift charging to daylight hours
-    - OFF_PEAK: Off-peak tariff - shift charging to cheapest hours
+
+_CHARGER_POWER_KW: dict[EVChargerType, float] = {
+    EVChargerType.SLOW: 3.6,
+    EVChargerType.FAST: 7.0,
+    EVChargerType.RAPID: 22.0,
+}
+
+CHARGER_TYPES: tuple[str, ...] = tuple(charger.value for charger in EVChargerType)
+
+
+class SmartChargingMode(StrEnum):
+    """Where in each stay the EV charges.
+
+    - NONE: from arrival
+    - SOLAR: in the run of the stay with the most of the home's PV generation
+    - OFF_PEAK: in the run of the stay with the most of the home tariff's cheap minutes
     """
 
     NONE = "none"
     SOLAR = "solar"
     OFF_PEAK = "off_peak"
 
+    @classmethod
+    def parse(cls, value: object, *, field: str) -> "SmartChargingMode":
+        """Return the mode *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, field=field)
+
+
+_OFF_PEAK_WITHOUT_A_TARIFF = (
+    "smart_charging_mode 'off_peak' charges the EV in the tariff's cheap periods, "
+    "but the home has no tariff; add a tariff or use smart_charging_mode 'none'"
+)
+
+_SOLAR_WITHOUT_GENERATION = (
+    "smart_charging_mode 'solar' charges the EV in the run of its stay with the most PV generation, "
+    "but no generation_kw was given; pass the home's PV generation or use smart_charging_mode 'none'"
+)
+
+
+_HOUR_OF_DAY = Interval(0, 23)
+
 
 @dataclass(frozen=True)
 class EVConfig:
     """Configuration for electric vehicle charging.
 
+    Construction reads the hours as whole numbers and the required charge as a finite
+    number, and the charger type and smart charging mode as their EVChargerType and
+    SmartChargingMode members, and holds what it read: a string naming a member is read as
+    that member, and the field holds the member. It refuses a value outside its range, a
+    charger type or smart charging mode that names no member, by the field's name and its
+    allowed values, or a charge the stay cannot deliver, with a ConfigurationError.
+
     Attributes:
-        charger_type: Charger power rating (3.6kW, 7kW, or 22kW)
-        arrival_hour: Hour of day when EV arrives home (0-23)
+        charger_type: Charger power rating (3.6kW, 7kW, or 22kW), held as its EVChargerType
+            member
+        arrival_hour: Hour of day when EV arrives home (0-23), default 18, 6pm
         departure_hour: Hour of day when EV departs (0-23), default 7am
         required_charge_kwh: Energy required per day in kWh, default 35 kWh
             (typical UK EV doing ~100 miles/day at 3.5 miles/kWh)
-        smart_charging_mode: Charging schedule optimization strategy
+        smart_charging_mode: Charging schedule optimization strategy, held as its
+            SmartChargingMode member, default SmartChargingMode.NONE
         name: Optional identifier for the EV configuration
     """
 
-    charger_type: str
-    arrival_hour: int
+    charger_type: EVChargerType
+    arrival_hour: int = 18
     departure_hour: int = 7
     required_charge_kwh: float = 35.0
-    smart_charging_mode: str = "none"
+    smart_charging_mode: SmartChargingMode = SmartChargingMode.NONE
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate EV configuration parameters."""
-        # Validate charger_type
-        valid_charger_types = ["3.6kW", "7kW", "22kW"]
-        if self.charger_type not in valid_charger_types:
-            raise ValueError(
-                f"Charger type must be one of {valid_charger_types}, "
-                f"got '{self.charger_type}'"
-            )
+        """Read each number setting, then the charger type and mode as their members, then refuse a charge the stay cannot deliver."""
+        read_field(self, "arrival_hour", as_whole_number, _HOUR_OF_DAY)
+        read_field(self, "departure_hour", as_whole_number, _HOUR_OF_DAY)
+        read_field(self, "required_charge_kwh", as_finite_float, Interval(0, 100, low_open=True))
+        object.__setattr__(self, "charger_type", EVChargerType.parse(self.charger_type, field="charger_type"))
+        object.__setattr__(
+            self,
+            "smart_charging_mode",
+            SmartChargingMode.parse(self.smart_charging_mode, field="smart_charging_mode"),
+        )
 
-        # Validate arrival_hour
-        if not 0 <= self.arrival_hour <= 23:
-            raise ValueError(
-                f"Arrival hour must be 0-23, got {self.arrival_hour}"
-            )
-
-        # Validate departure_hour
-        if not 0 <= self.departure_hour <= 23:
-            raise ValueError(
-                f"Departure hour must be 0-23, got {self.departure_hour}"
-            )
-
-        # Validate required_charge_kwh
-        if self.required_charge_kwh <= 0:
-            raise ValueError(
-                f"Required charge must be positive, got {self.required_charge_kwh} kWh"
-            )
-
-        # Check for unrealistically high charging requirement
-        if self.required_charge_kwh > 100:
-            raise ValueError(
-                f"Required charge seems unrealistic: {self.required_charge_kwh} kWh "
-                "(typical UK EV battery is 40-75 kWh)"
-            )
-
-        # Validate smart_charging_mode
-        valid_modes = ["none", "solar", "off_peak"]
-        if self.smart_charging_mode not in valid_modes:
-            raise ValueError(
-                f"Smart charging mode must be one of {valid_modes}, "
-                f"got '{self.smart_charging_mode}'"
-            )
-
-        # Validate that there's enough time to charge
-        charger_power_kw = self._parse_charger_power()
+        charger_power_kw = self.get_charger_power_kw()
         available_hours = self._calculate_available_hours()
         max_charge_kwh = charger_power_kw * available_hours
 
         if self.required_charge_kwh > max_charge_kwh:
-            raise ValueError(
+            raise ConfigurationError(
                 f"Cannot deliver {self.required_charge_kwh} kWh with {self.charger_type} "
                 f"charger in {available_hours:.1f} hours (max: {max_charge_kwh:.1f} kWh). "
                 "Either reduce required_charge_kwh or adjust arrival/departure hours."
             )
-
-    def _parse_charger_power(self) -> float:
-        """Extract charger power in kW from charger_type string.
-
-        Returns:
-            Charger power in kW
-        """
-        # Parse "3.6kW" -> 3.6
-        return float(self.charger_type.replace("kW", ""))
 
     def _calculate_available_hours(self) -> float:
         """Calculate available charging hours between arrival and departure.
@@ -139,7 +174,7 @@ class EVConfig:
         Returns:
             Charger power in kW
         """
-        return self._parse_charger_power()
+        return self.charger_type.power_kw
 
     def get_available_charging_hours(self) -> float:
         """Get available charging window in hours.
@@ -150,164 +185,231 @@ class EVConfig:
         return self._calculate_available_hours()
 
 
+def _off_peak_tariff(tariff: TariffConfig | None) -> TariffConfig:
+    """*tariff*, whose cheap minutes an off_peak EV charges in.
+
+    Raises:
+        ConfigurationError: If tariff is None.
+    """
+    if tariff is None:
+        raise ConfigurationError(_OFF_PEAK_WITHOUT_A_TARIFF)
+    return tariff
+
+
+def require_tariff_for_smart_charging(ev_config: EVConfig, tariff: TariffConfig | None) -> None:
+    """Refuse an EV whose smart charging mode reads the tariff, off_peak, when there is no tariff to read.
+
+    Raises:
+        ConfigurationError: ev_config's smart_charging_mode is 'off_peak' and tariff is None.
+    """
+    if ev_config.smart_charging_mode is SmartChargingMode.OFF_PEAK:
+        _off_peak_tariff(tariff)
+
+
+RowWeights: TypeAlias = Callable[[pd.DatetimeIndex], np.ndarray]
+"""A preference weight for each of the rows it is given, in their order: a session takes the run of its stay whose weights sum highest."""
+
+
+def _no_preference(rows: pd.DatetimeIndex) -> np.ndarray:
+    """A weight of 0 on every row, so every run of a stay ties and the earliest wins."""
+    return np.zeros(len(rows))
+
+
+def _cheap_minutes(tariff: TariffConfig) -> RowWeights:
+    """A weight of 1 on each row whose local minute of the day is one of *tariff*'s cheap minutes, 0 on the others."""
+    cheap = np.zeros(MINUTES_PER_DAY)
+    cheap[sorted(tariff.cheap_minutes_of_day)] = 1.0
+
+    def weights(rows: pd.DatetimeIndex) -> np.ndarray:
+        on_rows: np.ndarray = cheap[minutes_of_day(rows)]
+        return on_rows
+
+    return weights
+
+
+def _row_weights(config: EVConfig, tariff: TariffConfig | None, generation_kw: RowWeights | None) -> RowWeights:
+    """The weights *config*'s smart charging mode places its sessions by: none, no preference; off_peak, *tariff*'s cheap minutes; solar, *generation_kw*.
+
+    Raises:
+        ConfigurationError: off_peak with no tariff, require_tariff_for_smart_charging's refusal; or solar with no generation_kw.
+    """
+    mode = config.smart_charging_mode
+    if mode is SmartChargingMode.OFF_PEAK:
+        return _cheap_minutes(_off_peak_tariff(tariff))
+    if mode is SmartChargingMode.SOLAR:
+        if generation_kw is None:
+            raise ConfigurationError(_SOLAR_WITHOUT_GENERATION)
+        return generation_kw
+    return _no_preference
+
+
+def _checked_weights(rows: pd.DatetimeIndex, weights_on: RowWeights) -> np.ndarray:
+    """The weights *weights_on* gives *rows*, as floats.
+
+    Raises:
+        ValueError: If it gives other than one weight for each of *rows*, naming both counts, or a weight that
+            is not a finite number, naming the first such row and its weight.
+    """
+    weights = np.asarray(weights_on(rows), dtype=np.float64)
+    if weights.shape != (len(rows),):
+        raise ValueError(
+            f"The EV's row weights hold {weights.size} values for {len(rows)} rows: "
+            "a RowWeights callable gives one weight for each row it is given"
+        )
+    not_finite = np.flatnonzero(~np.isfinite(weights))
+    if not_finite.size:
+        first = not_finite[0]
+        raise ValueError(
+            f"The EV's row weights hold {weights[first]} at {rows[first]}: "
+            "a RowWeights callable gives a finite number for each row it is given"
+        )
+    return weights
+
+
+@dataclass(frozen=True, eq=False)
+class _DayOnRows:
+    """One LocalDay's rows as the positions from *begin* in the rows of every day read with it, and their local minutes of the day.
+
+    Compared by identity, as LocalDay is.
+    """
+
+    day: LocalDay
+    begin: int
+    minutes: np.ndarray
+
+    def first_reading(self, minute_of_day: int) -> int:
+        """The position of the row LocalDay.instant(minute_of_day) is: the day's first row whose local clock reads minute_of_day or later.
+
+        Raises:
+            ValueError: If no row of the day reads minute_of_day or later, naming the date and the minute.
+        """
+        reaching = np.flatnonzero(self.minutes >= minute_of_day)
+        if reaching.size == 0:
+            raise ValueError(f"No row of {self.day.date.isoformat()} reads minute {minute_of_day} of the day or later")
+        return self.begin + int(reaching[0])
+
+
+def _days_on_rows(days: Sequence[LocalDay], minutes: np.ndarray) -> list[_DayOnRows]:
+    """Each of *days*, whose rows joined in order have the local minutes of the day *minutes*, as its positions in them."""
+    begins = itertools.accumulate((len(day.rows) for day in days), initial=0)
+    return [
+        _DayOnRows(day, begin, minutes[begin : begin + len(day.rows)]) for day, begin in zip(days, begins, strict=False)
+    ]
+
+
+def _stays(config: EVConfig, days: Sequence[_DayOnRows]) -> Iterator[tuple[int, int]]:
+    """The (arrival, departure) positions of the stay from each of *days* but the last, on the days' wall clock: departure is the next day's when departure_hour is not after arrival_hour."""
+    overnight = config.departure_hour <= config.arrival_hour
+    for arrival_day, next_day in itertools.pairwise(days):
+        departure_day = next_day if overnight else arrival_day
+        yield (
+            arrival_day.first_reading(config.arrival_hour * MINUTES_PER_HOUR),
+            departure_day.first_reading(config.departure_hour * MINUTES_PER_HOUR),
+        )
+
+
+_ROW_TOLERANCE = 1e-9
+"""How far, in rows, a charge's row count may sit from a whole number and still be read as that whole number."""
+
+
+@dataclass(frozen=True)
+class _ChargeRows:
+    """The rows one stay's charge takes: *whole* rows at the charger's rating, then one row at *fraction* of it when *fraction* is above 0."""
+
+    whole: int
+    fraction: float
+
+    @property
+    def count(self) -> int:
+        """The rows the session spans, its fractional row included."""
+        return self.whole + (1 if self.fraction > 0.0 else 0)
+
+
+def _charge_rows(config: EVConfig, step_hours: float) -> _ChargeRows:
+    """The rows of *step_hours* that deliver *config*'s required charge at its charger's rating."""
+    rows_needed = config.required_charge_kwh / (config.get_charger_power_kw() * step_hours)
+    whole = math.floor(rows_needed + _ROW_TOLERANCE)
+    remainder = rows_needed - whole
+    return _ChargeRows(whole, remainder if remainder > _ROW_TOLERANCE else 0.0)
+
+
+def _session_kw(stay_weights: np.ndarray, charge: _ChargeRows, power_kw: float) -> np.ndarray:
+    """Each row's kW in a stay of *stay_weights*' rows: its run of *charge*'s rows whose weights sum highest, the earliest on a tie, or every row at full power when the stay is shorter than the charge."""
+    session = np.zeros(stay_weights.size)
+    if charge.count > stay_weights.size:
+        session[:] = power_kw
+        return session
+    start = int(np.argmax(sliding_window_view(stay_weights, charge.count).sum(axis=1)))
+    session[start : start + charge.whole] = power_kw
+    if charge.fraction > 0.0:
+        session[start + charge.whole] = charge.fraction * power_kw
+    return session
+
+
+def _widened(window: SimulationWindow) -> SimulationWindow:
+    """*window* with a day added either side: the day before holds the stay the first morning's session comes from, the day after its last stay's departure."""
+    return SimulationWindow(
+        window.first_day - timedelta(days=1), window.last_day + timedelta(days=1), window.cadence, window.timezone
+    )
+
+
 def generate_ev_charging_profile(
     config: EVConfig,
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    timezone: str = "Europe/London",
+    window: SimulationWindow,
+    *,
+    tariff: TariffConfig | None = None,
+    generation_kw: RowWeights | None = None,
 ) -> pd.Series:
-    """Generate EV charging load profile.
+    """The EV's charging power in kW on window.rows().
 
-    Supports multiple charging strategies:
-    - "none": Dumb charging - starts immediately on arrival
-    - "solar": Solar-aware - prefers daylight hours (10:00-16:00)
-    - "off_peak": Off-peak tariff - prefers Economy 7 hours (00:30-07:30)
+    The car is home for one stay from each date's ``arrival_hour`` on the window's wall
+    clock until ``departure_hour``, on the next date when ``departure_hour`` is not after
+    ``arrival_hour``. The stays run from the one arriving the day before the window to the
+    one arriving on its last day, so the first morning holds the session of the evening
+    before the window, and a session still running when the window ends is cut there. A
+    clock change inside a stay shortens or lengthens it by the hour it skips or repeats.
 
-    All strategies ensure the required charge is delivered before departure.
+    Each stay charges in one unbroken session at the charger's full power, on whole rows
+    of the window's cadence and then one last row at the fraction of full power the rest
+    of the charge needs, so it delivers exactly ``required_charge_kwh``. A stay too short
+    for that, as a clock change can make one, charges on every one of its rows. Of the
+    sessions that fit, it takes the one whose rows' weights sum highest, the earliest on a
+    tie. "none" weighs every row alike, so it charges from arrival. "off_peak" weighs the
+    tariff's cheap minutes, ``TariffConfig.cheap_minutes_of_day``, 1 and the others 0, so
+    on a tariff with no cheap minute, such as a flat rate, it charges from arrival too.
+    "solar" weighs each row by ``generation_kw``, the home's PV generation, not its surplus
+    over the household's load.
 
     Args:
         config: EV configuration
-        start_date: Start of simulation period
-        end_date: End of simulation period (inclusive)
-        timezone: Timezone for the simulation
+        window: The calendar days, the cadence of their rows and their clock's zone
+        tariff: The home's tariff, whose cheap minutes an "off_peak" EV charges in; the
+            other modes do not read it
+        generation_kw: The home's PV generation in kW on the rows it is given, which a
+            "solar" EV charges in the most of; the other modes do not read it. It is asked
+            once, for the rows from the day before the window to the day after it.
 
     Returns:
-        Time series of charging power in kW at 1-minute resolution
+        The charging power in kW on window.rows(), named after the EV
+
+    Raises:
+        ConfigurationError: Before anything is built, for an "off_peak" EV with no
+            tariff, the refusal require_tariff_for_smart_charging makes, or a "solar" EV
+            with no generation_kw.
+        ValueError: If generation_kw gives other than one weight for each row it is
+            given, naming both counts, or a weight that is not a finite number, naming
+            the first such row and its weight; or if the window's cadence does not
+            divide one hour, as window.rows() refuses it.
     """
-    # Create minute-by-minute time index for the full period
-    date_range = pd.date_range(
-        start=start_date,
-        end=end_date,
-        freq="D",
-        tz=timezone,
-    )
-
-    # Calculate total minutes in the period
-    n_days = len(date_range)
-    n_minutes = n_days * 1440
-
-    # Initialize power array (kW) - zeros everywhere by default
-    power_kw = np.zeros(n_minutes, dtype=np.float64)
-
-    # Get charger power
-    charger_power_kw = config.get_charger_power_kw()
-
-    # Calculate how many minutes of charging are needed
-    # Energy (kWh) = Power (kW) × Time (hours)
-    # Time (hours) = Energy (kWh) / Power (kW)
-    charging_hours_needed = config.required_charge_kwh / charger_power_kw
-    charging_minutes_needed = int(np.ceil(charging_hours_needed * 60))
-
-    # For each day, apply the charging schedule
-    for day_idx in range(n_days):
-        day_start_minute = day_idx * 1440
-        arrival_minute = day_start_minute + (config.arrival_hour * 60)
-        departure_minute = day_start_minute + (config.departure_hour * 60)
-
-        # Handle overnight charging (departure before arrival next day)
-        if config.departure_hour <= config.arrival_hour:
-            # Overnight case: e.g., arrive 18:00, depart 07:00 next day
-            departure_minute += 1440  # Next day
-
-        # Calculate available charging window
-        available_minutes = departure_minute - arrival_minute
-
-        # Determine charging start time based on smart charging mode
-        if config.smart_charging_mode == "solar":
-            # Solar-aware charging: prefer daylight hours (10:00-16:00)
-            solar_start_minute = day_start_minute + (10 * 60)  # 10:00
-            solar_end_minute = day_start_minute + (16 * 60)  # 16:00
-
-            # Find overlap between solar window and available charging window
-            charging_start_minute = max(arrival_minute, solar_start_minute)
-            charging_window_end = min(departure_minute, solar_end_minute)
-
-            # Check if there's enough time in the solar window
-            solar_window_minutes = max(0, charging_window_end - charging_start_minute)
-
-            if solar_window_minutes >= charging_minutes_needed:
-                # Enough time in solar window - charge during solar hours
-                actual_charging_minutes = charging_minutes_needed
-            else:
-                # Not enough time in solar window - use as much solar time as possible
-                # then charge immediately after solar window or from arrival
-                if solar_window_minutes > 0:
-                    # Partial solar charging + remaining time after solar window
-                    charging_start_minute = max(arrival_minute, solar_start_minute)
-                    actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-                else:
-                    # No overlap with solar window - start charging at arrival
-                    charging_start_minute = arrival_minute
-                    actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-        elif config.smart_charging_mode == "off_peak":
-            # Off-peak tariff charging: prefer Economy 7 hours (00:30-07:30)
-            # Off-peak window for current day
-            off_peak_start_minute = day_start_minute + (0 * 60 + 30)  # 00:30
-            off_peak_end_minute = day_start_minute + (7 * 60 + 30)  # 07:30
-
-            # For overnight charging, also consider next day's off-peak window
-            if config.departure_hour <= config.arrival_hour:
-                # Overnight case - look at next day's off-peak window
-                next_day_off_peak_start = day_start_minute + 1440 + (0 * 60 + 30)  # Next day 00:30
-                next_day_off_peak_end = day_start_minute + 1440 + (7 * 60 + 30)  # Next day 07:30
-
-                # Find overlap with next day's off-peak window
-                charging_start_minute = max(arrival_minute, next_day_off_peak_start)
-                charging_window_end = min(departure_minute, next_day_off_peak_end)
-
-                # Check if there's enough time in the off-peak window
-                off_peak_window_minutes = max(0, charging_window_end - charging_start_minute)
-
-                if off_peak_window_minutes >= charging_minutes_needed:
-                    # Enough time in off-peak window - charge during off-peak hours
-                    actual_charging_minutes = charging_minutes_needed
-                else:
-                    # Not enough time - use available off-peak time + fallback
-                    if off_peak_window_minutes > 0:
-                        charging_start_minute = max(arrival_minute, next_day_off_peak_start)
-                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-                    else:
-                        # No overlap - start at arrival
-                        charging_start_minute = arrival_minute
-                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-            else:
-                # Same day charging - use current day's off-peak window
-                charging_start_minute = max(arrival_minute, off_peak_start_minute)
-                charging_window_end = min(departure_minute, off_peak_end_minute)
-
-                off_peak_window_minutes = max(0, charging_window_end - charging_start_minute)
-
-                if off_peak_window_minutes >= charging_minutes_needed:
-                    # Enough time in off-peak window
-                    actual_charging_minutes = charging_minutes_needed
-                else:
-                    # Not enough time in off-peak window
-                    if off_peak_window_minutes > 0:
-                        charging_start_minute = max(arrival_minute, off_peak_start_minute)
-                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-                    else:
-                        # No overlap - start at arrival
-                        charging_start_minute = arrival_minute
-                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-        else:
-            # Dumb charging (mode="none")
-            # Start charging immediately on arrival
-            charging_start_minute = arrival_minute
-            actual_charging_minutes = min(charging_minutes_needed, available_minutes)
-
-        # Set power during charging period
-        charging_end_minute = charging_start_minute + actual_charging_minutes
-        power_kw[charging_start_minute:charging_end_minute] = charger_power_kw
-
-    # Create time index for the full period at minute resolution
-    time_index = pd.date_range(
-        start=start_date,
-        periods=n_minutes,
-        freq="1min",
-        tz=timezone,
-    )
-
-    # Create pandas Series
-    profile = pd.Series(power_kw, index=time_index, name=config.name or "EV Charging")
-
-    return profile
+    weights_on = _row_weights(config, tariff, generation_kw)
+    widened = _widened(window)
+    widened_rows = widened.rows()
+    weights = _checked_weights(widened_rows, weights_on)
+    days = _days_on_rows(list(widened.local_days()), minutes_of_day(widened_rows))
+    charge = _charge_rows(config, window.step_hours)
+    power_kw = np.zeros(len(widened_rows))
+    for begin, end in _stays(config, days):
+        power_kw[begin:end] += _session_kw(weights[begin:end], charge, config.get_charger_power_kw())
+    rows = window.rows()
+    begin = widened_rows.searchsorted(rows[0])
+    return pd.Series(power_kw[begin : begin + len(rows)], index=rows, name=config.name or "EV Charging")

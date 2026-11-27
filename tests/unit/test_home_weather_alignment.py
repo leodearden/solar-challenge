@@ -10,12 +10,14 @@ import time
 import numpy as np
 import pandas as pd
 import pytest
+from solar_challenge.demand import LoadKind
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import align_tmy_to_index
+from tests._synthetic_weather import sunless_tmy, weather_for
 
 
 @pytest.fixture
@@ -252,11 +254,8 @@ class TestAlignTMYToIndex:
 
 
 def _utc_tmy_with_one_marked_hour(marked_hour_utc: str, **marked: float) -> pd.DataFrame:
-    """A year of hourly UTC 1990 weather, the shape of a PVGIS TMY: dark and 25 °C except for the marked hour's columns."""
-    weather = pd.DataFrame(
-        {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 25.0, "wind_speed": 2.0},
-        index=pd.date_range("1990-01-01 00:00", periods=8760, freq="1h", tz="UTC"),
-    )
+    """sunless_tmy's dark year at 25 °C, except for the marked hour's columns."""
+    weather = sunless_tmy(temp_air=25.0)
     for column, value in marked.items():
         weather.loc[pd.Timestamp(marked_hour_utc, tz="UTC"), column] = value
     return weather
@@ -282,7 +281,7 @@ class TestSimulateHomeAlignsWeatherByUTCInstant:
             config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=weather,
+            weather=weather_for(config, weather),
         )
 
         pd.testing.assert_index_equal(
@@ -308,12 +307,12 @@ class TestSimulateHomeAlignsWeatherByUTCInstant:
             config,
             start_date=pd.Timestamp("2024-06-21"),
             end_date=pd.Timestamp("2024-06-21"),
-            weather_data=weather,
+            weather=weather_for(config, weather),
         )
 
-        assert results.heat_pump_load is not None
+        heat_pump_load = results.additional_loads[LoadKind.HEAT_PUMP]
         pd.testing.assert_index_equal(
-            results.heat_pump_load.index[results.heat_pump_load > 0],
+            heat_pump_load.index[heat_pump_load > 0],
             _NOON_HOUR_BST_ON_2024_06_21,
             check_names=False,
         )
@@ -334,7 +333,7 @@ class TestSimulateHomeRepeatsTheTMYs28FebruaryOnALeapDay:
             config,
             start_date=pd.Timestamp("2024-02-28"),
             end_date=pd.Timestamp("2024-02-29"),
-            weather_data=weather,
+            weather=weather_for(config, weather),
         )
 
         feb_28 = results.generation.loc["2024-02-28"]
@@ -358,10 +357,10 @@ class TestSimulateHomeRepeatsTheTMYs28FebruaryOnALeapDay:
             config,
             start_date=pd.Timestamp("2024-02-28"),
             end_date=pd.Timestamp("2024-02-29"),
-            weather_data=weather,
+            weather=weather_for(config, weather),
         )
 
-        assert results.heat_pump_load is not None
-        feb_28 = results.heat_pump_load.loc["2024-02-28"]
+        heat_pump_load = results.additional_loads[LoadKind.HEAT_PUMP]
+        feb_28 = heat_pump_load.loc["2024-02-28"]
         assert feb_28.sum() > 0
-        np.testing.assert_array_equal(results.heat_pump_load.loc["2024-02-29"].to_numpy(), feb_28.to_numpy())
+        np.testing.assert_array_equal(heat_pump_load.loc["2024-02-29"].to_numpy(), feb_28.to_numpy())

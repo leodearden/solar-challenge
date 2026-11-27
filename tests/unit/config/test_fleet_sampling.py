@@ -1,0 +1,559 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""How generate_homes_from_distribution draws a fleet's settings: each stateless spec draws itself, each setting keeps its own pool and pre-sampled draws, and each random order draws ahead in the order it documents."""
+
+import dataclasses
+import math
+import random
+from collections.abc import Callable, Sequence
+from typing import Any, Optional
+
+import pytest
+
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.ev import EVConfig
+from solar_challenge.fleet_distribution import (
+    ComponentDistribution,
+    FleetDistributionConfig,
+    NormalDistribution,
+    ProportionalDistribution,
+    ShuffledPoolDistribution,
+    SpecValue,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
+    generate_homes_from_distribution,
+    parse_fleet_distribution_config,
+)
+from solar_challenge.home import HomeConfig
+from solar_challenge.location import Location
+from tests._construction_refusals import prefixed_construction_refusal
+
+
+def _draws(
+    spec: WeightedDiscreteDistribution | NormalDistribution | UniformDistribution, *, seed: int, n: int
+) -> list[Optional[float]]:
+    """Return the first *n* values *spec* draws from an RNG seeded with *seed*."""
+    rng = random.Random(seed)
+    return [spec.draw(rng) for _ in range(n)]
+
+
+class TestAStatelessSpecDrawsItself:
+    """A weighted discrete, normal or uniform spec draws its values itself, from the RNG it is handed."""
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(
+                WeightedDiscreteDistribution(values=(30.0, 35.0, 40.0), weights=(1.0, 2.0, 1.0)),
+                id="weighted_discrete",
+            ),
+            pytest.param(NormalDistribution(mean=35.0, std=8.0, min=15.0, max=50.0), id="normal"),
+            pytest.param(UniformDistribution(min=20.0, max=45.0), id="uniform"),
+        ],
+    )
+    def test_its_draws_are_the_values_the_fleet_gives_its_homes(
+        self, spec: WeightedDiscreteDistribution | NormalDistribution | UniformDistribution
+    ) -> None:
+        """A spec's draws, from an RNG seeded with the fleet's seed, are the values the generator gives the fleet's homes.
+
+        The fleet's pv.tilt is the only setting it draws from its RNG.
+        """
+        fleet = FleetDistributionConfig(
+            n_homes=8, pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": spec}), seed=17
+        )
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert [home.pv_config.tilt for home in homes] == _draws(spec, seed=17, n=8)
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param(NormalDistribution(mean=1.0, std=0.1, min=2.5), id="min"),
+            pytest.param(NormalDistribution(mean=10.0, std=0.1, max=2.5), id="max"),
+        ],
+    )
+    def test_a_normal_draw_is_clamped_to_its_bound(self, spec: NormalDistribution) -> None:
+        """Each mean lies at least 15 standard deviations past its bound, so every draw is clamped to it whatever the seed."""
+        assert spec.draw(random.Random(0)) == 2.5
+
+
+class TestAPoolOnAnySettingIsDrawnInEitherRandomOrder:
+    """A shuffled pool on any component's setting gives the fleet's homes its values in its counts, in either random order."""
+
+    @pytest.mark.parametrize(
+        ("block", "key", "values", "read"),
+        [
+            pytest.param("pv", "tilt", (30.0, 40.0), lambda home: home.pv_config.tilt, id="pv.tilt"),
+            pytest.param(
+                "load",
+                "household_occupants",
+                (2.0, 4.0),
+                lambda home: home.load_config.household_occupants,
+                id="load.household_occupants",
+            ),
+            pytest.param(
+                "battery",
+                "max_charge_kw",
+                (2.0, 3.0),
+                lambda home: home.battery_config.max_charge_kw,
+                id="battery.max_charge_kw",
+            ),
+            pytest.param(
+                "heat_pump",
+                "thermal_capacity_kw",
+                (6.0, 8.0),
+                lambda home: home.heat_pump_config.thermal_capacity_kw,
+                id="heat_pump.thermal_capacity_kw",
+            ),
+            pytest.param("ev", "arrival_hour", (17.0, 19.0), lambda home: home.ev_config.arrival_hour, id="ev.arrival_hour"),
+        ],
+    )
+    @pytest.mark.parametrize("random_order", ["default", "bristol_legacy"])
+    def test_its_homes_hold_its_values_in_its_counts(
+        self,
+        random_order: str,
+        block: str,
+        key: str,
+        values: tuple[float, float],
+        read: Callable[[HomeConfig], float],
+    ) -> None:
+        """Every home of the fleet draws the pooled setting, so its 4 homes hold each of the pool's 2 values twice."""
+        a, b = values
+        fleet_block: dict[str, Any] = {
+            "n_homes": 4,
+            "seed": 3,
+            "random_order": random_order,
+            "pv": {"capacity_kw": 4.0},
+            "load": {"use_stochastic": False},
+            "battery": {"capacity_kwh": 5.0},
+            "heat_pump": {"heat_pump_type": "ASHP"},
+            "ev": {"charger_type": {"type": "weighted_discrete", "values": ["7kW"], "weights": [1]}},
+        }
+        fleet_block[block] = {**fleet_block[block], key: {"type": "shuffled_pool", "values": [a, b], "counts": [2, 2]}}
+
+        homes = generate_homes_from_distribution(parse_fleet_distribution_config(fleet_block), Location.bristol())
+
+        assert sorted(read(home) for home in homes) == [a, a, b, b]
+
+
+class TestOneSpecObjectOnTwoSettings:
+    """One spec object given to two settings is drawn for each setting on its own."""
+
+    @pytest.mark.parametrize("random_order", ["default", "bristol_legacy"])
+    def test_one_pool_gives_each_setting_its_own_counts(self, random_order: str) -> None:
+        """Each setting the pool is given to hands out its own copy of the pool, so each holds each value twice."""
+        pool = ShuffledPoolDistribution(values=(30.0, 60.0), counts=(2, 2))
+        fleet = FleetDistributionConfig(
+            n_homes=4,
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": pool, "azimuth": pool}),
+            seed=1,
+            random_order=random_order,
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert sorted(home.pv_config.tilt for home in homes) == [30.0, 30.0, 60.0, 60.0]
+        assert sorted(home.pv_config.azimuth for home in homes) == [30.0, 30.0, 60.0, 60.0]
+
+    def test_one_normal_gives_a_pre_sampled_setting_and_another_their_own_draws(self) -> None:
+        """bristol_legacy draws every home's consumption ahead, and then each home's tilt afresh, from the one normal."""
+        normal = NormalDistribution(mean=45.0, std=10.0, min=10.0, max=80.0)
+        fleet = FleetDistributionConfig(
+            n_homes=4,
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": normal}),
+            load=ComponentDistribution({"annual_consumption_kwh": normal}),
+            seed=1,
+            random_order="bristol_legacy",
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        draws = _draws(normal, seed=1, n=8)
+        assert [home.load_config.annual_consumption_kwh for home in homes] == draws[:4]
+        assert [home.pv_config.tilt for home in homes] == draws[4:]
+
+
+#: The pools of a fleet of 12 homes in which every home draws every pooled setting, as (component, key, values, counts).
+_POOLS_OF_12_HOMES: tuple[tuple[str, str, tuple[Any, ...], tuple[int, ...]], ...] = (
+    ("pv", "capacity_kw", (3.0, 4.0, 5.0), (4, 4, 4)),
+    ("pv", "tilt", (25.0, 35.0, 45.0), (4, 4, 4)),
+    ("load", "household_occupants", (1.0, 2.0, 3.0), (4, 4, 4)),
+    ("battery", "capacity_kwh", (5.0, 10.0), (6, 6)),
+    ("battery", "max_charge_kw", (2.5, 3.0), (6, 6)),
+    ("heat_pump", "heat_pump_type", ("ASHP", "GSHP"), (6, 6)),
+    ("ev", "charger_type", ("7kW", "3.6kW"), (6, 6)),
+    ("ev", "departure_hour", (6.0, 7.0, 8.0), (4, 4, 4)),
+)
+
+#: The consumption of the fleet of 12 homes, the one setting it draws neither from a pool nor as a fixed value.
+_CONSUMPTION_OF_12_HOMES = NormalDistribution(mean=3400.0, std=800.0, min=2000.0, max=6000.0)
+
+
+def _fleet_of_12_pools(random_order: str) -> FleetDistributionConfig:
+    """Return the fleet of 12 homes that _POOLS_OF_12_HOMES and _CONSUMPTION_OF_12_HOMES describe, seeded with 21."""
+    block: dict[str, Any] = {
+        "n_homes": 12,
+        "seed": 21,
+        "random_order": random_order,
+        "load": {"annual_consumption_kwh": {"type": "normal", **dataclasses.asdict(_CONSUMPTION_OF_12_HOMES)}},
+    }
+    for component, key, values, counts in _POOLS_OF_12_HOMES:
+        block.setdefault(component, {})[key] = {"type": "shuffled_pool", "values": list(values), "counts": list(counts)}
+    return parse_fleet_distribution_config(block)
+
+
+#: Each pool of _POOLS_OF_12_HOMES, under the path of its setting.
+_POOL_OF_12_HOMES_BY_PATH: dict[str, ShuffledPoolDistribution] = {
+    f"{component}.{key}": ShuffledPoolDistribution(values=values, counts=counts)
+    for component, key, values, counts in _POOLS_OF_12_HOMES
+}
+
+
+def _shuffled(pool: ShuffledPoolDistribution, rng: random.Random) -> list[Any]:
+    """Return *pool*'s values, expanded to its counts, then shuffled by *rng*."""
+    values = pool.create_pool()
+    rng.shuffle(values)
+    return values
+
+
+def _drawn_settings(home: HomeConfig) -> dict[str, object]:
+    """Return what a home of the fleet of 12 homes holds for each setting it draws."""
+    assert home.battery_config is not None and home.heat_pump_config is not None and home.ev_config is not None
+    return {
+        "pv.capacity_kw": home.pv_config.capacity_kw,
+        "pv.tilt": home.pv_config.tilt,
+        "load.annual_consumption_kwh": home.load_config.annual_consumption_kwh,
+        "load.household_occupants": home.load_config.household_occupants,
+        "battery.capacity_kwh": home.battery_config.capacity_kwh,
+        "battery.max_charge_kw": home.battery_config.max_charge_kw,
+        "heat_pump.heat_pump_type": home.heat_pump_config.heat_pump_type,
+        "ev.charger_type": home.ev_config.charger_type,
+        "ev.departure_hour": home.ev_config.departure_hour,
+    }
+
+
+def _modelled_settings(pools: dict[str, list[Any]], consumptions: Sequence[Optional[float]], index: int) -> dict[str, object]:
+    """Return what the home at *index* holds for each setting _drawn_settings reads, given the modelled draws."""
+    return {
+        "pv.capacity_kw": pools["pv.capacity_kw"][index],
+        "pv.tilt": pools["pv.tilt"][index],
+        "load.annual_consumption_kwh": consumptions[index],
+        "load.household_occupants": int(pools["load.household_occupants"][index]),
+        "battery.capacity_kwh": pools["battery.capacity_kwh"][index],
+        "battery.max_charge_kw": pools["battery.max_charge_kw"][index],
+        "heat_pump.heat_pump_type": pools["heat_pump.heat_pump_type"][index],
+        "ev.charger_type": pools["ev.charger_type"][index],
+        "ev.departure_hour": int(pools["ev.departure_hour"][index]),
+    }
+
+
+class TestEachRandomOrderDrawsAheadInTheOrderItDocuments:
+    """Before its first home, each random order draws ahead what it documents, in the order it documents."""
+
+    @pytest.mark.parametrize(
+        ("random_order", "consumptions_drawn_ahead", "pool_order"),
+        [
+            pytest.param(
+                "default",
+                0,
+                (
+                    "pv.capacity_kw",
+                    "pv.tilt",
+                    "load.household_occupants",
+                    "battery.capacity_kwh",
+                    "battery.max_charge_kw",
+                    "heat_pump.heat_pump_type",
+                    "ev.charger_type",
+                    "ev.departure_hour",
+                ),
+                id="default",
+            ),
+            pytest.param(
+                "bristol_legacy",
+                12,
+                (
+                    "pv.capacity_kw",
+                    "battery.capacity_kwh",
+                    "heat_pump.heat_pump_type",
+                    "ev.charger_type",
+                    "pv.tilt",
+                    "load.household_occupants",
+                    "battery.max_charge_kw",
+                    "ev.departure_hour",
+                ),
+                id="bristol_legacy",
+            ),
+        ],
+    )
+    def test_the_fleet_draws_ahead_in_the_documented_order(
+        self, random_order: str, consumptions_drawn_ahead: int, pool_order: tuple[str, ...]
+    ) -> None:
+        """The homes hold what a model of the documented order draws from an RNG seeded alike.
+
+        The model draws the consumptions the order draws ahead, shuffles every pool in the order's sequence, and then
+        draws the other consumptions, one per home: a home of this fleet draws nothing else afresh. Every home draws
+        its heat pump's type from the heat_pump_type pool, which takes its place in the sequence as every pool does.
+        """
+        homes = generate_homes_from_distribution(_fleet_of_12_pools(random_order), Location.bristol())
+
+        rng = random.Random(21)
+        consumptions = [_CONSUMPTION_OF_12_HOMES.draw(rng) for _ in range(consumptions_drawn_ahead)]
+        pools = {path: _shuffled(_POOL_OF_12_HOMES_BY_PATH[path], rng) for path in pool_order}
+        consumptions += [_CONSUMPTION_OF_12_HOMES.draw(rng) for _ in range(12 - consumptions_drawn_ahead)]
+        assert [_drawn_settings(home) for home in homes] == [
+            _modelled_settings(pools, consumptions, index) for index in range(12)
+        ]
+
+    @pytest.mark.parametrize(
+        "random_order",
+        [pytest.param("shuffled", id="another-name"), pytest.param(["default"], id="a-yaml-list")],
+    )
+    def test_a_random_order_outside_the_two_is_refused(self, random_order: object) -> None:
+        """A fleet's random order is one of the two by name, and the refusal names both."""
+        with pytest.raises(ConfigurationError) as refusal:
+            FleetDistributionConfig(
+                n_homes=1,
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
+                random_order=random_order,
+            )
+
+        assert str(refusal.value) == (
+            f"FleetDistributionConfig: random_order must be 'default' or 'bristol_legacy', got '{random_order}'"
+        )
+
+
+class _PoolShortOfItsCounts(ShuffledPoolDistribution):
+    """A pool whose counts total its fleet's homes, but which expands to one value fewer."""
+
+    def create_pool(self) -> list[Optional[float]]:
+        """Return the pool's values expanded to its counts, less the last."""
+        return super().create_pool()[:-1]
+
+
+class TestASettingDrawnPastItsValuesIsRefused:
+    """A setting drawn ahead holds one value per home, and generation refuses a draw past them, naming the setting.
+
+    The generator refuses a pool whose counts do not total the fleet's homes before it draws, so only a pool that
+    expands to fewer values than its counts give can run dry.
+    """
+
+    def test_a_pool_that_runs_dry_is_refused_naming_its_setting(self) -> None:
+        """The third of the fleet's 3 homes finds the pool's 2 values drawn, and its draw is refused."""
+        fleet = FleetDistributionConfig(
+            n_homes=3,
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": _PoolShortOfItsCounts(values=(30.0, 40.0), counts=(2, 1))}),
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "fleet_distribution.pv.tilt: has no value left to draw: its 2 values, one per home, are all drawn"
+        )
+
+
+def _fleet_with_tilt(tilt: dict[str, Any]) -> FleetDistributionConfig:
+    """Parse a seeded fleet of 2 homes with 4 kW of PV whose pv.tilt is *tilt*."""
+    return parse_fleet_distribution_config({"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0, "tilt": tilt}})
+
+
+class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
+    """A proportional_to scales the value its home drew earlier for its source."""
+
+    def test_a_source_drawn_earlier_in_the_same_component_is_scaled(self) -> None:
+        """Each home draws its PV capacity before its tilt, so a tilt of 5 times the capacity is 20 degrees."""
+        fleet = _fleet_with_tilt({"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 5})
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert [home.pv_config.tilt for home in homes] == [20.0, 20.0]
+
+    def test_a_source_that_drew_text_is_refused_naming_the_dependents_path_and_the_text(self) -> None:
+        """The fleet's check admits the consumption, a number field drawn before the occupants, so only a pool handing out text, which no parsed fleet draws, makes its home draw one."""
+        fleet = FleetDistributionConfig(
+            n_homes=1,
+            pv=ComponentDistribution({"capacity_kw": 4.0}),
+            load=ComponentDistribution(
+                {
+                    "annual_consumption_kwh": _PoolOfText(values=(3000.0,), counts=(1,)),
+                    "household_occupants": ProportionalDistribution(source="load.annual_consumption_kwh"),
+                },
+                settings={"use_stochastic": False},
+            ),
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "fleet_distribution.load.household_occupants: proportional_to load.annual_consumption_kwh, "
+            "which drew 'x', not a number"
+        )
+
+    def test_a_sweeping_fleet_is_refused_at_entry_naming_its_placement_and_expand_sweep_configs(self) -> None:
+        """A fleet whose battery capacity sweeps is parsed whole, but its homes are drawn only from the fleet of each sweep point."""
+        fleet = parse_fleet_distribution_config(
+            {
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.0},
+                "battery": {
+                    "capacity_kwh": {
+                        "type": "proportional_to",
+                        "source": "pv.capacity_kw",
+                        "multiplier": {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3},
+                    }
+                },
+            }
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points; "
+            "generate the homes of each point's fleet, which expand_sweep_configs gives"
+        )
+
+
+class _PoolOfText(ShuffledPoolDistribution):
+    """A pool of numbers, as its fleet checks it, that hands out text in their place."""
+
+    def create_pool(self) -> list[SpecValue]:
+        """Return "x" for each value the pool's counts give."""
+        return ["x" for _ in super().create_pool()]
+
+
+def _proportional_to_pv(**spec: float) -> dict[str, Any]:
+    """A proportional_to spec whose source is pv.capacity_kw, with *spec*'s multiplier or offset."""
+    return {"type": "proportional_to", "source": "pv.capacity_kw", **spec}
+
+
+def _fleet_with_an_ev_hour(key: str, spec: NormalDistribution) -> FleetDistributionConfig:
+    """A seeded fleet of 1 home with 4 kW of PV and a 7 kW EV whose hour *key* draws from *spec*."""
+    return FleetDistributionConfig(
+        n_homes=1,
+        pv=ComponentDistribution({"capacity_kw": 4.0}),
+        ev=ComponentDistribution({"charger_type": "7kW", key: spec}),
+        seed=1,
+    )
+
+
+class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
+    """A proportional_to on a count gives a whole number by the sampler's one count conversion: an occupant count and an EV hour alike are rounded, as a normal's draw is."""
+
+    @pytest.mark.parametrize(("capacity_kw", "occupants"), [(2.4, 2), (2.5, 3), (2.6, 3)])
+    def test_an_occupant_count_is_the_whole_number_nearest_its_value(self, capacity_kw: float, occupants: int) -> None:
+        """Occupants equal to the home's PV capacity in kW are that capacity rounded, a half rounding up."""
+        fleet = parse_fleet_distribution_config(
+            {"n_homes": 1, "pv": {"capacity_kw": capacity_kw}, "load": {"household_occupants": _proportional_to_pv()}}
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert homes[0].load_config.household_occupants == occupants
+
+    def test_an_ev_hour_is_the_whole_number_nearest_its_value(self) -> None:
+        """An arrival hour of 4 times a 4.7 kW PV capacity is 18.8, which the EV takes as 19, as an occupant count of 18.8 would be."""
+        fleet = parse_fleet_distribution_config(
+            {
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.7},
+                "ev": {"charger_type": "7kW", "arrival_hour": _proportional_to_pv(multiplier=4.0)},
+            }
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert homes[0].ev_config.arrival_hour == 19
+
+    def test_a_normal_ev_hour_is_its_draw_rounded(self) -> None:
+        """Each home's arrival hour is the normal's draw for it, from the fleet's seed, rounded, a half rounding up: the rounding follows the same draws, so the draw sequence is unchanged.
+
+        The fleet's ev.arrival_hour is the only setting it draws from its RNG.
+        """
+        spec = NormalDistribution(mean=18.0, std=1.5, min=15.0, max=22.0)
+        fleet = FleetDistributionConfig(
+            n_homes=8,
+            pv=ComponentDistribution({"capacity_kw": 4.0}),
+            ev=ComponentDistribution({"charger_type": "7kW", "arrival_hour": spec}),
+            seed=17,
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert [home.ev_config.arrival_hour for home in homes if home.ev_config is not None] == [
+            math.floor(draw + 0.5) for draw in _draws(spec, seed=17, n=8) if draw is not None
+        ]
+
+    @pytest.mark.parametrize(
+        ("key", "spec", "hour"),
+        [
+            pytest.param("arrival_hour", NormalDistribution(mean=23.5, std=0.0), 24.0, id="a draw of 23.5"),
+            pytest.param("departure_hour", NormalDistribution(mean=-0.7, std=0.0), -1.0, id="a draw of -0.7"),
+        ],
+    )
+    def test_an_ev_hour_its_spec_leaves_unbounded_may_round_off_the_clock_and_is_refused_by_ev_config(
+        self, key: str, spec: NormalDistribution, hour: float
+    ) -> None:
+        """A draw from 23.5 up rounds to 24, and one between -1 and -0.5 to -1, where truncation made 23 and 0, so EVConfig refuses the hour, naming the component and the home."""
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(_fleet_with_an_ev_hour(key, spec), Location.bristol())
+
+        assert str(refusal.value) == prefixed_construction_refusal(
+            "fleet_distribution.ev: home 1", lambda: EVConfig("7kW", **{key: hour})
+        )
+
+    @pytest.mark.parametrize(
+        ("key", "spec", "hour"),
+        [
+            pytest.param("arrival_hour", NormalDistribution(mean=23.5, std=0.0, max=23.9), 23, id="a max below 24"),
+            pytest.param("departure_hour", NormalDistribution(mean=-0.7, std=0.0, min=-0.9), 0, id="a min above -1"),
+        ],
+    )
+    def test_an_ev_hour_is_rounded_to_a_whole_hour_its_specs_bounds_allow(
+        self, key: str, spec: NormalDistribution, hour: int
+    ) -> None:
+        """A rounded count is the nearest of the whole numbers from its spec's min to its max, so a spec bounded above -1 and below 24 keeps its EV hours from 0 to 23."""
+        homes = generate_homes_from_distribution(_fleet_with_an_ev_hour(key, spec), Location.bristol())
+
+        assert [getattr(home.ev_config, key) for home in homes if home.ev_config is not None] == [hour]
+
+    @pytest.mark.parametrize(
+        ("component", "key", "block"),
+        [
+            pytest.param("load", "household_occupants", {}, id="load.household_occupants"),
+            pytest.param("ev", "arrival_hour", {"charger_type": "7kW"}, id="ev.arrival_hour"),
+        ],
+    )
+    @pytest.mark.parametrize("multiplier", [1e308, -1e308], ids=["inf", "-inf"])
+    def test_a_count_that_is_not_finite_is_refused_naming_its_path(
+        self, component: str, key: str, block: dict[str, Any], multiplier: float
+    ) -> None:
+        """A multiplier of ±1e308 times the 4.0 kW source overflows to an infinity, to which no whole number is nearest, so the count is refused naming its path and its value."""
+        fleet = parse_fleet_distribution_config(
+            {"n_homes": 1, "pv": {"capacity_kw": 4.0}, component: {**block, key: _proportional_to_pv(multiplier=multiplier)}}
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == f"fleet_distribution.{component}.{key} must be a finite number, got {4.0 * multiplier!r}"
+
+    def test_a_count_that_is_nan_is_refused_naming_its_path(self) -> None:
+        """No finite source, multiplier and offset make a NaN, but 0 times a listed infinite consumption does, and no whole number is nearest it, so occupants proportional_to it are refused naming their path and NaN."""
+        fleet = parse_fleet_distribution_config(
+            {
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.0},
+                "load": {
+                    "annual_consumption_kwh": {"type": "weighted_discrete", "values": [math.inf], "weights": [1.0]},
+                    "household_occupants": {
+                        "type": "proportional_to", "source": "load.annual_consumption_kwh", "multiplier": 0.0,
+                    },
+                },
+            }
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == "fleet_distribution.load.household_occupants must be a finite number, got nan"

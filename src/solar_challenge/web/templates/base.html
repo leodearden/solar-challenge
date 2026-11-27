@@ -6,14 +6,19 @@
     <title>{% block title %}Solar Challenge Dashboard{% endblock %}</title>
 
     <!-- Favicon -->
-    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+    <link rel="icon" href="{{ url_for('static', filename='dist/favicon.svg') }}" type="image/svg+xml">
 
     <!-- Tailwind CSS (compiled) -->
     <link rel="stylesheet" href="{{ url_for('static', filename='dist/style.css') }}">
 
+    {# What the page's forms accept and start at, web/fleet_components.page_limits(), which the page's scripts read #}
+    <script type="application/json" id="page-limits">{{ page_limits.as_json() | tojson }}</script>
+
     {% block head %}{% endblock %}
 
-    <!-- onJobProgressStreamErrors, which each script that follows a job's progress stream calls (must load before Alpine core) -->
+    <!-- Handles Alpine's cancelled x-transition hides, which Alpine rejects before it can catch them (must load before Alpine core) -->
+    <script defer src="{{ url_for('static', filename='js/alpine-cancelled-transitions.js') }}"></script>
+    <!-- followJobProgress, the one reader of a job's progress stream, which each script that follows a job calls (must load before Alpine core) -->
     <script defer src="{{ url_for('static', filename='js/job-progress-stream.js') }}"></script>
     <!-- progressTracker, the component templates/simulate/partials/progress-tracker.html opens (must load before Alpine core) -->
     <script defer src="{{ url_for('static', filename='js/progress-tracker.js') }}"></script>
@@ -36,10 +41,17 @@
             }
         })();
     </script>
+
+    <!-- Sidebar state initialisation (before paint, so neither the sidebar nor the main column slides in on load) -->
+    <script>
+        if (localStorage.getItem('sidebarOpen') === 'false') {
+            document.documentElement.classList.add('sidebar-collapsed');
+        }
+    </script>
 </head>
 <body class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 min-h-screen"
       x-data="{
-          sidebarOpen: localStorage.getItem('sidebarOpen') !== 'false',
+          sidebarOpen: !document.documentElement.classList.contains('sidebar-collapsed'),
           mobileMenuOpen: false,
           darkMode: document.documentElement.classList.contains('dark')
       }"
@@ -52,9 +64,7 @@
     {% include "partials/nav-sidebar.html" %}
 
     <!-- Main content wrapper -->
-    <div class="transition-all duration-300 min-h-screen flex flex-col"
-         :class="sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'"
-    >
+    <div class="transition-all duration-300 min-h-screen flex flex-col lg:ml-64 lg:sidebar-collapsed:ml-16">
         <!-- Top bar (mobile) -->
         <header class="sticky top-0 z-20 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 lg:hidden">
             <div class="flex items-center justify-between px-4 h-16">

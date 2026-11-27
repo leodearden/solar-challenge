@@ -188,11 +188,11 @@ tasks:
           paths: ["src/solar_challenge/optimize.py"]
           expect: absent
       - name: "finance-has-no-simulator-local-imports"
-        binding: "grep: 10 function-local battery/fleet/home/pv import lines in finance.py today"
+        binding: "grep: 6 function-local battery/fleet/home/pv import lines in finance.py at ae77e354 binding compute_soh, FleetConfig, calculate_summary, calculate_degradation_factor (the TYPE_CHECKING block's imports stay, esc-928-3)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: '^[[:space:]]+from solar_challenge\.(battery|fleet|home|pv) import'
+          pattern: '^[[:space:]]+from solar_challenge\.(battery|fleet|home|pv) import .*\b(compute_soh|FleetConfig|calculate_summary|calculate_degradation_factor)\b'
           paths: ["src/solar_challenge/finance.py"]
           expect: absent
       - name: "allow-list-finance-entries-gone"
@@ -273,7 +273,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: 'Fixed-15p|15 ?p/kWh|\b15p\b'
-          paths: ["src/solar_challenge/optimize.py", "src/solar_challenge/output.py", "src/solar_challenge/cli/optimize.py"]
+          paths: ["src/solar_challenge/optimize.py", "src/solar_challenge/output.py", "src/solar_challenge/board_report.py", "src/solar_challenge/cli/optimize.py"]
           expect: absent
       - name: "simulation-counts"
         binding: "probe: _evaluate_config 12 and finance run 12 calls today with a counting constant simulate; B10 asserts 5 and 6"
@@ -334,7 +334,7 @@ tasks:
           kind: manual
           reason: "figures are asserted by B14's tests and recorded on the task after 812"
   - label: "ι"
-    task_id: null
+    task_id: 939
     title: "Held for S29: solve_cost_recovery_rate is defined in projection"
     note: "x_seam_wait = {stream: S29, contract: surface bump release window}; excluded from the batch's commit_planning"
     capabilities:
@@ -355,7 +355,7 @@ tasks:
           paths: ["src/solar_challenge/finance.py"]
           expect: absent
   - label: "κ"
-    task_id: null
+    task_id: 941
     title: "Held for S29: BillDistribution.per_home_total_outlay_gbp"
     note: "x_seam_wait = {stream: S29, contract: surface bump release window}; excluded from the batch's commit_planning"
     capabilities:

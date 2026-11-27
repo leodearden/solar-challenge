@@ -1,37 +1,29 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the error handling every /api endpoint shares: malformed and non-object JSON bodies, and HTTP methods a route does not allow."""
+"""Tests for the error handling every /api endpoint shares: malformed and non-object JSON bodies, refusals besides the one per route the request boundary's gate sends, and HTTP methods a route does not allow.
 
+The gate, tests/integration/test_request_boundary.py, holds every POST route's answer to a refusal, to a ValueError that is no refusal and to a defect.
+"""
+
+from collections.abc import Callable
+from functools import partial
 from unittest.mock import NonCallableMagicMock
 
 import pytest
 
 pytest.importorskip("flask")
-from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.api import api_bp
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import Interval, as_whole_number
+from solar_challenge.web.api import SWEEP_MAX_STEPS
+from solar_challenge.web.fleet_scenario import parse_fleet_form
+from solar_challenge.web.simulation_params import parse_date_range
+from tests._api_routes import api_routes
+from tests._error_records import error_records
+from tests._fleet_form import valid_distribution_form
 
 
 _API_ENDPOINTS_THAT_READ_NO_JSON_BODY = frozenset({"api.import_fleet_yaml"})
-
-
-def _api_body_method_routes() -> list[tuple[str, str, str]]:
-    """Return the endpoint, method and path of every POST, PUT and PATCH route of the api blueprint.
-
-    A path argument is filled with a value that names no record, e.g. no-such-run_id.
-    """
-    api_only = Flask(__name__, static_folder=None)
-    api_only.register_blueprint(api_bp)
-    urls = api_only.url_map.bind("localhost")
-    return [
-        (
-            rule.endpoint,
-            method,
-            urls.build(rule.endpoint, {name: f"no-such-{name}" for name in rule.arguments}, method=method),
-        )
-        for rule in api_only.url_map.iter_rules()
-        for method in sorted({"POST", "PUT", "PATCH"}.intersection(rule.methods or ()))
-    ]
 
 
 class TestErrorPaths:
@@ -77,7 +69,7 @@ class TestErrorPaths:
         ("method", "path"),
         [
             pytest.param(method, path, id=endpoint)
-            for endpoint, method, path in _api_body_method_routes()
+            for endpoint, method, path in api_routes({"POST", "PUT", "PATCH"})
             if endpoint not in _API_ENDPOINTS_THAT_READ_NO_JSON_BODY
         ],
     )
@@ -92,7 +84,7 @@ class TestErrorPaths:
 
     def test_no_stale_endpoint_is_listed_as_reading_no_json_body(self) -> None:
         """Every endpoint exempted from the shared 400 is still a POST, PUT or PATCH route of the api blueprint."""
-        body_method_endpoints = {endpoint for endpoint, _, _ in _api_body_method_routes()}
+        body_method_endpoints = {endpoint for endpoint, _, _ in api_routes({"POST", "PUT", "PATCH"})}
         assert _API_ENDPOINTS_THAT_READ_NO_JSON_BODY - body_method_endpoints == set()
 
     @pytest.mark.parametrize(
@@ -125,3 +117,51 @@ class TestErrorPaths:
         """DELETE on job status endpoint returns 405."""
         resp = client.delete("/api/jobs/some-id")
         assert resp.status_code == 405
+
+
+_FLEET_FORM_WITH_A_BATTERY_DISPATCH = {
+    **valid_distribution_form(),
+    "battery": {"capacity_kwh": 5.0, "dispatch_strategy": {"type": "self_consumption"}},
+}
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "refuse"),
+    [
+        pytest.param(
+            "/api/simulate/home",
+            {"days": 7, "start": "2024-06-01"},
+            partial(parse_date_range, {"days": 7, "start": "2024-06-01"}),
+            id="home-days-with-start",
+        ),
+        pytest.param(
+            "/api/simulate/sweep",
+            {"steps": 1},
+            partial(as_whole_number, 1, "steps", Interval(2, SWEEP_MAX_STEPS)),
+            id="sweep-one-step",
+        ),
+        pytest.param(
+            "/api/simulate/fleet-from-distribution",
+            _FLEET_FORM_WITH_A_BATTERY_DISPATCH,
+            partial(parse_fleet_form, _FLEET_FORM_WITH_A_BATTERY_DISPATCH),
+            id="fleet-battery-dispatch-strategy",
+        ),
+    ],
+)
+def test_a_body_a_reader_refuses_is_answered_400_with_its_refusal_and_logs_nothing(
+    client: FlaskClient,
+    mock_job_manager: NonCallableMagicMock,
+    caplog: pytest.LogCaptureFixture,
+    path: str,
+    body: dict[str, object],
+    refuse: Callable[[], object],
+) -> None:
+    """A route answers each of its readers' refusals 400 with its text, not only the one the gate's row R1 sends it."""
+    with pytest.raises(ConfigurationError) as refusal:
+        refuse()
+
+    resp = client.post(path, json=body)
+
+    assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+    assert error_records(caplog) == []
+    assert mock_job_manager.method_calls == []

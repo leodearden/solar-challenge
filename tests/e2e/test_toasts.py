@@ -6,10 +6,7 @@ Verifies toast success/error appearance, auto-dismiss and manual dismiss.
 import re
 from typing import Literal
 
-import pytest
 from playwright.sync_api import Locator, Page, expect
-
-pytestmark = pytest.mark.e2e
 
 
 # -- Raising a toast --------------------------------------------------------

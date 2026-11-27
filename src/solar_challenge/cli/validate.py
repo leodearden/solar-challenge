@@ -4,7 +4,6 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable, Mapping, Optional, Sequence
-from warnings import WarningMessage, catch_warnings, simplefilter
 
 import pandas as pd
 import typer
@@ -14,21 +13,21 @@ from rich.text import Text
 from solar_challenge.cli.utils import (
     console,
     handle_errors,
+    invocation,
     print_error,
     print_success,
     verbatim_table_title,
 )
 from solar_challenge.config import (
-    ScenarioConfig,
     detect_fleet_sweep_spec,
+    load_community_configs,
     load_config,
-    load_home_config,
     load_scenarios,
-    parse_fleet_config,
     parse_sweep_fleet_configs,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
+from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.validation import (
     ValidationReport,
@@ -66,18 +65,31 @@ def _display_validation_report(report: ValidationReport) -> None:
 
     console.print(table)
 
-    # Summary
-    passed = sum(1 for r in report.results if r.passed)
-    total = len(report.results)
-    if report.all_passed:
-        print_success(f"All {total} checks passed")
-    else:
-        print_error(f"{passed}/{total} checks passed")
+
+def _read_results_csv(csv_file: Path) -> pd.DataFrame:
+    """The results csv_file holds, indexed by its first column as _on_the_default_clock reads it."""
+    frame = pd.read_csv(csv_file, index_col=0, parse_dates=True)
+    return frame.set_axis(_on_the_default_clock(frame.index))
+
+
+def _on_the_default_clock(index: pd.Index) -> pd.Index:
+    """index with its timestamps that carry UTC offsets read as the instants they name, on the default location's clock.
+
+    A zoned index (one offset) and text (differing offsets, which read_csv leaves unparsed)
+    become those instants; text that is not timestamps raises pandas' ValueError. A naive
+    DatetimeIndex names no instant and is returned as written, and any other index, such as
+    integers, as read, for SimulationWindow.of_index to refuse.
+    """
+    zoned = isinstance(index, pd.DatetimeIndex) and index.tz is not None
+    if not (zoned or pd.api.types.is_string_dtype(index.dtype)):
+        return index
+    return pd.to_datetime(index, utc=True).tz_convert(Location.bristol().timezone)
 
 
 @app.command()
 @handle_errors
 def results(
+    ctx: typer.Context,
     csv_file: Annotated[
         Path,
         typer.Argument(
@@ -103,6 +115,10 @@ def results(
 ) -> None:
     """Validate simulation results CSV against benchmarks.
 
+    The CSV's first column holds the timestamps an export writes. Timestamps with UTC
+    offsets are read on the default location's (UK) clock, naive ones as written. Rows may
+    be at any even cadence, each row's kW counting for the time the row lasts.
+
     Checks PV generation and consumption values for sanity:
     - Generation never negative
     - Generation zero at night
@@ -111,8 +127,7 @@ def results(
     - Consumption never negative or unrealistically high
     - Baseload present
     """
-    # Load CSV
-    df = pd.read_csv(csv_file, index_col=0, parse_dates=True)
+    df = _read_results_csv(csv_file)
 
     # Check for required columns
     gen_col = None
@@ -155,8 +170,12 @@ def results(
     report = ValidationReport(results=all_results)
     _display_validation_report(report)
 
+    total = len(report.results)
     if not report.all_passed:
+        passed = sum(1 for r in report.results if r.passed)
+        print_error(f"{passed}/{total} checks passed")
         raise typer.Exit(1)
+    print_success(invocation(ctx), f"All {total} checks passed")
 
 
 @dataclass(frozen=True)
@@ -171,18 +190,8 @@ class _DefinedHomes:
     sweep_points: int = 1
 
 
-def _scenario_homes(scenario: ScenarioConfig) -> list[HomeConfig]:
-    """The homes a scenario simulates: its single home, or else its fleet."""
-    return [scenario.home] if scenario.home is not None else scenario.homes
-
-
-def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:
-    """The homes `fleet run` builds from the file.
-
-    For a YAML-defined sweep, the homes `fleet sweep` builds at every sweep point.
-    """
-    if detect_fleet_sweep_spec(document) is None:
-        return _DefinedHomes(homes=parse_fleet_config(document).homes)
+def _sweep_point_homes(document: Mapping[str, Any]) -> _DefinedHomes:
+    """The homes `fleet sweep` builds at every point of the document's YAML-defined sweep."""
     fleets = [fleet for _, fleet in parse_sweep_fleet_configs(document)]
     return _DefinedHomes(
         homes=[home for fleet in fleets for home in fleet.homes],
@@ -191,22 +200,28 @@ def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:
 
 
 def _homes_defined_by(config_file: Path) -> _DefinedHomes:
-    """The homes the file defines, built by the config.py loader its shape needs.
+    """The homes the file defines, every block of it read as the commands read it.
 
-    Raises the loader's own ConfigurationError or ValueError when the file is refused.
+    A YAML-defined sweep is read as `fleet sweep` reads it, at every sweep point; any other
+    file through the one scenario reader, load_scenarios. Sweep detection reads a
+    fleet_distribution: file's keys and scenario-level blocks before its fleet_distribution:
+    block, as both readers do, so either form is refused on the same first block as `fleet
+    run` and `fleet sweep` refuse it. Each scenario's community: block is read after every
+    scenario's homes. Raises the ConfigurationError or ValueError of the first refusal.
     """
     document = load_config(config_file)
-    if "scenarios" in document or "scenario" in document:
-        return _DefinedHomes(
+    if detect_fleet_sweep_spec(document) is not None:
+        defined = _sweep_point_homes(document)
+    else:
+        defined = _DefinedHomes(
             homes=[
                 home
                 for scenario in load_scenarios(config_file)
-                for home in _scenario_homes(scenario)
+                for home in scenario.simulated_homes()
             ]
         )
-    if "fleet_distribution" in document or "homes" in document:
-        return _fleet_homes(document)
-    return _DefinedHomes(homes=[load_home_config(config_file)])
+    load_community_configs(config_file)
+    return defined
 
 
 @dataclass(frozen=True)
@@ -274,26 +289,17 @@ def _domestic_scale_warnings(defined: _DefinedHomes) -> list[str]:
     ]
 
 
-def _user_warnings(caught: Sequence[WarningMessage]) -> list[str]:
-    """The messages of the UserWarnings among *caught*: the advisories a loader raises as it builds."""
-    return [
-        str(item.message) for item in caught if issubclass(item.category, UserWarning)
-    ]
-
-
 def _findings(config_file: Path) -> tuple[list[str], list[str]]:
     """The (errors, warnings) of validating the file.
 
-    The errors are the loader's first refusal, if any. The warnings are the advisories
-    the loader raised on the way, then each domestic-scale size above its ceiling.
+    The errors are the first refusal met reading the file, if any; otherwise the warnings
+    are each domestic-scale size above its ceiling.
     """
-    with catch_warnings(record=True) as caught:
-        simplefilter("always")
-        try:
-            defined = _homes_defined_by(config_file)
-        except (ConfigurationError, ValueError) as refusal:
-            return [str(refusal)], _user_warnings(caught)
-    return [], _user_warnings(caught) + _domestic_scale_warnings(defined)
+    try:
+        defined = _homes_defined_by(config_file)
+    except (ConfigurationError, ValueError) as refusal:
+        return [str(refusal)], []
+    return [], _domestic_scale_warnings(defined)
 
 
 def _print_config_findings(
@@ -331,15 +337,12 @@ def config(
 ) -> None:
     """Validate a configuration file by building the homes it defines.
 
-    The file's shape picks which loader builds them:
-    - scenarios: or scenario: files load as scenarios
-    - homes: or fleet_distribution: files load as a fleet, as `fleet run` loads them
-    - any other file loads as a home file: a home: block, or a flat home
-
-    A YAML-defined sweep is built at every sweep point, as `fleet sweep` builds it.
-    The first value or key the loader refuses is an ERROR. The loader's advisories,
-    and sizes beyond a domestic install, are WARNINGs. Only the homes are checked,
-    not the file's other top-level blocks, such as seg: or finance:.
+    Every scenario of the file, bare, a scenario: block or each scenarios: entry, is read
+    by the one scenario grammar, each block as the commands read it, whether its homes come
+    from home:, homes: or fleet_distribution:. A YAML-defined sweep is built at every sweep
+    point, as `fleet sweep` builds it. Each scenario's community: block is read last, after
+    every scenario's homes. The first value or key refused is an ERROR. Sizes beyond a
+    domestic install are WARNINGs.
     """
     errors, warnings = _findings(config_file)
     _print_config_findings(config_file, errors=errors, warnings=warnings)

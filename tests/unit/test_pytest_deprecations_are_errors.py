@@ -13,7 +13,6 @@ lacks stops pytest at startup.
 """
 
 import warnings
-from pathlib import Path
 
 import pytest
 
@@ -24,15 +23,13 @@ def test_a_pytest_deprecation_fails_the_test_that_meets_it() -> None:
         warnings.warn(pytest.PytestDeprecationWarning("a feature pytest will remove"), stacklevel=1)
 
 
-def test_a_pytest_deprecation_fails_the_collection_that_meets_it(
-    pytester_under_root_conftest: pytest.Pytester, project_root: Path
-) -> None:
+@pytest.mark.usefixtures("pytester_sessions_read_the_project_ini")
+def test_a_pytest_deprecation_fails_the_collection_that_meets_it(pytester_under_root_conftest: pytest.Pytester) -> None:
     """A PytestDeprecationWarning raised while a module is collected is a collection error, not recorded.
 
     Collection is over before any test runs, so the module is collected in a
     session of its own, under copies of this project's pyproject.toml and root conftest.
     """
-    pytester_under_root_conftest.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
     module = pytester_under_root_conftest.makepyfile(
         """
         import warnings
@@ -47,3 +44,57 @@ def test_a_pytest_deprecation_fails_the_collection_that_meets_it(
 
     result.assert_outcomes(errors=1)
     result.stdout.fnmatch_lines(["*ERROR collecting*", "*PytestDeprecationWarning: a feature pytest will remove*"])
+
+
+@pytest.mark.usefixtures("pytester_sessions_read_the_project_ini")
+@pytest.mark.parametrize(
+    ("module_source", "outcomes"),
+    [
+        pytest.param(
+            """
+            import pytest
+
+
+            class TestReadsAClassScopedFixture:
+                @pytest.fixture(scope="class")
+                def value(self) -> int:
+                    return 1
+
+                def test_reads_it(self, value: int) -> None:
+                    assert value == 1
+            """,
+            {"errors": 1},
+            id="instance-method",
+        ),
+        pytest.param(
+            """
+            import pytest
+
+
+            class TestReadsAClassScopedFixture:
+                @pytest.fixture(scope="class")
+                @classmethod
+                def value(cls) -> int:
+                    return 1
+
+                def test_reads_it(self, value: int) -> None:
+                    assert value == 1
+            """,
+            {"passed": 1},
+            id="classmethod",
+        ),
+    ],
+)
+def test_a_class_scoped_fixture_errors_its_test_only_when_defined_as_an_instance_method(
+    pytester_under_root_conftest: pytest.Pytester, module_source: str, outcomes: dict[str, int]
+) -> None:
+    """A class-scoped fixture defined as an instance method errors its test, and the same fixture as a classmethod passes.
+
+    Tasks 489 and 1423 each removed that deprecated use from the suite; uv.lock pins
+    a pytest that flags it, so the per-task verify fails a reintroduction.
+    """
+    module = pytester_under_root_conftest.makepyfile(module_source)
+
+    result = pytester_under_root_conftest.runpytest_subprocess(module)
+
+    result.assert_outcomes(**outcomes)

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for POST /api/simulate/home and POST /api/simulate/fleet, and for how the simulate endpoints parse and refuse a home config."""
 
+import dataclasses
 import math
 from collections.abc import Callable
 from unittest.mock import NonCallableMagicMock
@@ -10,10 +11,24 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.web.shared import resolve_location
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location, parse_location
+from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    PV_CAPACITY_KW_WHEN_OMITTED,
+    parse_heat_pump_block,
+    parse_location_block,
+)
+from solar_challenge.web.request_boundary import read_boolean, read_location, read_string, require_encodable_text
+from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
+from solar_challenge.web.simulation_params import HOME_CONFIG_KEYS
+from tests._heat_pump_block_refusals import UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
+from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._html_page import element_attributes
-from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
+from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES
 
 
 VALID_FLEET_PAYLOAD: dict = {
@@ -49,18 +64,24 @@ def home_page_consumption_bounds(client: FlaskClient) -> tuple[float, float]:
     return float(consumption_input["min"]), float(consumption_input["max"])
 
 
+#: The two ways a form body's top-level field reads as not sent: null, and "" (a cleared input).
+UNSENT_VALUES = (pytest.param(None, id="null"), pytest.param("", id="empty-string"))
+
+
 class TestSimulateHomeAPI:
     """Tests for POST /api/simulate/home."""
 
     def test_valid_config_returns_201(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Valid JSON body returns 201 with job_id and run_id."""
+        """Valid JSON body returns 201 with the submitted job's job_id and run_id, and as results_url the path of the run's results page, /results/<run_id>."""
         resp = client.post("/api/simulate/home", json=VALID_HOME_PAYLOAD)
         assert resp.status_code == 201
-        data = resp.get_json()
-        assert data["job_id"] == "job-home-001"
-        assert data["run_id"] == "run-home-001"
+        assert resp.get_json() == {
+            "job_id": "job-home-001",
+            "run_id": "run-home-001",
+            "results_url": "/results/run-home-001",
+        }
         mock_job_manager.submit_home_job.assert_called_once()
 
     def test_default_values_accepted(
@@ -83,22 +104,22 @@ class TestSimulateHomeAPI:
         assert "JSON" in data["error"]
 
     def test_invalid_pv_too_low_returns_400(self, client: FlaskClient) -> None:
-        """PV capacity below 0.5 kW triggers a 400."""
+        """PV capacity below the pv component's value_range triggers a 400 naming pv_kw, the range and the value sent."""
         resp = client.post(
             "/api/simulate/home",
             json={**VALID_HOME_PAYLOAD, "pv_kw": 0.1},
         )
         assert resp.status_code == 400
-        assert "PV capacity" in resp.get_json()["error"]
+        assert resp.get_json()["error"] == "pv_kw must be between 0.5 and 20, got 0.1"
 
     def test_invalid_pv_too_high_returns_400(self, client: FlaskClient) -> None:
-        """PV capacity above 20 kW triggers a 400."""
+        """PV capacity above the pv component's value_range triggers a 400 naming pv_kw, the range and the value sent."""
         resp = client.post(
             "/api/simulate/home",
             json={**VALID_HOME_PAYLOAD, "pv_kw": 25.0},
         )
         assert resp.status_code == 400
-        assert "PV capacity" in resp.get_json()["error"]
+        assert resp.get_json()["error"] == "pv_kw must be between 0.5 and 20, got 25.0"
 
     @pytest.mark.parametrize("end", ["low", "high"])
     def test_consumption_at_either_end_the_home_page_allows_is_accepted(
@@ -137,15 +158,25 @@ class TestSimulateHomeAPI:
         mock_job_manager.submit_home_job.assert_not_called()
 
     def test_negative_battery_returns_400(self, client: FlaskClient) -> None:
-        """A negative battery capacity is refused with a 400 naming battery_kwh and the value sent."""
+        """A negative battery capacity is refused with a 400 naming battery_kwh, the battery component's value_range and the value sent."""
         resp = client.post(
             "/api/simulate/home",
             json={**VALID_HOME_PAYLOAD, "battery_kwh": -1.0},
         )
         assert resp.status_code == 400
-        assert resp.get_json()["error"] == (
-            "battery_kwh must be >= 0 and finite (0 for no battery), got -1.0 kWh"
+        assert resp.get_json()["error"] == "battery_kwh must be between 0 and 100, got -1.0"
+
+    def test_a_battery_above_its_range_returns_400_and_queues_no_run(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """P1: a 500 kWh battery is refused with a 400 naming battery_kwh, its range and the value sent; nothing is submitted."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "battery_kwh": 500},
         )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "battery_kwh must be between 0 and 100, got 500"}
+        mock_job_manager.submit_home_job.assert_not_called()
 
     def test_nan_battery_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
@@ -226,7 +257,7 @@ class TestSimulateHomeAPI:
             "occupants": 3,
             "stochastic": False,
             "location": "bristol",
-            "name": "Web Simulation",
+            "name": "",
             "days": 30,
         }
         resp = client.post("/api/simulate/home", json=payload)
@@ -235,7 +266,7 @@ class TestSimulateHomeAPI:
         call_kwargs = mock_job_manager.submit_home_job.call_args
         config = call_kwargs.kwargs.get("config") or call_kwargs[0][0]
         assert config.battery_config is not None
-        assert config.battery_config.efficiency == pytest.approx(0.9)
+        assert config.battery_config.charge_efficiency == config.battery_config.discharge_efficiency == math.sqrt(0.9)
 
     def test_unrecognised_key_returns_400_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
@@ -243,7 +274,7 @@ class TestSimulateHomeAPI:
         """A body carrying a key the API does not read is refused by name, not simulated without it."""
         resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "period_days": 1})
         assert resp.status_code == 400
-        assert "period_days" in resp.get_json()["error"]
+        assert "Unrecognised home config keys: 'period_days';" in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -275,8 +306,13 @@ class TestSimulateHomeAPI:
             ),
             pytest.param(
                 {"pv_kw": 4.0, "days": 80000},
-                f"days must be between 1 and {MAX_WINDOW_DAYS}, got 80000",
+                f"days must be between 1 and {MAX_DAYS}, got 80000",
                 id="80000-days",
+            ),
+            pytest.param(
+                {"pv_kw": 4.0, "days": 366},
+                f"days must be between 1 and {MAX_DAYS}, got 366",
+                id="366-days",
             ),
             pytest.param(
                 {"pv_kw": 4.0, "start": "2024-06-10", "end": "2024-06-01"},
@@ -288,10 +324,96 @@ class TestSimulateHomeAPI:
     def test_window_it_cannot_run_returns_400_naming_it_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, body: dict, message: str
     ) -> None:
-        """A window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, is a 400 naming it, never a queued run."""
+        """A window that ends before it starts, or spans more than MAX_WINDOW_DAYS days, or a days outside 1 to MAX_DAYS, is a 400 naming it, never a queued run."""
         resp = client.post("/api/simulate/home", json=body)
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}
+        mock_job_manager.submit_home_job.assert_not_called()
+
+    def test_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A JSON string can escape a lone surrogate, which the run store cannot bind, so such a name is refused as request_boundary.require_encodable_text refuses it, before any job is submitted."""
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
+
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "name": chr(0xD800)})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_home_job.assert_not_called()
+
+    def test_a_name_that_is_not_a_json_string_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "name": ["a"]})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": "name must be a JSON string, got list"})
+        mock_job_manager.submit_home_job.assert_not_called()
+
+    def test_a_stochastic_that_is_not_a_json_boolean_returns_400_naming_stochastic_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """The text "false" is refused, never read by its truthiness as the stochastic model switched on."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read_boolean("false", "stochastic")
+
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "stochastic": "false"})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_home_job.assert_not_called()
+
+    @pytest.mark.parametrize("unsent", UNSENT_VALUES)
+    @pytest.mark.parametrize("field", sorted(HOME_CONFIG_KEYS))
+    def test_a_field_sent_as_null_or_empty_text_queues_the_run_a_body_without_it_queues(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, field: str, unsent: object
+    ) -> None:
+        """Every recognised home field sent as null or "" reads as not sent: the run queued is the one the same body without the field queues."""
+        base = {"pv_kw": 4, "days": 1}
+        without = {key: value for key, value in base.items() if key != field}
+
+        sent = client.post("/api/simulate/home", json={**base, field: unsent})
+        left_out = client.post("/api/simulate/home", json=without)
+
+        assert (sent.status_code, left_out.status_code) == (201, 201), (sent.get_json(), left_out.get_json())
+        with_unsent, without_field = mock_job_manager.submit_home_job.call_args_list
+        assert with_unsent.kwargs == without_field.kwargs
+
+    def test_a_null_location_queues_a_home_at_bristol(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A location sent as null is not sent, so the home queued is at Bristol."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "location": None})
+
+        assert resp.status_code == 201, resp.get_json()
+        assert mock_job_manager.submit_home_job.call_args.kwargs["config"].location == Location.bristol()
+
+    def test_a_body_that_sends_only_its_window_queues_the_engine_defaults(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A field the body does not send takes its engine dataclass's default, not a web copy: PV_CAPACITY_KW_WHEN_OMITTED's array at PVConfig's defaults, LoadConfig's occupants, the TDCV estimate and no battery; stochastic is the web's default, off."""
+        resp = client.post("/api/simulate/home", json={"days": 1})
+
+        assert resp.status_code == 201, resp.get_json()
+        config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
+        assert config.pv_config == PVConfig(capacity_kw=PV_CAPACITY_KW_WHEN_OMITTED)
+        pv_defaults = {field.name: field.default for field in dataclasses.fields(PVConfig)}
+        for setting in ("azimuth", "tilt", "system_age_years", "degradation_rate_per_year"):
+            assert (setting, getattr(config.pv_config, setting)) == (setting, pv_defaults[setting])
+        load_defaults = {field.name: field.default for field in dataclasses.fields(LoadConfig)}
+        assert config.load_config.household_occupants == load_defaults["household_occupants"]
+        assert config.load_config.annual_consumption_kwh is None
+        assert config.load_config.use_stochastic is False
+        assert config.battery_config is None
+
+    @pytest.mark.parametrize("unsent", UNSENT_VALUES)
+    def test_an_unrecognised_key_sent_as_null_or_empty_text_returns_400_naming_it_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, unsent: object
+    ) -> None:
+        """The presence rule applies to recognised keys only: an unrecognised key is refused by name whatever it holds."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "period_days": unsent})
+
+        assert resp.status_code == 400
+        assert "Unrecognised home config keys: 'period_days';" in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
 
 
@@ -301,12 +423,14 @@ class TestSimulateFleetAPI:
     def test_valid_fleet_returns_201(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Valid fleet config returns 201 with job_id and run_id."""
+        """Valid fleet config returns 201 with the submitted job's job_id and run_id, and as results_url the path of the run's results page, /results/<run_id>."""
         resp = client.post("/api/simulate/fleet", json=VALID_FLEET_PAYLOAD)
         assert resp.status_code == 201
-        data = resp.get_json()
-        assert data["job_id"] == "job-fleet-001"
-        assert data["run_id"] == "run-fleet-001"
+        assert resp.get_json() == {
+            "job_id": "job-fleet-001",
+            "run_id": "run-fleet-001",
+            "results_url": "/results/run-fleet-001",
+        }
         mock_job_manager.submit_fleet_job.assert_called_once()
 
     def test_no_json_body_returns_400(self, client: FlaskClient) -> None:
@@ -392,9 +516,70 @@ class TestSimulateFleetAPI:
         configs = call_kwargs.kwargs.get("configs") or call_kwargs[0][0]
         assert len(configs) == 2
 
+    def test_a_fleet_posted_without_a_name_is_submitted_with_none(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """The endpoint gives the run no name of its own: the JobManager names it (RunKind.default_name)."""
+        nameless_home = {key: value for key, value in VALID_HOME_PAYLOAD.items() if key != "name"}
+
+        resp = client.post("/api/simulate/fleet", json={"homes": [nameless_home]})
+
+        assert resp.status_code == 201
+        assert mock_job_manager.submit_fleet_job.call_args.kwargs["name"] is None
+
+    def test_a_fleet_name_holding_a_lone_surrogate_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """The fleet's own name is refused as request_boundary.require_encodable_text refuses it, before any job is submitted; the payload's homes carry no name, so it is the one value refused."""
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
+
+        resp = client.post("/api/simulate/fleet", json={**VALID_FLEET_PAYLOAD, "name": chr(0xD800)})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param({"x": 1}, id="object"),
+            pytest.param(5, id="integer"),
+            pytest.param(["a"], id="array"),
+        ],
+    )
+    def test_a_fleet_name_that_is_not_a_json_string_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_string(value, "name")
+
+        resp = client.post("/api/simulate/fleet", json={**VALID_FLEET_PAYLOAD, "name": value})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_a_later_homes_name_that_is_not_a_json_string_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        resp = client.post(
+            "/api/simulate/fleet", json={"homes": [VALID_HOME_PAYLOAD, {**VALID_HOME_PAYLOAD, "name": ["a"]}]}
+        )
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": "name must be a JSON string, got list"})
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_a_fleet_name_sent_as_null_is_submitted_with_none(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A null name is no name, as a fleet posted without one is: the JobManager names the run."""
+        resp = client.post("/api/simulate/fleet", json={**VALID_FLEET_PAYLOAD, "name": None})
+
+        assert resp.status_code == 201
+        assert mock_job_manager.submit_fleet_job.call_args.kwargs["name"] is None
+
 
 class TestParseHomeConfigErrorPaths:
-    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, a window set by both days and start/end, and a location they cannot resolve."""
+    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, a window set by both days and start/end, a location they cannot resolve, a name holding a lone surrogate, and a tariff name that is not a string."""
 
     def test_invalid_tariff_returns_400(
         self, client: FlaskClient
@@ -485,7 +670,7 @@ class TestParseHomeConfigErrorPaths:
         """A nested block sent as a non-object is a 400 naming the block and the type sent, never a 500; nothing is submitted."""
         resp = client.post(url, json=body)
         assert resp.status_code == 400
-        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        assert non_mapping_block_refusal(key, "str") in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
 
@@ -530,8 +715,8 @@ class TestParseHomeConfigErrorPaths:
             ),
             pytest.param(
                 "/api/simulate/home",
-                {**VALID_HOME_PAYLOAD, "heat_pump": {"thermal_capacity_kw": 10**400}},
-                f"heat_pump.thermal_capacity_kw must be a finite number, got {10**400!r}",
+                {**VALID_HOME_PAYLOAD, "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 10**400}},
+                f"heat_pump: thermal_capacity_kw must be a finite number, got {10**400!r}",
                 id="home-heat_pump.thermal_capacity_kw-too-large-for-a-float",
             ),
         ],
@@ -631,14 +816,97 @@ class TestParseHomeConfigErrorPaths:
         body: Callable[[str], dict[str, object]],
         location: str,
     ) -> None:
-        """A location resolve_location refuses is a 400 carrying its refusal, never a run at Bristol; nothing is submitted."""
+        """A location read_location refuses is a 400 carrying its refusal, never a run at Bristol; nothing is submitted."""
         resp = client.post(url, json=body(location))
         assert resp.status_code == 400
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
-        with pytest.raises(ValueError) as refusal:
-            resolve_location(location)
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location(location)
         assert str(refusal.value) in resp.get_json()["error"]
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            pytest.param(
+                "/api/simulate/fleet",
+                {"homes": [VALID_HOME_PAYLOAD, {**VALID_HOME_PAYLOAD, "name": chr(0xD800)}]},
+                id="fleet-later-home",
+            ),
+            pytest.param(
+                "/api/simulate/sweep",
+                {"min": 1, "max": 5, "steps": 2, "base_config": {"name": chr(0xD800)}},
+                id="sweep",
+            ),
+        ],
+    )
+    def test_name_holding_a_lone_surrogate_returns_400_carrying_the_refusal_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, url: str, body: dict
+    ) -> None:
+        """A home config's name that require_encodable_text refuses is a 400 carrying its refusal, which the sweep prefixes with its point, never a home named with a lone surrogate; nothing is submitted."""
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
+
+        resp = client.post(url, json=body)
+
+        assert resp.status_code == 400
+        assert str(refusal.value) in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("url", "body", "message"),
+        [
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "tariff": {"type": "flat_rate", "rate_per_kwh": 0.2, "name": 5}},
+                "tariff.name: must be a string, got 5",
+                id="home-tariff-name",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {
+                    **VALID_HOME_PAYLOAD,
+                    "tariff": {
+                        "type": "custom",
+                        "periods": [
+                            {"start_time": "00:00", "end_time": "00:00", "rate_per_kwh": 0.2, "name": 7}
+                        ],
+                    },
+                },
+                "tariff.periods[0].name: must be a string, got 7",
+                id="home-tariff-period-name",
+            ),
+            pytest.param(
+                "/api/simulate/fleet",
+                {
+                    "homes": [
+                        VALID_HOME_PAYLOAD,
+                        {
+                            **VALID_HOME_PAYLOAD,
+                            "tariff": {"type": "flat_rate", "rate_per_kwh": 0.2, "name": 5},
+                        },
+                    ]
+                },
+                "tariff.name: must be a string, got 5",
+                id="fleet-later-home-tariff-name",
+            ),
+        ],
+    )
+    def test_tariff_name_that_is_not_a_string_returns_400_naming_it_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: NonCallableMagicMock,
+        url: str,
+        body: dict[str, object],
+        message: str,
+    ) -> None:
+        """A tariff or tariff-period name that is not a string is a 400 naming it by its path, never a run the stored-run reader cannot open; nothing is submitted."""
+        resp = client.post(url, json=body)
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
 
 class TestParseHomeConfigPVAge:
@@ -672,6 +940,108 @@ class TestParseHomeConfigPVAge:
             json={**VALID_HOME_PAYLOAD, "degradation_rate_per_year": 1.5},
         )
         assert resp.status_code == 400
+
+
+class TestSimulateHomeLocation:
+    """A home body's location reaches the submitted home as read_location reads it, a 'lat,lon,alt' string or a location: block; a location it refuses is a 400 naming it, and nothing is submitted."""
+
+    def test_coordinates_with_an_altitude_reach_the_submitted_home(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with location '51.5,-0.1,11' returns 201, and the submitted home is at the location parse_location reads, 11 m up."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "location": "51.5,-0.1,11"})
+        assert resp.status_code == 201, resp.get_json()
+        location = mock_job_manager.submit_home_job.call_args.kwargs["config"].location
+        assert location == parse_location("51.5,-0.1,11")
+        assert location.altitude == 11.0
+
+    def test_a_location_block_reaches_the_submitted_home(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with a location: block of latitude and longitude returns 201, and the submitted home is at the location parse_location_block reads."""
+        block = {"latitude": 51.5, "longitude": -0.1}
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "location": block})
+        assert resp.status_code == 201, resp.get_json()
+        config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
+        assert config.location == parse_location_block(block)
+
+    @pytest.mark.parametrize(
+        ("location", "named"),
+        [
+            pytest.param({"latitude": 50}, ("location: requires 'longitude'",), id="block-without-longitude"),
+            pytest.param(5, ("location", "int"), id="number"),
+        ],
+    )
+    def test_a_location_read_location_refuses_returns_400_naming_it_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: NonCallableMagicMock,
+        location: object,
+        named: tuple[str, ...],
+    ) -> None:
+        """POST with a location: block missing its longitude, or a location that is a number, is a 400 whose error names what is wrong; nothing is submitted."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "location": location})
+        assert resp.status_code == 400
+        error = resp.get_json()["error"]
+        assert all(piece in error for piece in named), error
+        mock_job_manager.submit_home_job.assert_not_called()
+
+
+class TestSimulateHomeSystemLosses:
+    """A home body's system_losses reaches the submitted home's PVConfig; one PVConfig refuses is a 400 carrying its refusal."""
+
+    def test_endpoint_threads_system_losses_to_pv_config(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with system_losses=0.05 returns 201, and the submitted home's PVConfig carries it."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "system_losses": 0.05})
+        assert resp.status_code == 201
+        config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
+        assert config.pv_config.system_losses == 0.05
+
+    def test_system_losses_pvconfig_refuses_returns_400_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with a system_losses PVConfig refuses is a 400 whose error is PVConfig's own refusal; nothing is submitted."""
+        with pytest.raises(ValueError) as pv_refusal:
+            PVConfig(capacity_kw=VALID_HOME_PAYLOAD["pv_kw"], system_losses=1.0)
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "system_losses": 1.0})
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == str(pv_refusal.value)
+        mock_job_manager.submit_home_job.assert_not_called()
+
+
+class TestSimulateHomeHeatPump:
+    """A home body's heat_pump block is config's heat_pump: block.
+
+    A valid block reaches the submitted home; a block the grammar refuses is a 400 carrying the
+    grammar's refusal, and nothing is submitted.
+    """
+
+    def test_a_gshp_with_its_capacity_set_reaches_the_submitted_home(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with a heat_pump block naming a 12 kW GSHP returns 201, and the submitted home's heat pump is that GSHP."""
+        block = {"heat_pump_type": "GSHP", "thermal_capacity_kw": 12}
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "heat_pump": block})
+        assert resp.status_code == 201, resp.get_json()
+        mock_job_manager.submit_home_job.assert_called_once()
+        config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
+        assert config.heat_pump_config == HeatPumpConfig(heat_pump_type="GSHP", thermal_capacity_kw=12.0)
+
+    @pytest.mark.parametrize(("block", "key"), UNRECOGNISED_KEY_HEAT_PUMP_BLOCKS)
+    def test_a_block_the_grammar_refuses_returns_400_with_its_refusal_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, block: dict, key: str
+    ) -> None:
+        """POST with a heat_pump key the grammar does not recognise is a 400 whose error is parse_heat_pump_block's own refusal, naming the key; nothing is submitted."""
+        with pytest.raises(ConfigurationError) as grammar_refusal:
+            parse_heat_pump_block(block)
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "heat_pump": block})
+        assert resp.status_code == 400
+        error = resp.get_json()["error"]
+        assert error == str(grammar_refusal.value)
+        assert repr(key) in error
+        mock_job_manager.submit_home_job.assert_not_called()
 
 
 class TestParseHomeConfigSEG:

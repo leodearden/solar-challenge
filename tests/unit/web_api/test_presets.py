@@ -2,6 +2,7 @@
 """Tests for the home preset endpoints: GET /api/presets, POST /api/presets and GET /api/presets/<name>."""
 
 import json
+import logging
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +16,11 @@ from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
+from tests._web_app import database_of, point_store_config_at_a_missing_directory
 
 _BUILTIN_PRESET_NAMES = ("Small Urban", "Medium Suburban", "Large with Battery")
 
@@ -26,7 +31,7 @@ def _save_home_presets_one_of_them_under_a_builtin_name(app: Flask, client: Flas
     The 'Small Urban' row's values are unlike the built-in one's, so applying the wrong preset shows.
     """
     insert_saved_home_preset(
-        app.config["DATABASE"], "Small Urban", json.dumps({"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000})
+        database_of(app), "Small Urban", json.dumps({"pv_kw": 9.5, "battery_kwh": 7.0, "consumption_kwh": 6000})
     )
     assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
 
@@ -37,7 +42,7 @@ def _answers_to_saves_sent_together(app: Flask, *saves: tuple[str, dict[str, obj
     Another connection holds the database's write lock while the saves are sent and lets go
     half a second later, so every save is in flight before any of them can write.
     """
-    with closing(sqlite3.connect(app.config["DATABASE"], isolation_level=None)) as other_writer:
+    with closing(sqlite3.connect(database_of(app).path, isolation_level=None)) as other_writer:
         other_writer.execute("BEGIN IMMEDIATE")
         with ThreadPoolExecutor(max_workers=len(saves)) as pool:
             sent = [pool.submit(app.test_client().post, path, json=body) for path, body in saves]
@@ -92,13 +97,17 @@ class TestListPresets:
 
     @pytest.mark.parametrize(
         "config_json",
-        [pytest.param("{not json", id="not-json"), pytest.param("[9.5]", id="not-an-object")],
+        [
+            pytest.param("{not json", id="not-json"),
+            pytest.param("[9.5]", id="not-an-object"),
+            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, id="nested-too-deeply"),
+        ],
     )
     def test_a_saved_home_preset_whose_config_is_not_a_json_object_is_left_out(
         self, app: Flask, client: FlaskClient, config_json: str
     ) -> None:
         """A saved home preset whose config is not a JSON object is neither listed nor found, and the other saved presets are listed."""
-        insert_saved_home_preset(app.config["DATABASE"], "Broken", config_json)
+        insert_saved_home_preset(database_of(app), "Broken", config_json)
         assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
 
         names = [p["name"] for p in client.get("/api/presets").get_json()]
@@ -111,7 +120,7 @@ class TestListPresets:
     ) -> None:
         """A database that cannot be read leaves the list answering, with the built-in presets alone."""
         assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
-        Path(app.config["DATABASE"]).write_bytes(b"not a database")
+        database_of(app).path.write_bytes(b"not a database")
 
         resp = client.get("/api/presets")
 
@@ -163,8 +172,7 @@ class TestSavePreset:
             "/api/presets",
             json={"name": "", "pv_kw": 4.0},
         )
-        assert resp.status_code == 400
-        assert "name" in resp.get_json()["error"].lower()
+        assert (resp.status_code, resp.get_json()) == (400, {"error": "Preset name is required"})
 
     def test_save_whitespace_name_returns_400(self, client: FlaskClient) -> None:
         """POST with whitespace-only preset name returns 400."""
@@ -172,7 +180,40 @@ class TestSavePreset:
             "/api/presets",
             json={"name": "   ", "pv_kw": 4.0},
         )
-        assert resp.status_code == 400
+        assert (resp.status_code, resp.get_json()) == (400, {"error": "Preset name is required"})
+
+    def test_save_of_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_saves_nothing(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A JSON string can escape a lone surrogate, which sqlite3 cannot bind, so such a name is refused as request_boundary.require_encodable_text refuses it, before any database access."""
+        name = chr(0xD800)
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(name, "name")
+
+        resp = client.post("/api/presets", json={"name": name, "pv_kw": 4.0})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        assert saved_preset_names(database_of(app)) == []
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            pytest.param(5, id="integer"),
+            pytest.param(None, id="null"),
+            pytest.param(["a"], id="array"),
+            pytest.param({"x": 1}, id="object"),
+        ],
+    )
+    def test_save_of_a_name_that_is_not_a_json_string_returns_400_naming_name_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, name: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_string(name, "name")
+
+        resp = client.post("/api/presets", json={"name": name, "pv_kw": 4.0})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        assert saved_preset_names(database_of(app)) == []
 
     @pytest.mark.parametrize(
         ("preset_type", "error"),
@@ -243,7 +284,7 @@ class TestSavePreset:
 
         assert resp.status_code == 409
         assert resp.get_json() == {"error": f"A built-in home preset is already named {name!r}"}
-        assert saved_preset_names(app.config["DATABASE"]) == []
+        assert saved_preset_names(database_of(app)) == []
 
     def test_saving_a_name_again_replaces_its_config_and_keeps_its_id(self, client: FlaskClient) -> None:
         """A second save under a saved home preset's name updates that preset in place."""
@@ -328,3 +369,58 @@ class TestGetPreset:
         resp = client.get(f"/api/presets/{name}")
 
         assert (resp.status_code, resp.get_json()["source"]) == (200, "builtin")
+
+    def test_a_saved_home_preset_the_database_cannot_read_answers_500_naming_it_and_logs_an_error_naming_it(
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A database fault in the lookup of a saved home preset is a 500 naming the preset and the fault, not "not found", logged once at ERROR with the database's error in its traceback."""
+        assert client.post("/api/presets", json={"name": "Mine", "pv_kw": 2.5}).status_code == 201
+        database_of(app).path.write_bytes(b"not a database")
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.get("/api/presets/Mine")
+
+        message = "Saved preset 'Mine' could not be read: file is not a database"
+        assert (resp.status_code, resp.get_json()) == (500, {"error": message})
+        records = [r for r in caplog.records if "'Mine'" in r.getMessage()]
+        assert [(r.levelno, r.getMessage()) for r in records] == [(logging.ERROR, message)]
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1].__cause__, sqlite3.DatabaseError)
+
+    def test_each_builtin_presets_name_answers_the_entry_the_list_holds_under_it_when_the_database_cannot_be_read(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A database that cannot be read leaves the list holding the built-in presets alone, and each of their names still answers the entry the list holds under it."""
+        database_of(app).path.write_bytes(b"not a database")
+        listed = client.get("/api/presets").get_json()
+        assert [(p["name"], p["source"]) for p in listed] == [(name, "builtin") for name in _BUILTIN_PRESET_NAMES]
+
+        for entry in listed:
+            resp = client.get(f"/api/presets/{entry['name']}")
+            assert (resp.status_code, resp.get_json()) == (200, entry)
+
+
+class TestPresetsAnswerFromTheAppsDatabase:
+    """The preset endpoints use the Database create_app built, whatever the app's store config names afterwards."""
+
+    def test_home_presets_are_saved_listed_and_found_in_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, app: Flask, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        assert client.post("/api/presets", json={"name": "Before", "pv_kw": 2.5}).status_code == 201
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        assert client.post("/api/presets", json={"name": "After", "pv_kw": 3.5}).status_code == 201
+
+        listed = client.get("/api/presets").get_json()
+        assert [preset["name"] for preset in listed if preset["source"] == "saved"] == ["After", "Before"]
+        found = client.get("/api/presets/Before")
+        assert (found.status_code, found.get_json()["pv_kw"]) == (200, 2.5)
+
+    def test_a_fleet_preset_is_saved_in_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, app: Flask, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        assert client.post("/api/scenarios/save", json={"name": "Fleet", "config": {"n_homes": 9}}).status_code == 201
+
+        assert saved_preset_names(database_of(app)) == ["Fleet"]

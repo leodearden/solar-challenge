@@ -2,7 +2,7 @@
 
 **Task:** #236 (follow-up from #195; folds #479)
 **Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig.inverter_efficiency`, `_inverter_and_wiring`, `_cec_library_inverter`, `create_model_chain_picking_from`)
-**Tests:** [`tests/unit/test_pv.py`](../tests/unit/test_pv.py)'s `TestCecInverterEfficiency` and `TestTheSystemNamesItsInverter`; [`tests/unit/config/test_generate_homes.py`](../tests/unit/config/test_generate_homes.py)'s `TestGenerateHomesFromDistributionInverterEfficiency`
+**Tests:** [`tests/unit/test_pv.py::TestCecInverterEfficiency`](../tests/unit/test_pv.py) and [`tests/unit/test_pv.py::TestTheSystemNamesItsInverter`](../tests/unit/test_pv.py); [`tests/unit/config/test_generate_homes.py::TestGenerateHomesFromDistributionInverterEfficiency`](../tests/unit/config/test_generate_homes.py)
 
 ---
 
@@ -67,3 +67,12 @@ relying on it.
   §5's site table, [tmy-irradiation-scaling.md](tmy-irradiation-scaling.md),
   [finance-spreadsheet-reconciliation.md](finance-spreadsheet-reconciliation.md) §4.2 and
   [pv-inverter-string-matching.md](pv-inverter-string-matching.md).
+- **[Amended 2026-10-20, task 823: every figure above, "after" and the per-capacity
+  changes included, was measured under SAPM's generic cell temperature. Every array's
+  cells now run at NOCT-SAM's temperature, from the module's own NOCT and efficiency
+  ([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured at the configured 0.96
+  by benchmark §3's and §4's methods, on task 823's commit 2be9d1b (same interpreter,
+  libraries and TMY): the 248 capacities read 943.8 (10.2 kW) to 1026.4 (10.1 kW) kWh
+  per wired kWp, median 1008.2, pstdev 11.7; the default 4 kW reads 1012.12, a
+  performance ratio of 0.8188; and the AC peak reaches at most 0.994 × the wired DC (at
+  0.4 kW).]**

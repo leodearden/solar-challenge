@@ -1,29 +1,45 @@
 """Tests for weather data handling."""
 
+import errno
+import hashlib
 import json
+import os
+import pickle
 import re
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta, timezone
+from dataclasses import dataclass, field
+from datetime import timedelta, timezone, tzinfo
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 import pandas as pd
 import numpy as np
 from unittest.mock import call, patch
 
+import solar_challenge
 from solar_challenge.weather import (
+    CACHE_DIR_VARIABLE,
+    DEFAULT_CACHE_DIR,
     PVGIS_TMY_REQUEST,
+    PrefetchedWeather,
+    PvgisTmy,
     WeatherCache,
     WeatherDataError,
-    get_tmy_data,
+    default_weather,
     scale_tmy_to_annual_ghi,
 )
 from solar_challenge.location import Location
-from tests._synthetic_weather import synthetic_june_weather
+from tests._repository_paths import REPOSITORY_ROOT
+from tests._synthetic_weather import TMY_DAYS, synthetic_june_weather, synthetic_tmy
 
 PRE_SCALING_BRISTOL_TMY_STEM = "tmy_5dc8c8bca218"
 """The file stem of Bristol's cached TMY before task 285, when the cache held PVGIS's TMY unscaled."""
+
+KEY_VERSION_2_ENTRY_DIR = REPOSITORY_ROOT / "tests" / "fixtures" / "weather_cache_key_version_2"
+"""Bristol's entry for synthetic_june_weather("2024-06-21") as key version 2's put wrote it: a CSV and a .meta.json sidecar."""
 
 
 @pytest.fixture
@@ -35,12 +51,7 @@ def sample_index():
 @pytest.fixture
 def pvgis_tmy():
     """A TMY shaped like PVGIS's as pvlib returns it: one non-leap 1990 of hourly UTC rows, its irradiance varying day to day."""
-    utc_1990 = pd.date_range("1990-01-01", periods=8760, freq="h", tz="UTC")
-    return (
-        synthetic_june_weather("1990-01-01", irradiance_scale_per_day=np.linspace(0.2, 1.0, 365))
-        .set_axis(utc_1990)
-        .assign(relative_humidity=80.0)
-    )
+    return synthetic_tmy(irradiance_scale_per_day=np.linspace(0.2, 1.0, TMY_DAYS).tolist()).assign(relative_humidity=80.0)
 
 
 @pytest.fixture
@@ -97,6 +108,76 @@ def _interrupted_half_way(frame):
     return frame.assign(temp_air=temp_air)
 
 
+class _ZonePandasCannotLocalizeIn(tzinfo):
+    """Europe/London in a tzinfo type pandas can convert an index to but cannot localize wall times in; its str names no timezone."""
+
+    _london = ZoneInfo("Europe/London")
+
+    def utcoffset(self, dt):
+        return self._london.utcoffset(dt)
+
+    def dst(self, dt):
+        return self._london.dst(dt)
+
+    def tzname(self, dt):
+        return self._london.tzname(dt)
+
+
+_SYNTHETIC_JUNE_DAY = synthetic_june_weather("2024-06-21")
+"""synthetic_june_weather's 2024-06-21: 24 hourly rows in Europe/London, on an index whose frequency is h."""
+
+
+def _entry_text(entry):
+    """The text of entry, a cache entry's file, read as UTF-8 bytes so that no newline is translated."""
+    return entry.read_bytes().decode("utf-8")
+
+
+def _write_entry_text(entry, text):
+    """Write text over entry, a cache entry's file, as UTF-8 bytes so that no newline is translated."""
+    entry.write_bytes(text.encode("utf-8"))
+
+
+def _sealed(content):
+    """An entry file's text with content after a first line sealing it, as put seals it."""
+    return json.dumps({"sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}) + "\n" + content
+
+
+def _rewrite_header(entry, rewrite):
+    """Replace the JSON object on the header line of entry, a cache entry's file, with what rewrite makes of it, keeping the frame's CSV below it.
+
+    It seals the file again over its new content, as put seals it, so that get reads past the seal to the header's own checks.
+    """
+    _seal, header, frame_csv = _entry_text(entry).split("\n", 2)
+    _write_entry_text(entry, _sealed(json.dumps(rewrite(json.loads(header))) + "\n" + frame_csv))
+
+
+def _cut_short_at_a_row_boundary(entry):
+    """Cut entry, a cache entry's file, short after the first half of its lines."""
+    lines = _entry_text(entry).splitlines(keepends=True)
+    _write_entry_text(entry, "".join(lines[: len(lines) // 2]))
+
+
+def _cut_short_mid_row(entry):
+    """Cut entry, a cache entry's file, short after the first half of its lines and the next line but its last field."""
+    lines = _entry_text(entry).splitlines(keepends=True)
+    half = len(lines) // 2
+    _write_entry_text(entry, "".join(lines[:half]) + lines[half].rsplit(",", 1)[0])
+
+
+def _cut_short_above_the_rows(entry):
+    """Cut entry, the file of _SYNTHETIC_JUNE_DAY's entry, short to the lines above the frame's rows."""
+    lines = _entry_text(entry).splitlines(keepends=True)
+    _write_entry_text(entry, "".join(lines[: -len(_SYNTHETIC_JUNE_DAY)]))
+
+
+def _change_the_timezone_keeping_the_seal(entry):
+    """Change the timezone the header of entry, a cache entry's file, names from Europe/London to UTC, leaving every other byte as it was."""
+    text = _entry_text(entry)
+    changed = text.replace('"timezone": "Europe/London"', '"timezone": "UTC"', 1)
+    assert changed != text, f"the entry's file names no Europe/London timezone to change: {text[:200]!r}"
+    _write_entry_text(entry, changed)
+
+
 class TestWeatherCache:
     """Test weather data caching (LOC-004)."""
 
@@ -127,11 +208,60 @@ class TestWeatherCache:
             "temp_air": np.linspace(5, 15, 24),
         }, index=sample_index)
 
-    def test_cache_directory_created(self, temp_cache_dir):
-        """Cache directory is created if it doesn't exist."""
-        new_cache_dir = temp_cache_dir / "new_cache"
-        cache = WeatherCache(cache_dir=new_cache_dir)
-        assert new_cache_dir.exists()
+    @pytest.fixture
+    def key_version_2_entry_names(self, cache):
+        """The names of the files in KEY_VERSION_2_ENTRY_DIR, each copied into cache's directory."""
+        names = sorted(file.name for file in KEY_VERSION_2_ENTRY_DIR.iterdir())
+        for name in names:
+            shutil.copy2(KEY_VERSION_2_ENTRY_DIR / name, cache.cache_dir / name)
+        return names
+
+    def test_constructing_a_cache_leaves_its_directory_absent_until_the_first_put(
+        self, tmp_path, bristol, sample_weather_data
+    ):
+        """Constructing a cache creates neither its directory nor the directory's parent, and get, invalidate and
+        clear read the absent directory as an empty cache, creating nothing either; the first put creates the
+        directory, its parent included, and stores the entry there."""
+        cache_dir = tmp_path / "absent" / "weather"
+
+        cache = WeatherCache(cache_dir=cache_dir)
+
+        assert not cache_dir.parent.exists()
+        assert cache.get("tmy", bristol) is None
+        assert cache.invalidate("tmy", bristol) is False
+        assert cache.clear() == 0
+        assert not cache_dir.parent.exists()
+
+        cache.put(sample_weather_data, "tmy", bristol)
+
+        assert len(list(cache_dir.iterdir())) == 1
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), sample_weather_data)
+
+    @pytest.mark.parametrize(
+        ("directory_parts", "put_error"),
+        [
+            pytest.param(("file", "weather"), NotADirectoryError, id="its directory under a regular file"),
+            pytest.param(("file",), FileExistsError, id="its directory a regular file"),
+        ],
+    )
+    def test_a_regular_file_in_its_directorys_place_reads_as_an_empty_cache_and_put_raises_oserror(
+        self, tmp_path, bristol, sample_weather_data, directory_parts, put_error
+    ):
+        """A regular file where the cache directory, or a parent of it, should be leaves no entry file anywhere, so
+        get, invalidate and clear read the cache as empty, as for an absent directory, and put raises the OSError
+        its mkdir raises; the regular file is left as it was."""
+        regular_file = tmp_path / "file"
+        regular_file.write_text("kept")
+        cache = WeatherCache(cache_dir=tmp_path.joinpath(*directory_parts))
+
+        assert cache.get("tmy", bristol) is None
+        assert cache.invalidate("tmy", bristol) is False
+        assert cache.clear() == 0
+        with pytest.raises(put_error):
+            cache.put(sample_weather_data, "tmy", bristol)
+
+        assert regular_file.read_text() == "kept"
+        assert list(tmp_path.iterdir()) == [regular_file]
 
     def test_put_and_get_tmy(self, cache, bristol, sample_weather_data):
         """Data can be stored and retrieved from cache."""
@@ -162,54 +292,159 @@ class TestWeatherCache:
         pd.testing.assert_frame_equal(cache.get("tmy", bristol), scaled, check_exact=True)
 
     @pytest.mark.parametrize(
-        ("start", "tz"),
+        "index",
         [
-            pytest.param("2024-03-30", "UTC", id="UTC across the March clock change"),
-            pytest.param("2024-06-21", "Europe/London", id="Europe/London at one offset"),
-            pytest.param("2024-03-30", "Europe/London", id="Europe/London across the March clock change"),
-            pytest.param("2024-10-26", "Europe/London", id="Europe/London across the October clock change"),
-            pytest.param("2024-06-21", "UTC+01:00", id="a fixed UTC offset"),
-            pytest.param("2024-03-30", None, id="naive"),
+            pytest.param(pd.date_range("2024-03-30", periods=48, freq="h", tz="UTC"), id="UTC across the March clock change"),
+            pytest.param(pd.date_range("2024-06-21", periods=48, freq="h", tz="Europe/London"), id="Europe/London at one offset"),
+            pytest.param(
+                pd.date_range("2024-03-30", periods=48, freq="h", tz="Europe/London"),
+                id="Europe/London across the March clock change",
+            ),
+            pytest.param(
+                pd.date_range("2024-10-26", periods=48, freq="h", tz="Europe/London"),
+                id="Europe/London across the October clock change",
+            ),
+            pytest.param(pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC+01:00"), id="a fixed UTC offset"),
+            pytest.param(pd.date_range("2024-03-30", periods=48, freq="h"), id="naive"),
+            pytest.param(
+                pd.DatetimeIndex(pd.date_range("1990-01-01", periods=48, freq="h", tz="UTC"), freq=None, name="time(UTC)"),
+                id="UTC with no frequency, named time(UTC) as pvlib returns PVGIS's TMY",
+            ),
         ],
     )
-    def test_get_returns_the_index_put_stored(self, cache, bristol, start, tz):
-        """get returns the frame on the index put stored: its instants, its timezone and its frequency."""
-        index = pd.date_range(start, periods=48, freq="h", tz=tz)
+    def test_put_writes_one_file_that_get_returns_exactly(self, cache, bristol, index):
+        """put leaves one file under cache_dir, and get returns the frame from it exactly: its values bit for bit, and
+        its index's instants, timezone, frequency and name."""
         frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
         cache.put(frame, "tmy", bristol)
 
+        assert len(list(cache.cache_dir.iterdir())) == 1
         pd.testing.assert_frame_equal(cache.get("tmy", bristol), frame, check_exact=True)
+
+    def test_an_entry_written_at_key_version_2_is_a_miss(self, cache, bristol, key_version_2_entry_names):
+        """An entry as key version 2 wrote it, a CSV and a .meta.json sidecar, is never read: get finds no entry."""
+        assert cache.get("tmy", bristol) is None
+
+    def test_clear_removes_entries_of_key_version_2_too(self, cache, bristol, sample_weather_data, key_version_2_entry_names):
+        """clear removes the files of an entry key version 2 wrote along with the entry put writes beside them, and
+        returns how many files it removed."""
+        cache.put(sample_weather_data, "tmy", bristol)
+        names_before = {file.name for file in cache.cache_dir.iterdir()}
+        assert set(key_version_2_entry_names) < names_before
+
+        assert cache.clear() == len(names_before)
+        assert list(cache.cache_dir.iterdir()) == []
+
+    @pytest.mark.parametrize(
+        "spoil",
+        [
+            pytest.param(lambda entry: entry.write_bytes(b"garbage"), id="text that is not JSON"),
+            pytest.param(lambda entry: entry.write_bytes(b"\x00\xff\xfe"), id="bytes that are not UTF-8"),
+            pytest.param(lambda entry: entry.write_bytes(b""), id="an empty file"),
+            pytest.param(
+                lambda entry: _write_entry_text(entry, _SYNTHETIC_JUNE_DAY.to_csv()),
+                id="the frame's CSV with no header line, as key version 2 wrote it",
+            ),
+            pytest.param(
+                lambda entry: _write_entry_text(
+                    entry, json.dumps({"timezone": "Europe/London", "freq": "h"}) + "\n" + _SYNTHETIC_JUNE_DAY.to_csv()
+                ),
+                id="a header line then the frame's CSV, with no seal line",
+            ),
+            pytest.param(
+                lambda entry: _rewrite_header(entry, lambda header: {"timezone": header["timezone"]}),
+                id="a header lacking freq",
+            ),
+            pytest.param(
+                lambda entry: _rewrite_header(entry, lambda header: {**header, "timezone": 5}),
+                id="a header whose timezone is no str",
+            ),
+            pytest.param(
+                lambda entry: _rewrite_header(entry, lambda header: {**header, "freq": 5}),
+                id="a header whose freq is no str",
+            ),
+            pytest.param(
+                lambda entry: _rewrite_header(entry, lambda header: {**header, "freq": "2h"}),
+                id="a header naming a freq the rows do not follow",
+            ),
+            pytest.param(_cut_short_at_a_row_boundary, id="cut short at a row boundary"),
+            pytest.param(_cut_short_mid_row, id="cut short mid-row"),
+            pytest.param(_cut_short_above_the_rows, id="cut short to the lines above the frame's rows"),
+            pytest.param(
+                lambda entry: _write_entry_text(entry, _entry_text(entry).rstrip("\n")[:-3]),
+                id="cut short inside its last row, keeping the row count",
+            ),
+            pytest.param(
+                _change_the_timezone_keeping_the_seal, id="its header's timezone changed, its seal as put wrote it"
+            ),
+        ],
+    )
+    def test_get_refuses_an_entry_it_cannot_read_naming_its_file(self, cache, bristol, spoil):
+        """get refuses an entry file cut short, changed after put wrote it, or holding anything but a frame as put writes
+        one, with a ValueError naming the file, so it never returns a degraded frame."""
+        cache.put(_SYNTHETIC_JUNE_DAY, "tmy", bristol)
+        [entry] = cache.cache_dir.iterdir()
+        spoil(entry)
+
+        with pytest.raises(ValueError, match=re.escape(str(entry))):
+            cache.get("tmy", bristol)
+
+    def test_a_refusal_says_removing_the_entry_makes_get_find_none(self, cache, bristol):
+        """get's refusal of an entry file it cannot read names WeatherCache.invalidate as a way to remove the entry,
+        and says get then finds no entry, promising no fetch, since the cache fetches nothing; once invalidate has
+        removed the entry, get returns None."""
+        cache.put(_SYNTHETIC_JUNE_DAY, "tmy", bristol)
+        [entry] = cache.cache_dir.iterdir()
+        entry.write_bytes(b"garbage")
+
+        with pytest.raises(ValueError) as refusal:
+            cache.get("tmy", bristol)
+
+        message = str(refusal.value)
+        words_get_writes = message.replace(str(refusal.value.__cause__), "").replace(str(entry), "")
+        assert "WeatherCache.invalidate" in message
+        assert "so that get finds no entry" in message
+        assert "fetch" not in words_get_writes.lower()
+        assert cache.invalidate("tmy", bristol) is True
+        assert cache.get("tmy", bristol) is None
 
     @pytest.mark.parametrize(
         "tz",
         [
             pytest.param("dateutil/Europe/London", id="a dateutil zone"),
             pytest.param(timezone(timedelta(hours=1), "BST"), id="a named fixed offset"),
+            pytest.param(_ZonePandasCannotLocalizeIn(), id="a zone pandas can convert to but not localize in"),
         ],
     )
-    def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, cache, bristol, tz):
+    def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, tmp_path, bristol, tz):
         """put refuses a frame indexed in a timezone whose str, from which get restores it, names none: its
-        ValueError names that str, and put leaves no file, so a get finds no entry."""
-        index = pd.date_range("2024-06-21", periods=48, freq="h", tz=tz)
+        ValueError names that str, and put creates nothing, not even the cache's absent directory, so a get finds
+        no entry. The index is built at UTC and converted to tz, because pandas cannot localize wall times in some
+        such zones."""
+        cache = WeatherCache(cache_dir=tmp_path / "absent")
+        index = pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC").tz_convert(tz)
         frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
 
         with pytest.raises(ValueError, match=re.escape(str(index.tz))):
             cache.put(frame, "tmy", bristol)
 
-        assert list(cache.cache_dir.iterdir()) == []
+        assert not cache.cache_dir.exists()
         assert cache.get("tmy", bristol) is None
 
     def test_get_refuses_an_entry_recording_a_timezone_it_could_not_restore(self, cache, bristol):
         """get refuses an entry recording its timezone as a str that names none, a dateutil zone's say, which put
-        refuses to record: its ValueError names that str."""
+        refuses to record: its ValueError names that str and the entry's file."""
         index = pd.date_range("2024-06-21", periods=48, freq="h", tz="Europe/London")
         cache.put(pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index), "tmy", bristol)
         dateutil_london = "tzfile('/usr/share/zoneinfo/Europe/London')"
-        [meta_file] = cache.cache_dir.glob("*.meta.json")
-        meta_file.write_text(json.dumps({**json.loads(meta_file.read_text()), "timezone": dateutil_london}))
+        [entry] = cache.cache_dir.iterdir()
+        _rewrite_header(entry, lambda header: {**header, "timezone": dateutil_london})
 
-        with pytest.raises(ValueError, match=re.escape(dateutil_london)):
+        with pytest.raises(ValueError) as refusal:
             cache.get("tmy", bristol)
+
+        assert dateutil_london in str(refusal.value)
+        assert str(entry) in str(refusal.value)
 
     def test_different_locations_different_cache(self, cache, sample_weather_data):
         """Different locations use different cache entries."""
@@ -268,6 +503,23 @@ class TestWeatherCache:
         assert list(cache.cache_dir.iterdir()) == []
         assert cache.get("tmy", bristol) is None
 
+    def test_a_put_that_cannot_replace_the_entrys_path_raises_oserror_leaving_the_path_as_it_was_and_no_staged_file(
+        self, cache, bristol, sample_weather_data
+    ):
+        """put's last step replaces what lies at the entry's path with the file it has written. When that fails, as
+        onto a non-empty directory, put raises OSError, leaving the directory as it was and no staged file beside it."""
+        cache.put(sample_weather_data, "tmy", bristol)
+        [entry] = cache.cache_dir.iterdir()
+        entry.unlink()
+        entry.mkdir()
+        (entry / "kept").write_text("kept")
+
+        with pytest.raises(IsADirectoryError):
+            cache.put(sample_weather_data, "tmy", bristol)
+
+        assert list(cache.cache_dir.iterdir()) == [entry]
+        assert [(file.name, file.read_text()) for file in entry.iterdir()] == [("kept", "kept")]
+
     def test_clear_removes_all(self, cache, bristol, sample_weather_data):
         """Clear removes all cached data."""
         cache.put(sample_weather_data, "tmy", bristol)
@@ -277,12 +529,13 @@ class TestWeatherCache:
         assert result is None
 
     def test_invalidate_specific_entry(self, cache, bristol, sample_weather_data):
-        """Invalidate removes specific cache entry."""
+        """Invalidate removes specific cache entry, leaving no file of it."""
         cache.put(sample_weather_data, "tmy", bristol)
         removed = cache.invalidate("tmy", bristol)
         assert removed is True
         result = cache.get("tmy", bristol)
         assert result is None
+        assert list(cache.cache_dir.iterdir()) == []
 
     def test_invalidate_returns_false_if_not_found(self, cache, bristol):
         """Invalidate returns False if entry doesn't exist."""
@@ -290,47 +543,259 @@ class TestWeatherCache:
         assert removed is False
 
 
-class TestGetTmyDataWithCache:
-    """Test TMY data retrieval with caching."""
+class TestWeatherCacheDirectory:
+    """A WeatherCache's directory is the one it is given, else the one CACHE_DIR_VARIABLE names when set and non-empty, else DEFAULT_CACHE_DIR.
+
+    Each test sets or deletes the variable itself, so a shell that exports it cannot change the outcome,
+    and a test that lets WeatherCache() choose works in tmp_path, so the relative default lands there.
+    """
+
+    def test_given_no_directory_it_uses_the_one_the_variable_names(self, monkeypatch, tmp_path):
+        """WeatherCache() uses the directory the variable names, which its first put creates."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        cache = WeatherCache()
+
+        assert cache.cache_dir == tmp_path / "named"
+        assert not (tmp_path / "named").exists()
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / "named").iterdir())) == 1
+
+    @pytest.mark.parametrize(
+        "clear_variable",
+        [
+            pytest.param(lambda monkeypatch: monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False), id="unset"),
+            pytest.param(lambda monkeypatch: monkeypatch.setenv(CACHE_DIR_VARIABLE, ""), id="empty"),
+        ],
+    )
+    def test_given_no_directory_it_uses_the_default_when_the_variable_is_unset_or_empty(
+        self, monkeypatch, tmp_path, clear_variable
+    ):
+        """WeatherCache() uses DEFAULT_CACHE_DIR, under the working directory, which its first put creates."""
+        monkeypatch.chdir(tmp_path)
+        clear_variable(monkeypatch)
+
+        cache = WeatherCache()
+
+        assert cache.cache_dir == DEFAULT_CACHE_DIR
+        assert not (tmp_path / DEFAULT_CACHE_DIR).exists()
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / DEFAULT_CACHE_DIR).iterdir())) == 1
+
+    def test_given_a_directory_it_ignores_the_variable(self, monkeypatch, tmp_path):
+        """WeatherCache(cache_dir=...) uses the directory it is given: its first put creates that one, never the one
+        the variable names."""
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        cache = WeatherCache(cache_dir=tmp_path / "given")
+
+        assert cache.cache_dir == tmp_path / "given"
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / "given").iterdir())) == 1
+        assert not (tmp_path / "named").exists()
+
+
+def _cache_whose_directory_is_a_symlink_to_nowhere(tmp_path):
+    """A cache whose get finds no entry and whose put's mkdir raises FileExistsError for the link, even as root.
+
+    Not a read-only directory, which root can write.
+    """
+    cache_dir = tmp_path / "weather"
+    cache_dir.symlink_to(tmp_path / "nowhere", target_is_directory=True)
+    return WeatherCache(cache_dir=cache_dir)
+
+
+def _cache_whose_directory_lies_under_a_regular_file(tmp_path):
+    """A cache whose get finds no entry and whose put's mkdir raises NotADirectoryError, even as root."""
+    regular_file = tmp_path / "file"
+    regular_file.touch()
+    return WeatherCache(cache_dir=regular_file / "weather")
+
+
+class TestPvgisTmy:
+    """PvgisTmy(cache) serves PVGIS's scaled TMY from its cache, else fetches it and puts it there; PvgisTmy(None) fetches on every get."""
 
     @pytest.fixture
-    def mock_tmy_data(self, sample_index):
-        """Mock TMY data from PVGIS."""
-        return pd.DataFrame({
-            "ghi": np.linspace(0, 800, 24),
-            "dni": np.linspace(0, 600, 24),
-            "dhi": np.linspace(0, 300, 24),
-            "temp_air": np.linspace(5, 15, 24),
-        }, index=sample_index)
+    def june_day(self):
+        """The frame seeded_cache holds as Bristol's TMY."""
+        return synthetic_june_weather("2024-06-21")
 
-    def test_uses_cache_when_available(self, weather_cache, pvgis_requests, mock_tmy_data):
-        """Uses cached data when available, returned exactly as stored."""
-        location = Location.bristol()
-        weather_cache.put(mock_tmy_data, "tmy", location)
+    @pytest.fixture
+    def seeded_cache(self, tmp_path, june_day):
+        """A cache of the test's own, not the weather_cache default_weather() reads, holding june_day as Bristol's TMY."""
+        cache = WeatherCache(cache_dir=tmp_path / "weather")
+        cache.put(june_day, "tmy", Location.bristol())
+        return cache
 
-        result = get_tmy_data(location, use_cache=True)
+    def test_get_returns_the_tmy_its_cache_holds_exactly(self, seeded_cache, june_day, pvgis_requests):
+        """get returns the TMY its cache holds, exactly as it was put, and requests nothing from PVGIS."""
+        result = PvgisTmy(seeded_cache).get(Location.bristol())
 
+        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
         pvgis_requests.tmy.assert_not_called()
         pvgis_requests.hourly.assert_not_called()
-        pd.testing.assert_frame_equal(result, mock_tmy_data)
 
-    def test_skips_cache_when_disabled(self, weather_cache, pvgis_requests, mock_tmy_data):
-        """Skips cache when use_cache=False."""
-        location = Location.bristol()
-        weather_cache.put(mock_tmy_data, "tmy", location)
+    def test_an_entry_its_cache_cannot_read_raises_naming_its_file_and_fetches_nothing(
+        self, seeded_cache, pvgis_requests
+    ):
+        """get passes on the ValueError its cache's get raises for an entry file no longer as put wrote it, naming
+        the file, with one note that once the entry is removed the next get fetches the TMY afresh, and requests
+        nothing from PVGIS."""
+        [entry] = seeded_cache.cache_dir.iterdir()
+        entry.write_bytes(b"garbage")
 
-        get_tmy_data(location, use_cache=False)
+        with pytest.raises(ValueError, match=re.escape(str(entry))) as refusal:
+            PvgisTmy(seeded_cache).get(Location.bristol())
+
+        [note] = refusal.value.__notes__
+        assert "PvgisTmy.get fetches the TMY afresh" in note
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "remove",
+        [
+            pytest.param(lambda cache, entry: entry.unlink(), id="the file deleted"),
+            pytest.param(
+                lambda cache, entry: cache.invalidate("tmy", Location.bristol()), id="WeatherCache.invalidate"
+            ),
+        ],
+    )
+    def test_once_an_entry_it_cannot_read_is_removed_get_fetches_it_afresh(
+        self, seeded_cache, pvgis_requests, remove
+    ):
+        """Once the entry its cache refused is removed, by deleting the file or with WeatherCache.invalidate, the
+        same PvgisTmy's next get fetches the scaled TMY afresh from PVGIS, once, and puts it, so the cache holds a
+        readable entry again."""
+        weather = PvgisTmy(seeded_cache)
+        [entry] = seeded_cache.cache_dir.iterdir()
+        entry.write_bytes(b"garbage")
+        with pytest.raises(ValueError):
+            weather.get(Location.bristol())
+
+        remove(seeded_cache, entry)
+        fetched = weather.get(Location.bristol())
 
         pvgis_requests.tmy.assert_called_once()
         pvgis_requests.hourly.assert_called_once()
+        pd.testing.assert_frame_equal(seeded_cache.get("tmy", Location.bristol()), fetched, check_exact=True)
+
+    def test_an_entry_path_its_cache_cannot_open_raises_the_oserror_and_fetches_nothing(
+        self, seeded_cache, pvgis_requests
+    ):
+        """get passes on the OSError its cache's get raises for an entry path it cannot open for a reason other than
+        the path's absence, naming the path, and requests nothing from PVGIS. A directory at the path is the cause
+        used, since opening one raises even as root, where a cache directory with no permissions would not."""
+        [entry] = seeded_cache.cache_dir.iterdir()
+        entry.unlink()
+        entry.mkdir()
+
+        with pytest.raises(IsADirectoryError, match=re.escape(str(entry))):
+            PvgisTmy(seeded_cache).get(Location.bristol())
+
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+    def test_a_miss_fetches_once_puts_and_serves_later_gets_from_its_cache(
+        self, tmp_path, weather_cache, pvgis_requests
+    ):
+        """A get its cache cannot answer fetches the scaled TMY once and puts it in that cache, not in the
+        weather_cache default_weather() reads; a later get is served from that cache with no request."""
+        bristol = Location.bristol()
+        cache = WeatherCache(cache_dir=tmp_path / "weather")
+
+        first = PvgisTmy(cache).get(bristol)
+
+        pvgis_requests.tmy.assert_called_once()
+        pvgis_requests.hourly.assert_called_once()
+        assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), first, check_exact=True)
+        assert list(weather_cache.cache_dir.iterdir()) == []
+
+        pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
+        pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
+        pd.testing.assert_frame_equal(PvgisTmy(cache).get(bristol), first, check_exact=True)
+
+    @pytest.mark.parametrize(
+        ("make_cache", "put_errno"),
+        [
+            pytest.param(
+                _cache_whose_directory_is_a_symlink_to_nowhere, errno.EEXIST, id="its directory a symlink to nowhere"
+            ),
+            pytest.param(
+                _cache_whose_directory_lies_under_a_regular_file, errno.ENOTDIR, id="its directory under a regular file"
+            ),
+        ],
+    )
+    def test_a_put_its_cache_cannot_make_returns_the_fetched_tmy_with_a_warning_naming_the_directory(
+        self, tmp_path, pvgis_requests, make_cache, put_errno
+    ):
+        """A get whose put its cache cannot make, as where the cache directory cannot be created, returns the scaled
+        TMY it fetched, with a UserWarning attributed to get's caller that names the directory and the OSError's
+        reason, and caches nothing. A cache directory under a regular file is one, since its get finds no entry and
+        so fetches, instead of raising."""
+        cache = make_cache(tmp_path)
+
+        with pytest.warns(UserWarning, match=re.escape(str(cache.cache_dir))) as raised:
+            fetched = PvgisTmy(cache).get(Location.bristol())
+
+        assert fetched["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pvgis_requests.tmy.assert_called_once()
+        pvgis_requests.hourly.assert_called_once()
+        [warning] = [w for w in raised if str(cache.cache_dir) in str(w.message)]
+        assert os.strerror(put_errno) in str(warning.message)
+        assert warning.filename == __file__
+        assert not cache.cache_dir.exists()
+
+    def test_after_a_put_its_cache_cannot_make_the_next_get_fetches_again(self, tmp_path, pvgis_requests):
+        """A get whose put its cache could not make leaves nothing cached, so the next get fetches the scaled TMY
+        from PVGIS again, and returns the same frame."""
+        weather = PvgisTmy(_cache_whose_directory_is_a_symlink_to_nowhere(tmp_path))
+
+        with pytest.warns(UserWarning):
+            first = weather.get(Location.bristol())
+        with pytest.warns(UserWarning):
+            second = weather.get(Location.bristol())
+
+        assert pvgis_requests.tmy.call_count == 2
+        assert pvgis_requests.hourly.call_count == 2
+        pd.testing.assert_frame_equal(first, second, check_exact=True)
+
+    def test_with_no_cache_it_fetches_on_every_get_and_writes_nothing(self, weather_cache, pvgis_requests):
+        """PvgisTmy(None) requests both PVGIS answers on every get and puts nothing, not even in the weather_cache
+        default_weather() reads."""
+        weather = PvgisTmy(None)
+
+        weather.get(Location.bristol())
+        weather.get(Location.bristol())
+
+        assert pvgis_requests.tmy.call_count == 2
+        assert pvgis_requests.hourly.call_count == 2
+        assert list(weather_cache.cache_dir.iterdir()) == []
+
+    def test_it_pickles_with_its_cache_directory(self, seeded_cache, june_day, pvgis_requests):
+        """A PvgisTmy restored from its pickle reads the same cache directory, so it serves the same TMY."""
+        restored = pickle.loads(pickle.dumps(PvgisTmy(seeded_cache)))
+
+        assert restored.cache.cache_dir == seeded_cache.cache_dir
+        pd.testing.assert_frame_equal(restored.get(Location.bristol()), june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
 
 
-class TestGetTmyDataScalesToLongTermMeanGhi:
-    """get_tmy_data scales PVGIS's TMY to the mean annual GHI of PVGIS's 2005-2020 hourly series."""
+class TestPvgisTmyScalesToLongTermMeanGhi:
+    """PvgisTmy.get scales PVGIS's TMY to the mean annual GHI of PVGIS's 2005-2020 hourly series."""
 
     def test_annual_ghi_is_the_series_mean(self, pvgis_tmy, pvgis_requests):
         """The TMY's GHI sums to the mean of the series' calendar-year totals; its temperatures are PVGIS's."""
-        result = get_tmy_data(Location.bristol(), use_cache=False)
+        result = PvgisTmy(None).get(Location.bristol())
 
         assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
         pd.testing.assert_series_equal(result["temp_air"], pvgis_tmy["temp_air"])
@@ -338,7 +803,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
     def test_tmy_is_requested_with_pvgis_tmy_request(self, pvgis_requests):
         """The TMY request is PVGIS_TMY_REQUEST at the location's point, so whatever imports it asks for the same TMY."""
         bristol = Location.bristol()
-        get_tmy_data(bristol, use_cache=False)
+        PvgisTmy(None).get(bristol)
 
         assert pvgis_requests.tmy.call_args == call(
             latitude=bristol.latitude, longitude=bristol.longitude, **PVGIS_TMY_REQUEST
@@ -346,7 +811,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
 
     def test_series_is_requested_as_ghi_for_the_tmys_point_years_and_horizon(self, pvgis_requests):
         """The series request asks for the TMY request's data as one GHI column, the response pvgis_hourly_series mirrors."""
-        get_tmy_data(Location.bristol(), use_cache=False)
+        PvgisTmy(None).get(Location.bristol())
 
         tmy_request = pvgis_requests.tmy.call_args.kwargs
         series_request = pvgis_requests.hourly.call_args.kwargs
@@ -361,16 +826,6 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
             assert series_request[series_arg] == tmy_request[tmy_arg], series_arg
         assert series_request["surface_tilt"] == 0
         assert series_request["components"] is False
-
-    def test_scaled_tmy_is_cached(self, weather_cache, pvgis_requests):
-        """Once fetched, the scaled TMY is served from the cache exactly as fetched, with no further PVGIS request."""
-        first = get_tmy_data(Location.bristol())
-        pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
-        pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
-        second = get_tmy_data(Location.bristol())
-
-        assert first["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
-        pd.testing.assert_frame_equal(second, first, check_exact=True)
 
     def test_a_tmy_cached_before_scaling_is_never_served(self, weather_cache, pvgis_tmy, pvgis_requests):
         """Bristol's unscaled TMY, as the cache stored it before task 285, is fetched afresh and scaled instead."""
@@ -389,7 +844,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
             )
         )
 
-        result = get_tmy_data(Location.bristol())
+        result = PvgisTmy(weather_cache).get(Location.bristol())
 
         pvgis_requests.tmy.assert_called_once()
         assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
@@ -411,7 +866,7 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         pvgis_requests.hourly.return_value = (make_series(pvgis_hourly_series), {})
 
         with pytest.raises(WeatherDataError, match="2020"):
-            get_tmy_data(Location.bristol())
+            PvgisTmy(weather_cache).get(Location.bristol())
 
         assert weather_cache.get("tmy", Location.bristol()) is None
 
@@ -427,14 +882,14 @@ class TestGetTmyDataScalesToLongTermMeanGhi:
         pvgis_requests.tmy.return_value = (make_tmy(pvgis_tmy), {})
 
         with pytest.raises(WeatherDataError) as refusal:
-            get_tmy_data(Location.bristol())
+            PvgisTmy(weather_cache).get(Location.bristol())
 
         assert isinstance(refusal.value.__cause__, ValueError)
         assert str(refusal.value.__cause__) in str(refusal.value)
         assert weather_cache.get("tmy", Location.bristol()) is None
 
 
-class TestGetTmyDataReportsPvgisFailures:
+class TestPvgisTmyReportsPvgisFailures:
     """Every failure at the PVGIS boundary raises WeatherDataError naming why, and leaves nothing cached."""
 
     @pytest.mark.parametrize(
@@ -449,7 +904,7 @@ class TestGetTmyDataReportsPvgisFailures:
         getattr(pvgis_requests, failing_request).side_effect = ConnectionError("PVGIS is unreachable")
 
         with pytest.raises(WeatherDataError, match="PVGIS is unreachable"):
-            get_tmy_data(Location.bristol())
+            PvgisTmy(weather_cache).get(Location.bristol())
 
         assert weather_cache.get("tmy", Location.bristol()) is None
 
@@ -460,13 +915,160 @@ class TestGetTmyDataReportsPvgisFailures:
         pvgis_requests.tmy.return_value = (pvgis_tmy.drop(columns="ghi"), {})
 
         with pytest.raises(WeatherDataError, match="ghi"):
-            get_tmy_data(Location.bristol())
+            PvgisTmy(weather_cache).get(Location.bristol())
 
         assert weather_cache.get("tmy", Location.bristol()) is None
 
     def test_weather_data_error_is_a_runtime_error(self):
         """Callers that catch RuntimeError still catch every PVGIS failure."""
         assert issubclass(WeatherDataError, RuntimeError)
+
+
+class TestDefaultWeather:
+    """default_weather() is PvgisTmy over a new WeatherCache() at each call, so it reads the directory CACHE_DIR_VARIABLE names at that call, else DEFAULT_CACHE_DIR under the working directory."""
+
+    @pytest.fixture
+    def variable_unset_in_tmp_path(self, monkeypatch, tmp_path):
+        """The variable unset, working in tmp_path, so that WeatherCache() resolves its default there."""
+        monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
+        monkeypatch.chdir(tmp_path)
+
+    def test_default_weather_follows_the_variable_at_each_call(self, variable_unset_in_tmp_path, monkeypatch, tmp_path):
+        """Each default_weather() reads a cache in the directory the variable names at that call."""
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "first"))
+        assert default_weather().cache.cache_dir == tmp_path / "first"
+
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "second"))
+        assert default_weather().cache.cache_dir == tmp_path / "second"
+
+    def test_default_weather_creates_no_directory(self, variable_unset_in_tmp_path, tmp_path):
+        """default_weather() writes nothing under the working directory, so a composition root that builds the
+        default provider writes nothing before its first put."""
+        default_weather()
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_default_weather_reads_the_directory_the_variable_names(
+        self, variable_unset_in_tmp_path, monkeypatch, tmp_path, pvgis_requests
+    ):
+        """default_weather() serves the TMY held in the directory the variable names, exactly, and requests nothing
+        from PVGIS."""
+        june_day = synthetic_june_weather("2024-06-21")
+        WeatherCache(cache_dir=tmp_path / "named").put(june_day, "tmy", Location.bristol())
+        monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
+
+        result = default_weather().get(Location.bristol())
+
+        pd.testing.assert_frame_equal(result, june_day, check_exact=True)
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
+
+RETIRED_NAMES = ("set_weather_cache", "get_weather_cache", "get_tmy_data")
+"""The process-wide weather cache's setter and getter, and the facade over it, which task 827 retired."""
+
+
+class TestTheGlobalWeatherSourceIsRetired:
+    """Neither the package nor solar_challenge.weather serves a retired name: weather reaches a simulation only as a provider it is given."""
+
+    @pytest.mark.parametrize("name", RETIRED_NAMES)
+    def test_the_package_serves_no_retired_name(self, name):
+        """Accessing a retired name on the package raises AttributeError naming it."""
+        with pytest.raises(AttributeError, match=name):
+            getattr(solar_challenge, name)
+
+    @pytest.mark.parametrize("name", RETIRED_NAMES)
+    def test_importing_a_retired_name_from_the_weather_module_raises_import_error(self, name):
+        """`from solar_challenge.weather import <name>` raises ImportError naming it."""
+        with pytest.raises(ImportError, match=f"cannot import name '{name}'"):
+            exec(f"from solar_challenge.weather import {name}", {})
+
+
+@dataclass
+class _CountingWeather:
+    """A WeatherProvider by its get alone: it serves frames and records each location it is asked for."""
+
+    frames: dict[Location, pd.DataFrame]
+    asked: list[Location] = field(default_factory=list)
+
+    def get(self, location: Location) -> pd.DataFrame:
+        self.asked.append(location)
+        return self.frames[location]
+
+
+class TestPrefetchedWeather:
+    """PrefetchedWeather holds the frames it is given, or fetches, in a read-only mapping of its own, and answers only for their locations."""
+
+    BRISTOL = Location.bristol()
+    BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
+    UNHELD = Location(51.48, -3.18)
+
+    @pytest.fixture
+    def bristol_frame(self):
+        """A clear 21 June."""
+        return synthetic_june_weather("2024-06-21")
+
+    @pytest.fixture
+    def bath_frame(self):
+        """The same day as bristol_frame at half its irradiance, so that the two differ."""
+        return synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(0.5,))
+
+    @pytest.fixture
+    def counting(self, bristol_frame, bath_frame):
+        """A counting provider serving bristol_frame at BRISTOL and bath_frame at BATH."""
+        return _CountingWeather({self.BRISTOL: bristol_frame, self.BATH: bath_frame})
+
+    @pytest.fixture
+    def fetched(self, counting):
+        """What fetch makes of counting for BRISTOL, BATH and BRISTOL again."""
+        return PrefetchedWeather.fetch(counting, [self.BRISTOL, self.BATH, self.BRISTOL])
+
+    def test_fetch_gets_each_distinct_location_once_in_first_seen_order(self, counting):
+        """fetch asks its provider for each distinct location once, in the order the locations are first seen."""
+        PrefetchedWeather.fetch(counting, [self.BRISTOL, self.BATH, self.BRISTOL])
+
+        assert counting.asked == [self.BRISTOL, self.BATH]
+
+    def test_get_returns_the_frame_held_for_a_location(self, fetched, bristol_frame, bath_frame):
+        """get returns the frame held for each location it holds."""
+        pd.testing.assert_frame_equal(fetched.get(self.BATH), bath_frame, check_exact=True)
+        pd.testing.assert_frame_equal(fetched.get(self.BRISTOL), bristol_frame, check_exact=True)
+
+    def test_get_refuses_a_location_it_does_not_hold_naming_it_and_those_it_holds(self, fetched):
+        """get refuses a location it does not hold with a LookupError naming that location and each one it holds."""
+        with pytest.raises(LookupError) as refusal:
+            fetched.get(self.UNHELD)
+
+        for location in (self.UNHELD, self.BRISTOL, self.BATH):
+            assert repr(location) in str(refusal.value)
+
+    def test_it_holds_a_copy_of_the_frames_it_was_given(self, bristol_frame, bath_frame):
+        """A location added to the given dict after construction is not held: the held locations are fixed then."""
+        given = {self.BRISTOL: bristol_frame}
+        weather = PrefetchedWeather(given)
+        given[self.BATH] = bath_frame
+
+        with pytest.raises(LookupError):
+            weather.get(self.BATH)
+
+    def test_its_frames_refuse_a_location_set_or_deleted_after_construction(self, fetched, bath_frame):
+        """frames raises TypeError at a location set or deleted, so get still answers for exactly the locations fetched."""
+        with pytest.raises(TypeError):
+            fetched.frames[self.UNHELD] = bath_frame
+        with pytest.raises(TypeError):
+            del fetched.frames[self.BATH]
+
+        pd.testing.assert_frame_equal(fetched.get(self.BATH), bath_frame, check_exact=True)
+        with pytest.raises(LookupError):
+            fetched.get(self.UNHELD)
+
+    def test_it_pickles_with_its_frames(self, fetched, bath_frame):
+        """A PrefetchedWeather restored from its pickle holds the same frames, as read-only as the original's."""
+        restored = pickle.loads(pickle.dumps(fetched))
+
+        pd.testing.assert_frame_equal(restored.get(self.BATH), bath_frame, check_exact=True)
+        with pytest.raises(TypeError):
+            restored.frames[self.UNHELD] = bath_frame
 
 
 class TestScaleTmyToAnnualGhi:

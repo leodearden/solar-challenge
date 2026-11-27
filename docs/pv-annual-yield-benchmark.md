@@ -1,7 +1,7 @@
 # PV Annual-Yield Benchmark: kWh per Wired kWp
 
-**Task:** #239 (follow-up from #203), #324, #282, #749
-**Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `_UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`)
+**Task:** #239 (follow-up from #203), #324, #282, #749, #781, #812, #818
+**Code:** [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`validate_pv_generation`, `UK_YIELD_BENCHMARK_KWH_PER_KWP`); [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`wired_dc_capacity_kw`, `_module_rating_w`); [`src/solar_challenge/timebase.py`](../src/solar_challenge/timebase.py) (`SimulationWindow.annualisation_scale`)
 
 ---
 
@@ -22,22 +22,46 @@ DC that `create_pv_system` wires, `pv.wired_dc_capacity_kw`, not by the configur
 The yields are §3's Bristol measurements. Divided by the nameplate, these correct
 simulations failed the band as it then was, 700–1100; divided by the wired DC, they
 were inside it.
+**[Amended 2026-10-20, task 823: those yields are §3's 2026-09-30 record: the unscaled
+TMY, no system losses, and SAPM's generic cell temperature. Re-measured by §3's method on
+the scaled TMY, with the system losses and NOCT-SAM's cell temperature
+([pv-cell-temperature.md](pv-cell-temperature.md)), on task 823's commit 2be9d1b, per
+nameplate and per wired kWp: 0.3 kW 1333.8 and 999.3; 0.7 kW 1133.1 and 990.4; 1.5 kW
+1085.0 and 1016.1; 5.9 kW 1029.1 and 1010.8. Per wired kWp all four are inside today's
+300–1200 (§2); per nameplate, 0.3 kW is above it.]**
 `validate_pv_generation` and `validate_simulation` take the `PVConfig` that produced the
 generation, so the wired DC is that of the config's own module, `custom_module_params`
 included. The `validate results` CLI holds only a capacity, `--pv-kw`, so it validates
 against a `PVConfig` of the default module at that capacity.
 
-A run of 365 days or more is judged on its AC energy scaled to a 365-day year by
-`validation._annual_equivalent_kwh`, as `validate_consumption` scales its annual total:
-a two-year run at 1000 kWh/kWp a year reads 1000, not 2000. A shorter run is not judged.
+The wired DC is the sum, over the arrays of the `PVSystem` that `create_pv_system`
+builds, of modules per string × strings × the module's rating, `pv._module_rating_w`.
+A module with PVWatts parameters (`pdc0` and `gamma_pdc`) is rated at its `pdc0`, the
+power pvlib's PVWatts DC model multiplies by the module count; any other module is
+rated at its `STC`. `create_pv_system` counts the modules by the same rating and
+refuses a module that has neither, so the module count, the DC the model gives at STC
+and the wired DC agree. Until task 812, a module without an `STC` was counted as 400 W
+whatever its `pdc0`: 4 kW of `{"pdc0": 300.0, "gamma_pdc": -0.004}` wired 10 modules,
+3.0 kWp modelled, and was judged on 4.0 kWp; it now wires 13, 3.9 kWp.
+
+A run of 365 calendar days or more is judged on its AC energy scaled to a year by its
+window's `annualisation_scale` (`timebase.SimulationWindow`). The scale is the covered
+year's days over the window's calendar days. The year's days are 365 or 366, or 365.25
+for a window across a year end
+([simulation-window-and-cadence.md](prds/simulation-window-and-cadence.md), §Resolved
+design decisions 5). `validate_consumption` scales its annual total by the same rule. So
+a 2023–2024 run at 1000 kWh/kWp a year reads 1000, not 2000, and a whole calendar year is
+judged on its own energy. A shorter run is not judged: a yield benchmark needs a year of
+seasons.
 
 ## 2. The Band Is Sourced from PVGIS and MCS
 
 - The band is 300–1200 kWh per wired kWp: the range two external references give an
   unshaded UK array facing east, west or anywhere between them through south, at any
   pitch, in a typical year, rounded outward to the next hundred.
-- `_UK_YIELD_BENCHMARK_KWH_PER_KWP` in `validation.py` is the single source of the
-  numbers; this note transcribes them.
+- `UK_YIELD_BENCHMARK_KWH_PER_KWP` in `validation.py` is the single source of the
+  numbers; this note transcribes them. It is public, so other modules read it rather
+  than restate it.
 - **Scope.** The check knows neither the site nor, in `validate results`, the
   orientation, so the band must hold every array it may be given. Facing within 90° of
   south covers MCS's orientations up to east and west, and any pitch avoids an
@@ -81,7 +105,8 @@ This is a dated record. Re-measure with the method below before relying on it.
 - **Provenance.** Measured 2026-09-30 on main 0e8c240: CPython 3.12.3, pandas 3.0.3,
   pvlib 0.15.1, numpy 2.4.6. The 0.3–7.0 kW figures were re-measured identical on main
   df664c7 (2026-10-01).
-- **Weather.** PVGIS TMYs through `weather.get_tmy_data`. Bristol's is the 1990 TMY,
+- **Weather.** PVGIS TMYs through `weather.get_tmy_data` (task 827 retired it;
+  `PvgisTmy(WeatherCache()).get` serves the same year). Bristol's is the 1990 TMY,
   GHI 992.3 kWh/m², cached as `tmy_5dc8c8bca218`. **[Amended 2026-10-03, task 285:
   `get_tmy_data` now scales this TMY's irradiance by 1.078, to GHI 1069.5 kWh/m²
   ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)), so §3 and §4 describe the
@@ -118,13 +143,23 @@ This is a dated record. Re-measure with the method below before relying on it.
   on the scaled TMY by §3's and §4's methods, on task 236's commit be3e1de: the 248
   capacities read 925.9–1007.7 kWh/kWp (median 989.1), all inside the band, old or new,
   and 4 kW reads 993.1. The AC peak reaches at most 0.948 × the wired DC (at 0.4 kW).]**
+  **[Amended 2026-10-20, task 823: every array's cells now run at NOCT-SAM's temperature,
+  from the module's own NOCT and efficiency, not SAPM's generic open-rack glass/glass set
+  ([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured with the losses on the
+  scaled TMY by §3's and §4's methods, on task 823's commit 2be9d1b (same interpreter and
+  libraries): the 248 capacities read 943.8 (10.2 kW) to 1026.4 (10.1 kW) kWh/kWp
+  (median 1008.2), all inside the band, and 4 kW reads 1012.1. The AC peak reaches at
+  most 0.994 × the wired DC, at 0.4 kW (0.398 kW on 0.40 kWp). That is a bright, windy
+  April hour, 1194 W/m² in plane, 8.4 °C air and 6.8 m/s wind, where NOCT-SAM puts the
+  cell at 23.0 °C and SAPM put it at 36.8 °C. The UK-site table below predates
+  NOCT-SAM.]**
 - **Model.** `pv.create_model_chain` applied no soiling, wiring, mismatch or
   availability losses. From task 252 every model chain deducts PVWatts v5's default
   system losses from each array's DC power ([pv-system-losses.md](pv-system-losses.md)).
 - **Method.** South-facing at 35° unless stated. The hourly AC in kW, summed, is kWh:
 
   ```python
-  kwh = simulate_pv_output(config, location, get_tmy_data(location)).sum()
+  kwh = simulate_pv_output(config, location, PvgisTmy(WeatherCache()).get(location)).sum()
   kwh_per_wired_kwp = kwh / wired_dc_capacity_kw(config)
   ```
 
@@ -174,7 +209,7 @@ This is a dated record. Re-measure before relying on it.
 
 - **Provenance.** Measured 2026-10-02 on main 3c4fb55: CPython 3.12.3, pandas 3.0.3,
   pvlib 0.15.1, numpy 2.4.6, and §3's Bristol 1990 TMY. The peak is
-  `simulate_pv_output(config, location, get_tmy_data(location)).max()`.
+  `simulate_pv_output(config, location, PvgisTmy(WeatherCache()).get(location)).max()`.
 - **Per wired DC.** The AC peak reached at most 1.029 × the wired DC (0.6 kW: 0.412 kW
   on 0.40 kWp), and 10% over it failed none of these configs:
   - the default module at 0.3–3.0 kW in 0.1 kW steps and at 4.0, 5.9, 7.0 and 10.8 kW;
@@ -257,7 +292,7 @@ This is a dated record. Re-query before relying on it.
   Brighton's 1130.
 - PVGIS gives Eastbourne's optimum a year-to-year standard deviation, `SD_y`, of 38.73,
   so a sunny single year there can pass 1200. The band is for a typical year, the kind
-  of year `weather.get_tmy_data` gives the model.
+  of year `PvgisTmy.get` gives the model.
 
 ## 6. When to Revisit
 
@@ -268,3 +303,6 @@ This is a dated record. Re-query before relying on it.
 - Validation gains the in-plane irradiation. A performance-ratio check, a year's AC over
   the in-plane irradiation times the wired kWp, against MCS's 0.8, would then judge a
   run independently of its site and orientation.
+- [self-consumption-benchmark.md](self-consumption-benchmark.md) §2 takes its 4 kWp
+  generation range from this note's scope and §5's Kk extremes, so a change to either
+  moves that range too.

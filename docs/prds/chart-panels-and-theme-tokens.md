@@ -109,7 +109,7 @@ Heuristics served: 11 (SPOT: colours, chart descriptions, flow identities, cards
    - a sweep with fewer than two finished points.
 3. **`ChartPanel` refuses what the old convention allowed.** `__post_init__` refuses a `dom_id` not matching `^chart-[a-z0-9-]+$`, a blank title, a height ≤ 0, a figure string that is blank or `{}`, and a blank reason. The `{}` sentinel cannot be constructed.
 4. **Title and height have one value.** The panel helper writes `title` and `height_px` into the figure's layout, and `chart_panel` renders the same title as the card heading and the same height as the container's `min-height`. The figure keeps its title, so a chart downloaded from Plotly's modebar still names itself. Where builder and template disagree today, the builder's title is kept.
-5. **Tabs are data.** `ChartTab(key, label, panels)` comes from the assembler, and `chart_tabs` renders the tab bar through `tab_bar`. That gives one place for `role=tab`, `aria-selected` and the active/inactive classes. The results and compare pages lose their hand-written tab markup. `simulate/home.html`'s Alpine-driven tab loop uses `tab_bar`'s classes if it can take an Alpine list (tactical, θ).
+5. **Tabs are data.** `ChartTab(key, label, panels)` comes from the assembler, and `chart_tabs` renders the tab bar through `tab_bar`. That gives one place for `role=tab`, `aria-selected` and the active/inactive classes. The results and compare pages lose their hand-written tab markup. `simulate/home.html`'s Alpine-driven tab loop uses `tab_bar`'s classes if it can take an Alpine list (tactical, θ). It cannot, so task 1169 made the configuration tabs a list the template sets, which `tab_bar` draws in a layout of their own; every tab bar shares one colour pair, whose dark hover colours mirror its light ones.
 6. **One token file, two readers, no references across sections.** The `tailwind` section names built-in palettes: `primary` and `warning`, plus `status.{running,completed,failed}` and `component.{pv,battery,load}`. These resolve to amber, green, red and teal exactly as today, so the compiled colours are unchanged (probe). The `chart` section's hues are `#rrggbb` and its roles map to hues. The chart amber (`#f5a623`) stays distinct from primary-500 (`#f59e0b`): series encoding and UI accent are different dimensions (heuristic 3), and this keeps every chart's look. The neutral figure colours, the unpriced-note grey and the Sankey node outline, become chart roles, so the "only the token file writes a colour" rule has no exception.
 7. **The Run Single Home quick action is the accent.** It is the dashboard's lead action, drawn in amber because amber is the accent. It moves to `primary-*`, a visual no-op (R1). The Fleet and Build Scenario actions keep their sky and emerald.
 8. **Chrome from the page, not a second channel (R3).** `chart_panel`'s container carries `text-*` classes and `[--chart-grid:theme(...)]` custom properties for light and dark. chart-renderer.js reads `getComputedStyle(container).color` and `--chart-grid` at draw time and on `theme-changed`. It applies them to every axis the figure's layout has: `xaxis*`, `yaxis*` (secondary axes included), their zero lines, and `polar*` with its radial and angular axes and disc. Paper and plot backgrounds stay transparent as `charts._SHARED_LAYOUT` sets them, so the card colour shows through. This realises D22's "chart-renderer.js reads the tokens" through the compiled theme. The lead may want the program's seam row worded to match (§Open questions Q6).
@@ -118,18 +118,18 @@ Heuristics served: 11 (SPOT: colours, chart descriptions, flow identities, cards
    - `total_direct_self_consumption_kwh = total_self_consumption_kwh − total_battery_discharge_kwh`;
    - `total_grid_to_demand_kwh = total_grid_import_kwh − total_grid_charge_kwh`.
 
-   The first and third are ≥ 0 by `__post_init__`'s existing check. The second is exact while discharge never exceeds the step's shortfall, which S3's `DispatchDecision` bound makes a construction invariant. The properties are additive frozen-surface members (D29, in-leaf). `SimulationResults`' docstring "self_consumption: Direct PV consumption" is corrected in the same leaf.
+   The first and third are ≥ 0 by `__post_init__`'s existing check. The second is ≥ 0 because `__post_init__` also refuses a `total_battery_discharge_kwh` above `total_self_consumption_kwh` (task 1358). The engine satisfies that bound exactly: S3's discharge ≤ shortfall bound and `Battery.discharge`'s cap at the request (task 1362) keep each step's discharge within its self-consumption. A stored summary that breaks it is refused as `StoredRunUnreadable`. The properties are additive frozen-surface members (D29, in-leaf). `SimulationResults`' docstring "self_consumption: Direct PV consumption" is corrected in the same leaf.
 10. **The financial note reads the run's configuration.** `HomeConfig.tariff_config` and `seg_tariff` are stored with every home run, so the note is a lookup. The rules:
     - no tariff and no SEG: "No tariff configured — cost and revenue tracking unavailable";
     - SEG only: "No import tariff configured — cost tracking unavailable";
     - a tariff: no note, as today.
 
     The "cannot tell an SEG run that exported nothing" caveat and the series inference go. No engine field and no stored-format change are needed. The SOC chart keeps reading the limits from `Battery(battery_config)`, the authority on SoH-derated limits. The route's double `has_battery` guard goes, because the assembler decides applicability once.
-11. **Comparison input is S19's headline, widened.** D-S19-8 makes `storage.run_headline` the one place the web maps `FleetSummary` names. ζ widens `RunHeadline` with the five energy totals and three ratios, plus `pv_stored_share: float | None`. Export ratio for a fleet is `total_grid_export_kwh / total_generation_kwh`. The PV stored share is None for a fleet run, because `FleetSummary` carries no battery totals. The radar draws the axes every compared run has, and when one is left out the panel's figure carries a note naming the run and the metric. Mixed home and fleet comparisons are allowed.
+11. **Comparison input is S19's headline, widened.** D-S19-8 makes `run_headline` (in `web/run_headline.py` since task 1413) the one place the web maps `FleetSummary` names. ζ widens `RunHeadline` with the five energy totals and three ratios, plus `pv_stored_share: float | None`. Export ratio for a fleet is `total_grid_export_kwh / total_generation_kwh`. The PV stored share is None for a fleet run, because `FleetSummary` carries no battery totals. The radar draws the axes every compared run has, and when one is left out the panel's figure carries a note naming the run and the metric. Mixed home and fleet comparisons are allowed.
 12. **Chart errors are not swallowed.** `history.compare_page`'s broad `except Exception` and the function-local chart imports in `routes.py` and `history.py` go. This is the position of task 454, whose architect measured plotly at 1.4–5.4 % of app import. An unreadable stored summary is S19's `StoredRunUnreadable` (flash and redirect). Task 153's "keep the charts deferral" item is superseded (cross-reference). If 775 (S1's import-structure test) has landed, δ deletes the `web.routes → web.charts` and `web.history → web.charts` allow-list entries in the same change.
 13. **The sweep chart is server-built and posted, not encoded in a URL.** `POST /scenarios/sweep/chart` takes JSON `{parameter_label, points: [{value, run_id}]}` and answers the HTML of the sweep panels, rendered by `chart_panel`. It loads each point's summary through S19's `RunRecord.summary()`, and refuses a missing or non-home run with 400 naming the run id. A `SweepMetric` enum carries each metric's label, its summary reader and its direction (`higher` or `lower` is better). Its members are generation, self-consumption ratio and grid import, and `sweep_parameter_chart` marks the best point by that direction. The swept values come from the page that submitted them. S26's knob registry may later read them back from the runs (cross-reference). chart-renderer.js observes the document for containers added or re-filled after load (`MutationObserver` on `data-chart-figure`), so the sweep page needs no renderer API.
 14. **One Plotly loader.** `components/macros.html::chart_scripts()` emits the Plotly CDN tag and chart-renderer.js. Every chart page calls it, including the sweep page. This supersedes task 129. Vendoring Plotly (task 250) then edits one place.
-15. **Card structure has one home (θ).** The card triple is written only in `macros.html`. `stat_card` and `chart_panel` are built on `card`, and each page card is a `card` call. The macro gains whatever header and body parameters the 13 sites need (coloured header bands, padding) without restating the triple. A source test refuses the triple outside `macros.html`. A source grep is the right check because the fact guarded is where the class string is written.
+15. **Card structure has one home (θ).** The card triple is written only in `macros.html`. `stat_card` and `chart_panel` are built on `card`, and each page card is a `card` call. The macro gains whatever header and body parameters the 13 sites need (coloured header bands, padding) without restating the triple. A source test refuses the triple outside `macros.html`. A source grep is the right check because the fact guarded is where the class string is written. Task 1168 (ruling esc-1168-3, option B) keeps the dashboard's other card looks as named macros beside `card`: `panel` (rounded-xl), `flat_card` (no shadow) and `split_card` (top above bottom). Each look's classes are written once in `macros.html`, and `tests/unit/test_web_cards.py` guards each as it guards the triple. Task 1196 gives `panel` a title band, which the sweep page's three panels draw through `title`, and the point preview's count through `subtitle_expression`. builder.html's YAML Preview keeps its own band, the dashboard's one compact row (title and aside on one line, `py-3`, the title in `text-sm`): drawing it unchanged through `panel` would add a row layout and a compact size for that one site.
 16. **No surface bump.** The only frozen-surface change is three additive `SummaryStatistics` properties (D29: `FROZEN_MEMBERS` entries plus an "Unreleased on main" line in ε). `RunHeadline`, `ChartPanel` and the token file are web-internal.
 
 ## Contract (seams: theme tokens and `ChartPanel`; owner this PRD)
@@ -199,7 +199,7 @@ class SummaryStatistics:
     @property
     def total_grid_to_demand_kwh(self) -> float: ...            # grid import less grid charge
 
-# src/solar_challenge/web/storage.py  (ζ widens S19 γ's type; S19 owns the name and the mapping)
+# src/solar_challenge/web/run_headline.py  (ζ widens S19 γ's type; S19 owns the name and the mapping)
 @dataclass(frozen=True)
 class RunHeadline:
     generation_kwh: float; demand_kwh: float; self_consumption_kwh: float
@@ -211,10 +211,19 @@ class RunHeadline:
 ```jinja
 {# src/solar_challenge/web/templates/components/macros.html #}
 {% macro card(title='', subtitle='', ...) %}     {# the one home of the card class triple (θ) #}
+{% macro panel(title='', subtitle_expression='', classes='') %}
+                                                 {# the one home of the rounded-xl panel look (task 1168) and of a titled panel's header band,
+                                                    the title over the subtitle the Alpine expression subtitle_expression holds (task 1196) #}
+{% macro flat_card(classes='') %}                {# the one home of the shadowless flat card look (task 1168) #}
+{% macro split_card(top, bottom, bottom_classes='') %}
+                                                 {# the one home of the split card look: top above bottom, the top's border dividing them (task 1168) #}
 {% macro chart_panel(panel) %}                   {# a card titled panel.title; a container with panel.dom_id, min-height panel.height_px
                                                     and data-chart-figure, its classes naming the chart chrome (γ); or the reason.
                                                     An undefined panel fails the render naming it, as chart_panel does today #}
-{% macro tab_bar(tabs, model='activeTab') %}     {# role=tablist/tab, aria-selected, the active/inactive class pair once #}
+{% macro tab_bar(tabs, label, classes='', list_classes='', tab_classes='', model='activeTab') %}
+                                                 {# role=tablist/tab, aria-selected, the active/inactive class pair once; label names the bar,
+                                                    and classes, list_classes and tab_classes lay out the bar, its list and each tab (task 1169);
+                                                    a list wider than its bar scrolls sideways inside it, so the page keeps its width (task 1174) #}
 {% macro chart_tabs(tabs) %}                     {# tab_bar + one x-show panel list per tab #}
 {% macro chart_scripts() %}                      {# the Plotly CDN tag and chart-renderer.js, once #}
 ```
@@ -230,14 +239,17 @@ Invariants and where each is enforced:
 
 | invariant | construction | use |
 |---|---|---|
-| Every colour the dashboard writes lives in `theme-tokens.json`. | the file; `charts.py` load refusal; `tailwind.config.js` throw | a test scanning every web source (`.py`, `.html`, `.js`, hand-written `.css`, `tailwind.config.js`) for `#rrggbb` finds only the token file (γ) |
+| Every colour the dashboard writes lives in `theme-tokens.json`. | the file; `charts.py` load refusal; `tailwind.config.js` throw; `build-favicon.js`'s refusal of a theme without primary-500 | a test scanning every web source (`.py`, `.html`, `.js`, hand-written `.css`, and the package root's `tailwind.config.js` and `build-favicon.js`) for `#rrggbb` finds only the token file (γ); `static/dist`'s `style.css` and `favicon.svg` (task 993) are build outputs, which the css-build lane compares with a fresh build |
 | The accent is the only use of the accent's palette. | `tailwind.primary` names it | a test: no template or script applies a class naming the palette `tailwind.primary` names (β) |
 | Every token role is drawn. | — | every `tailwind` role palette is applied by some template (β); every chart role is drawn by some figure (`test_web_chart_colours`, α) |
 | A chart that applies is drawn or says why not. | `ChartPanel.__post_init__` | assemblers list only applicable charts; `chart_panel` renders the figure or the reason (δ) |
 | A chart's id, title and height live once. | `ChartPanel` | the panel helper writes title/height into the figure; the template reads only the panel (δ) |
 | The battery's PV/grid split has one home. | `SummaryStatistics.__post_init__` (grid charge ≤ charge, ≤ import) | Sankey and radar read the properties (ε, ζ) |
-| A fleet summary's names are mapped once. | `storage.run_headline` (S19) | the comparison charts read `RunHeadline` (ζ) |
+| A fleet summary's names are mapped once. | `run_headline.run_headline` (S19) | the comparison charts read `RunHeadline` (ζ) |
 | Each card is the card macro. | `card` | a source test: the triple appears only in `macros.html` (θ) |
+| Each other card look is its macro: `panel`, `flat_card`, `split_card` (task 1168). | those macros | a source test: each look's classes appear only in `macros.html` |
+| A titled panel's header band is `panel`'s (task 1196). | `panel` | a source test: the band's classes appear only in `macros.html`; a source test: a `panel` call that gives `subtitle_expression` gives a title |
+| The divider under `macros.html`'s header bands and tab bars is spelled once (task 1205). | `_divider_classes`, which `_panel_title_band_classes`, `_header_band_classes` and `tab_bar` build on | a source test: `macros.html` spells the divider once; the per-look source test reads a `~` of strings and earlier `{% set %}` values as the one class list it builds |
 
 Downstream readers and their seam lines:
 

@@ -1,40 +1,37 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Guards two invariants of charts.py's COLOUR_PALETTE: it is the one home of the chart
-colours, so a palette edit reaches every copy of a chart colour, and it holds only colours
-a chart draws, so it reads as the list of them.
+"""Guards three invariants of the chart colours, whose one home is the chart section of the
+theme token file, static/src/theme-tokens.json, which charts.py loads into COLOUR_PALETTE:
+a token edit reaches every chart colour a chart draws; the palette holds only colours a
+chart draws, so it reads as the list of them; and no chart draws Plotly's default template's
+bar outline, a colour outside the palette. That no other web source writes out a chart
+colour is tests/unit/test_web_theme_tokens.py's to guard.
 
-The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Five
+The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Four
 checks enforce the invariants:
 
-* No dashboard source writes out a palette colour: not tailwind.config.js, not a
-  template, not the hand-written stylesheet and not a script. A colour counts as written
-  where its hex literal appears in a source, matched case-insensitively anywhere,
-  comments included, so an eight-digit #rrggbbaa copy counts through its prefix. Not
-  read: the compiled dist/style.css, which derives from the templates and the theme, and
-  rgb() or rgba() forms in those sources.
-* Every palette colour a chart builder draws follows a palette edit: with each palette
-  entry recoloured, no builder's figure still draws a shipped palette colour as #rrggbb,
-  rgb() or rgba(), so a translucent fill or a reused hue that charts.py writes out by hand
-  fails. A colour that no palette entry has, such as the transparent backgrounds, is not
-  flagged. Plotly's default template, which no builder chooses, is not read.
+* Every chart colour a chart builder draws follows a palette edit: with each palette role
+  recoloured, no builder's figure still draws a chart hue as #rrggbb, rgb() or rgba(), so
+  a translucent fill or a reused hue that charts.py writes out by hand fails. A colour that
+  no hue has is not flagged, and a fully transparent colour, such as the charts'
+  transparent backgrounds, is not read, as it draws nothing. Nor is Plotly's default
+  template, which no builder chooses.
 * Every palette role is drawn by some chart: with each role recoloured with a colour no
   other role has, the figures of all the _FIGURES cases together must draw every role's
   colour, so a role no chart reads fails. Only those figures are read, so a role a builder
   draws only for inputs no case gives is reported too.
-* Both of those checks read a figure from every chart builder: each of its cases names the
-  builder it draws with, and a public function of charts.py that no case names fails, so a
-  new builder cannot go unread. A name charts.py imports, such as make_subplots, is not a
-  builder.
-* Every palette colour is written #rrggbb, the form charts.py derives translucent colours
-  from. charts.py refuses any other form only when it draws a chart that needs one; this
-  check refuses it for the whole palette.
+* No chart outlines its bars: Plotly's default template, which every figure carries,
+  outlines each bar in its own plot background colour, #E5ECF6, which no figure draws, so
+  every bar trace of every _FIGURES case must set its own outline width to 0.
+* All three of those checks read the figures of every public function of charts.py, each
+  chart builder and each page's tab assembler: each case names the function it draws with
+  and reads the figure of every panel the function returns, every panel of every tab for an
+  assembler, and a public function that no case names fails, so a new builder cannot go
+  unread. A name charts.py imports, such as make_subplots, is not a builder.
 """
 
 import dataclasses
 import inspect
-import json
-import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any
 
@@ -44,77 +41,20 @@ import pytest
 pytest.importorskip("jinja2")
 pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import FleetResults
+from solar_challenge.demand import LoadKind
+from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.web import charts
-from solar_challenge.web.charts import COLOUR_PALETTE
-from tests._dashboard_sources import (
-    HAND_WRITTEN_STYLESHEET_KEY,
-    TAILWIND_CONFIG_KEY,
-    dashboard_script_sources,
-    dashboard_template_sources,
-    hand_written_stylesheet_source,
-    tailwind_config_source,
-)
-from tests._finance_builders import make_fleet_results, make_sim_results
-from tests._plotly_figure import Rgb, colour_literals
-
-_CHART_COLOURS = frozenset(colour.lower() for colour in COLOUR_PALETTE.values())
-
-
-def _written_chart_colours(source: str) -> list[str]:
-    """The chart colours *source* writes out, sorted."""
-    lowered = source.lower()
-    return sorted(colour for colour in _CHART_COLOURS if colour in lowered)
-
-
-def test_no_dashboard_source_writes_out_a_chart_colour() -> None:
-    assert _CHART_COLOURS, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
-    sources = {
-        TAILWIND_CONFIG_KEY: tailwind_config_source(),
-        **dashboard_template_sources(),
-        HAND_WRITTEN_STYLESHEET_KEY: hand_written_stylesheet_source(),
-        **dashboard_script_sources(),
-    }
-
-    written = {
-        path: colours
-        for path, source in sources.items()
-        if (colours := _written_chart_colours(source))
-    }
-
-    listing = "".join(f"\n  {path}: {' '.join(colours)}" for path, colours in written.items())
-    assert written == {}, (
-        "These dashboard sources write out colours that charts.py's COLOUR_PALETTE defines, "
-        f"so a palette edit does not reach them:{listing}\n"
-        "The charts take their colours from COLOUR_PALETTE, because Plotly needs colour "
-        "strings rather than Tailwind classes. Delete the copy. If a page must show a chart "
-        "colour, pass it from COLOUR_PALETTE to the page."
-    )
-
-
-def _strings(node: object) -> Iterator[str]:
-    """Every string leaf of the dicts and lists under *node*."""
-    if isinstance(node, str):
-        yield node
-    elif isinstance(node, dict):
-        for value in node.values():
-            yield from _strings(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _strings(value)
-
-
-def _drawn_colours(figure_json: str) -> dict[str, Rgb]:
-    """Each colour *figure_json* draws, by how it is written; Plotly's default template is skipped."""
-    figure = json.loads(figure_json)
-    figure["layout"].pop("template", None)
-    return dict(literal for text in _strings(figure) for literal in colour_literals(text))
+from solar_challenge.web.charts import COLOUR_PALETTE, ChartPanel, ChartTab
+from solar_challenge.web.run_headline import run_headline
+from tests._dashboard_sources import THEME_TOKENS_KEY, theme_tokens
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results, make_window
+from tests._plotly_figure import Rgb, colour_literals, drawn_colours, traces
 
 
 @dataclasses.dataclass(frozen=True)
 class _Recolouring:
-    """The red, green and blue of each shipped palette colour, and of each role's substitute."""
+    """The red, green and blue of each chart hue the token file ships, and of each role's substitute."""
 
     shipped: frozenset[Rgb]
     substitutes: Mapping[str, Rgb]
@@ -125,10 +65,12 @@ def recolouring(monkeypatch: pytest.MonkeyPatch) -> _Recolouring:
     """Recolours every palette role with a colour of its own, for the test.
 
     The role at 1-based index i becomes #0000ii, so each role's substitute is shared by no
-    other role and equals no shipped colour. A figure that draws a substitute therefore
+    other role and equals no shipped hue. A figure that draws a substitute therefore
     names the one role it reads, even where several shipped roles share one hue.
     """
-    shipped = frozenset(rgb for colour in COLOUR_PALETTE.values() for _, rgb in colour_literals(colour))
+    shipped = frozenset(
+        rgb for colour in theme_tokens()["chart"]["hues"].values() for _, rgb in colour_literals(colour)
+    )
     for index, role in enumerate(list(COLOUR_PALETTE), start=1):
         monkeypatch.setitem(COLOUR_PALETTE, role, f"#0000{index:02x}")
     substitutes = {
@@ -144,9 +86,21 @@ def _year() -> SimulationResults:
     return make_sim_results(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0, discharge_kwh=100.0)
 
 
-def _year_with_heat_pump() -> SimulationResults:
+def _year_with_additional_loads() -> SimulationResults:
+    """_year()'s run whose demand also holds a steady 0.1 kW of every additional LoadKind.
+
+    load_panels colours each load by its kind's chart role, so a kind added without a role in
+    the token file's chart section fails every case that draws this run.
+    """
     year = _year()
-    return dataclasses.replace(year, heat_pump_load=pd.Series(0.3, index=year.demand.index))
+    additional_loads = {
+        kind: pd.Series(0.1, index=year.demand.index) for kind in LoadKind if kind is not LoadKind.HOUSEHOLD
+    }
+    return dataclasses.replace(
+        year,
+        demand=year.demand + sum(additional_loads.values()),
+        additional_loads=additional_loads,
+    )
 
 
 def _fleet_year() -> FleetResults:
@@ -166,68 +120,89 @@ _SUMMARY = SummaryStatistics(
     self_consumption_ratio=0.5,
     grid_dependency_ratio=0.375,
     export_ratio=0.4,
-    simulation_days=1,
+    window=make_window(days=1),
     total_import_cost_gbp=0.0,
     total_export_revenue_gbp=0.0,
     net_cost_gbp=0.0,
     total_grid_charge_kwh=4.0,
+    load_energy_kwh={LoadKind.HOUSEHOLD: 80.0},
 )
+_SWEEP_POINTS = tuple(charts.SweepPoint(value, _SUMMARY) for value in (2.0, 4.0, 6.0))
 _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 _TEN_KWH_BATTERY = BatteryConfig(capacity_kwh=10.0)
 
 
+def _five_home_runs() -> list[charts.ComparedRun]:
+    """A compared run of _SUMMARY's headline under each of _FIVE_RUNS, so the fifth takes the first run's colour again."""
+    return [charts.ComparedRun(label, run_headline(_SUMMARY)) for label in _FIVE_RUNS]
+
+
+def _four_home_runs_and_a_fleet_run() -> list[charts.ComparedRun]:
+    """_five_home_runs with the last a fleet run, which has no PV stored in battery, so the radar notes the axis it leaves out."""
+    *homes, last = _five_home_runs()
+    return [*homes, charts.ComparedRun(last.label, run_headline(calculate_fleet_summary(_fleet_year())))]
+
+
+def _panels_of(tabs: tuple[ChartTab, ...]) -> tuple[ChartPanel, ...]:
+    """Every panel of *tabs*, tab by tab."""
+    return tuple(panel for tab in tabs for panel in tab.panels)
+
+
 @dataclasses.dataclass(frozen=True)
 class _FigureCase:
-    """A figure the palette checks read: *draw* draws it with *builder*, which it is passed."""
+    """Figures the palette checks read: *draw* draws their panels with *builder*, which it is passed."""
 
     builder: Callable[..., Any]
-    draw: Callable[[Callable[..., Any]], str | None]
+    draw: Callable[[Callable[..., Any]], tuple[ChartPanel, ...]]
 
-    def figure(self) -> str:
-        """The figure's JSON, drawn now, with the palette as it stands."""
-        figure = self.draw(self.builder)
-        assert figure is not None and figure != "{}", (
-            f"{self.builder.__name__} drew no figure, so a check reading the figure would pass vacuously"
+    def figures(self) -> list[str]:
+        """The JSON of each panel's figure, drawn now, with the palette as it stands."""
+        panels = self.draw(self.builder)
+        absent = [panel.dom_id for panel in panels if not isinstance(panel.content, str)]
+        assert panels and absent == [], (
+            f"{self.builder.__name__} drew no figure for {absent or 'any panel'}, so a check reading"
+            " its figures would pass vacuously"
         )
-        return figure
+        return [panel.content for panel in panels if isinstance(panel.content, str)]
 
 
 _FIGURES: dict[str, _FigureCase] = {
-    "power_flow_timeline": _FigureCase(charts.power_flow_timeline, lambda build: build(_year())),
+    "power_flow_timeline": _FigureCase(charts.power_flow_timeline, lambda build: (build(_year()),)),
     "battery_soc_chart": _FigureCase(
-        charts.battery_soc_chart, lambda build: build(_year(), battery_config=_TEN_KWH_BATTERY)
+        charts.battery_soc_chart, lambda build: (build(_year(), battery_config=_TEN_KWH_BATTERY),)
     ),
-    "sankey_diagram": _FigureCase(charts.sankey_diagram, lambda build: build(_SUMMARY)),
-    "daily_energy_balance": _FigureCase(charts.daily_energy_balance, lambda build: build(_year())),
-    "monthly_summary": _FigureCase(charts.monthly_summary, lambda build: build(_year())),
-    "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: build(_year())),
-    "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: build(_year())),
-    "heat_pump_load_profile": _FigureCase(
-        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump()).load_profile_chart
-    ),
-    "heat_pump_share": _FigureCase(
-        charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump()).load_share_chart
-    ),
-    "overlaid_power_flows": _FigureCase(
-        charts.overlaid_power_flows, lambda build: build([_year()] * 5, _FIVE_RUNS)
-    ),
-    "comparison_bar_chart": _FigureCase(
-        charts.comparison_bar_chart, lambda build: build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)
-    ),
+    "sankey_diagram": _FigureCase(charts.sankey_diagram, lambda build: (build(_SUMMARY),)),
+    "daily_energy_balance": _FigureCase(charts.daily_energy_balance, lambda build: (build(_year()),)),
+    "monthly_summary": _FigureCase(charts.monthly_summary, lambda build: (build(_year()),)),
+    "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: (build(_year(), make_home_config()),)),
+    "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: (build(_year()),)),
+    "load_panels": _FigureCase(charts.load_panels, lambda build: build(_year_with_additional_loads())),
+    "comparison_bar_chart": _FigureCase(charts.comparison_bar_chart, lambda build: (build(_five_home_runs()),)),
     "comparison_radar": _FigureCase(
-        charts.comparison_radar, lambda build: build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)
+        charts.comparison_radar, lambda build: (build(_four_home_runs_and_a_fleet_run()),)
     ),
-    "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: build(_fleet_year())),
-    "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: build(_fleet_year())),
-    "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: build([_SUMMARY] * 3)),
-    "fleet_box_plots": _FigureCase(charts.fleet_box_plots, lambda build: build([_SUMMARY] * 3)),
+    "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: (build(_fleet_year()),)),
+    "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: (build(_fleet_year()),)),
+    "fleet_heatmap": _FigureCase(charts.fleet_heatmap, lambda build: (build([_SUMMARY] * 3),)),
+    "fleet_box_plots": _FigureCase(charts.fleet_box_plots, lambda build: (build([_SUMMARY] * 3),)),
     "fleet_distribution_histograms": _FigureCase(
-        charts.fleet_distribution_histograms, lambda build: build([_SUMMARY] * 3)
+        charts.fleet_distribution_histograms, lambda build: (build([_SUMMARY] * 3),)
     ),
     "sweep_parameter_chart": _FigureCase(
         charts.sweep_parameter_chart,
-        lambda build: build([2.0, 4.0, 6.0], [50.0, 70.0, 65.0], "PV Capacity (kW)", "Self-Consumption (%)"),
+        lambda build: (build("PV Capacity (kW)", _SWEEP_POINTS, charts.SweepMetric.GENERATION),),
     ),
+    "sweep_panels": _FigureCase(charts.sweep_panels, lambda build: build("PV Capacity (kW)", _SWEEP_POINTS)),
+    "home_results_tabs": _FigureCase(
+        charts.home_results_tabs,
+        lambda build: _panels_of(
+            build(make_home_config(battery_config=_TEN_KWH_BATTERY), _year_with_additional_loads(), _SUMMARY)
+        ),
+    ),
+    "fleet_results_tabs": _FigureCase(
+        charts.fleet_results_tabs, lambda build: _panels_of(build(_fleet_year(), [_SUMMARY] * 3))
+    ),
+    "comparison_tabs": _FigureCase(charts.comparison_tabs, lambda build: _panels_of(build(_five_home_runs()))),
 }
 
 
@@ -236,27 +211,62 @@ def test_a_palette_edit_reaches_every_palette_colour_a_chart_draws(
     case: _FigureCase, recolouring: _Recolouring
 ) -> None:
     stale = sorted(
-        colour for colour, rgb in _drawn_colours(case.figure()).items() if rgb in recolouring.shipped
+        {
+            colour
+            for figure in case.figures()
+            for colour, rgb in drawn_colours(figure).items()
+            if rgb in recolouring.shipped
+        }
     )
 
     assert stale == [], (
-        f"With every COLOUR_PALETTE entry recoloured, the chart still draws {', '.join(stale)}, "
-        "so a palette edit does not reach it. Name the colour's role in COLOUR_PALETTE, or derive "
-        "a translucent form from its palette entry."
+        f"With every COLOUR_PALETTE role recoloured, the chart still draws {', '.join(stale)}, "
+        f"a chart hue of {THEME_TOKENS_KEY}, so a token edit does not reach it. Draw the colour "
+        "through its role in COLOUR_PALETTE, giving the token file's chart section a role for it "
+        "if it has none, or derive a translucent form from its palette entry."
     )
 
 
 def test_every_palette_role_is_drawn_by_some_chart(recolouring: _Recolouring) -> None:
-    assert COLOUR_PALETTE, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
+    assert COLOUR_PALETTE, "COLOUR_PALETTE holds no role, so this guard would pass vacuously"
 
-    drawn = {rgb for case in _FIGURES.values() for rgb in _drawn_colours(case.figure()).values()}
+    drawn = {
+        rgb for case in _FIGURES.values() for figure in case.figures() for rgb in drawn_colours(figure).values()
+    }
     undrawn = sorted(role for role, substitute in recolouring.substitutes.items() if substitute not in drawn)
 
     assert undrawn == [], (
         f"No chart draws these COLOUR_PALETTE roles: {', '.join(undrawn)}. The palette reads as "
         "the list of the colours the charts draw, and the palette-edit check never reads a role "
-        "no chart draws. Delete the role, or draw it in a chart builder. If a builder draws it "
-        "only for some inputs, give _FIGURES a case with those inputs."
+        f"no chart draws. Delete the role from {THEME_TOKENS_KEY}'s chart section, or draw it in "
+        "a chart builder. If a builder draws it only for some inputs, give _FIGURES a case with "
+        "those inputs."
+    )
+
+
+def test_no_chart_outlines_its_bars() -> None:
+    """Plotly's default template, which every figure carries, outlines each bar 0.5 px in its plot background colour, #E5ECF6.
+
+    No figure draws that background, so the outline showed as a light rim round every bar on the dark card
+    (task 1046). A bar trace's own outline width of 0 overrides the template's.
+    """
+    bars = [
+        (case_name, trace["name"], trace.get("marker", {}).get("line", {}).get("width"))
+        for case_name, case in _FIGURES.items()
+        for figure in case.figures()
+        for trace in traces(figure)
+        if trace["type"] == "bar"
+    ]
+    assert bars, "no _FIGURES case draws a bar, so this check would pass vacuously"
+
+    outlined = sorted(
+        f"{case_name}: {name!r} (outline width {width})" for case_name, name, width in bars if width != 0
+    )
+
+    assert outlined == [], (
+        "These bar traces keep the outline of Plotly's default template, #E5ECF6 at 0.5 px, a light rim "
+        f"on the dark card: {', '.join(outlined)}. Build each bar with charts.py's bar helper, _bar, which "
+        "sets its outline width, marker.line.width, to 0."
     )
 
 
@@ -280,24 +290,6 @@ def test_every_public_chart_builder_has_a_figure_case() -> None:
         "No _FIGURES case draws a figure with these public charts.py functions: "
         f"{', '.join(unexercised)}. Neither palette check reads the colours they draw. "
         "Add each to _FIGURES with inputs that make it draw a figure."
-    )
-
-
-def test_every_palette_colour_is_written_rrggbb() -> None:
-    assert COLOUR_PALETTE, "COLOUR_PALETTE defines no colour, so this guard would pass vacuously"
-
-    not_rrggbb = {
-        role: colour
-        for role, colour in COLOUR_PALETTE.items()
-        if not re.fullmatch(r"#[0-9a-f]{6}", colour, re.IGNORECASE)
-    }
-
-    listing = "".join(f"\n  {role}: {colour!r}" for role, colour in not_rrggbb.items())
-    assert not_rrggbb == {}, (
-        f"These COLOUR_PALETTE entries are not written #rrggbb:{listing}\n"
-        "charts.py derives each translucent chart colour from a #rrggbb palette colour, and "
-        "raises when it draws a chart whose colour is written another way, such as #rgb "
-        "shorthand, a colour name or rgba()."
     )
 
 

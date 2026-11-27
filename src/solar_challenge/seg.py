@@ -3,6 +3,8 @@
 
 from dataclasses import dataclass
 
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
+
 
 @dataclass(frozen=True)
 class SEGTariff:
@@ -13,18 +15,15 @@ class SEGTariff:
 
     Attributes:
         name: Supplier or tariff name identifier
-        rate_pence_per_kwh: Export rate in pence per kilowatt-hour
+        rate_pence_per_kwh: Export rate in pence per kilowatt-hour, a finite number of at least 0
     """
 
     name: str
     rate_pence_per_kwh: float
 
     def __post_init__(self) -> None:
-        """Validate SEG tariff parameters."""
-        if self.rate_pence_per_kwh < 0:
-            raise ValueError(
-                f"SEG rate must be non-negative, got {self.rate_pence_per_kwh} p/kWh"
-            )
+        """Read rate_pence_per_kwh as a finite number of at least 0, holding the float read."""
+        read_field(self, "rate_pence_per_kwh", as_finite_float, NON_NEGATIVE)
 
 
 # UK supplier SEG tariff presets (rates in pence per kWh, as of 2024/2025)

@@ -7,6 +7,8 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from tests._hermetic_checkout import init_hermetic_checkout
+
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git is not installed; the tree's symlinks are listed with it"
 )
@@ -73,9 +75,8 @@ def test_no_tracked_symlink_points_outside_the_checkout(project_root: Path) -> N
 
 
 def test_reports_only_the_symlinks_whose_target_leaves_the_checkout(tmp_path: Path) -> None:
-    checkout = tmp_path / "checkout"
-    (checkout / "nested").mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+    checkout = init_hermetic_checkout(tmp_path / "checkout")
+    (checkout / "nested").mkdir()
     (checkout / "not_a_link").write_text("../outside", encoding="utf-8")
     (checkout / "inside").symlink_to("nested", target_is_directory=True)
     (checkout / "nested" / "up_and_back").symlink_to("../inside", target_is_directory=True)

@@ -4,24 +4,45 @@
 
 All tests are offline/fast — no PVGIS/network is touched.  An injected synthetic
 simulate (constant FleetResults across ages) stands in for the real fleet simulator.
+The module also pins that the solve refuses a call that passes no simulator: it
+runs only the one its caller passes, never one of its own.
 """
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional
+from typing import TYPE_CHECKING
 
 import pytest
+from scipy.interpolate import PchipInterpolator
 
+import solar_challenge
 from solar_challenge.finance import (
     BillDistribution,
     CostRecoverySolution,
     FinanceConfig,
+    bill_distribution,
+)
+from solar_challenge.home import RunPricing
+from solar_challenge.projection import (
+    CostRecoveryRun,
+    fewest_simulated_ages,
     project_economics,
+    project_fleet,
     project_multi_year,
+    run_cost_recovery,
+    scenario_fleet,
     solve_cost_recovery_rate,
 )
-from tests._factories import make_bill_distribution
+from tests._factories import make_bill_breakdown, make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario
+from tests._fleet_simulate_stand_in import answering_with
+from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from solar_challenge.config import ScenarioConfig
+    from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 
 
 # ---------------------------------------------------------------------------
@@ -103,8 +124,8 @@ class TestCostRecoverySolution:
                 outlay=outlay,
                 representative_outlay_gbp=outlay.representative.total_outlay_gbp,
                 net_surplus_per_home_per_year_gbp=100.0,
-                saving_vs_baseline_gbp=100.0,
-                saving_pct=20.0,
+                saving_vs_baseline_gbp=outlay.representative.saving_vs_baseline_gbp,
+                saving_pct=outlay.representative.saving_pct,
                 feasible=True,
                 binding="nope",
             )
@@ -118,8 +139,8 @@ class TestCostRecoverySolution:
                 outlay=outlay,
                 representative_outlay_gbp=outlay.representative.total_outlay_gbp,
                 net_surplus_per_home_per_year_gbp=100.0,
-                saving_vs_baseline_gbp=100.0,
-                saving_pct=20.0,
+                saving_vs_baseline_gbp=outlay.representative.saving_vs_baseline_gbp,
+                saving_pct=outlay.representative.saving_pct,
                 feasible=True,
                 binding="floor",
             )
@@ -134,15 +155,80 @@ class TestCostRecoverySolution:
                 outlay=outlay,
                 representative_outlay_gbp=outlay.representative.total_outlay_gbp,
                 net_surplus_per_home_per_year_gbp=100.0,
-                saving_vs_baseline_gbp=100.0,
-                saving_pct=20.0,
+                saving_vs_baseline_gbp=outlay.representative.saving_vs_baseline_gbp,
+                saving_pct=outlay.representative.saving_pct,
                 feasible=True,
                 binding="floor",
             )
 
+    @pytest.mark.parametrize(
+        ("feasible", "binding"),
+        [
+            (True, "infeasible_above_retail"),
+            (False, "floor"),
+            (False, "rate_clamped_zero"),
+        ],
+    )
+    def test_a_feasible_flag_that_contradicts_the_binding_is_refused_naming_both(
+        self, feasible: bool, binding: str
+    ) -> None:
+        """feasible must be binding != 'infeasible_above_retail'; a contradicting pair is refused."""
+        outlay = make_bill_distribution()
+        with pytest.raises(ValueError) as refused:
+            CostRecoverySolution(
+                own_use_rate_pence_per_kwh=15.0,
+                outlay=outlay,
+                representative_outlay_gbp=outlay.representative.total_outlay_gbp,
+                net_surplus_per_home_per_year_gbp=100.0,
+                saving_vs_baseline_gbp=outlay.representative.saving_vs_baseline_gbp,
+                saving_pct=outlay.representative.saving_pct,
+                feasible=feasible,
+                binding=binding,
+            )
+        assert f"feasible={feasible!r}" in str(refused.value)
+        assert f"binding={binding!r}" in str(refused.value)
+
+    @pytest.mark.parametrize(
+        ("copy", "copied", "sourced"),
+        [
+            ("representative_outlay_gbp", 999.0, 66.15),
+            ("saving_vs_baseline_gbp", 100.0, 132.5),
+            ("saving_pct", 20.0, 26.5),
+        ],
+    )
+    def test_a_copy_that_disagrees_with_the_outlays_representative_is_refused_naming_both(
+        self, copy: str, copied: float, sourced: float
+    ) -> None:
+        """Each of the three copies must equal its outlay.representative source exactly."""
+        outlay = make_bill_distribution(representative=make_bill_breakdown(total_outlay_gbp=66.15))
+        representative = outlay.representative
+        copies = {
+            "representative_outlay_gbp": representative.total_outlay_gbp,
+            "saving_vs_baseline_gbp": representative.saving_vs_baseline_gbp,
+            "saving_pct": representative.saving_pct,
+        }
+        assert copies[copy] == sourced
+        copies[copy] = copied
+        with pytest.raises(ValueError) as refused:
+            CostRecoverySolution(
+                own_use_rate_pence_per_kwh=15.0,
+                outlay=outlay,
+                net_surplus_per_home_per_year_gbp=100.0,
+                feasible=True,
+                binding="floor",
+                **copies,
+            )
+        assert copy in str(refused.value)
+        assert repr(copied) in str(refused.value)
+        assert repr(sourced) in str(refused.value)
+
     def test_all_fields_read_back(self) -> None:
         """All 8 fields read back correctly after construction."""
-        outlay = make_bill_distribution()
+        outlay = make_bill_distribution(
+            representative=make_bill_breakdown(
+                total_outlay_gbp=999.0, saving_vs_baseline_gbp=75.0, saving_pct=15.0
+            )
+        )
         sol = CostRecoverySolution(
             own_use_rate_pence_per_kwh=12.5,
             outlay=outlay,
@@ -168,7 +254,7 @@ class TestCostRecoverySolution:
 # ---------------------------------------------------------------------------
 
 
-def _make_scenario(n_homes: int) -> "ScenarioConfig":  # type: ignore[name-defined]
+def _make_scenario(n_homes: int) -> ScenarioConfig:
     """The solve tests' scenario: *n_homes* default homes on a 5 p/kWh scenario-level SEG rate."""
     return make_scenario(n_homes=n_homes, seg_tariff_pence_per_kwh=5.0)
 
@@ -293,7 +379,7 @@ class TestSolveCostRecoveryRateInterior:
             own_use_rate_pence_per_kwh=sol.own_use_rate_pence_per_kwh,
         )
         curve_solved = project_multi_year(scenario, finance_solved, simulate=simulate)
-        econ_solved = project_economics(curve_solved, scenario, finance_solved)
+        econ_solved = project_economics(curve_solved, scenario_fleet(scenario), finance_solved)
 
         assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
             sol.net_surplus_per_home_per_year_gbp, abs=1e-6
@@ -389,8 +475,8 @@ class TestSolveCostRecoveryRateInterior:
         # fc.homes[0].pv_config.system_age_years = age, so the factory reads
         # the correct age for each PCHIP node.
         def simulate_degrading(
-            fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp"  # type: ignore[name-defined]
-        ) -> "FleetResults":  # type: ignore[name-defined]
+            fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp
+        ) -> FleetResults:
             age = fc.homes[0].pv_config.system_age_years
             factor = max(0.0, 1.0 - 0.005 * age)
             return make_fleet_results(
@@ -414,7 +500,7 @@ class TestSolveCostRecoveryRateInterior:
             own_use_rate_pence_per_kwh=sol.own_use_rate_pence_per_kwh,
         )
         curve_solved = project_multi_year(scenario, finance_solved, simulate=simulate_degrading)
-        econ_solved = project_economics(curve_solved, scenario, finance_solved)
+        econ_solved = project_economics(curve_solved, scenario_fleet(scenario), finance_solved)
 
         assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
             sol.net_surplus_per_home_per_year_gbp, abs=1e-4
@@ -432,13 +518,13 @@ class TestSolveCostRecoveryRateClamps:
     def test_over_feasible_binding_rate_clamped_zero(self) -> None:
         """Over-feasible: surplus(0) > floor → binding='rate_clamped_zero', rate==0, feasible=True.
 
-        Set-up: zero capex (grant >= capex) + large SEG income (via export_revenue_gbp)
+        Set-up: zero capex (grant >= capex) + large SEG income (via a 25 p SEG rate)
         ensures fleet_revenue(r=0) = SEG > fleet_opex + floor×n_homes, so surplus(r=0) > floor
         without needing any own-use payment.
         """
         n_homes = 5
         # fleet_opex = 131 × 5 = 655 GBP/yr; floor×n_homes = 10 × 5 = 50 GBP/yr
-        # Need SEG > 705 GBP/yr → set export_revenue_gbp=200/home → 1000/fleet >> 705
+        # Need SEG > 705 GBP/yr → 800 kWh at 25 p = 200/home → 1000/fleet >> 705
         scenario = _make_scenario(n_homes=n_homes)
         finance = _make_finance(
             pv_cost_per_kwp_gbp=200.0,
@@ -454,7 +540,7 @@ class TestSolveCostRecoveryRateClamps:
             self_kwh=2000.0,
             export_kwh=800.0,
             import_kwh=1200.0,
-            export_revenue_gbp=200.0,
+            pricing=RunPricing(None, 25.0),
         )
         simulate = lambda fc, s, e: fr  # noqa: E731
 
@@ -566,7 +652,7 @@ class TestSolveCostRecoveryRateDegenerate:
             self_kwh=0.0,
             export_kwh=2800.0,
             import_kwh=4000.0,
-            export_revenue_gbp=200.0,  # SEG: 200 × 5 = 1000 GBP/yr fleet
+            pricing=RunPricing(None, 100.0 * 200.0 / 2800.0),  # SEG: 200 × 5 = 1000 GBP/yr fleet
         )
         scenario = _make_scenario(n_homes=n_homes)
         # pv_cost_per_kwp_gbp must be > 0 (FinanceConfig validation); use minimal value.
@@ -664,7 +750,7 @@ class TestSolveCostRecoveryRateShortWindow:
             self_kwh=2000.0,
             export_kwh=800.0,
             import_kwh=1200.0,
-            export_revenue_gbp=40.0,
+            pricing=RunPricing(None, 5.0),
         )
         share_of_year = window_days / 365
         fleet_short = make_fleet_results(
@@ -672,7 +758,7 @@ class TestSolveCostRecoveryRateShortWindow:
             self_kwh=2000.0 * share_of_year,
             export_kwh=800.0 * share_of_year,
             import_kwh=1200.0 * share_of_year,
-            export_revenue_gbp=40.0 * share_of_year,
+            pricing=RunPricing(None, 5.0),
             days=window_days,
         )
 
@@ -693,3 +779,210 @@ class TestSolveCostRecoveryRateShortWindow:
         )
         assert sol_short.binding == sol_full.binding
         assert sol_short.feasible == sol_full.feasible
+
+
+# ---------------------------------------------------------------------------
+# The solve runs only its caller's simulator
+# ---------------------------------------------------------------------------
+
+
+class TestSolveCostRecoveryRateRequiresASimulator:
+    """solve_cost_recovery_rate runs only the simulator its caller passes, never one of its own."""
+
+    def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
+        """A call that passes no simulator is refused by name, and no fleet is simulated."""
+        scenario = _make_scenario(n_homes=2)
+        finance = _make_finance()
+
+        with pytest.raises(TypeError, match="simulate"):
+            solve_cost_recovery_rate(scenario, finance)
+
+
+# ---------------------------------------------------------------------------
+# The package's frozen name
+# ---------------------------------------------------------------------------
+
+
+def test_the_packages_frozen_solve_is_the_one_projection_defines() -> None:
+    """solar_challenge.solve_cost_recovery_rate is solar_challenge.projection's solve, defined there (B15)."""
+    assert solar_challenge.solve_cost_recovery_rate is solve_cost_recovery_rate
+    assert solar_challenge.solve_cost_recovery_rate.__module__ == "solar_challenge.projection"
+
+
+# ---------------------------------------------------------------------------
+# B8 — the solve is exact and independent of the configured rate
+# ---------------------------------------------------------------------------
+
+_OWN_USE_THROUGH_TASK_720_NODES_KWH = PchipInterpolator([0.0, 12.0, 24.0], [10_000.0, 9_000.0, 6_000.0])
+"""The home's own-use at each age: the monotone cubic through task 720's own-use nodes."""
+
+_INCOME_THROUGH_TASK_720_NODES_GBP = PchipInterpolator([0.0, 12.0, 24.0], [500.0, 800.0, 820.0])
+"""The home's SEG income at each age: the monotone cubic through task 720's income nodes."""
+
+_TASK_720_SEG_PENCE_PER_KWH = 5.0
+
+
+def _simulate_task_720_nodes(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+    """One home whose own-use and SEG income at the fleet's PV age lie on the cubics through task 720's nodes.
+
+    The import is priced at a 30 p tariff, which keeps the solve's age-0 outlay
+    bill off its no-tariff retail fallback.
+    """
+    age = fleet_config.homes[0].pv_config.system_age_years
+    return make_fleet_results(
+        homes=fleet_config.homes,
+        self_kwh=float(_OWN_USE_THROUGH_TASK_720_NODES_KWH(age)),
+        export_kwh=float(_INCOME_THROUGH_TASK_720_NODES_GBP(age)) * 100.0 / _TASK_720_SEG_PENCE_PER_KWH,
+        import_kwh=1_200.0,
+        pricing=RunPricing(0.30, _TASK_720_SEG_PENCE_PER_KWH),
+    )
+
+
+def _task_720_finance(own_use_rate_pence_per_kwh: float) -> FinanceConfig:
+    """Task 720's finance at *own_use_rate_pence_per_kwh*: a £1,000/home/yr floor on £2,000/kWp PV with no grant."""
+    return FinanceConfig(
+        standing_charge_pence_per_day=28.0,
+        asset_life_years=25,
+        loan_term_years=15,
+        own_use_rate_pence_per_kwh=own_use_rate_pence_per_kwh,
+        retained_cash_floor_per_home_per_year_gbp=1000.0,
+        retail_baseline_rate_pence_per_kwh=30.0,
+        pv_cost_per_kwp_gbp=2000.0,
+        grant_gbp=0.0,
+        vat_rate=0.05,
+    )
+
+
+_CONFIGURED_RATES_PENCE_PER_KWH = (0.0, 15.0, 23.0)
+
+
+class TestTheSolveIsExactAndIndependentOfTheConfiguredRate:
+    """On task 720's nodes, whose own-use and income are not proportional, the solved rate re-projects onto the floor.
+
+    The rate moves neither the ages a projection simulates nor its income, so
+    the solve's two-point line is a re-projection at every rate, whichever
+    rate the finance configures (B8).
+    """
+
+    @pytest.mark.parametrize("configured_rate", _CONFIGURED_RATES_PENCE_PER_KWH)
+    def test_re_projecting_at_the_solved_rate_meets_the_floor(self, configured_rate: float) -> None:
+        scenario = make_scenario(n_homes=1)
+        finance = _task_720_finance(configured_rate)
+
+        solution = solve_cost_recovery_rate(scenario, finance, simulate=_simulate_task_720_nodes)
+
+        assert solution.binding == "floor"
+        finance_solved = _task_720_finance(solution.own_use_rate_pence_per_kwh)
+        fleet = scenario_fleet(scenario)
+        curve_solved = project_fleet(fleet, finance_solved, simulate=_simulate_task_720_nodes).curve
+        assert project_economics(curve_solved, fleet, finance_solved).net_surplus_per_home_per_year_gbp == (
+            pytest.approx(finance.retained_cash_floor_per_home_per_year_gbp, abs=1e-6)
+        )
+
+    def test_the_solved_rate_is_the_same_at_every_configured_rate(self) -> None:
+        scenario = make_scenario(n_homes=1)
+
+        solutions = [
+            solve_cost_recovery_rate(scenario, _task_720_finance(rate), simulate=_simulate_task_720_nodes)
+            for rate in _CONFIGURED_RATES_PENCE_PER_KWH
+        ]
+
+        assert {solution.binding for solution in solutions} == {"floor"}
+        solved_rates = [solution.own_use_rate_pence_per_kwh for solution in solutions]
+        assert max(solved_rates) - min(solved_rates) <= 1e-12, solved_rates
+
+    def test_the_configured_rate_moves_neither_the_sampled_ages_nor_the_error_estimate(self) -> None:
+        fleet = scenario_fleet(make_scenario(n_homes=1))
+
+        curves = [
+            project_fleet(fleet, _task_720_finance(rate), simulate=_simulate_task_720_nodes).curve
+            for rate in _CONFIGURED_RATES_PENCE_PER_KWH
+        ]
+
+        assert len({curve.sampled_ages for curve in curves}) == 1, [curve.sampled_ages for curve in curves]
+        assert len({curve.interp_error_estimate for curve in curves}) == 1, [
+            curve.interp_error_estimate for curve in curves
+        ]
+
+
+# ---------------------------------------------------------------------------
+# C7 — one projection serves the economics, the solve and the outlay
+# ---------------------------------------------------------------------------
+
+
+class TestOneProjectionServesTheRun:
+    """run_cost_recovery's one projection, at the configured rate, gives its economics, its solve and its outlay."""
+
+    def _interior(self) -> tuple[ScenarioConfig, FinanceConfig, FleetResults]:
+        """TestSolveCostRecoveryRateInterior's scenario, finance and per-home results: a solve strictly between 0 and retail."""
+        scenario = _make_scenario(n_homes=5)
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=2000.0,
+            grant_gbp=0.0,
+            retained_cash_floor=100.0,
+            retail_baseline_rate=30.0,
+        )
+        return scenario, finance, make_fleet_results(n_homes=5, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+
+    def test_the_runs_solution_is_the_scenarios_solve(self) -> None:
+        scenario, finance, fr = self._interior()
+        simulate = answering_with(fr)
+
+        run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=simulate)
+
+        assert run.solution == solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+    def test_the_runs_projection_is_the_fleets_projection_at_the_configured_rate(self) -> None:
+        scenario, finance, fr = self._interior()
+        simulate = answering_with(fr)
+        fleet = scenario_fleet(scenario)
+
+        run = run_cost_recovery(fleet, finance, simulate=simulate)
+
+        projection = project_fleet(fleet, finance, simulate=simulate)
+        assert run.projection.curve == projection.curve
+        assert run.projection.age0_summaries == projection.age0_summaries
+
+    def test_the_runs_economics_are_its_projections_at_the_configured_rate(self) -> None:
+        scenario, finance, fr = self._interior()
+        fleet = scenario_fleet(scenario)
+
+        run = run_cost_recovery(fleet, finance, simulate=answering_with(fr))
+
+        assert run.economics == project_economics(run.projection.curve, fleet, finance)
+
+    def test_the_outlay_bills_the_projections_age_0_summaries_at_the_solved_rate(self) -> None:
+        scenario, finance, fr = self._interior()
+
+        run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=answering_with(fr))
+
+        finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=run.solution.own_use_rate_pence_per_kwh)
+        assert run.solution.outlay == bill_distribution(run.projection.age0_summaries, finance_solved)
+
+    def test_the_run_and_the_solve_each_ask_for_one_projections_ages(self) -> None:
+        """Neither simulates an age-0 fleet of its own for the outlay."""
+        scenario, finance, fr = self._interior()
+        answer = answering_with(fr)
+        run_asked: list[str] = []
+        solve_asked: list[str] = []
+
+        def recording(asked: list[str]) -> FleetSimulate:
+            def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+                asked.append(fleet_config.name)
+                return answer(fleet_config, start, end)
+
+            return simulate
+
+        run_cost_recovery(scenario_fleet(scenario), finance, simulate=recording(run_asked))
+        solve_cost_recovery_rate(scenario, finance, simulate=recording(solve_asked))
+
+        assert tuple(run_asked) == PROJECTION_AGES_OVER_25_YEARS
+        assert len(run_asked) == fewest_simulated_ages(finance.asset_life_years)
+        assert tuple(solve_asked) == PROJECTION_AGES_OVER_25_YEARS
+
+    def test_the_run_is_a_cost_recovery_run(self) -> None:
+        scenario, finance, fr = self._interior()
+
+        run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=answering_with(fr))
+
+        assert isinstance(run, CostRecoveryRun)

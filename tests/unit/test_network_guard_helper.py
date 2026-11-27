@@ -19,10 +19,13 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from tests._network_guard import refusing_network
+from tests._network_guard import refusing_network, send_child_processes_to_a_dead_proxy
 
 # TEST-NET-1 (RFC 5737) is never routed, and the guard refuses before any syscall, so no packet is sent.
 _OFF_THIS_MACHINE = ("192.0.2.1", 9)
+
+# An AF_UNIX address holds fewer than 108 bytes on Linux and 104 on macOS, so a path through this name is too long on every host.
+_A_DIR_NAME_LONGER_THAN_A_SOCKET_ADDRESS_HOLDS = "d" * 108
 
 
 def _fetch_in_a_child_process(url: str) -> subprocess.CompletedProcess[str]:
@@ -42,7 +45,7 @@ def _run_in_a_child_process(program: str) -> subprocess.CompletedProcess[str]:
 
 
 def _send_to_the_proxy(method: str, request_target: str) -> int:
-    """Send a *method* request for *request_target* to the proxy HTTP_PROXY names, as a client that honours it does, and return the answer's status."""
+    """Send a *method* request for *request_target*, as given, straight to the proxy HTTP_PROXY names, and return the answer's status."""
     proxy = urlsplit(os.environ["HTTP_PROXY"])
     connection = http.client.HTTPConnection(str(proxy.hostname), proxy.port, timeout=30)
     try:
@@ -121,13 +124,16 @@ class TestRefusingNetwork:
 
         assert refused == []
 
-    def test_a_unix_domain_connection_goes_through(self, tmp_path: Path) -> None:
-        path = str(tmp_path / "socket")
+    def test_a_unix_domain_connection_goes_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Its address is relative to its own directory, as an absolute one under tmp_path can outgrow what an AF_UNIX address holds."""
+        directory = tmp_path / _A_DIR_NAME_LONGER_THAN_A_SOCKET_ADDRESS_HOLDS
+        directory.mkdir()
+        monkeypatch.chdir(directory)
         with socket.socket(socket.AF_UNIX) as server, socket.socket(socket.AF_UNIX) as client:
-            server.bind(path)
+            server.bind("socket")
             server.listen()
             with refusing_network() as refused:
-                client.connect(path)
+                client.connect("socket")
 
         assert refused == []
 
@@ -210,16 +216,33 @@ class TestRefusingNetwork:
 
     @pytest.mark.parametrize(
         "request_target",
-        ["/path", "http://example.invalid:no-port/", "ftp://example.invalid/"],
-        ids=["origin-form", "port-not-a-number", "scheme-without-a-default-port"],
+        ["http://example.invalid:no-port/", "ftp://example.invalid/"],
+        ids=["port-not-a-number", "scheme-without-a-default-port"],
     )
-    def test_a_request_through_the_proxy_whose_target_names_no_host_and_port_is_refused_and_recorded_as_sent(
+    def test_a_request_through_the_proxy_whose_absolute_form_target_names_no_host_and_port_is_refused_and_recorded_as_sent(
         self, request_target: str
     ) -> None:
         with refusing_network() as refused:
             status = _send_to_the_proxy("GET", request_target)
 
         assert (status, refused) == (HTTPStatus.FORBIDDEN, [request_target])
+
+    @pytest.mark.parametrize(
+        ("method", "request_target"),
+        [("GET", "/"), ("POST", "/api/simulate/home"), ("OPTIONS", "*")],
+        ids=["GET-root", "POST-web-api-path", "OPTIONS-asterisk"],
+    )
+    def test_a_request_addressed_to_the_proxy_itself_is_refused_and_not_recorded(
+        self, method: str, request_target: str
+    ) -> None:
+        """Its client took the proxy for the server it meant, so nothing was routed off this machine."""
+        with refusing_network() as refused:
+            statuses = (
+                _send_to_the_proxy(method, request_target),
+                _send_to_the_proxy("GET", "http://example.invalid/"),
+            )
+
+        assert (statuses, refused) == ((HTTPStatus.FORBIDDEN, HTTPStatus.FORBIDDEN), ["example.invalid:80"])
 
     def test_leaving_restores_the_environment_it_replaced(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HTTP_PROXY", "http://the-callers-proxy.invalid:3128")
@@ -230,3 +253,18 @@ class TestRefusingNetwork:
             pass
 
         assert dict(os.environ) == before
+
+
+class TestSendChildProcessesToADeadProxy:
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_a_child_processs_request_off_this_machine_fails_to_connect_without_being_refused(
+        self, scheme: str
+    ) -> None:
+        """So a test whose child processes ask a live service meets it out of reach, and their requests do not count against the test."""
+        host, port = _OFF_THIS_MACHINE
+        with refusing_network() as refused, pytest.MonkeyPatch.context() as patch:
+            send_child_processes_to_a_dead_proxy(patch)
+            child = _fetch_with_requests_in_a_child_process(f"{scheme}://{host}:{port}/")
+
+        assert child.returncode != 0 and "ProxyError" in child.stderr, (child.returncode, child.stderr[-2000:])
+        assert refused == []

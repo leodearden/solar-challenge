@@ -1,7 +1,11 @@
 """Tests for the scenario builder and parameter sweep web features."""
 
 import json
+import logging
 import math
+import sqlite3
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -11,37 +15,38 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.config import (
+from solar_challenge.config import load_fleet_config
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import (
     NormalDistribution,
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
-    load_fleet_config,
     parse_fleet_distribution_config,
+)
+from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.scenario_blocks import (
     parse_location_block,
     parse_seg_rate,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.charts import sweep_parameter_chart
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-from solar_challenge.web.shared import LOCATION_PRESETS
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
-from tests._html_page import element_attributes, element_count, texts, texts_after
-from tests._plotly_figure import traces
-from tests._web_app import build_test_app
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a test Flask application."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a Flask test client."""
-    return app.test_client()
+from solar_challenge.web.api import SWEEP_MAX_STEPS
+from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES, ComponentLimits
+from solar_challenge.web.request_boundary import read_string, require_encodable_text
+from solar_challenge.web.storage import RunStorage
+from tests._chart_absences import sweep_reason
+from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_names
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
+from tests._error_records import error_records
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._fleet_form import fleet_reader_refusal
+from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
+from tests._html_select_options import option_texts
+from tests._plotly_figure import traces_by_name
+from tests._run_summaries import home_summary
+from tests._web_app import database_of, point_store_config_at_a_missing_directory
+from tests._web_runs import store_fleet_run, store_home_run
 
 
 class TestScenarioBuilderRoute:
@@ -83,10 +88,8 @@ class TestScenarioBuilderRoute:
         assert "Download YAML" in data
         assert "Save" in data
 
-    def test_the_builder_page_hands_its_script_each_components_keys_and_starting_distribution(
-        self, client: FlaskClient
-    ) -> None:
-        """The second argument is what static/js/scenario-builder.js reads of each component."""
+    def test_the_builder_page_hands_its_script_only_the_section_it_opens_at(self, client: FlaskClient) -> None:
+        """scenarioBuilder takes no components: static/js/scenario-builder.js reads each component's start from #page-limits, as the fleet page's script does."""
         page = client.get("/scenarios/builder").get_data(as_text=True)
         scopes = [attributes.get("x-data") or "" for attributes in element_attributes(page, "div")]
         (x_data,) = [scope for scope in scopes if scope.startswith("scenarioBuilder(")]
@@ -94,17 +97,18 @@ class TestScenarioBuilderRoute:
             arguments = json.loads("[" + x_data.removeprefix("scenarioBuilder(").removesuffix(")") + "]")
         except json.JSONDecodeError as exc:
             pytest.fail(f"x-data={x_data!r} does not pass scenarioBuilder JSON arguments: {exc}")
-        assert arguments[1:] == [
-            [
-                {
-                    "key": component.key,
-                    "fixed_field": component.fixed_field,
-                    "grammar_key": component.grammar_key,
-                    "dist": component.builder_default.editor_state(),
-                }
-                for component in FLEET_COMPONENTS.values()
-            ]
-        ]
+        assert [type(argument) for argument in arguments] == [str]
+
+    def test_builder_offers_each_location_preset_labelled_with_its_name(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/builder's location select offers each LOCATION_PRESETS key labelled with its Location's name, and a custom location."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+
+        assert option_texts(page, {"x-model": "location_preset"}) == {
+            **{key: preset.name for key, preset in LOCATION_PRESETS.items()},
+            "custom": "Custom Location",
+        }
 
 
 class TestSweepRoute:
@@ -121,20 +125,40 @@ class TestSweepRoute:
         page = response.get_data(as_text=True)
         assert element_count(page, "select", {"x-model": "parameter"}) == 1
 
+    def test_sweep_page_offers_each_location_preset_labelled_with_its_name(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/sweep's location select offers each LOCATION_PRESETS key, labelled with its Location's name."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+
+        assert option_texts(page, {"x-model": "baseConfig.location"}) == {
+            key: preset.name for key, preset in LOCATION_PRESETS.items()
+        }
+
     def test_sweep_page_contains_mode_options(self, client: FlaskClient) -> None:
         """GET /scenarios/sweep offers the Linear and Geometric modes, in that order, after the Sweep Mode label."""
         response = client.get("/scenarios/sweep")
         page = response.get_data(as_text=True)
         assert texts_after(page, "Sweep Mode", 2) == ["Linear", "Geometric"]
 
-    def test_sweep_page_contains_preview_section(self, client: FlaskClient) -> None:
-        """GET /scenarios/sweep has the Sweep Point Preview heading, once."""
-        response = client.get("/scenarios/sweep")
-        page = response.get_data(as_text=True)
-        assert texts(page).count("Sweep Point Preview") == 1
+    def test_sweep_page_heads_each_panel_with_its_title(self, client: FlaskClient) -> None:
+        """GET /scenarios/sweep heads each of its panels, the configuration, the point preview and the results, with its title, once."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        titles = ("Sweep Configuration", "Sweep Point Preview", "Sweep Results")
+        assert counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
+
+    def test_sweep_point_preview_counts_the_values_the_sweep_will_test(self, client: FlaskClient) -> None:
+        """GET /scenarios/sweep has exactly one paragraph bound to the count of values the sweep will test."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        assert element_count(page, "p", {"x-text": "previewValues.length + ' values will be tested'"}) == 1
+
+    def test_sweep_page_shows_no_sweep_id(self, client: FlaskClient) -> None:
+        """GET /scenarios/sweep mentions no Sweep ID: a sweep answers none, only its points' job ids."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        assert [text for text in texts(page) if "Sweep ID" in text] == []
 
     def test_sweep_page_days_input_allows_the_days_the_server_accepts(self, client: FlaskClient) -> None:
-        """The base Days input, whose value the page sends as base_config.days, allows 1 to MAX_WINDOW_DAYS: the days parse_date_range accepts."""
+        """The base Days input, whose value the page sends as base_config.days, allows 1 to MAX_DAYS: the days parse_date_range accepts."""
         page = client.get("/scenarios/sweep").get_data(as_text=True)
         days_inputs = [
             attributes
@@ -142,7 +166,7 @@ class TestSweepRoute:
             if attributes.get("x-model") == "baseConfig.days"
         ]
         assert [(attributes.get("min"), attributes.get("max")) for attributes in days_inputs] == [
-            ("1", str(MAX_WINDOW_DAYS))
+            ("1", str(MAX_DAYS))
         ]
 
 
@@ -164,17 +188,15 @@ class TestOldScenarioApiPaths:
         assert client.open(path, method=method).status_code == 404
 
 
-def _validation_with_pv_pool(client: FlaskClient, entries: list[dict[str, float]]) -> Any:
-    """POST /api/scenarios/validate's answer to the default builder form with its PV a shuffled pool of *entries*, in place of its fixed capacity."""
-    form = {
-        key: value
-        for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
-        if key != "pv_capacity_kw"
-    }
-    response = client.post(
-        "/api/scenarios/validate",
-        json={**form, "pv_distribution_type": "shuffled_pool", "pv_sp_entries": entries},
-    )
+def _form_with_pv_pool(values: list[float], counts: list[int], **form_changes: Any) -> dict[str, Any]:
+    """The default builder form with its PV a shuffled pool of *values*, each given to its count of *counts* homes, in place of its fixed capacity, and with *form_changes* over it."""
+    pool = {"type": "shuffled_pool", "values": values, "counts": counts}
+    return {**TestBuilderScenarioYaml._DEFAULT_FORM, "pv": {"capacity_kw": pool}, **form_changes}
+
+
+def _validation_with_pv_pool(client: FlaskClient, values: list[float], counts: list[int], **form_changes: Any) -> Any:
+    """POST /api/scenarios/validate's answer to _form_with_pv_pool's form."""
+    response = client.post("/api/scenarios/validate", json=_form_with_pv_pool(values, counts, **form_changes))
     assert response.status_code == 200
     return response.get_json()
 
@@ -226,49 +248,42 @@ class TestScenarioAPI:
         assert data["errors"] == []
 
     @pytest.mark.parametrize(
-        ("without", "changes", "error_text"),
+        ("changes", "error_text"),
         [
             pytest.param(
-                ("pv_capacity_kw",),
-                {"pv_distribution_type": "uniform", "pv_min": 8, "pv_max": 2},
+                {"pv": {"capacity_kw": {"type": "uniform", "min": 8, "max": 2}}},
                 "min cannot be greater than max",
                 id="PV uniform min above max",
             ),
             pytest.param(
-                ("battery_capacity_kwh",),
-                {
-                    "battery_distribution_type": "weighted_discrete",
-                    "battery_wd_values": [{"value": 0, "weight": 0}, {"value": 5, "weight": 0}],
-                },
+                {"pv": {"capacity_kw": {"type": "normal", "mean": 4}}},
+                "pv.capacity_kw: requires 'std'",
+                id="PV normal without its std",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": {"type": "weighted_discrete", "values": [0, 5], "weights": [0, 0]}}},
                 "weights cannot all be zero",
                 id="battery weights all zero",
             ),
-            pytest.param((), {"seg_rate_pence_per_kwh": -1}, "seg", id="negative SEG rate"),
-            pytest.param((), {"import_rate": -0.1}, "negative", id="negative import rate"),
-            pytest.param((), {"end_date": ""}, "end_date", id="cleared end date"),
+            pytest.param({"seg_rate_pence_per_kwh": -1}, "seg", id="negative SEG rate"),
+            pytest.param({"import_rate": -0.1}, "rate_per_kwh must be at least 0", id="negative import rate"),
+            pytest.param({"end_date": ""}, "end_date", id="cleared end date"),
             pytest.param(
-                (),
                 {"location_preset": "custom", "latitude": 95, "longitude": -2.2, "altitude": 38.0},
-                "Latitude must be between -90 and 90",
+                "latitude must be between -90 and 90",
                 id="custom latitude out of range",
             ),
-            pytest.param((), {"export_rate": 0.15}, "export_rate", id="unread export_rate"),
+            pytest.param({"export_rate": 0.15}, "export_rate", id="unread export_rate"),
         ],
     )
     def test_validate_reports_what_the_scenario_readers_reject(
         self,
         client: FlaskClient,
-        without: tuple[str, ...],
         changes: dict[str, Any],
         error_text: str,
     ) -> None:
-        """The default builder form, *without* those fields and with *changes*, is invalid for the reason a scenario reader gives."""
-        form = {
-            key: value
-            for key, value in TestBuilderScenarioYaml._DEFAULT_FORM.items()
-            if key not in without
-        }
-        form.update(changes)
+        """The default builder form with *changes* is invalid for the reason a scenario reader gives."""
+        form = {**TestBuilderScenarioYaml._DEFAULT_FORM, **changes}
 
         response = client.post("/api/scenarios/validate", json=form)
 
@@ -277,26 +292,56 @@ class TestScenarioAPI:
         assert data["valid"] is False
         assert any(error_text in error for error in data["errors"]), data["errors"]
 
+    def test_validate_reports_a_drawn_value_outside_its_components_range(
+        self, client: FlaskClient
+    ) -> None:
+        """P15: the default form with its PV a normal around 50 kW, which every home draws above the pv component's range, is invalid, naming pv.capacity_kw and the range."""
+        form = {
+            **TestBuilderScenarioYaml._DEFAULT_FORM,
+            "pv": {"capacity_kw": {"type": "normal", "mean": 50, "std": 1}},
+        }
+
+        response = client.post("/api/scenarios/validate", json=form)
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["valid"] is False
+        assert any(
+            error.startswith("pv.capacity_kw must be between 0.5 and 20 for every home, got ")
+            for error in data["errors"]
+        ), data["errors"]
+
     def test_validate_reports_a_shuffled_pool_too_small_for_the_fleet(
         self, client: FlaskClient
     ) -> None:
         """A PV pool of 90 values for 100 homes is the one fault in a form that validates with a pool of 100.
 
-        The builder's default PV pool used to hold those 90 values.  The fault's message is
-        not asserted: load_fleet_config raises a bare IndexError for it today.
+        The builder's default PV pool used to hold those 90 values.  The fault is reported in
+        read_form_fleet's words, naming the pool at the form's path, n_homes and the pool's size.
         """
+        values = [3.0, 4.0, 5.0]
+        refusal = fleet_reader_refusal(_form_with_pv_pool(values, [20, 40, 30]))
 
-        def validation_with_pv_pool_counts(counts: tuple[int, int, int]) -> Any:
-            entries = [
-                {"value": value, "count": count}
-                for value, count in zip((3.0, 4.0, 5.0), counts)
-            ]
-            return _validation_with_pv_pool(client, entries)
+        assert _validation_with_pv_pool(client, values, [20, 40, 40]) == {"valid": True, "errors": []}
+        assert _validation_with_pv_pool(client, values, [20, 40, 30]) == {"valid": False, "errors": [refusal]}
+        assert refusal.removeprefix("the top level: ").startswith("pv.capacity_kw: ")
+        assert "n_homes (100), got 90" in refusal
 
-        assert validation_with_pv_pool_counts((20, 40, 40)) == {"valid": True, "errors": []}
-        short_pool = validation_with_pv_pool_counts((20, 40, 30))
-        assert short_pool["valid"] is False
-        assert len(short_pool["errors"]) == 1, short_pool["errors"]
+    def test_validate_answers_the_readers_refusal_of_a_seg_block_without_a_temp_directory(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The builder's document is judged in memory, so with the temp directory missing the answer is still parse_seg_rate's refusal of the negative rate."""
+        with pytest.raises(ConfigurationError) as seg_refusal:
+            parse_seg_rate({"rate_pence_per_kwh": -1.0})
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "absent"))
+
+        response = client.post(
+            "/api/scenarios/validate",
+            json={**TestBuilderScenarioYaml._DEFAULT_FORM, "seg_rate_pence_per_kwh": -1},
+        )
+
+        assert response.status_code == 200
+        assert response.get_json() == {"valid": False, "errors": [str(seg_refusal.value)]}
 
     def test_validate_missing_name_returns_errors(self, client: FlaskClient) -> None:
         """Test POST /api/scenarios/validate with missing name returns errors."""
@@ -313,7 +358,7 @@ class TestScenarioAPI:
         """Test POST /api/scenarios/validate with invalid PV capacity."""
         response = client.post(
             "/api/scenarios/validate",
-            json={"name": "Test", "pv_capacity_kw": 999},
+            json={"name": "Test", "pv": {"capacity_kw": 999}},
         )
         assert response.status_code == 200
         data = response.get_json()
@@ -338,26 +383,17 @@ class TestScenarioAPI:
             "errors": [f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."],
         }
 
-    def test_validate_refuses_only_a_shuffled_pool_too_large_for_a_dashboard_fleet(
+    def test_validate_refuses_a_shuffled_pool_whose_counts_far_exceed_the_fleets_homes_naming_their_total_and_n_homes(
         self, client: FlaskClient
     ) -> None:
-        """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more, naming the count.
+        """E7: a pool of 10**12 values for 10 homes is refused with read_form_fleet's one refusal, which holds the counts to n_homes before any value of the pool is built, naming pv.capacity_kw at the form's path, the counts' total and n_homes; a pool of 10 values for those homes validates."""
+        form = _form_with_pv_pool([4.0], [10**12], n_homes=10)
+        refusal = fleet_reader_refusal(form)
 
-        The pool sent is at most one value over the limit, never a count such as finding
-        fk-9dd1d9389dd2's 10**12: if the bound regressed, validate would build every value
-        of the pool.
-        """
-        at_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES}]
-        above_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES + 1}]
-
-        assert _validation_with_pv_pool(client, at_limit) == {"valid": True, "errors": []}
-        assert _validation_with_pv_pool(client, above_limit) == {
-            "valid": False,
-            "errors": [
-                f"pv_sp_entries[0].count must be between 0 and {MAX_FLEET_HOMES}, "
-                f"got {MAX_FLEET_HOMES + 1}"
-            ],
-        }
+        assert _validation_with_pv_pool(client, [4.0], [10], n_homes=10) == {"valid": True, "errors": []}
+        assert _validation_with_pv_pool(client, [4.0], [10**12], n_homes=10) == {"valid": False, "errors": [refusal]}
+        assert refusal.removeprefix("the top level: ").startswith("pv.capacity_kw: ")
+        assert f"n_homes (10), got {10**12}" in refusal
 
     def test_validate_accepts_each_fixed_value_the_builder_page_allows_and_refuses_one_beyond_it(
         self, client: FlaskClient
@@ -370,25 +406,26 @@ class TestScenarioAPI:
             if attributes.get("x-model.number") == "dist.fixed"
         ]
 
-        def validation_with(field: str, value: float) -> Any:
+        def validation_with(component: ComponentLimits, value: float) -> Any:
             response = client.post(
                 "/api/scenarios/validate",
-                json={**TestBuilderScenarioYaml._DEFAULT_FORM, field: value},
+                json={**TestBuilderScenarioYaml._DEFAULT_FORM, component.key: {component.grammar_key: value}},
             )
             assert response.status_code == 200
             return response.get_json()
 
         for component, (served_min, served_max) in zip(FLEET_COMPONENTS.values(), bounds, strict=True):
             low, high = float(served_min), float(served_max)
+            field = f"{component.key}.{component.grammar_key}"
             for value in (low, high):
-                answer = validation_with(component.fixed_field, value)
+                answer = validation_with(component, value)
                 assert answer == {"valid": True, "errors": []}, (
-                    f"{component.fixed_field} {value!r}, which the page allows, was refused: {answer}"
+                    f"{field} {value!r}, which the page allows, was refused: {answer}"
                 )
             for value in (math.nextafter(low, -math.inf), math.nextafter(high, math.inf)):
-                answer = validation_with(component.fixed_field, value)
+                answer = validation_with(component, value)
                 assert answer["valid"] is False, (
-                    f"{component.fixed_field} {value!r}, beyond what the page allows, was accepted: {answer}"
+                    f"{field} {value!r}, beyond what the page allows, was accepted: {answer}"
                 )
 
     def test_list_presets(self, client: FlaskClient) -> None:
@@ -410,13 +447,88 @@ class TestScenarioAPI:
         data = response.get_json()
         assert data["name"] == "test-preset"
 
-    def test_save_preset_no_name_returns_400(self, client: FlaskClient) -> None:
-        """Test POST /api/scenarios/save with no name returns 400."""
-        response = client.post(
-            "/api/scenarios/save",
-            json={"config": {"n_homes": 10}},
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"config": {"n_homes": 10}}, id="no-name"),
+            pytest.param({"name": "   ", "config": {"n_homes": 9}}, id="blank-name"),
+        ],
+    )
+    def test_save_preset_without_a_name_returns_400_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, body: dict[str, Any]
+    ) -> None:
+        """Test POST /api/scenarios/save with no name, or a blank one, returns 400."""
+        response = client.post("/api/scenarios/save", json=body)
+
+        assert (response.status_code, response.get_json()) == (400, {"error": "Scenario name is required"})
+        assert saved_preset_names(database_of(app)) == []
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            pytest.param(5, id="integer"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_save_of_a_name_that_is_not_a_json_string_returns_400_naming_name_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, name: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            read_string(name, "name")
+
+        response = client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}})
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
+        assert saved_preset_names(database_of(app)) == []
+
+    @pytest.mark.parametrize(
+        ("config", "type_name"),
+        [
+            pytest.param([1, 2], "list", id="array"),
+            pytest.param([], "list", id="empty-array"),
+            pytest.param("", "str", id="empty-string"),
+            pytest.param(0, "int", id="zero"),
+            pytest.param(None, "NoneType", id="null"),
+        ],
+    )
+    def test_save_of_a_config_that_is_not_a_json_object_returns_400_and_saves_nothing(
+        self, app: Flask, client: FlaskClient, config: object, type_name: str
+    ) -> None:
+        """A sent config, falsy or not, must be a JSON object: it is never the cue to save the rest of the body as the preset."""
+        response = client.post("/api/scenarios/save", json={"name": "s", "config": config})
+
+        assert (response.status_code, response.get_json()) == (
+            400,
+            {"error": f"config must be a JSON object, got {type_name}"},
         )
-        assert response.status_code == 400
+        assert saved_preset_names(database_of(app)) == []
+
+    def test_save_of_a_body_that_sends_no_config_saves_its_flat_form(self, client: FlaskClient) -> None:
+        """Every key of the body but name and type is the preset's config."""
+        response = client.post("/api/scenarios/save", json={"name": "Flat", "n_homes": 3})
+
+        assert response.status_code == 201
+        assert client.get("/api/scenarios/presets/Flat").get_json()["config"] == {"n_homes": 3}
+
+    def test_save_of_an_empty_config_object_saves_that_object(self, client: FlaskClient) -> None:
+        """A sent config is the preset's config even when it is an empty object: whether config was sent, not its truthiness, decides the flat-form fallback."""
+        response = client.post("/api/scenarios/save", json={"name": "Empty", "config": {}})
+
+        assert response.status_code == 201
+        assert client.get("/api/scenarios/presets/Empty").get_json()["config"] == {}
+
+    def test_save_of_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_saves_nothing(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A JSON string can escape a lone surrogate, which sqlite3 cannot bind, so such a name is refused as request_boundary.require_encodable_text refuses it, before any database access."""
+        name = chr(0xD800)
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(name, "name")
+
+        response = client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}})
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
+        assert saved_preset_names(database_of(app)) == []
 
     def test_save_under_a_name_a_saved_home_preset_holds_returns_409_and_changes_nothing(
         self, client: FlaskClient
@@ -486,6 +598,124 @@ class TestScenarioAPI:
             "Bristol Phase 1",
         )
 
+    def test_saved_scenario_presets_are_listed_and_found_in_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, app: Flask, client: FlaskClient, tmp_path: Path
+    ) -> None:
+        """The scenario preset list and lookup read the Database create_app built, whatever the app's store config names afterwards."""
+        assert client.post("/api/scenarios/save", json={"name": "Fleet", "config": {"n_homes": 9}}).status_code == 201
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        listed = client.get("/api/scenarios/presets").get_json()["presets"]
+        assert [preset["name"] for preset in listed if preset["source"] == "saved"] == ["Fleet"]
+        found = client.get("/api/scenarios/presets/Fleet")
+        assert (found.status_code, found.get_json()["config"]) == (200, {"n_homes": 9})
+
+    def test_a_name_only_a_saved_home_preset_holds_is_not_a_scenario_preset(self, client: FlaskClient) -> None:
+        """The lookup serves saved fleet presets only, as the list holds them: a saved home preset's name is not found."""
+        assert client.post("/api/presets", json={"name": "Home only", "pv_kw": 3.0}).status_code == 201
+
+        resp = client.get("/api/scenarios/presets/Home only")
+
+        assert (resp.status_code, resp.get_json()) == (404, {"error": "Preset 'Home only' not found"})
+        assert "Home only" not in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+    def test_the_builtin_scenario_files_are_listed_alone_and_a_warning_logged_when_the_database_cannot_be_read(
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A database that cannot be read leaves the list answering, with the built-in scenario files alone, and the presets module logs the database's error once, as a warning."""
+        builtin_names = [
+            p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"] if p["source"] == "builtin"
+        ]
+        assert builtin_names, "the list holds no built-in preset, so it cannot show them listed alone"
+        assert client.post("/api/scenarios/save", json={"name": "Mine", "config": {"n_homes": 9}}).status_code == 201
+        database_of(app).path.write_bytes(b"not a database")
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.get("/api/scenarios/presets")
+
+        assert resp.status_code == 200
+        assert [(p["name"], p["source"]) for p in resp.get_json()["presets"]] == [
+            (name, "builtin") for name in builtin_names
+        ]
+        records = [r for r in caplog.records if r.name == "solar_challenge.web.presets"]
+        assert [r.levelno for r in records] == [logging.WARNING]
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1], sqlite3.DatabaseError)
+
+    def test_a_saved_preset_the_database_cannot_read_answers_500_naming_it_and_logs_an_error_naming_it(
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A database fault in the lookup of a saved preset is a 500 naming the preset and the fault, not "not found", logged once at ERROR with the database's error in its traceback."""
+        assert client.post("/api/scenarios/save", json={"name": "Mine", "config": {"n_homes": 9}}).status_code == 201
+        database_of(app).path.write_bytes(b"not a database")
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.get("/api/scenarios/presets/Mine")
+
+        message = "Saved preset 'Mine' could not be read: file is not a database"
+        assert (resp.status_code, resp.get_json()) == (500, {"error": message})
+        records = [r for r in caplog.records if "'Mine'" in r.getMessage()]
+        assert [(r.levelno, r.getMessage()) for r in records] == [(logging.ERROR, message)]
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1].__cause__, sqlite3.DatabaseError)
+
+    def test_a_saved_fleet_preset_whose_config_is_not_json_answers_500_naming_it(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A saved fleet preset the list holds, but whose config is not JSON, is a 500 naming it, not "not found"."""
+        insert_saved_fleet_preset(database_of(app), "Broken", "{not json")
+        assert "Broken" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+        resp = client.get("/api/scenarios/presets/Broken")
+
+        assert (resp.status_code, resp.get_json()) == (
+            500,
+            {"error": "Saved preset 'Broken' could not be read: its config is not JSON"},
+        )
+
+    def test_a_saved_fleet_preset_whose_config_is_nested_too_deeply_to_decode_answers_500_naming_it_caused_by_the_recursion(
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A saved fleet preset the list holds, but whose config json.loads gives up on as nested too deeply, is a 500 naming it and that fault, logged once at ERROR with the RecursionError as the cause."""
+        insert_saved_fleet_preset(database_of(app), "Deep", JSON_NESTED_TOO_DEEPLY_TO_DECODE)
+        assert "Deep" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.get("/api/scenarios/presets/Deep")
+
+        message = "Saved preset 'Deep' could not be read: its config is nested too deeply to decode as JSON"
+        assert (resp.status_code, resp.get_json()) == (500, {"error": message})
+        records = [r for r in caplog.records if "'Deep'" in r.getMessage()]
+        assert [(r.levelno, r.getMessage()) for r in records] == [(logging.ERROR, message)]
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1].__cause__, RecursionError)
+
+    @pytest.mark.parametrize("config_json", ["[1]", "3", '"text"', "null"], ids=["array", "number", "string", "json-null"])
+    def test_a_saved_fleet_preset_whose_config_is_json_but_not_an_object_answers_500_naming_it(
+        self, app: Flask, client: FlaskClient, config_json: str
+    ) -> None:
+        """A saved fleet preset the list holds, but whose config is JSON other than an object, is a 500 naming it, as one whose config is not JSON is."""
+        insert_saved_fleet_preset(database_of(app), "Not an object", config_json)
+        assert "Not an object" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+        resp = client.get("/api/scenarios/presets/Not an object")
+
+        assert (resp.status_code, resp.get_json()) == (
+            500,
+            {"error": "Saved preset 'Not an object' could not be read: its config is not a JSON object"},
+        )
+
+    @pytest.mark.parametrize("config_json", ["", None], ids=["empty-text", "sql-null"])
+    def test_a_saved_fleet_preset_whose_config_is_stored_as_empty_text_or_null_is_served_with_an_empty_config(
+        self, app: Flask, client: FlaskClient, config_json: str | None
+    ) -> None:
+        """A saved fleet preset whose config is stored as empty text or as NULL is served, with the config {}."""
+        insert_saved_fleet_preset(database_of(app), "Empty", config_json)
+
+        resp = client.get("/api/scenarios/presets/Empty")
+
+        assert (resp.status_code, resp.get_json()["config"]) == (200, {})
+
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
     """The YAML text /api/scenarios/preview-yaml answers for the builder *form*, and the document it holds."""
@@ -506,21 +736,21 @@ class TestBuilderScenarioYaml:
         "location_preset": "bristol",
         "n_homes": 100,
         "import_rate": 0.245,
-        "seg_rate_pence_per_kwh": 15.0,
-        "pv_capacity_kw": 4,
-        "battery_capacity_kwh": 5,
-        "annual_consumption_kwh": 3500,
+        "seg_rate_pence_per_kwh": "",
+        "pv": {"capacity_kw": 4},
+        "battery": {"capacity_kwh": 5},
+        "load": {"annual_consumption_kwh": 3500},
     }
-    """The form scenario-builder.js's getFormData() sends on page load, given a name.
+    """A form scenario-builder.js's getFormData() sends, given a name, with each component at its Fixed Value.
 
     tests/e2e/test_scenario_builder.py::test_default_form_previews_yaml_the_fleet_loader_loads
-    pins the real payload this mirrors.
+    pins the real payload's shape.
     """
 
     def test_default_form_yaml_loads_through_load_fleet_config(
         self, client: FlaskClient, tmp_path: Path
     ) -> None:
-        """load_fleet_config builds every home of the form; the period and SEG rate are there for their own readers."""
+        """load_fleet_config builds every home of the form; the period is there for its own reader, and the seg: block is null, since the builder starts with no SEG rate."""
         yaml_text, document = _preview_document(client, self._DEFAULT_FORM)
         path = tmp_path / "builder.yaml"
         path.write_text(yaml_text, encoding="utf-8")
@@ -539,72 +769,68 @@ class TestBuilderScenarioYaml:
             for home in fleet.homes
         } == {(4.0, 5.0, 3500.0, TariffConfig.flat_rate(0.245), LOCATION_PRESETS["bristol"])}
         assert document["period"] == {"start_date": "2024-01-01", "end_date": "2024-12-31"}
-        assert parse_seg_rate(document["seg"]) == 15.0
+        assert document["seg"] is None
 
     @pytest.mark.parametrize(
-        ("distribution_fields", "expected"),
+        ("spec", "expected"),
         [
             pytest.param(
-                {"distribution_type": "normal", "mean": 5, "std": 2, "min": 0, "max": 13.5},
+                {"type": "normal", "mean": 5, "std": 2, "min": 0, "max": 13.5},
                 NormalDistribution(5.0, 2.0, min=0.0, max=13.5),
                 id="normal",
             ),
             pytest.param(
-                {"distribution_type": "uniform", "mean": 5, "std": 2, "min": 2, "max": 8},
+                {"type": "uniform", "min": 2, "max": 8},
                 UniformDistribution(2.0, 8.0),
                 id="uniform",
             ),
             pytest.param(
-                {
-                    "distribution_type": "weighted_discrete",
-                    "wd_values": [{"value": 3, "weight": 20}, {"value": 4, "weight": 40}],
-                },
+                {"type": "weighted_discrete", "values": [3, 4], "weights": [20, 40]},
                 WeightedDiscreteDistribution((3.0, 4.0), (20.0, 40.0)),
                 id="weighted_discrete",
             ),
             pytest.param(
-                {
-                    "distribution_type": "shuffled_pool",
-                    "sp_entries": [{"value": 3, "count": 50}, {"value": 4, "count": 50}],
-                },
+                {"type": "shuffled_pool", "values": [3, 4], "counts": [50, 50]},
                 ShuffledPoolDistribution((3.0, 4.0), (50, 50)),
                 id="shuffled_pool",
             ),
         ],
     )
     @pytest.mark.parametrize(
-        ("component", "fixed_field", "grammar_key"),
-        [
-            pytest.param("pv", "pv_capacity_kw", "capacity_kw", id="pv"),
-            pytest.param("battery", "battery_capacity_kwh", "capacity_kwh", id="battery"),
-            pytest.param(
-                "load", "annual_consumption_kwh", "annual_consumption_kwh", id="load"
-            ),
-        ],
+        "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
     )
     def test_each_distribution_the_form_offers_reaches_the_loader(
         self,
         client: FlaskClient,
-        component: str,
-        fixed_field: str,
-        grammar_key: str,
-        distribution_fields: dict[str, Any],
+        component: ComponentLimits,
+        spec: dict[str, Any],
         expected: object,
     ) -> None:
-        """A component sent as a distribution, in the keys getFormData() sends, is read back as that distribution.
-
-        The form keys are the component's prefix on each of *distribution_fields*,
-        and the component's fixed field is not sent.
-        """
-        form = {key: value for key, value in self._DEFAULT_FORM.items() if key != fixed_field}
-        form.update(
-            {f"{component}_{suffix}": value for suffix, value in distribution_fields.items()}
-        )
+        """A component sent as a distribution, in the grammar's spelling getFormData() sends it in, is read back as that distribution."""
+        form = {**self._DEFAULT_FORM, component.key: {component.grammar_key: spec}}
 
         _, document = _preview_document(client, form)
 
         fleet_distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-        assert getattr(getattr(fleet_distribution, component), grammar_key) == expected
+        assert getattr(fleet_distribution, component.key).draws[component.grammar_key] == expected
+
+    @pytest.mark.parametrize(
+        "rate",
+        [
+            pytest.param("5.5", id="typed"),
+            pytest.param(5.5, id="uploaded"),
+        ],
+    )
+    def test_a_seg_rate_the_form_sets_is_the_rate_the_seg_reader_reads(
+        self, client: FlaskClient, rate: str | float
+    ) -> None:
+        """A SEG rate the form sets is written in the seg: block as the rate the seg: reader reads.
+
+        The builder sends a rate typed into its SEG input as text, and an uploaded scenario's rate as the number its YAML holds.
+        """
+        _, document = _preview_document(client, {**self._DEFAULT_FORM, "seg_rate_pence_per_kwh": rate})
+
+        assert parse_seg_rate(document["seg"]) == 5.5
 
     @pytest.mark.parametrize(
         ("rate_field", "block"),
@@ -616,11 +842,11 @@ class TestBuilderScenarioYaml:
     def test_a_cleared_rate_writes_its_block_as_null_and_the_form_validates(
         self, client: FlaskClient, rate_field: str, block: str
     ) -> None:
-        """Clearing the import or SEG rate means a scenario with no tariff or no SEG, which the readers accept.
+        """Clearing the import or SEG rate of a form that sets both means a scenario with no tariff or no SEG, which the readers accept.
 
         The block is written as null, the readers' spelling of none, not as an empty block they refuse.
         """
-        form = {**self._DEFAULT_FORM, rate_field: ""}
+        form = {**self._DEFAULT_FORM, "seg_rate_pence_per_kwh": 5.5, rate_field: ""}
 
         _, document = _preview_document(client, form)
         validation = client.post("/api/scenarios/validate", json=form).get_json()
@@ -631,8 +857,6 @@ class TestBuilderScenarioYaml:
     @pytest.mark.parametrize(
         "omitted",
         [
-            pytest.param(("latitude",), id="without latitude"),
-            pytest.param(("longitude",), id="without longitude"),
             pytest.param(("altitude",), id="without altitude"),
             pytest.param(("latitude", "longitude", "altitude"), id="without any coordinate"),
         ],
@@ -663,6 +887,33 @@ class TestBuilderScenarioYaml:
         }
         assert validation == {"valid": True, "errors": []}
 
+    @pytest.mark.parametrize(
+        "omitted",
+        [
+            pytest.param("latitude", id="without latitude"),
+            pytest.param("longitude", id="without longitude"),
+        ],
+    )
+    def test_a_custom_location_without_one_coordinate_is_written_as_given_and_reported(
+        self, client: FlaskClient, omitted: str
+    ) -> None:
+        """A custom location the form sends without its latitude or its longitude is reported by the key it leaves out, not loaded as Bristol's.
+
+        The form sends the *omitted* coordinate as ''.  The preview writes the coordinates
+        given as the document's location: block, which the loader refuses naming the key it
+        leaves out.
+        """
+        coordinates = {"latitude": 53.4, "longitude": -2.2, "altitude": 38.0}
+        given = {key: value for key, value in coordinates.items() if key != omitted}
+        form = {**self._DEFAULT_FORM, "location_preset": "custom", **given, omitted: ""}
+
+        _, document = _preview_document(client, form)
+        validation = client.post("/api/scenarios/validate", json=form).get_json()
+
+        assert document["location"] == given
+        assert validation["valid"] is False
+        assert validation["errors"] == [f"location: requires {omitted!r}"], validation
+
     def test_a_form_key_the_builder_does_not_read_is_refused(self, client: FlaskClient) -> None:
         """A key the builder does not read gets 400 naming it, instead of being dropped from the YAML."""
         response = client.post(
@@ -691,46 +942,293 @@ class TestBuilderScenarioYaml:
         assert "latitude" in response.get_json()["error"]
 
 
+_PV_CAPACITY = "PV Capacity (kW)"
+
+# The three metrics' bests fall at three different values, and grid import's highest (2.0) is not
+# its lowest (4.0). The ratios are exact in binary, so their percentages are exactly 50, 37.5 and 25.
+_THREE_POINTS = (
+    SweepPoint(
+        2.0, home_summary(total_generation_kwh=72.0, self_consumption_ratio=0.5, total_grid_import_kwh=12.0)
+    ),
+    SweepPoint(
+        4.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.375, total_grid_import_kwh=3.0)
+    ),
+    SweepPoint(
+        6.0, home_summary(total_generation_kwh=144.0, self_consumption_ratio=0.25, total_grid_import_kwh=6.0)
+    ),
+)
+
+# A battery sweep past what the home can fill: generation is the same at every capacity, and self-consumption
+# and grid import stop changing from 5 kWh, so each metric's best reading is shared by more than one point.
+_SATURATED_BATTERY_POINTS = (
+    SweepPoint(
+        0.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.375, total_grid_import_kwh=6.0)
+    ),
+    SweepPoint(
+        5.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.5, total_grid_import_kwh=3.0)
+    ),
+    SweepPoint(
+        10.0, home_summary(total_generation_kwh=108.0, self_consumption_ratio=0.5, total_grid_import_kwh=3.0)
+    ),
+)
+
+_SWEEP_PANEL_HEADINGS = [
+    ("chart-sweep-generation", "Generation (kWh) vs PV Capacity (kW)"),
+    ("chart-sweep-self-consumption", "Self-Consumption (%) vs PV Capacity (kW)"),
+    ("chart-sweep-grid-import", "Grid Import (kWh) vs PV Capacity (kW)"),
+]
+
+
+def _figure(panel: ChartPanel) -> str:
+    """*panel*'s figure JSON, failing the test when the panel is an absence."""
+    assert panel.figure_json is not None, f"{panel.dom_id} drew no figure: {panel.absence_reason}"
+    return panel.figure_json
+
+
 class TestSweepChart:
-    """Tests for the sweep_parameter_chart function in charts.py."""
+    """sweep_panels draws one panel per SweepMetric, each through sweep_parameter_chart, from a sweep's finished points."""
 
-    def test_sweep_parameter_chart_returns_json(self) -> None:
-        """Test sweep_parameter_chart returns valid Plotly JSON."""
-        result = sweep_parameter_chart(
-            [2.0, 4.0, 6.0, 8.0],
-            [50.5, 65.3, 72.1, 78.4],
-            "PV Capacity (kW)",
-            "Self-Consumption (%)",
+    def test_sweep_panels_draw_one_panel_per_metric_in_member_order(self) -> None:
+        panels = sweep_panels(_PV_CAPACITY, _THREE_POINTS)
+
+        assert [(panel.dom_id, panel.title) for panel in panels] == _SWEEP_PANEL_HEADINGS
+        assert [panel.dom_id for panel in panels] == [metric.dom_id for metric in SweepMetric]
+
+    def test_each_sweep_panel_draws_its_metric_at_each_swept_value_beside_the_optimal_point_and_the_trend(
+        self,
+    ) -> None:
+        drawn = []
+        for panel in sweep_panels(_PV_CAPACITY, _THREE_POINTS):
+            by_name = traces_by_name(_figure(panel))
+            names = list(by_name)
+            drawn.append((names, by_name[names[0]]["x"], by_name[names[0]]["y"]))
+
+        assert drawn == [
+            (["Generation (kWh)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [72.0, 108.0, 144.0]),
+            (["Self-Consumption (%)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [50.0, 37.5, 25.0]),
+            (["Grid Import (kWh)", "Optimal", "Trend"], [2.0, 4.0, 6.0], [12.0, 3.0, 6.0]),
+        ]
+
+    @pytest.mark.parametrize(
+        ("metric", "optimal_value", "optimal_metric"),
+        [
+            pytest.param(SweepMetric.GENERATION, 6.0, 144.0, id="generation-at-its-highest"),
+            pytest.param(SweepMetric.SELF_CONSUMPTION, 2.0, 50.0, id="self-consumption-at-its-highest"),
+            pytest.param(SweepMetric.GRID_IMPORT, 4.0, 3.0, id="grid-import-at-its-lowest"),
+        ],
+    )
+    def test_sweep_parameter_chart_marks_the_optimal_point_by_its_metrics_direction(
+        self, metric: SweepMetric, optimal_value: float, optimal_metric: float
+    ) -> None:
+        optimal = traces_by_name(_figure(sweep_parameter_chart(_PV_CAPACITY, _THREE_POINTS, metric)))["Optimal"]
+
+        assert (optimal["x"], optimal["y"]) == ([optimal_value], [optimal_metric])
+
+    @pytest.mark.parametrize(
+        ("metric", "optimal_value", "optimal_metric"),
+        [
+            pytest.param(SweepMetric.GENERATION, 0.0, 108.0, id="generation-highest-at-every-point"),
+            pytest.param(SweepMetric.SELF_CONSUMPTION, 5.0, 50.0, id="self-consumption-highest-from-5-kwh"),
+            pytest.param(SweepMetric.GRID_IMPORT, 5.0, 3.0, id="grid-import-lowest-from-5-kwh"),
+        ],
+    )
+    def test_sweep_parameter_chart_marks_the_earliest_swept_of_the_points_sharing_the_best_reading(
+        self, metric: SweepMetric, optimal_value: float, optimal_metric: float
+    ) -> None:
+        panel = sweep_parameter_chart("Battery Capacity (kWh)", _SATURATED_BATTERY_POINTS, metric)
+
+        optimal = traces_by_name(_figure(panel))["Optimal"]
+
+        assert (optimal["x"], optimal["y"]) == ([optimal_value], [optimal_metric])
+
+    @pytest.mark.parametrize(
+        "points", [pytest.param((), id="no-points"), pytest.param(_THREE_POINTS[1:2], id="one-point")]
+    )
+    def test_sweep_panels_of_fewer_than_two_points_name_the_rule_and_the_sweeps_points_in_each_titled_panel(
+        self, points: tuple[SweepPoint, ...]
+    ) -> None:
+        panels = sweep_panels(_PV_CAPACITY, points)
+
+        assert [(panel.dom_id, panel.title, panel.absence_reason) for panel in panels] == [
+            (dom_id, title, sweep_reason(len(points))) for dom_id, title in _SWEEP_PANEL_HEADINGS
+        ]
+
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "minus-inf"])
+    def test_a_sweep_point_refuses_a_value_that_is_not_finite(self, value: float) -> None:
+        with pytest.raises(ValueError, match=r"SweepPoint\.value"):
+            SweepPoint(value, home_summary())
+
+    @pytest.mark.parametrize("label", ["", "   "], ids=["empty", "spaces"])
+    def test_sweep_parameter_chart_refuses_a_blank_parameter_label(self, label: str) -> None:
+        with pytest.raises(ValueError, match="parameter_label"):
+            sweep_parameter_chart(label, _THREE_POINTS, SweepMetric.GENERATION)
+
+
+_SWEEP_CHART_URL = "/scenarios/sweep/chart"
+
+
+def _sweep_chart_body(*points: tuple[object, object]) -> dict[str, Any]:
+    """A sweep chart request of the PV capacity sweep's *points*, each its value and its run's id."""
+    return {"parameter_label": _PV_CAPACITY, "points": [{"value": value, "run_id": run_id} for value, run_id in points]}
+
+
+def _store_a_finished_point(storage: RunStorage, run_id: str, self_kwh: float, export_kwh: float, import_kwh: float) -> None:
+    """Save a day's home run under *run_id*, its totals the kWh given, as a sweep point's finished job saves it."""
+    store_home_run(
+        storage,
+        run_id,
+        make_home_config(),
+        make_sim_results(self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh, days=1),
+    )
+
+
+def _no_run(storage: RunStorage, run_id: str) -> None:
+    """Store nothing, so no run has *run_id*."""
+
+
+def _a_finished_fleet_run(storage: RunStorage, run_id: str) -> None:
+    store_fleet_run(storage, run_id, make_fleet_results(n_homes=2, days=1))
+
+
+def _a_home_run_with_no_summary_yet(storage: RunStorage, run_id: str) -> None:
+    storage.create_run(run_id, run_type="home", name="Sweep point", n_homes=1, created_at="2026-10-26T09:00:00+00:00")
+
+
+_A_POINT = {"value": 2.0, "run_id": "run-2kw"}
+
+_MALFORMED_SWEEP_CHART_BODIES = [
+    pytest.param(["PV Capacity (kW)", [_A_POINT]], ["Request body"], id="body-not-an-object"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [_A_POINT], "metric": "generation"},
+        ["'metric'"],
+        id="unrecognised-key",
+    ),
+    pytest.param({"points": [_A_POINT]}, ["parameter_label"], id="parameter-label-missing"),
+    pytest.param({"parameter_label": "  ", "points": [_A_POINT]}, ["parameter_label"], id="parameter-label-blank"),
+    pytest.param({"parameter_label": 7, "points": [_A_POINT]}, ["parameter_label"], id="parameter-label-not-a-string"),
+    pytest.param({"parameter_label": _PV_CAPACITY}, ["points"], id="points-missing"),
+    pytest.param({"parameter_label": _PV_CAPACITY, "points": _A_POINT}, ["points"], id="points-not-an-array"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [_A_POINT] * (SWEEP_MAX_STEPS + 1)},
+        ["points", str(SWEEP_MAX_STEPS)],
+        id="more-points-than-a-sweep-has-steps",
+    ),
+    pytest.param({"parameter_label": _PV_CAPACITY, "points": [2.0]}, ["points[0]"], id="point-not-an-object"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [{**_A_POINT, "label": "2 kW"}]},
+        ["points[0]", "'label'"],
+        id="unrecognised-point-key",
+    ),
+    pytest.param(_sweep_chart_body((True, "run-2kw")), ["points[0].value"], id="value-a-bool"),
+    pytest.param(_sweep_chart_body(("NaN", "run-2kw")), ["points[0].value"], id="value-the-text-nan"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [{"run_id": "run-2kw"}]}, ["points[0].value"], id="value-missing"
+    ),
+    pytest.param(_sweep_chart_body((2.0, 7)), ["points[0].run_id"], id="run-id-a-number"),
+    pytest.param(_sweep_chart_body((2.0, "run-2kw"), (4.0, "\ud800")), ["points[1].run_id"], id="run-id-a-lone-surrogate"),
+    pytest.param(
+        {"parameter_label": _PV_CAPACITY, "points": [{"value": 2.0}]}, ["points[0].run_id"], id="run-id-missing"
+    ),
+    pytest.param(
+        _sweep_chart_body((2.0, "run-2kw"), (False, "run-4kw")),
+        ["points[1].value"],
+        id="a-later-point-refused-before-an-earlier-points-unknown-run-is-read",
+    ),
+]
+
+
+class TestSweepChartRoute:
+    """POST /scenarios/sweep/chart answers the HTML of a sweep's panels, read from its finished points' stored runs."""
+
+    def test_three_finished_points_draw_each_metrics_panel_marking_its_best_point_by_its_direction(
+        self, client: FlaskClient, storage: RunStorage
+    ) -> None:
+        """Grid import is marked at its lowest, 4.0, while its highest is at 2.0 (B12)."""
+        _store_a_finished_point(storage, "run-2kw", self_kwh=24.0, export_kwh=48.0, import_kwh=12.0)
+        _store_a_finished_point(storage, "run-4kw", self_kwh=30.0, export_kwh=78.0, import_kwh=3.0)
+        _store_a_finished_point(storage, "run-6kw", self_kwh=36.0, export_kwh=108.0, import_kwh=6.0)
+
+        response = client.post(
+            _SWEEP_CHART_URL, json=_sweep_chart_body((2.0, "run-2kw"), (4.0, "run-4kw"), (6.0, "run-6kw"))
         )
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        assert "data" in parsed
 
-    def test_sweep_parameter_chart_has_traces(self) -> None:
-        """Test sweep_parameter_chart includes main, optimal, and trend traces."""
-        result = sweep_parameter_chart(
-            [1.0, 2.0, 3.0, 4.0, 5.0],
-            [10.0, 25.0, 40.0, 55.0, 70.0],
-            "Battery (kWh)",
-            "Grid Import (kWh)",
-        )
-        # Should have at least the main trace, optimal marker, and trend line
-        assert len(traces(result)) >= 2
+        assert (response.status_code, response.mimetype) == (200, "text/html"), response.get_data(as_text=True)
+        figures = chart_figures(response.get_data(as_text=True))
+        assert list(figures) == [metric.dom_id for metric in SweepMetric]
+        assert {dom_id: traces_by_name(figure)["Optimal"]["x"] for dom_id, figure in figures.items()} == {
+            "chart-sweep-generation": [6.0],
+            "chart-sweep-self-consumption": [2.0],
+            "chart-sweep-grid-import": [4.0],
+        }
 
-    def test_sweep_parameter_chart_empty_returns_empty(self) -> None:
-        """Test sweep_parameter_chart returns '{}' with empty inputs."""
-        result = sweep_parameter_chart([], [], "X", "Y")
-        assert result == "{}"
+    def test_one_finished_point_gives_each_panel_the_reason_it_has_no_chart(
+        self, client: FlaskClient, storage: RunStorage
+    ) -> None:
+        _store_a_finished_point(storage, "run-4kw", self_kwh=30.0, export_kwh=78.0, import_kwh=3.0)
 
-    def test_sweep_parameter_chart_two_points(self) -> None:
-        """Test sweep_parameter_chart works with just two data points."""
-        result = sweep_parameter_chart(
-            [1.0, 10.0],
-            [20.0, 80.0],
-            "Param",
-            "Metric",
-        )
-        assert result and result != "{}"
-        parsed = json.loads(result)
-        assert "data" in parsed
-        assert "layout" in parsed
+        response = client.post(_SWEEP_CHART_URL, json=_sweep_chart_body((4.0, "run-4kw")))
+
+        assert response.status_code == 200, response.get_data(as_text=True)
+        page = response.get_data(as_text=True)
+        assert chart_figures(page) == {}
+        assert [texts_after(page, title, 1) for _, title in _SWEEP_PANEL_HEADINGS] == [
+            [sweep_reason(1)] for _ in _SWEEP_PANEL_HEADINGS
+        ]
+
+    @pytest.mark.parametrize(
+        ("store", "why"),
+        [
+            pytest.param(_no_run, "no run", id="no-run-has-the-id"),
+            pytest.param(_a_finished_fleet_run, "fleet run", id="a-fleet-run"),
+            pytest.param(_a_home_run_with_no_summary_yet, "no summary", id="a-home-run-with-no-summary-yet"),
+        ],
+    )
+    def test_a_point_whose_run_is_not_a_finished_home_run_is_refused_naming_its_run_id(
+        self,
+        client: FlaskClient,
+        storage: RunStorage,
+        store: Callable[[RunStorage, str], None],
+        why: str,
+    ) -> None:
+        _store_a_finished_point(storage, "run-2kw", self_kwh=24.0, export_kwh=48.0, import_kwh=12.0)
+        store(storage, "run-4kw")
+
+        response = client.post(_SWEEP_CHART_URL, json=_sweep_chart_body((2.0, "run-2kw"), (4.0, "run-4kw")))
+
+        assert response.status_code == 400, response.get_data(as_text=True)
+        body = response.get_json()
+        assert body == {"error": body["error"]}
+        assert [text for text in ("run-4kw", why) if text not in body["error"]] == [], body["error"]
+
+    def test_a_runs_row_the_store_cannot_read_answers_500_not_a_refusal_of_the_request(
+        self, app: Flask, client: FlaskClient, storage: RunStorage
+    ) -> None:
+        """A writer outside the store blanked the point's runs name, which contract C7 forbids, so RunRecord refuses the row with a ValueError: the store's fault, not the request's."""
+        _store_a_finished_point(storage, "run-4kw", self_kwh=30.0, export_kwh=78.0, import_kwh=3.0)
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET name = '   ' WHERE id = ?", ("run-4kw",))
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+
+        response = client.post(_SWEEP_CHART_URL, json=_sweep_chart_body((4.0, "run-4kw")))
+
+        assert response.status_code == 500, response.get_data(as_text=True)
+
+    def test_a_body_nested_past_the_recursion_limit_is_refused_not_a_500(self, app: Flask, client: FlaskClient) -> None:
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+
+        response = client.post(_SWEEP_CHART_URL, data="[" * 100000, content_type="application/json")
+
+        assert response.status_code == 400, response.get_data(as_text=True)
+        assert "NoneType" in response.get_json()["error"]
+
+    @pytest.mark.parametrize(("body", "named"), _MALFORMED_SWEEP_CHART_BODIES)
+    def test_a_malformed_body_is_refused_naming_the_field(
+        self, client: FlaskClient, caplog: pytest.LogCaptureFixture, body: object, named: list[str]
+    ) -> None:
+        response = client.post(_SWEEP_CHART_URL, json=body)
+
+        assert response.status_code == 400, response.get_data(as_text=True)
+        refusal = response.get_json()
+        assert refusal == {"error": refusal["error"]}
+        assert [text for text in named if text not in refusal["error"]] == [], refusal["error"]
+        assert error_records(caplog) == []

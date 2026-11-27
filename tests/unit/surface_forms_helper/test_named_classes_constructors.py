@@ -1,0 +1,412 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The rules of tests/_surface_forms.py's named_classes for the callable or class that spells a class's signature, the constructor inspect reads for it, and the errors raised when none is known, one per test.
+
+A class that carries an inspect.Signature, and the module the strings that signature
+names are read in, have their rules in
+tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py, and a
+constructor a generator wrote, or a function named as one, in
+tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py.
+"""
+
+import decimal
+import fractions
+import pathlib
+
+import pytest
+
+from tests._surface_forms import named_classes
+from tests.unit.surface_forms_helper._fixtures import (
+    GIVEN_BY_A_METACLASS_GET,
+    imported_module,
+)
+
+
+def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction\n"
+        "\n"
+        "class Meter:\n"
+        "    def __init__(self, ratio: 'Fraction') -> None: ...\n",
+    )
+
+    class Submeter(metering.Meter):
+        pass
+
+    assert named_classes(Submeter) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Plain", id="no-constructor"),
+        pytest.param("Initialised", id="own-init"),
+        pytest.param("Inherited", id="call-a-base-metaclass-defines"),
+        pytest.param("Halved", id="call-assigned-as-a-descriptor"),
+        pytest.param("Signed", id="carries-a-signature"),
+    ],
+)
+def test_a_class_whose_metaclass_resolves_a_call_defined_in_python_names_the_classes_that_call_names_read_where_it_is_spelled_not_where_its_constructor_is(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "charging",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Charging(type):\n"
+        "    def __call__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "def settle(cls, share: 'Share', rate=1) -> None: ...\n",
+    )
+    recharging = imported_module(
+        tmp_path,
+        monkeypatch,
+        "recharging",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "from functools import partialmethod\n"
+        "\n"
+        "from charging import Charging, settle\n"
+        "\n"
+        "class Recharging(Charging):\n"
+        "    pass\n"
+        "\n"
+        "class Halving(type):\n"
+        "    __call__ = partialmethod(settle, rate=2)\n"
+        "\n"
+        "class Plain(metaclass=Charging):\n"
+        "    pass\n"
+        "\n"
+        "class Initialised(metaclass=Charging):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Inherited(metaclass=Recharging):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Halved(metaclass=Halving):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Signed(metaclass=Charging):\n"
+        "    __signature__ = inspect.Signature(\n"
+        "        [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        "    )\n",
+    )
+
+    assert named_classes(getattr(recharging, name)) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Assigned", id="assigned-function"),
+        pytest.param("Called", id="assigned-callable-object"),
+        pytest.param("Made", id="assigned-new"),
+        pytest.param("Wrapping", id="functools-wraps-wrapper"),
+    ],
+)
+def test_a_constructor_spelled_in_another_module_than_its_class_body_names_the_classes_that_module_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "building",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def build(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "def make(cls, share: 'Share'): ...\n"
+        "\n"
+        "class Builder:\n"
+        "    def __call__(self, share: 'Share') -> None: ...\n",
+    )
+    rebuilding = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rebuilding",
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "from building import Builder, build, make\n"
+        "\n"
+        "class Assigned:\n"
+        "    __init__ = build\n"
+        "\n"
+        "class Called:\n"
+        "    __init__ = Builder()\n"
+        "\n"
+        "class Made:\n"
+        "    __new__ = make\n"
+        "\n"
+        "class Wrapping:\n"
+        "    @wraps(build)\n"
+        "    def __init__(self, *args, **kwargs) -> None: ...\n",
+    )
+
+    assert named_classes(getattr(rebuilding, name)) == {fractions.Fraction}
+
+
+def test_a_constructor_that_wraps_another_callable_but_carries_a_signature_of_none_names_the_classes_the_annotations_it_holds_name_read_where_they_are_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Meter:\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from decimal import Decimal as Share\n"
+        "from functools import wraps\n"
+        "\n"
+        "from metering import Meter\n"
+        "\n"
+        "class Rewrapped(Meter):\n"
+        "    @wraps(Meter.__new__)\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "    __new__.__signature__ = None\n"
+        "\n"
+        "class Relinked(Meter):\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "    __new__.__wrapped__ = Meter.__new__\n"
+        "    __new__.__signature__ = None\n"
+        "\n"
+        "class Initialised:\n"
+        "    @wraps(object.__init__)\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "    __init__.__signature__ = None\n",
+    )
+
+    assert named_classes(submetering.Rewrapped) == {fractions.Fraction}
+    assert named_classes(submetering.Relinked) == {decimal.Decimal}
+    assert named_classes(submetering.Initialised) == {decimal.Decimal}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Halved", id="partialmethod"),
+        pytest.param("Dispatched", id="singledispatchmethod"),
+    ],
+)
+def test_a_constructor_assigned_as_a_descriptor_is_read_once_bound_to_its_class_and_names_the_classes_the_module_of_the_function_it_wraps_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "settling",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def settle(self, share: 'Share', rate: int) -> None: ...\n",
+    )
+    resettling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "resettling",
+        "from decimal import Decimal as Share\n"
+        "from functools import partialmethod, singledispatchmethod\n"
+        "\n"
+        "from settling import settle\n"
+        "\n"
+        "class Halved:\n"
+        "    __init__ = partialmethod(settle, rate=1)\n"
+        "\n"
+        "class Dispatched:\n"
+        "    __init__ = singledispatchmethod(settle)\n",
+    )
+
+    assert named_classes(getattr(resettling, name)) == {fractions.Fraction, int}
+
+
+def test_a_new_is_read_as_getattr_gives_it_not_bound_to_the_class_again_so_names_the_classes_the_module_spelling_that_object_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reader is a callable data descriptor: inspect reads it through its __call__, and binding it again would give rebound, which the module of Gated spells."""
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "gating",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Reader:\n"
+        "    def __init__(self, rebound):\n"
+        "        self.rebound = rebound\n"
+        "\n"
+        "    def __call__(self, cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "    def __get__(self, instance, owner):\n"
+        "        return self.rebound\n"
+        "\n"
+        "    def __set__(self, instance, value): ...\n",
+    )
+    regating = imported_module(
+        tmp_path,
+        monkeypatch,
+        "regating",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from gating import Reader\n"
+        "\n"
+        "def rebound(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Gated:\n"
+        "    __new__ = staticmethod(Reader(rebound))\n",
+    )
+
+    assert named_classes(regating.Gated) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Reinitialised", id="init"),
+        pytest.param("Renewed", id="new"),
+        pytest.param("Recalled", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "skipping",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Created:\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Initialised:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+    reskipping = imported_module(
+        tmp_path,
+        monkeypatch,
+        "reskipping",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from skipping import Created, Initialised\n"
+        "\n"
+        "class Skipping(type):\n"
+        "    __call__ = staticmethod(None)\n"
+        "\n"
+        "class Reinitialised(Created):\n"
+        "    __init__ = None\n"
+        "\n"
+        "class Renewed(Initialised):\n"
+        "    __new__ = None\n"
+        "\n"
+        "class Recalled(Initialised, metaclass=Skipping):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(getattr(reskipping, name)) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize("given", GIVEN_BY_A_METACLASS_GET)
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Built", id="init"),
+        pytest.param("Called", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_init_or_metaclass_call_is_a_class_whose_metaclass_defines_get_names_the_classes_the_module_spelling_that_class_constructor_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, given: object
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "getting",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Getting(type):\n"
+        "    def __get__(cls, instance, owner=None):\n"
+        f"        return {given!r}\n"
+        "\n"
+        "class Held(metaclass=Getting):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+    regetting = imported_module(
+        tmp_path,
+        monkeypatch,
+        "regetting",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from getting import Held\n"
+        "\n"
+        "class Built:\n"
+        "    __init__ = Held\n"
+        "\n"
+        "class Calling(type):\n"
+        "    __call__ = Held\n"
+        "\n"
+        "class Called(metaclass=Calling):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(getattr(regetting, name)) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("RenewedByABuiltin", id="builtin-as-new"),
+        pytest.param("RenewedByAMethodWrapper", id="staticmethod-of-a-method-wrapper-as-new"),
+        pytest.param("ReinitialisedByASlotWrapper", id="slot-wrapper-as-init"),
+        pytest.param("ReinitialisedByAMethodWrapper", id="method-wrapper-as-init"),
+    ],
+)
+def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "shadowing",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Created:\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Initialised:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+    reshadowing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "reshadowing",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from shadowing import Created, Initialised\n"
+        "\n"
+        "class RenewedByABuiltin(Initialised):\n"
+        "    __new__ = object.__new__\n"
+        "\n"
+        "class RenewedByAMethodWrapper(Initialised):\n"
+        "    __new__ = staticmethod(object().__init__)\n"
+        "\n"
+        "class ReinitialisedByASlotWrapper(Created):\n"
+        "    __init__ = object.__init__\n"
+        "\n"
+        "class ReinitialisedByAMethodWrapper(Created):\n"
+        "    __init__ = object().__init__\n",
+    )
+
+    assert named_classes(getattr(reshadowing, name)) == {fractions.Fraction}

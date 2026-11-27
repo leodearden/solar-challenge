@@ -1,82 +1,36 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Slow end-to-end integration test for POST /api/simulate/fleet-from-distribution.
+"""End-to-end integration test for POST /api/simulate/fleet-from-distribution.
 
 Uses a real JobManager (no mocks) to run a tiny 3-home, 1-day Bristol fleet
 through the endpoint, polls the job to completion, and asserts the run lands
-in history with n_homes == 3.
-
-Network guard
--------------
-This test contacts the PVGIS REST API (re.jrc.ec.europa.eu) to fetch weather
-data.  In offline or sandboxed CI environments the test is skipped
-automatically via the ``_pvgis_reachable()`` probe below.  You can also force
-a skip by setting the environment variable ``SOLAR_OFFLINE=1``.
+in history with n_homes == 3.  The test's weather cache serves a clear June day
+on SHORT_WINDOW_START, where a ``days`` window starts, as Bristol's TMY, so the
+job runs offline.
 """
-import os
-import socket
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
-from flask import Flask
-from flask.testing import FlaskClient
 
-from tests._web_app import build_test_app
-
-
-# ---------------------------------------------------------------------------
-# Network availability probe
-# ---------------------------------------------------------------------------
-
-
-def _pvgis_reachable() -> bool:
-    """Return True if the PVGIS REST API host is reachable within 3 s."""
-    if os.getenv("SOLAR_OFFLINE", "").lower() in ("1", "true", "yes"):
-        return False
-    try:
-        socket.setdefaulttimeout(3)
-        socket.getaddrinfo("re.jrc.ec.europa.eu", 443)
-        return True
-    except OSError:
-        return False
-
-
-_SKIP_OFFLINE = not _pvgis_reachable()
-_SKIP_REASON = (
-    "PVGIS endpoint not reachable (offline / sandboxed CI). "
-    "Set SOLAR_OFFLINE=0 or ensure network access to run this test."
-)
-
-
-# ---------------------------------------------------------------------------
-# Fixtures — real app, real JobManager (no mock)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """Create a real Flask app with temporary database and data dir."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """Create a test client against the real app."""
-    return app.test_client()
+from tests._web_app import app_builder
+from tests._web_job_days import web_job_days
 
 
 # ---------------------------------------------------------------------------
 # Payload
 # ---------------------------------------------------------------------------
 
+_FLEET_DAYS = web_job_days(count=1)
+
 _DIST_PAYLOAD = {
     "name": "E2E Dist Fleet",
     "n_homes": 3,
     "seed": 42,
     "location": "bristol",
-    "days": 1,
+    "days": _FLEET_DAYS.count,
     "pv": {
         "capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0},
     },
@@ -87,12 +41,14 @@ _DIST_PAYLOAD = {
     # Exercises the parse + dataclasses.replace path through the real pipeline
     # without erroring.  Effect verification (every HomeConfig carries the
     # TariffConfig / SEGTariff, battery-gated dispatch) lives in the unit tests
-    # tests/unit/test_web_fleet_config.py::TestApplyFleetOverlay and
-    # tests/unit/web_api/test_fleet_distribution.py::TestFleetFromDistribution.
+    # tests/unit/test_web_fleet_scenario.py::TestParseFleetForm::test_every_home_holds_the_forms_tariff_and_seg_and_every_battery_its_dispatch_strategy
+    # and tests/unit/web_api/test_fleet_distribution.py::TestFleetFromDistribution.
     "tariff": {"type": "flat_rate", "rate_per_kwh": 0.30},
     "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]},
     "seg": {"rate_pence_per_kwh": 5.0},
 }
+
+bristol_june_tmy = _FLEET_DAYS.bristol_tmy_fixture()
 
 
 # ---------------------------------------------------------------------------
@@ -100,13 +56,12 @@ _DIST_PAYLOAD = {
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
-@pytest.mark.skipif(_SKIP_OFFLINE, reason=_SKIP_REASON)
+@pytest.mark.usefixtures("bristol_june_tmy")
 class TestFleetFromDistributionE2E:
-    """End-to-end slow test: real 3-home distribution fleet runs to completion."""
+    """End-to-end: a real 3-home distribution fleet runs to completion."""
 
     def test_distribution_fleet_completes_and_lands_in_history(
-        self, client: FlaskClient
+        self, closes_at_teardown: ExitStack, tmp_path: Path
     ) -> None:
         """Submit a 3-home distribution fleet, poll to completion, assert history entry.
 
@@ -116,6 +71,8 @@ class TestFleetFromDistributionE2E:
         3. Assert status == "completed".
         4. Assert the run appears in history with n_homes == 3.
         """
+        client = app_builder(closes_at_teardown)(tmp_path).test_client()
+
         # 1. Submit
         submit_resp = client.post(
             "/api/simulate/fleet-from-distribution",

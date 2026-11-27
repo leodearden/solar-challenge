@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`home quick` runs to completion from 1 June 2024 and simulates the default home."""
+"""`home quick` runs to completion from timebase.SHORT_WINDOW_START and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names; its help names that home's consumption."""
 
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -10,18 +14,17 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
-from solar_challenge.weather import WeatherCache
-from tests._synthetic_weather import synthetic_june_weather
+from solar_challenge.timebase import ONE_MINUTE, SHORT_WINDOW_START, SimulationWindow
+from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, WeatherCache
+from tests._network_guard import refusing_network
+from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
 
-_DAY = "2024-06-01"
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(SHORT_WINDOW_START), count=1)
+bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
-
-@pytest.fixture(autouse=True)
-def _bristol_june_tmy(weather_cache: WeatherCache) -> None:
-    """Serve a clear _DAY, the day `home quick` starts on, as Bristol's TMY."""
-    weather_cache.put(synthetic_june_weather(_DAY), "tmy", Location.bristol())
+pytestmark = pytest.mark.usefixtures("bristol_june_tmy")
 
 
 def _saved_minutes(tmp_path: Path, *options: str) -> pd.DataFrame:
@@ -36,6 +39,13 @@ def _saved_minutes(tmp_path: Path, *options: str) -> pd.DataFrame:
     return pd.read_csv(csv_path, index_col=0, parse_dates=True)
 
 
+def _total_generation_kwh(stdout: str) -> float:
+    """The Total Generation figure of the summary table `home quick` prints, in kWh."""
+    match = re.search(r"Total Generation\W+(\d+(?:\.\d+)?) kWh", stdout)
+    assert match is not None, stdout
+    return float(match.group(1))
+
+
 def test_home_quick_runs_to_completion_and_prints_the_summary() -> None:
     """`home quick 4 5 --days 1` exits 0 and prints the results table."""
     result = runner.invoke(app, ["home", "quick", "4", "5", "--days", "1"])
@@ -44,17 +54,17 @@ def test_home_quick_runs_to_completion_and_prints_the_summary() -> None:
     assert "Quick Simulation Results" in result.stdout
 
 
-def test_home_quick_saves_the_minutes_from_midnight_on_1_june_2024(tmp_path: Path) -> None:
-    """`--output` saves the simulated minutes, the first at midnight on 1 June 2024."""
+def test_home_quick_saves_the_minutes_from_midnight_on_the_short_window_start(tmp_path: Path) -> None:
+    """`--output` saves the simulated minutes, the first at midnight on timebase.SHORT_WINDOW_START."""
     saved = _saved_minutes(tmp_path)
 
-    assert saved.index[0] == pd.Timestamp(_DAY, tz=Location.bristol().timezone)
+    assert saved.index[0] == pd.Timestamp(SHORT_WINDOW_START, tz=Location.bristol().timezone)
 
 
 @pytest.mark.parametrize(
     ("consumption_options", "expected_load"),
     [
-        pytest.param([], LoadConfig(), id="default-is-the-ofgem-tdcv"),
+        pytest.param([], LoadConfig(), id="no-c-takes-load-configs-default"),
         pytest.param(
             ["-c", "4200"],
             LoadConfig(annual_consumption_kwh=4200.0),
@@ -68,6 +78,49 @@ def test_home_quick_demand_is_the_days_share_of_the_annual_consumption(
     """The saved day's demand sums to the expected load's day, which the annual consumption fixes whatever the random profile."""
     saved = _saved_minutes(tmp_path, *consumption_options)
 
-    day = pd.Timestamp(_DAY)
-    expected_demand = generate_load_profile(expected_load, day, day)
+    expected_demand = generate_load_profile(
+        expected_load,
+        SimulationWindow(SHORT_WINDOW_START, SHORT_WINDOW_START, ONE_MINUTE, Location.bristol().timezone),
+    )
     assert saved["demand_kw"].sum() == pytest.approx(expected_demand.sum())
+
+
+def test_home_quick_run_as_its_own_process_reads_the_weather_cache_the_variable_names(tmp_path: Path) -> None:
+    """`home quick 4 --days 1`, run as a child in an empty working directory, simulates offline from the cache the variable names.
+
+    The child runs solar_challenge.cli.app, the object the solar-challenge console script runs. Its
+    environment names a cache of this test's making in the variable, in place of the test's own
+    weather_cache. It leaves no cache in its working directory.
+    """
+    cache_dir = tmp_path / "weather"
+    _JUNE_DAYS.seed_as_bristol_tmy(WeatherCache(cache_dir=cache_dir))
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+
+    with refusing_network() as refused:
+        result = subprocess.run(
+            [sys.executable, "-c", "from solar_challenge.cli import app; app()", "home", "quick", "4", "--days", "1"],
+            cwd=working_dir,
+            env={**os.environ, CACHE_DIR_VARIABLE: str(cache_dir)},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    assert refused == []
+    assert result.returncode == 0, result.stderr
+    assert _total_generation_kwh(result.stdout) > 0
+    assert not (working_dir / DEFAULT_CACHE_DIR).exists()
+
+
+def test_home_quick_help_names_the_consumption_it_defaults_to() -> None:
+    """`home quick --help` gives --consumption-kwh's default as a figure in that option's row: the annual consumption a LoadConfig with no total simulates.
+
+    COLUMNS keeps Rich from wrapping the row at 80 columns, so the row is the one line of the help that names the option.
+    """
+    result = runner.invoke(app, ["home", "quick", "--help"], env={"COLUMNS": "200"})
+
+    assert result.exit_code == 0, result.output
+    option_rows = [line for line in result.stdout.splitlines() if "--consumption-kwh" in line]
+    assert len(option_rows) == 1, result.stdout
+    assert f"{LoadConfig().get_annual_consumption():,.0f}" in option_rows[0], result.stdout

@@ -1,0 +1,2074 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""migrate_store's run-document steps: how it brings each run of a dashboard store to the stored-run format, in its files and its runs row.
+
+Each run-document step of the stored-run format is carried by the migration step of its version
+(D-S19-2), which tests/unit/test_web_schema.py checks beside the store's schema version.
+Version 2's carries the first: migrate_store brings each run of a store at version 1, the legacy
+fixtures of tests/_stored_run_fixtures.py among them, to the stored-run format, in its files and
+its runs row alike, so each then loads (D-S19-5). It rewrites only the documents the step
+changes, then writes the run's format.json, and reports each value it drops that is not null. A
+run whose documents it cannot migrate, or cannot read, is left as it was and reported by id,
+document and field, and the rest of the store migrates; so, once, is a run whose format.json
+cannot be read, while a run whose format.json names a later format is left as it is. A step that
+cannot write a run's file, or whose transaction fails once it has brought the run files forward,
+is refused, leaving the database at the version before it, and the migration run again once the
+fault is gone completes it. Either refusal also carries the runs whose files the step brought
+forward before the fault, which stay so, with each value it dropped or rewrote in them, as the
+migration run again leaves those files as they are. A step a run's file stops part way carries
+that run too, with each of its documents the step wrote before the fault and each value it
+dropped or rewrote in them, as the migration run again reads those documents already brought
+forward and reports none of their values; a value in a document it did not write is left for
+the migration run again to report. A step refused after an earlier step of
+the migration committed
+leaves the store at the version that step brought it to, and the refusal carries the report of
+the steps the migration applied; the migration run again goes on from that version and reports
+none of their values again.
+A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
+forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
+A store at version 3, whose runs were saved in format 3, is brought forward by version 4's step
+alone, which drops each battery's grid_charging that its run ignored on a tariff with no cheap
+period. A store at version 4, holding runs an earlier migration brought to format 4 from before
+summaries carried a window, is brought forward by version 5's step alone, which sets each such
+summary's window, in a run's files and its runs row alike, to the window of its run's time series,
+and drops each summary's simulation_days, its window's days. A store at version 5, holding a run a
+solar-challenge at that version saved in format 5, is brought forward by version 6's step alone,
+which drops each fleet summary's total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, in a
+run's files and its runs row alike, reporting each value that is not null. A store at version 6,
+holding a run a solar-challenge at that version saved in format 6, is brought forward by version
+7's step alone, which drops each stored battery's efficiency, the round trip its
+charge_efficiency and discharge_efficiency were derived from, in a run's files and its runs row
+alike, reporting each value that is not null, and keeps the pair. Every older store is brought
+forward by version 9's step too, which drops each stored home summary's seg_revenue_gbp, in a
+run's files and a home run's runs row alike, reporting the pre-975 fleet's two, and by version
+10's, which gives each stored home summary lacking a load_energy_kwh its household's energy and
+its heat pump's, then drops its three heat-pump figures, reporting nothing of a heat-pump home's
+summary stored before summaries held each load's energy. A store at version 8, holding the pre-867
+home and the pre-975 fleet as an earlier migration to version 8 left them, is brought forward by
+version 9's and version 10's steps alone, which rewrite only those summaries.
+A run that store's migration left in format 1, with no format.json, has its files brought
+forward by every step after format 1, so it is reported, if at all, by its own fault. After its
+steps, migrate_store catches up: it brings forward each run an earlier migration left in its
+files or its runs row, naming each, also in a store at SCHEMA_VERSION, which has no step to
+apply, once the run's documents are fixed, and reports again each it still cannot migrate. It
+goes by what a run's documents show, not by where they came from, so it catches up a run saved
+in the current format the same way when its save did not finish or its runs row holds a key no
+field has. A LaggingRunsRefused carries only the report of a migration that left the store at
+SCHEMA_VERSION, and, as a step's refusal does, the lagging runs whose files the catch-up brought
+forward before its fault, in whole or in part, with each value it dropped or rewrote in them.
+"""
+
+import errno
+import importlib.util
+import json
+import os
+import sqlite3
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
+from solar_challenge.dispatch import (
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
+from solar_challenge.home import HomeConfig, SummaryStatistics
+from solar_challenge.tariff import TariffConfig
+from solar_challenge.web.database import Database
+from solar_challenge.web.field_tree import field_tree
+from solar_challenge.web.schema import (
+    MIGRATIONS,
+    SCHEMA_VERSION,
+    LaggingRunsRefused,
+    MigrationRefused,
+    MigrationReport,
+    RunFilesBroughtForward,
+    migrate_store,
+    open_database,
+)
+from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import (
+    FIRST_FORMAT_VERSION,
+    RUN_FORMAT_VERSION,
+    DroppedValue,
+    PartlyBroughtForwardRun,
+    RewrittenValue,
+    RunType,
+    StoredDocument,
+    StoredFleetRun,
+    StoredHomeRun,
+    StoredRunDocuments,
+    StoredRunUnreadable,
+    StoredTimeSeries,
+    UnmigratedRun,
+    bring_run_documents_forward,
+    read_run_documents,
+    write_run_documents,
+)
+from tests._dashboard_databases import (
+    insert_runs_row,
+    runs_rows_of,
+    user_version_of,
+    write_database_at_schema_version,
+)
+from tests._finance_builders import make_home_config, make_sim_results
+from tests._refused_migration_steps import the_step_to_version_3_refused
+from tests._run_storage_layout import stored_run_dir
+from tests._run_stores import empty_run_storage, run_storage_over
+from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
+from tests._stored_run_fixtures import (
+    PRE_975_FLEET_SEG_REVENUE_KEYS,
+    PRE_S12_SUMMARY_HEAT_PUMP_KEYS,
+    STORED_RUN_FIXTURES,
+    fixture_run_type,
+    fixture_summary_statistics_documents,
+    install_pre_s12_heat_pump_home,
+    install_stored_run_fixture,
+)
+from tests._web_runs import store_home_run
+
+_NEEDS_PYARROW = pytest.mark.skipif(
+    importlib.util.find_spec("pyarrow") is None,
+    reason="a stored run's time series is written and read with pyarrow, from the web extra",
+)
+
+
+@pytest.fixture
+def store_at_version_1(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 1 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 1)
+
+
+@pytest.fixture
+def legacy_run_ids(store_at_version_1: Path) -> dict[str, str]:
+    """The run id of each legacy stored-run fixture, by name, each installed in store_at_version_1: its runs row and its run directory."""
+    database = Database(store_at_version_1)
+    return {name: install_stored_run_fixture(name, database, store_at_version_1.parent) for name in STORED_RUN_FIXTURES}
+
+
+_FIXTURES_IN_FORMAT_2 = (
+    "pre_469_home",
+    "legacy_fleet",
+    "pre_787_dispatch_fleet",
+    "pre_839_flat_grid_charging_fleet",
+    "pre_975_seg_fleet",
+)
+"""The legacy stored-run fixtures whose documents version 2's step leaves as they are, so a store at schema version 2 holds them as committed.
+
+pre_787_dispatch_fleet is the one a solar-challenge at format 2 saved. pre_839_flat_grid_charging_fleet,
+which one at format 3 saved, is in format 2 too, as v3 leaves its documents as they are, and so is
+pre_975_seg_fleet, which one at format 5 saved, as v3 to v5 leave its documents as they are.
+pre_786_dispatch_home is left out: its dispatch strategy holds the other variants' null keys, which
+v2 drops.
+"""
+
+
+@pytest.fixture
+def store_at_version_2(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 2 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 2)
+
+
+@pytest.fixture
+def format_2_run_ids(store_at_version_2: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_2, by name, each installed in store_at_version_2 with the format.json naming 2 a save at format 2 left."""
+    database = Database(store_at_version_2)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_2.parent) for name in _FIXTURES_IN_FORMAT_2}
+    for run_id in run_ids.values():
+        write_run_documents(_run_dir(store_at_version_2, run_id), (), 2)
+    return run_ids
+
+
+_FIXTURES_IN_FORMAT_3 = ("pre_469_home", "legacy_fleet", "pre_839_flat_grid_charging_fleet", "pre_975_seg_fleet")
+"""The legacy stored-run fixtures whose documents versions 2 and 3's steps leave as they are, so a store at schema version 3 holds them as committed.
+
+pre_839_flat_grid_charging_fleet is the one a solar-challenge at format 3 saved. pre_787_dispatch_fleet
+is left out: v3 rewrites its dispatch to the one each home ran by.
+"""
+
+
+@pytest.fixture
+def store_at_version_3(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 3 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 3)
+
+
+@pytest.fixture
+def format_3_run_ids(store_at_version_3: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_3, by name, each installed in store_at_version_3 with the format.json naming 3 a save at format 3 left."""
+    database = Database(store_at_version_3)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_3.parent) for name in _FIXTURES_IN_FORMAT_3}
+    for run_id in run_ids.values():
+        write_run_documents(_run_dir(store_at_version_3, run_id), (), 3)
+    return run_ids
+
+
+_FIXTURES_IN_FORMAT_4 = ("pre_469_home", "legacy_fleet", "pre_975_seg_fleet")
+"""The legacy stored-run fixtures whose documents versions 2 to 4's steps leave as they are, so a store at schema version 4 holds them as committed.
+
+pre_469_home and legacy_fleet were saved before summaries carried a window, and an earlier migration
+brought them to format 4 without one. pre_839_flat_grid_charging_fleet is left out: v4 drops its
+grid_charging.
+"""
+
+
+@pytest.fixture
+def store_at_version_4(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 4 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 4)
+
+
+@pytest.fixture
+def format_4_run_ids(store_at_version_4: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_4, by name, each installed in store_at_version_4 with the format.json naming 4 its migration to format 4 left."""
+    database = Database(store_at_version_4)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_4.parent) for name in _FIXTURES_IN_FORMAT_4}
+    for run_id in run_ids.values():
+        write_run_documents(_run_dir(store_at_version_4, run_id), (), 4)
+    return run_ids
+
+
+_FIXTURES_IN_FORMAT_5 = ("pre_975_seg_fleet",)
+"""The legacy stored-run fixtures whose documents versions 2 to 5's steps leave as they are, so a store at schema version 5 holds them as committed.
+
+pre_975_seg_fleet is the one a solar-challenge at format 5 saved. pre_469_home and legacy_fleet are
+left out: v5 sets each of their summaries' windows.
+"""
+
+
+@pytest.fixture
+def store_at_version_5(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 5 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 5)
+
+
+@pytest.fixture
+def format_5_run_ids(store_at_version_5: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_5, by name, each installed in store_at_version_5 with the format.json naming 5 a save at format 5 left."""
+    database = Database(store_at_version_5)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_5.parent) for name in _FIXTURES_IN_FORMAT_5}
+    for run_id in run_ids.values():
+        write_run_documents(_run_dir(store_at_version_5, run_id), (), 5)
+    return run_ids
+
+
+_FIXTURES_IN_FORMAT_6 = ("pre_867_round_trip_home",)
+"""The legacy stored-run fixtures whose documents versions 2 to 6's steps leave as they are, so a store at schema version 6 holds them as committed.
+
+pre_867_round_trip_home is the one a solar-challenge at format 6 saved. pre_975_seg_fleet is left
+out: v6 drops its fleet summary's SEG revenue pair.
+"""
+
+
+@pytest.fixture
+def store_at_version_6(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 6 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 6)
+
+
+@pytest.fixture
+def format_6_run_ids(store_at_version_6: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_6, by name, each installed in store_at_version_6 with the format.json naming 6 a save at format 6 left."""
+    database = Database(store_at_version_6)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_6.parent) for name in _FIXTURES_IN_FORMAT_6}
+    for run_id in run_ids.values():
+        write_run_documents(_run_dir(store_at_version_6, run_id), (), 6)
+    return run_ids
+
+
+_FIXTURES_IN_FORMAT_8 = ("pre_867_round_trip_home", "pre_975_seg_fleet")
+"""The legacy stored-run fixtures a store at schema version 8 holds, each brought to format 8 as an earlier migration to version 8 left it.
+
+v7 drops every fixture's battery efficiency, so none is in format 8 as committed. Each still holds
+its home summaries' seg_revenue_gbp, null in the pre-867 home's and not in the pre-975 fleet's,
+which v9 drops, and their null heat-pump figures and no load_energy_kwh, which v10 gives them.
+"""
+
+
+@pytest.fixture
+def store_at_version_8(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 8 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 8)
+
+
+@pytest.fixture
+def format_8_run_ids(store_at_version_8: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_8, by name, each installed in store_at_version_8 and brought to format 8 in its files, its format.json naming 8, and its runs row."""
+    database = Database(store_at_version_8)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_8.parent) for name in _FIXTURES_IN_FORMAT_8}
+    for name, run_id in run_ids.items():
+        _bring_to_format(store_at_version_8, run_id, fixture_run_type(name), 8)
+    return run_ids
+
+
+def _bring_to_format(database_path: Path, run_id: str, run_type: RunType, format_version: int) -> None:
+    """Bring run *run_id*, of type *run_type* and stored before runs carried a format version, to *format_version* in the store whose database file is *database_path*.
+
+    Its files are brought forward and format.json written naming *format_version*, and its runs
+    row's config_json and summary_json are brought forward and rewritten, each by
+    bring_run_documents_forward, as a migration to that format leaves them.
+    """
+    run_dir = _run_dir(database_path, run_id)
+    files = read_run_documents(run_dir, run_id, run_type)
+    files_forward = bring_run_documents_forward(run_type, files, FIRST_FORMAT_VERSION, format_version).documents
+    write_run_documents(run_dir, files_forward.changed_from(files), format_version)
+    row = runs_rows_of(database_path)[run_id]
+    row_documents = StoredRunDocuments(
+        config=StoredDocument.decoded(run_id, "runs.config_json", row["config_json"]),
+        summary=StoredDocument.decoded(run_id, "runs.summary_json", row["summary_json"]),
+        time_series=StoredTimeSeries(run_id, run_dir),
+    )
+    row_forward = bring_run_documents_forward(run_type, row_documents, FIRST_FORMAT_VERSION, format_version).documents
+    with Database(database_path).transaction() as conn:
+        conn.execute(
+            "UPDATE runs SET config_json = ?, summary_json = ? WHERE id = ?",
+            (json.dumps(row_forward.config.content), json.dumps(row_forward.summary.content), run_id),
+        )
+
+
+@dataclass(frozen=True)
+class _OlderStore:
+    """A store a solar-challenge at schema *version*, below SCHEMA_VERSION, left at *path*, its run files in that file's directory.
+
+    *run_ids* is the run id of each legacy stored-run fixture it holds, by the fixture's name.
+    """
+
+    path: Path
+    version: int
+    run_ids: Mapping[str, str]
+
+
+@pytest.fixture(
+    params=[
+        pytest.param((1, "store_at_version_1", "legacy_run_ids"), id="store-at-version-1"),
+        pytest.param((2, "store_at_version_2", "format_2_run_ids"), id="store-at-version-2"),
+        pytest.param((3, "store_at_version_3", "format_3_run_ids"), id="store-at-version-3"),
+        pytest.param((4, "store_at_version_4", "format_4_run_ids"), id="store-at-version-4"),
+        pytest.param((5, "store_at_version_5", "format_5_run_ids"), id="store-at-version-5"),
+        pytest.param((6, "store_at_version_6", "format_6_run_ids"), id="store-at-version-6"),
+    ]
+)
+def older_store(request: pytest.FixtureRequest) -> _OlderStore:
+    """store_at_version_1 holding legacy_run_ids, store_at_version_2 holding format_2_run_ids, store_at_version_3 holding format_3_run_ids, store_at_version_4 holding format_4_run_ids, store_at_version_5 holding format_5_run_ids, then store_at_version_6 holding format_6_run_ids."""
+    version, path_fixture, run_ids_fixture = request.param
+    return _OlderStore(request.getfixturevalue(path_fixture), version, request.getfixturevalue(run_ids_fixture))
+
+
+def _run_dir(database_path: Path, run_id: str) -> Path:
+    """The directory of run *run_id*'s files in the store whose database file is *database_path*, its run files in that file's directory."""
+    return stored_run_dir(run_storage_over(Database(database_path)), run_id)
+
+
+def _files_of(run_dir: Path) -> dict[str, bytes]:
+    """The bytes of each file in *run_dir* and its subdirectories, keyed by its POSIX path relative to *run_dir*."""
+    return {path.relative_to(run_dir).as_posix(): path.read_bytes() for path in sorted(run_dir.rglob("*")) if path.is_file()}
+
+
+Edit = Callable[[dict[str, Any]], None]
+
+
+def _setting(key: str, value: object) -> Edit:
+    """An edit setting a document's root key *key* to *value*."""
+
+    def edit(document: dict[str, Any]) -> None:
+        document[key] = value
+
+    return edit
+
+
+def _deleting(key: str) -> Edit:
+    """An edit deleting a document's root key *key*."""
+
+    def edit(document: dict[str, Any]) -> None:
+        del document[key]
+
+    return edit
+
+
+def _edit_stored_document(path: Path, edit: Edit) -> None:
+    """Rewrite the JSON document at *path*, a file of a run's directory, with *edit* applied to its content."""
+    document = json.loads(path.read_text())
+    edit(document)
+    path.write_text(json.dumps(document, indent=2))
+
+
+def _edit_runs_document(database_path: Path, run_id: str, column: str, edit: Edit) -> None:
+    """Rewrite run *run_id*'s *column*, config_json or summary_json, with *edit* applied to the document it holds."""
+    document = json.loads(runs_rows_of(database_path)[run_id][column])
+    edit(document)
+    with Database(database_path).transaction() as conn:
+        conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document), run_id))
+
+
+def _install_a_copy_holding_a_retired_figure(database_path: Path, run_id: str) -> str:
+    """Install a copy of pre_469_home as run *run_id* in the store whose database file is *database_path*, its run files in that file's directory, and return its id.
+
+    Its summary.json and its runs.summary_json hold 12.5 as retired_figure, a figure no field
+    has, which v2 drops.
+    """
+    installed = install_stored_run_fixture("pre_469_home", Database(database_path), database_path.parent, run_id=run_id)
+    _edit_stored_document(_run_dir(database_path, installed) / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(database_path, installed, "summary_json", _setting("retired_figure", 12.5))
+    return installed
+
+
+def _storage_of(database_path: Path) -> RunStorage:
+    """The RunStorage of the store at SCHEMA_VERSION whose database file is *database_path*, its run files in that file's directory."""
+    return run_storage_over(open_database(database_path))
+
+
+_PRE_787_FLEET_FIELDS_V3_CHANGES = (
+    ("homes[0].battery_config.grid_charging", {"target_soc_fraction": 0.8}, None),
+    ("homes[1].battery_config.grid_charging", {"target_soc_fraction": 0.8}, None),
+    ("homes[2].dispatch_strategy", "tou_optimized", "greedy"),
+    ("homes[2].battery_config.grid_charging", {"target_soc_fraction": 0.8}, None),
+)
+"""Each field of pre_787_dispatch_fleet's config that v3 sets to the dispatch its home ran by, the value it held and the one it holds now."""
+
+
+def _values_v3_changes_in_the_pre_787_fleet(run_id: str) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports v3 rewrote in pre_787_dispatch_fleet, installed as run *run_id*: its config.json's, then its runs row's."""
+    return tuple(
+        RewrittenValue(run_id, document, field, was, now)
+        for document in ("config.json", "runs.config_json")
+        for field, was, now in _PRE_787_FLEET_FIELDS_V3_CHANGES
+    )
+
+
+_PRE_839_FLEET_FIELDS_V4_CHANGES = tuple(
+    (f"homes[{index}].battery_config.grid_charging", {"target_soc_fraction": 0.8}, None) for index in range(3)
+)
+"""Each field of pre_839_flat_grid_charging_fleet's config that v4 drops, as its run ignored it on a flat tariff, the value it held and the one it holds now."""
+
+_PRE_839_FLEET_FIELDS_V8_CHANGES = (
+    ("homes[2].battery_config.dispatch_strategy", None, {"strategy_type": "tou_optimized", "peak_hours": None}),
+)
+"""The field of pre_839_flat_grid_charging_fleet's config that v8 sets, the battery strategy of the home that asked for tou_optimized, the value it held and the one it holds now."""
+
+
+def _values_a_step_changes_in_the_pre_839_fleet(
+    run_id: str, fields: tuple[tuple[str, object, object], ...]
+) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports a step rewrote in pre_839_flat_grid_charging_fleet, installed as run *run_id*, each of *fields*: its config.json's, then its runs row's."""
+    return tuple(
+        RewrittenValue(run_id, document, field, was, now)
+        for document in ("config.json", "runs.config_json")
+        for field, was, now in fields
+    )
+
+
+def _values_v4_and_v8_change_in_the_pre_839_fleet(run_id: str) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports v4, then v8, rewrote in pre_839_flat_grid_charging_fleet, installed as run *run_id*: each step's in its config.json, then in its runs row."""
+    return (
+        *_values_a_step_changes_in_the_pre_839_fleet(run_id, _PRE_839_FLEET_FIELDS_V4_CHANGES),
+        *_values_a_step_changes_in_the_pre_839_fleet(run_id, _PRE_839_FLEET_FIELDS_V8_CHANGES),
+    )
+
+
+_PRE_975_FLEET_SEG_REVENUE_VALUES = tuple(
+    (key, json.loads((STORED_RUN_FIXTURES_DIR / "pre_975_seg_fleet" / "run" / "summary.json").read_text())[key])
+    for key in PRE_975_FLEET_SEG_REVENUE_KEYS
+)
+"""The SEG revenue total and per-home mean pre_975_seg_fleet's FleetSummary holds, in its files and its runs row alike, each with its value, which v6 drops."""
+
+
+_PRE_975_HOME_SUMMARY_SEG_REVENUES = tuple(
+    (document, json.loads((STORED_RUN_FIXTURES_DIR / "pre_975_seg_fleet" / "run" / document).read_text())["seg_revenue_gbp"])
+    for document in ("homes/home_0_summary.json", "homes/home_1_summary.json")
+)
+"""Each home summary file of pre_975_seg_fleet, with the seg_revenue_gbp it holds, which v9 drops; a fleet's runs row holds no home summary."""
+
+_PRE_867_BATTERY_ROUND_TRIP = ("battery_config.efficiency", 0.81)
+"""The round-trip efficiency pre_867_round_trip_home's battery holds, in its files and its runs row alike, by its field's path, with its value, which v7 drops."""
+
+
+def _values_the_steps_drop(run_ids: Mapping[str, str]) -> tuple[DroppedValue, ...]:
+    """The values migrate_store reports the steps after a store's version dropped from the legacy runs installed as *run_ids*, by fixture name.
+
+    That is v6's from pre_975_seg_fleet, its summary.json's, then its runs row's, then v7's from
+    pre_867_round_trip_home, its config.json's, then its runs row's, then v9's from pre_975_seg_fleet,
+    each of its home summaries', each of a fixture *run_ids* holds: no store holds a fixture that a
+    step up to its own version changes.
+    """
+    pre_975_fleet = run_ids.get("pre_975_seg_fleet")
+    pre_867_home = run_ids.get("pre_867_round_trip_home")
+    return (
+        *(
+            DroppedValue(pre_975_fleet, document, field, value)
+            for document in ("summary.json", "runs.summary_json")
+            for field, value in _PRE_975_FLEET_SEG_REVENUE_VALUES
+            if pre_975_fleet is not None
+        ),
+        *(
+            DroppedValue(pre_867_home, document, *_PRE_867_BATTERY_ROUND_TRIP)
+            for document in ("config.json", "runs.config_json")
+            if pre_867_home is not None
+        ),
+        *(
+            DroppedValue(pre_975_fleet, document, "seg_revenue_gbp", value)
+            for document, value in _PRE_975_HOME_SUMMARY_SEG_REVENUES
+            if pre_975_fleet is not None
+        ),
+    )
+
+
+def _values_the_steps_after_version_1_rewrite(run_ids: Mapping[str, str]) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports the steps after schema version 1 rewrote in the legacy runs installed as *run_ids*, by fixture name: v3's in the pre-787 fleet, then v4's and v8's in the pre-839 fleet, each step's in every run before the next step's."""
+    return (
+        *_values_v3_changes_in_the_pre_787_fleet(run_ids["pre_787_dispatch_fleet"]),
+        *_values_v4_and_v8_change_in_the_pre_839_fleet(run_ids["pre_839_flat_grid_charging_fleet"]),
+    )
+
+
+def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_after_its_own_reporting_only_the_values_they_rewrite_in_the_pre_787_and_pre_839_fleets(
+    older_store: _OlderStore,
+) -> None:
+    """A store at version 2, 3, 4, 5 or 6, each run's format.json naming its version, is migrated without the steps up to its version.
+
+    The legacy runs hold no key v2 drops but the null keys of the other dispatch variants, a null
+    value it drops unreported. A store at version 3 holds no pre-787 fleet, as v3 rewrites it, and
+    one at version 4 no pre-839 fleet either, as v4 rewrites it. v5 reports no window it sets. v6
+    drops the pre-975 fleet's SEG revenue pair, reporting each value, from every store below
+    version 6. v7 drops each battery's efficiency, reporting the pre-867 home's 0.81, from every
+    store holding it. v8 drops each home's dispatch_strategy, reporting the battery strategy it gives
+    the pre-839 fleet's tou_optimized home. v9 drops each home summary's seg_revenue_gbp, reporting
+    the pre-975 fleet's two. v10 gives each home summary its household's energy, dropping its null
+    heat-pump figures, reporting nothing.
+    """
+    pre_787_fleet = older_store.run_ids.get("pre_787_dispatch_fleet")
+    rewritten_by_v3 = _values_v3_changes_in_the_pre_787_fleet(pre_787_fleet) if pre_787_fleet is not None else ()
+    pre_839_fleet = older_store.run_ids.get("pre_839_flat_grid_charging_fleet")
+    rewritten_by_v4_and_v8 = (
+        _values_v4_and_v8_change_in_the_pre_839_fleet(pre_839_fleet) if pre_839_fleet is not None else ()
+    )
+
+    report = migrate_store(older_store.path, older_store.path.parent)
+
+    assert report == MigrationReport(
+        path=older_store.path,
+        from_version=older_store.version,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[older_store.version :],
+        dropped_values=_values_the_steps_drop(older_store.run_ids),
+        rewritten_values=(*rewritten_by_v3, *rewritten_by_v4_and_v8),
+    )
+    assert user_version_of(older_store.path) == SCHEMA_VERSION
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_brings_a_store_at_version_6_forward_by_version_7_s_step_dropping_each_battery_s_round_trip_and_keeping_the_pair(
+    store_at_version_6: Path, format_6_run_ids: dict[str, str]
+) -> None:
+    """The pre-867 home's run files and runs row lose its battery's efficiency, the report holds its 0.81, and the run loads with the pair 0.9 it derived."""
+    run_id = format_6_run_ids["pre_867_round_trip_home"]
+
+    report = migrate_store(store_at_version_6, store_at_version_6.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_6,
+        from_version=6,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[6:],
+        dropped_values=_values_the_steps_drop(format_6_run_ids),
+    )
+    configs = [
+        json.loads((_run_dir(store_at_version_6, run_id) / "config.json").read_text()),
+        json.loads(runs_rows_of(store_at_version_6)[run_id]["config_json"]),
+    ]
+    assert [("efficiency" in config["battery_config"], config["battery_config"]["charge_efficiency"]) for config in configs] == [
+        (False, 0.9)
+    ] * 2
+    loaded = _storage_of(store_at_version_6).load_run(run_id)
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.config.battery_config == BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.9, discharge_efficiency=0.9)
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_brings_a_store_at_version_8_forward_by_version_9_s_and_10_s_steps_alone_rewriting_only_each_home_summary(
+    store_at_version_8: Path, format_8_run_ids: dict[str, str]
+) -> None:
+    """The upgrade of a dashboard at version 8: v9 drops each home summary's seg_revenue_gbp, reporting the pre-975 fleet's two values, and v10 gives each its load_energy_kwh, dropping its heat-pump figures, in a run's files and a home run's runs row alike.
+
+    Every other document and runs column is left byte for byte, and each run loads.
+    """
+    store = store_at_version_8
+    files_before = {run_id: _files_of(_run_dir(store, run_id)) for run_id in format_8_run_ids.values()}
+    rows_before = runs_rows_of(store)
+    pre_975_fleet = format_8_run_ids["pre_975_seg_fleet"]
+
+    report = migrate_store(store, store.parent)
+
+    assert report == MigrationReport(
+        path=store,
+        from_version=8,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[8:],
+        dropped_values=tuple(
+            DroppedValue(pre_975_fleet, document, "seg_revenue_gbp", value)
+            for document, value in _PRE_975_HOME_SUMMARY_SEG_REVENUES
+        ),
+    )
+    rows_after = runs_rows_of(store)
+    storage = _storage_of(store)
+    for name, run_id in format_8_run_ids.items():
+        before, after = files_before[run_id], _files_of(_run_dir(store, run_id))
+        summaries = fixture_summary_statistics_documents(name)
+        assert set(after) == set(before), name
+        assert {path for path in after if after[path] != before[path]} == {"format.json", *summaries.files}, name
+        assert {column for column, value in rows_before[run_id].items() if rows_after[run_id][column] != value} == (
+            summaries.columns
+        ), name
+        assert storage.load_run(run_id).run_id == run_id
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_each_legacy_run_of_an_older_store_carries_the_format_version_and_loads(
+    older_store: _OlderStore,
+) -> None:
+    """B5's second half, at the store: a run stored before runs carried a format version, or at format 2, loads once migrated."""
+    run_ids = list(older_store.run_ids.values())
+
+    migrate_store(older_store.path, older_store.path.parent)
+
+    markers = [json.loads((_run_dir(older_store.path, run_id) / "format.json").read_text()) for run_id in run_ids]
+    assert markers == [{"format_version": RUN_FORMAT_VERSION}] * len(run_ids)
+    storage = _storage_of(older_store.path)
+    assert [storage.load_run(run_id).run_id for run_id in run_ids] == run_ids
+
+
+_FIXTURES_SAVED_BEFORE_SUMMARIES_CARRIED_A_WINDOW = ("pre_469_home", "legacy_fleet", "pre_786_dispatch_home")
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_each_home_summary_of_a_run_saved_before_summaries_carried_a_window_loads_with_the_window_of_its_time_series(
+    older_store: _OlderStore,
+) -> None:
+    """v5 sets each one's window from its run's stored time series, in its files and, for a home run, its runs row alike."""
+    run_ids = [
+        older_store.run_ids[name] for name in _FIXTURES_SAVED_BEFORE_SUMMARIES_CARRIED_A_WINDOW if name in older_store.run_ids
+    ]
+
+    migrate_store(older_store.path, older_store.path.parent)
+
+    storage = _storage_of(older_store.path)
+    for run_id in run_ids:
+        loaded = storage.load_run(run_id)
+        if isinstance(loaded, StoredHomeRun):
+            record = storage.run_record(run_id)
+            row_summary = None if record is None else record.summary()
+            assert isinstance(row_summary, SummaryStatistics), run_id
+            summaries = [loaded.summary, row_summary]
+            windows = [loaded.results.window] * 2
+        else:
+            summaries = list(loaded.home_summaries)
+            windows = [results.window for results in loaded.fleet_results.per_home_results]
+        assert [summary.window for summary in summaries] == windows, run_id
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_a_run_stored_before_469_loads_with_no_grid_charge(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """Its summary has no total_grid_charge_kwh, so the field takes its default."""
+    run_id = legacy_run_ids["pre_469_home"]
+
+    migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    loaded = _storage_of(store_at_version_1).load_run(run_id)
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.summary.total_grid_charge_kwh == 0.0
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_a_run_stored_before_786_reads_its_battery_dispatch_as_its_variant_from_its_files_and_its_row(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    run_id = legacy_run_ids["pre_786_dispatch_home"]
+
+    migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    storage = _storage_of(store_at_version_1)
+    loaded = storage.load_run(run_id)
+    record = storage.run_record(run_id)
+    assert isinstance(loaded, StoredHomeRun)
+    assert record is not None
+    home_configs = record.home_configs()
+    assert home_configs is not None
+    for config in (loaded.config, *home_configs):
+        assert config.battery_config is not None
+        assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
+
+
+def _dispatch_settings(home: HomeConfig) -> tuple[str, DispatchStrategyConfig, GridChargeConfig | None]:
+    """*home*'s name, then its battery's dispatch_strategy and grid_charging; *home* has a battery."""
+    battery = home.battery_config
+    assert battery is not None, f"{home.name} has no battery"
+    return (home.name, battery.dispatch_strategy, battery.grid_charging)
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_the_pre_787_fleet_of_a_store_at_version_2_reads_each_home_s_dispatch_as_it_ran_from_its_files_and_its_row(
+    store_at_version_2: Path, format_2_run_ids: dict[str, str]
+) -> None:
+    """Before the migration, its documents hold the three shapes HomeConfig has refused since task 787.
+
+    They are grid_charging under self-consumption, grid_charging with no tariff, and home
+    tou_optimized with no tariff. Each now reads as the dispatch its run ran by.
+    """
+    run_id = format_2_run_ids["pre_787_dispatch_fleet"]
+
+    migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    storage = _storage_of(store_at_version_2)
+    loaded = storage.load_run(run_id)
+    record = storage.run_record(run_id)
+    assert isinstance(loaded, StoredFleetRun)
+    assert record is not None
+    for homes in (tuple(loaded.fleet_results.home_configs), record.home_configs()):
+        assert homes is not None
+        assert [_dispatch_settings(home) for home in homes] == [
+            ("Elm Row 1", SelfConsumptionStrategyConfig(), None),
+            ("Elm Row 2", TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), None),
+            ("Elm Row 3", SelfConsumptionStrategyConfig(), None),
+        ]
+
+
+def _install_a_run_in_format_1(database_path: Path, run_id: str) -> str:
+    """Install pre_786_dispatch_home as run *run_id* in the store whose database file is *database_path*, its run files in that file's directory; return the id.
+
+    The run has no format.json, so its documents are in format 1. In a store at version 2 that
+    is a run the migration to version 2 left as it was. Its config holds the other dispatch
+    variants' null keys, which v2 drops and v3 alone would refuse.
+    """
+    return install_stored_run_fixture("pre_786_dispatch_home", Database(database_path), database_path.parent, run_id=run_id)
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_brings_the_files_of_a_run_an_earlier_migration_left_in_format_1_forward_by_every_step_after_it(
+    store_at_version_2: Path,
+) -> None:
+    """The run stands for one the migration to version 2 left, whose documents have since been fixed: v2, then v3, bring it forward."""
+    left = _install_a_run_in_format_1(store_at_version_2, "left-by-v2")
+
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    run_dir = _run_dir(store_at_version_2, left)
+    assert json.loads((run_dir / "format.json").read_text()) == {"format_version": RUN_FORMAT_VERSION}
+    config = json.loads((run_dir / "config.json").read_text())
+    assert config["battery_config"]["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
+    assert [
+        each for each in report.unmigrated_runs if each.run_id == left and each.document in ("config.json", "summary.json")
+    ] == []
+    assert _storage_of(store_at_version_2).load_run(left).run_id == left
+
+
+def test_migrate_store_reports_the_files_of_a_run_an_earlier_migration_left_by_their_own_fault_not_by_a_key_the_skipped_step_drops(
+    store_at_version_2: Path,
+) -> None:
+    """Its summary.json lacks a figure SummaryStatistics requires; its config.json's import_limit_kw, which v2 drops, is no fault of it.
+
+    Only its files' report is checked here; its runs row's is checked apart.
+    """
+    lacking = _install_a_run_in_format_1(store_at_version_2, "lacking-generation")
+    run_dir = _run_dir(store_at_version_2, lacking)
+    _edit_stored_document(run_dir / "summary.json", _deleting("total_generation_kwh"))
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    reported = {(each.run_id, each.document, each.field) for each in report.unmigrated_runs}
+    assert (lacking, "summary.json", "total_generation_kwh") in reported
+    assert (lacking, "config.json", "battery_config.dispatch_strategy.import_limit_kw") not in reported
+    assert _files_of(run_dir) == files_before
+    assert not (run_dir / "format.json").exists()
+
+
+def test_migrate_store_brings_the_runs_row_of_a_run_an_earlier_migration_left_in_format_1_forward_by_every_step_after_it(
+    store_at_version_2: Path,
+) -> None:
+    """A runs row records no format: one that v3 alone cannot bring forward from format 2 is brought forward from format 1, by v2 then v3."""
+    left = _install_a_run_in_format_1(store_at_version_2, "left-by-v2")
+
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    config = json.loads(runs_rows_of(store_at_version_2)[left]["config_json"])
+    assert config["battery_config"]["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
+    record = _storage_of(store_at_version_2).run_record(left)
+    assert record is not None
+    [home] = record.home_configs() or ()
+    assert home.battery_config is not None
+    assert home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
+    assert [each for each in report.unmigrated_runs if each.run_id == left] == []
+
+
+def _install_a_run_lacking_generation(database_path: Path) -> str:
+    """Install _install_a_run_in_format_1's run as 'lacking-generation', without total_generation_kwh, which SummaryStatistics requires, in its summary.json and its runs.summary_json; return the id."""
+    lacking = _install_a_run_in_format_1(database_path, "lacking-generation")
+    _edit_stored_document(_run_dir(database_path, lacking) / "summary.json", _deleting("total_generation_kwh"))
+    _edit_runs_document(database_path, lacking, "summary_json", _deleting("total_generation_kwh"))
+    return lacking
+
+
+def test_migrate_store_reports_each_source_of_a_run_an_earlier_migration_left_once_by_its_own_fault(
+    store_at_version_2: Path,
+) -> None:
+    """Its files and its runs row are each reported by the figure their summary lacks, not by the import_limit_kw v2 drops from their config."""
+    lacking = _install_a_run_lacking_generation(store_at_version_2)
+    row_before = runs_rows_of(store_at_version_2)[lacking]
+
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    assert len(report.unmigrated_runs) == 2
+    assert {(each.run_id, each.document, each.field) for each in report.unmigrated_runs} == {
+        (lacking, "summary.json", "total_generation_kwh"),
+        (lacking, "runs.summary_json", "total_generation_kwh"),
+    }
+    assert runs_rows_of(store_at_version_2)[lacking] == row_before
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_brings_forward_a_run_an_earlier_migration_left_once_its_documents_are_fixed(
+    store_at_version_1: Path,
+) -> None:
+    """The store is at SCHEMA_VERSION by the time the run's summaries hold the figure they lacked, so no step is pending; the run is brought forward even so."""
+    lacking = _install_a_run_lacking_generation(store_at_version_1)
+    first = migrate_store(store_at_version_1, store_at_version_1.parent)
+    assert [each.run_id for each in first.unmigrated_runs] == [lacking, lacking]
+    committed = json.loads((STORED_RUN_FIXTURES_DIR / "pre_786_dispatch_home" / "run" / "summary.json").read_text())
+    restore = _setting("total_generation_kwh", committed["total_generation_kwh"])
+    _edit_stored_document(_run_dir(store_at_version_1, lacking) / "summary.json", restore)
+    _edit_runs_document(store_at_version_1, lacking, "summary_json", restore)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=SCHEMA_VERSION,
+        to_version=SCHEMA_VERSION,
+        applied_steps=(),
+        caught_up_runs=(lacking,),
+    )
+    marker = json.loads((_run_dir(store_at_version_1, lacking) / "format.json").read_text())
+    assert marker == {"format_version": RUN_FORMAT_VERSION}
+    storage = _storage_of(store_at_version_1)
+    loaded = storage.load_run(lacking)
+    record = storage.run_record(lacking)
+    assert isinstance(loaded, StoredHomeRun)
+    assert record is not None
+    assert record.summary() == loaded.summary
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
+
+
+def test_migrate_store_reports_again_each_run_an_earlier_migration_left_that_still_cannot_be_migrated(
+    store_at_version_1: Path,
+) -> None:
+    """Run again on the store, now at SCHEMA_VERSION, the migration applies no step but tries the run again, and reports each of its sources as the first migration did."""
+    lacking = _install_a_run_lacking_generation(store_at_version_1)
+    first = migrate_store(store_at_version_1, store_at_version_1.parent)
+    assert [each.run_id for each in first.unmigrated_runs] == [lacking, lacking]
+    files_after_first, rows_after_first = _files_of(_run_dir(store_at_version_1, lacking)), runs_rows_of(store_at_version_1)
+
+    second = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (second.applied_steps, second.caught_up_runs) == ((), ())
+    assert second.unmigrated_runs == first.unmigrated_runs
+    assert _files_of(_run_dir(store_at_version_1, lacking)) == files_after_first
+    assert runs_rows_of(store_at_version_1) == rows_after_first
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
+
+
+def test_migrate_store_brings_forward_and_names_a_run_whose_runs_row_alone_an_earlier_migration_left_once_it_is_fixed(
+    store_at_version_1: Path,
+) -> None:
+    """Only its runs.summary_json lacked the figure, so the first migration brought its files forward and left its row; the catch-up brings the fixed row forward and names the run."""
+    lacking = _install_a_run_in_format_1(store_at_version_1, "lacking-generation")
+    _edit_runs_document(store_at_version_1, lacking, "summary_json", _deleting("total_generation_kwh"))
+    first = migrate_store(store_at_version_1, store_at_version_1.parent)
+    assert [(each.run_id, each.document, each.field) for each in first.unmigrated_runs] == [
+        (lacking, "runs.summary_json", "total_generation_kwh")
+    ]
+    committed = json.loads((STORED_RUN_FIXTURES_DIR / "pre_786_dispatch_home" / "run" / "summary.json").read_text())
+    restore = _setting("total_generation_kwh", committed["total_generation_kwh"])
+    _edit_runs_document(store_at_version_1, lacking, "summary_json", restore)
+    files_after_first = _files_of(_run_dir(store_at_version_1, lacking))
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=SCHEMA_VERSION,
+        to_version=SCHEMA_VERSION,
+        applied_steps=(),
+        caught_up_runs=(lacking,),
+    )
+    assert "nothing to migrate" not in str(report)
+    assert f"  run {lacking!r}" in str(report).splitlines()
+    config = json.loads(runs_rows_of(store_at_version_1)[lacking]["config_json"])
+    assert config["battery_config"]["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
+    record = _storage_of(store_at_version_1).run_record(lacking)
+    assert record is not None
+    summary = record.summary()
+    assert isinstance(summary, SummaryStatistics)
+    assert summary.total_generation_kwh == committed["total_generation_kwh"]
+    assert _files_of(_run_dir(store_at_version_1, lacking)) == files_after_first
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_catches_up_a_current_run_whose_runs_row_holds_a_key_no_field_has_by_dropping_the_key(
+    tmp_path: Path,
+) -> None:
+    """A runs row records no format, so a row the current format refuses for a key no field has reads only from the first: the catch-up brings it forward from there, as it brings a row an earlier migration left, v2 dropping the key."""
+    storage = empty_run_storage(tmp_path)
+    config = make_home_config()
+    store_home_run(storage, "home-1", config, make_sim_results(days=1))
+    _edit_runs_document(storage.database.path, "home-1", "config_json", _setting("retired_setting", 1.5))
+    files_before = _files_of(stored_run_dir(storage, "home-1"))
+
+    report = migrate_store(storage.database.path, storage.data_dir)
+
+    assert report == MigrationReport(
+        storage.database.path,
+        from_version=SCHEMA_VERSION,
+        to_version=SCHEMA_VERSION,
+        applied_steps=(),
+        dropped_values=(DroppedValue("home-1", "runs.config_json", "retired_setting", 1.5),),
+        caught_up_runs=("home-1",),
+    )
+    record = storage.run_record("home-1")
+    assert record is not None
+    assert record.home_configs() == (config,)
+    assert _files_of(stored_run_dir(storage, "home-1")) == files_before
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_catches_up_a_current_run_whose_save_did_not_finish_writing_only_its_format_json(
+    tmp_path: Path,
+) -> None:
+    """A home run's save writes config.json, summary.json, data.parquet, then format.json; this run lost the last two, as a save stopped part way through leaves it.
+
+    A run with no format.json reads as one saved before runs carried a format version, so the
+    catch-up brings its documents forward from the first format, which changes none of them, and
+    writes its format.json. Its load still refuses it, naming the time series it lacks.
+    """
+    storage = empty_run_storage(tmp_path)
+    store_home_run(storage, "home-1", make_home_config(), make_sim_results(days=1))
+    run_dir = stored_run_dir(storage, "home-1")
+    saved = _files_of(run_dir)
+    (run_dir / "format.json").unlink()
+    (run_dir / "data.parquet").unlink()
+
+    report = migrate_store(storage.database.path, storage.data_dir)
+
+    assert report == MigrationReport(storage.database.path, SCHEMA_VERSION, SCHEMA_VERSION, (), caught_up_runs=("home-1",))
+    assert _files_of(run_dir) == {name: content for name, content in saved.items() if name != "data.parquet"}
+    with pytest.raises(StoredRunUnreadable) as refused:
+        storage.load_run("home-1")
+    assert (refused.value.document, refused.value.field) == ("data.parquet", None)
+
+
+def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """The pre-786 run's dispatch strategy loses the other variants' null keys in config.json and runs.config_json."""
+    run_id = legacy_run_ids["pre_786_dispatch_home"]
+
+    migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    configs = [
+        json.loads((_run_dir(store_at_version_1, run_id) / "config.json").read_text()),
+        json.loads(runs_rows_of(store_at_version_1)[run_id]["config_json"]),
+    ]
+    assert [config["battery_config"]["dispatch_strategy"] for config in configs] == [
+        {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
+    ] * 2
+
+
+_CONFIG_EACH_RUN_DOCUMENT_STEP_REWRITES = (
+    (2, "pre_786_dispatch_home"),
+    (3, "pre_787_dispatch_fleet"),
+    (4, "pre_839_flat_grid_charging_fleet"),
+    *((7, name) for name in STORED_RUN_FIXTURES),
+)
+"""Each run-document step's version and each legacy stored-run fixture whose config it rewrites.
+
+v2 drops the pre-786 run's null dispatch keys, v3 sets the pre-787 fleet's dispatch to the one each
+home ran by, v4 drops the grid_charging each home of the pre-839 fleet ignored on its flat tariff,
+and v7 drops each stored battery's efficiency, which every fixture's config holds, for a home with
+a battery.
+"""
+
+
+_FLEET_SUMMARIES_V6_REWRITES = (
+    "legacy_fleet",
+    "pre_787_dispatch_fleet",
+    "pre_839_flat_grid_charging_fleet",
+    "pre_975_seg_fleet",
+)
+"""Each legacy stored-run fixture whose FleetSummary, in its summary.json and its runs row's summary_json, v6 rewrites: every fleet's, each holding the SEG revenue pair, null but in the pre-975 fleet."""
+
+
+def _summaries_rewritten(name: str, version: int) -> tuple[frozenset[str], frozenset[str]]:
+    """The files, then the runs columns, holding a summary of fixture *name* that migrating a store at schema *version* rewrites.
+
+    Below version 10 that is each of its SummaryStatistics documents, which v5 below version 5,
+    dropping its simulation_days and setting its window when it holds none, v9 below version 9,
+    dropping its seg_revenue_gbp, and v10 below version 10, giving it its load_energy_kwh and
+    dropping its heat-pump figures, rewrite alike; and below version 6 its FleetSummary too, which
+    v6 rewrites, dropping its SEG revenue pair.
+    """
+    files, columns = fixture_summary_statistics_documents(name) if version < 10 else (frozenset(), frozenset())
+    if version < 6 and name in _FLEET_SUMMARIES_V6_REWRITES:
+        return files | {"summary.json"}, columns | {"summary_json"}
+    return files, columns
+
+
+def test_migrate_store_rewrites_only_the_documents_the_steps_change_and_writes_each_run_s_format_marker_leaving_no_other_file(
+    older_store: _OlderStore,
+) -> None:
+    """Every document and runs column no step changes is left byte for byte, and no temporary file is left behind.
+
+    Each run's format.json is added, or rewritten where a save at format 2 left one. A store below
+    version 5 has v5 rewrite each SummaryStatistics document, dropping its simulation_days, one
+    below version 6 has v6 rewrite each fleet's FleetSummary, dropping its SEG revenue pair, every
+    older store has v7 rewrite each config, dropping each battery's efficiency, and every older
+    store has v9 and v10 rewrite each SummaryStatistics document, dropping its seg_revenue_gbp and
+    its heat-pump figures and giving it its load_energy_kwh.
+    """
+    store = older_store.path
+    files_before = {run_id: _files_of(_run_dir(store, run_id)) for run_id in older_store.run_ids.values()}
+    rows_before = runs_rows_of(store)
+    config_rewritten = {
+        older_store.run_ids[name]
+        for version, name in _CONFIG_EACH_RUN_DOCUMENT_STEP_REWRITES
+        if version > older_store.version and name in older_store.run_ids
+    }
+    summaries_rewritten = {
+        run_id: _summaries_rewritten(name, older_store.version) for name, run_id in older_store.run_ids.items()
+    }
+
+    migrate_store(store, store.parent)
+
+    rows_after = runs_rows_of(store)
+    for run_id, before in files_before.items():
+        after = _files_of(_run_dir(store, run_id))
+        summary_files, summary_columns = summaries_rewritten[run_id]
+        assert set(after) == {*before, "format.json"}, run_id
+        assert {path for path in after if after[path] != before.get(path)} == {
+            "format.json",
+            *(("config.json",) if run_id in config_rewritten else ()),
+            *summary_files,
+        }, run_id
+        assert {column for column, value in rows_before[run_id].items() if rows_after[run_id][column] != value} == {
+            *(("config_json",) if run_id in config_rewritten else ()),
+            *summary_columns,
+        }, run_id
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_no_stored_summary_holds_a_seg_revenue_and_each_run_loads(older_store: _OlderStore) -> None:
+    """v9 drops each SummaryStatistics document's seg_revenue_gbp, in a run's files and a home run's runs row alike.
+
+    Each pre-975 home summary loads with the export revenue its dropped value copied.
+    """
+    migrate_store(older_store.path, older_store.path.parent)
+
+    rows = runs_rows_of(older_store.path)
+    storage = _storage_of(older_store.path)
+    for name, run_id in older_store.run_ids.items():
+        files, columns = fixture_summary_statistics_documents(name)
+        summaries = [
+            *(json.loads((_run_dir(older_store.path, run_id) / file).read_text()) for file in files),
+            *(json.loads(rows[run_id][column]) for column in columns),
+        ]
+        assert summaries and all("seg_revenue_gbp" not in summary for summary in summaries), name
+        loaded = storage.load_run(run_id)
+        if name == "pre_975_seg_fleet":
+            assert isinstance(loaded, StoredFleetRun)
+            assert [summary.total_export_revenue_gbp for summary in loaded.home_summaries] == pytest.approx(
+                [value for _, value in _PRE_975_HOME_SUMMARY_SEG_REVENUES], abs=1e-9
+            )
+
+
+
+def _stored_summaries(store: Path, name: str, run_id: str) -> list[dict[str, Any]]:
+    """Each SummaryStatistics document of fixture *name*, installed as run *run_id* in the store whose database file is *store*: its files', then its runs columns'."""
+    files, columns = fixture_summary_statistics_documents(name)
+    row = runs_rows_of(store)[run_id]
+    return [
+        *(json.loads((_run_dir(store, run_id) / file).read_text()) for file in sorted(files)),
+        *(json.loads(row[column]) for column in sorted(columns)),
+    ]
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_each_stored_summary_holds_its_household_s_energy_and_no_heat_pump_figure_and_each_run_loads(
+    older_store: _OlderStore,
+) -> None:
+    """v10 gives each SummaryStatistics document its load_energy_kwh, its household's energy, the legacy runs having no heat pump, in a run's files and a home run's runs row alike, and drops the three figures."""
+    migrate_store(older_store.path, older_store.path.parent)
+
+    storage = _storage_of(older_store.path)
+    for name, run_id in older_store.run_ids.items():
+        summaries = _stored_summaries(older_store.path, name, run_id)
+        assert summaries, name
+        assert [summary["load_energy_kwh"] for summary in summaries] == [
+            {"household": summary["total_demand_kwh"]} for summary in summaries
+        ], name
+        assert [key for summary in summaries for key in PRE_S12_SUMMARY_HEAT_PUMP_KEYS if key in summary] == [], name
+        loaded = storage.load_run(run_id)
+        if isinstance(loaded, StoredHomeRun):
+            assert loaded.summary.load_energy_kwh == {LoadKind.HOUSEHOLD: loaded.summary.total_demand_kwh}, name
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_gives_a_heat_pump_home_s_summary_stored_before_summaries_held_each_load_s_energy_both_energies_reporting_nothing_of_it(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """B9: its summary.json and its runs row hold its household's energy, its demand less its heat pump's, and its heat pump's, and the run loads.
+
+    The report names only v7's drops of the copy's battery efficiency, which it holds as
+    pre_867_round_trip_home does: nothing of its summary.
+    """
+    store = store_at_version_1
+    copy_id = install_pre_s12_heat_pump_home(Database(store), store.parent, run_id="pre-s12-heat-pump-home")
+
+    report = migrate_store(store, store.parent)
+
+    assert [summary["load_energy_kwh"] for summary in _stored_summaries(store, "pre_867_round_trip_home", copy_id)] == [
+        {"household": 3000.0, "heat_pump": 2400.0}
+    ] * 2
+    assert [
+        each
+        for each in (*report.dropped_values, *report.rewritten_values, *report.unmigrated_runs)
+        if each.run_id == copy_id
+    ] == [DroppedValue(copy_id, document, *_PRE_867_BATTERY_ROUND_TRIP) for document in ("config.json", "runs.config_json")]
+    assert copy_id not in report.caught_up_runs
+    loaded = _storage_of(store).load_run(copy_id)
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.summary.load_energy_kwh == {LoadKind.HOUSEHOLD: 3000.0, LoadKind.HEAT_PUMP: 2400.0}
+
+
+def test_migrate_store_reports_each_value_it_drops_that_is_not_null_naming_the_run_both_documents_and_the_field(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A null value it drops, the retired setting's here and the other dispatch variants' keys of the pre-786 run, goes unreported."""
+    run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-keys")
+    run_dir = _run_dir(store_at_version_1, run_id)
+    _edit_stored_document(run_dir / "config.json", _setting("retired_setting", None))
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    dropped = [each for each in report.dropped_values if each.run_id == run_id]
+    assert len(dropped) == 2
+    assert set(dropped) == {
+        DroppedValue(run_id, "summary.json", "retired_figure", 12.5),
+        DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+    }
+    assert "retired_figure" not in json.loads((run_dir / "summary.json").read_text())
+    assert "retired_figure" not in json.loads(runs_rows_of(store_at_version_1)[run_id]["summary_json"])
+    assert "retired_setting" not in json.loads((run_dir / "config.json").read_text())
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_and_migrates_every_other_run(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """D-S19-5: a run whose documents no step can make readable, which cannot be loaded today either, is reported by id, document and field.
+
+    Each run is reported once per document source, by the fault that keeps it from the step that
+    left it, because no later step of the migration is given it.
+    """
+    lacking = install_stored_run_fixture(
+        "pre_786_dispatch_home", Database(store_at_version_1), store_at_version_1.parent, run_id="lacking-generation"
+    )
+    _edit_stored_document(_run_dir(store_at_version_1, lacking) / "summary.json", _deleting("total_generation_kwh"))
+    _edit_runs_document(store_at_version_1, lacking, "summary_json", _deleting("total_generation_kwh"))
+    insert_runs_row(
+        store_at_version_1,
+        {"id": "garbled-config", "name": "Garbled", "type": "home", "config_json": "{not json", "status": "completed"},
+    )
+    files_before, rows_before = _files_of(_run_dir(store_at_version_1, lacking)), runs_rows_of(store_at_version_1)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert len(report.unmigrated_runs) == 3
+    assert {(each.run_id, each.document, each.field) for each in report.unmigrated_runs} == {
+        (lacking, "summary.json", "total_generation_kwh"),
+        (lacking, "runs.summary_json", "total_generation_kwh"),
+        ("garbled-config", "runs.config_json", None),
+    }
+    assert all(each.reason for each in report.unmigrated_runs)
+    assert _files_of(_run_dir(store_at_version_1, lacking)) == files_before
+    assert not (_run_dir(store_at_version_1, lacking) / "format.json").exists()
+    rows_after = runs_rows_of(store_at_version_1)
+    assert [rows_after[run_id] for run_id in (lacking, "garbled-config")] == [
+        rows_before[run_id] for run_id in (lacking, "garbled-config")
+    ]
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+def _discharging_in_economy_10_s_cheap_minutes(config: dict[str, Any]) -> None:
+    """Edit a home run's stored *config* to a battery dispatching tou_optimized over 16:00-21:00, with no grid_charging, on Economy 10, whose 20:00-21:00 is cheap."""
+    config["battery_config"]["dispatch_strategy"] = {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]}
+    config["battery_config"]["grid_charging"] = None
+    config["tariff_config"] = field_tree(TariffConfig.economy_10())
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_leaves_a_run_whose_tou_peak_hours_reach_a_cheap_minute_unmigrated_naming_the_window_and_migrates_the_rest(
+    store_at_version_3: Path, format_3_run_ids: dict[str, str]
+) -> None:
+    """Task 839's recorded decision: a run whose battery discharged in cheap minutes of its tariff no longer loads.
+
+    No configuration now accepted dispatches as it ran, so no step brings it forward. The run
+    stands for one the home page stored with its former default window, 16:00-21:00, on Economy 10.
+    """
+    left = install_stored_run_fixture(
+        "pre_786_dispatch_home", Database(store_at_version_3), store_at_version_3.parent, run_id="peak-in-cheap-minutes"
+    )
+    run_dir = _run_dir(store_at_version_3, left)
+    write_run_documents(run_dir, (), 3)
+    _edit_stored_document(run_dir / "config.json", _discharging_in_economy_10_s_cheap_minutes)
+    _edit_runs_document(store_at_version_3, left, "config_json", _discharging_in_economy_10_s_cheap_minutes)
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_3, store_at_version_3.parent)
+
+    assert user_version_of(store_at_version_3) == SCHEMA_VERSION
+    assert len(report.unmigrated_runs) == 2
+    assert {(each.run_id, each.document) for each in report.unmigrated_runs} == {
+        (left, "config.json"),
+        (left, "runs.config_json"),
+    }
+    for each in report.unmigrated_runs:
+        assert "peak_hours[0]" in each.reason and "20:00-21:00" in each.reason, each.reason
+    assert _files_of(run_dir) == files_before
+    assert json.loads((run_dir / "format.json").read_text()) == {"format_version": 3}
+    storage = _storage_of(store_at_version_3)
+    assert [storage.load_run(run_id).run_id for run_id in format_3_run_ids.values()] == list(format_3_run_ids.values())
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_leaves_a_run_saved_before_summaries_carried_a_window_whose_time_series_is_missing_unmigrated_naming_it_with_none_of_the_earlier_steps_fixes(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """v5 reads the window of a summary saved without one from its run's time series, so a run that lost its series cannot be brought forward.
+
+    The run stands for a pre-786 home run whose data.parquet is gone. Its files and its runs row
+    are each refused by the series, which the report names, and keep the other dispatch variants'
+    null keys v2 would have dropped, as the readability check runs every later step before any is
+    applied.
+    """
+    run_id = install_stored_run_fixture(
+        "pre_786_dispatch_home", Database(store_at_version_1), store_at_version_1.parent, run_id="series-lost"
+    )
+    run_dir = _run_dir(store_at_version_1, run_id)
+    (run_dir / "data.parquet").unlink()
+    files_before, row_before = _files_of(run_dir), runs_rows_of(store_at_version_1)[run_id]
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
+    left = [each for each in report.unmigrated_runs if each.run_id == run_id]
+    assert {(each.run_id, each.document, each.field) for each in left} == {(run_id, "data.parquet", None)}
+    for each in left:
+        assert "is missing" in each.reason, each.reason
+    assert _files_of(run_dir) == files_before
+    assert not (run_dir / "format.json").exists()
+    row_after = runs_rows_of(store_at_version_1)[run_id]
+    assert (row_after["config_json"], row_after["summary_json"]) == (row_before["config_json"], row_before["summary_json"])
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(each).run_id for each in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_leaves_the_files_of_a_fleet_saved_before_summaries_carried_a_window_whose_home_s_time_series_is_missing_unmigrated_and_brings_its_runs_row_forward(
+    store_at_version_1: Path,
+) -> None:
+    """A fleet run's runs row holds its config and its FleetSummary, no home summary, so v5 reads none of its series for it.
+
+    The run stands for a legacy fleet whose second home's series is gone. Its summary.json and its
+    runs.summary_json hold 12.5 as retired_figure, which v2 drops: the files keep it, while the
+    row loses it and the report names that value once, as the row's.
+    """
+    run_id = install_stored_run_fixture(
+        "legacy_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="fleet-series-lost"
+    )
+    run_dir = _run_dir(store_at_version_1, run_id)
+    _edit_stored_document(run_dir / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(store_at_version_1, run_id, "summary_json", _setting("retired_figure", 12.5))
+    (run_dir / "homes" / "home_1.parquet").unlink()
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
+    left = [each for each in report.unmigrated_runs if each.run_id == run_id]
+    assert [(each.run_id, each.document, each.field) for each in left] == [(run_id, "homes/home_1.parquet", None)]
+    assert "is missing" in left[0].reason, left[0].reason
+    assert _files_of(run_dir) == files_before
+    assert not (run_dir / "format.json").exists()
+    assert tuple(each for each in report.dropped_values if each.run_id == run_id) == (
+        DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+    )
+    assert "retired_figure" not in json.loads(runs_rows_of(store_at_version_1)[run_id]["summary_json"])
+
+
+def test_migrate_store_still_brings_forward_the_runs_row_of_a_run_whose_files_a_step_left_unmigrated(
+    store_at_version_1: Path,
+) -> None:
+    """A fleet run missing a home's summary file is left unmigrated in its files alone, so v3 still rewrites its runs row."""
+    copy = install_stored_run_fixture(
+        "pre_787_dispatch_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="missing-home-summary"
+    )
+    (_run_dir(store_at_version_1, copy) / "homes" / "home_0_summary.json").unlink()
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document) for each in report.unmigrated_runs] == [(copy, "homes/home_0_summary.json")]
+    assert tuple(each for each in report.rewritten_values if each.run_id == copy) == tuple(
+        RewrittenValue(copy, "runs.config_json", field, was, now) for field, was, now in _PRE_787_FLEET_FIELDS_V3_CHANGES
+    )
+    assert "dispatch_strategy" not in json.loads(runs_rows_of(store_at_version_1)[copy]["config_json"])["homes"][2]
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_still_brings_forward_the_files_of_a_run_whose_runs_row_a_step_left_unmigrated(
+    store_at_version_1: Path,
+) -> None:
+    """A fleet run whose runs.config_json is not JSON is left unmigrated in its runs row alone, so v3 still rewrites its files."""
+    copy = install_stored_run_fixture(
+        "pre_787_dispatch_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="garbled-row-config"
+    )
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute("UPDATE runs SET config_json = '{not json' WHERE id = ?", (copy,))
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [(copy, "runs.config_json", None)]
+    assert tuple(each for each in report.rewritten_values if each.run_id == copy) == tuple(
+        RewrittenValue(copy, "config.json", field, was, now) for field, was, now in _PRE_787_FLEET_FIELDS_V3_CHANGES
+    )
+    marker = json.loads((_run_dir(store_at_version_1, copy) / "format.json").read_text())
+    assert marker == {"format_version": RUN_FORMAT_VERSION}
+    assert _storage_of(store_at_version_1).load_run(copy).run_id == copy
+
+
+def test_migrate_store_reports_a_run_of_no_type_once_as_unmigrated_naming_its_type_and_leaves_it_as_it_was(
+    store_at_version_1: Path,
+) -> None:
+    """A run of no type is of no kind, so no step can read its documents, whether its files or its row's copies."""
+    run_id = install_stored_run_fixture(
+        "pre_786_dispatch_home", Database(store_at_version_1), store_at_version_1.parent, run_id="untyped"
+    )
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute("UPDATE runs SET type = NULL WHERE id = ?", (run_id,))
+    files_before, row_before = _files_of(_run_dir(store_at_version_1, run_id)), runs_rows_of(store_at_version_1)[run_id]
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [(run_id, "runs.type", None)]
+    assert _files_of(_run_dir(store_at_version_1, run_id)) == files_before
+    assert runs_rows_of(store_at_version_1)[run_id] == row_before
+
+
+def _put_a_directory_in_place_of(path: Path) -> None:
+    """Put a directory where the file at *path* is, or is to be written: no user can read or write it as a file, whereas a file's permissions do not bind a root user."""
+    path.unlink(missing_ok=True)
+    path.mkdir()
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_reports_a_run_whose_document_cannot_be_read_as_unmigrated_and_migrates_every_other_run(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A directory in the place of a run's summary.json stands in for a document that cannot be read, e.g. for its permissions."""
+    unreadable = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="unreadable-summary"
+    )
+    run_dir = _run_dir(store_at_version_1, unreadable)
+    _put_a_directory_in_place_of(run_dir / "summary.json")
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [
+        (unreadable, "summary.json", None)
+    ]
+    assert "is unreadable" in report.unmigrated_runs[0].reason
+    assert _files_of(run_dir) == files_before
+    assert not (run_dir / "format.json").exists()
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+_FORMAT_MARKERS_THAT_NAME_NO_FORMAT = [
+    pytest.param("not json", None, id="not-json"),
+    pytest.param(json.dumps({"format_version": "x"}), "format_version", id="format-version-not-a-number"),
+]
+"""The text of a format.json that names no format, and the field of it the refusal names, None for the document as a whole."""
+
+
+@pytest.mark.parametrize(("marker", "field"), _FORMAT_MARKERS_THAT_NAME_NO_FORMAT)
+def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it_and_leaves_its_files_and_runs_row_as_they_were(
+    store_at_version_1: Path, marker: str, field: str | None
+) -> None:
+    """A run's files are in the format their format.json names, so one that cannot be read leaves no format to bring them forward from.
+
+    No later step of the migration, nor its catch-up, is given the files, so they are reported
+    once. legacy_fleet's runs row, its config and its FleetSummary, is brought forward on its own:
+    v6 drops its FleetSummary's null SEG revenue pair, v7 its first home's battery's null
+    efficiency, v8 each home's dispatch_strategy, its first home's battery naming no strategy
+    taking self_consumption, and no step changes the rest of it.
+    """
+    run_id = install_stored_run_fixture(
+        "legacy_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="unreadable-marker"
+    )
+    run_dir = _run_dir(store_at_version_1, run_id)
+    (run_dir / "format.json").write_text(marker)
+    files_before, row_before = _files_of(run_dir), runs_rows_of(store_at_version_1)[run_id]
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [
+        (run_id, "format.json", field)
+    ]
+    assert _files_of(run_dir) == files_before
+    row_after = runs_rows_of(store_at_version_1)[run_id]
+    assert {**row_after, "config_json": None, "summary_json": None} == {
+        **row_before,
+        "config_json": None,
+        "summary_json": None,
+    }
+    config_brought_forward = json.loads(row_before["config_json"])
+    del config_brought_forward["homes"][0]["battery_config"]["efficiency"]
+    config_brought_forward["homes"][0]["battery_config"]["dispatch_strategy"] = {"strategy_type": "self_consumption"}
+    for home in config_brought_forward["homes"]:
+        del home["dispatch_strategy"]
+    assert json.loads(row_after["config_json"]) == config_brought_forward
+    assert json.loads(row_after["summary_json"]) == {
+        key: value
+        for key, value in json.loads(row_before["summary_json"]).items()
+        if key not in PRE_975_FLEET_SEG_REVENUE_KEYS
+    }
+
+
+def test_migrate_store_leaves_the_files_of_a_run_whose_format_json_names_a_later_format_as_they_are_and_reports_nothing_of_them(
+    store_at_version_1: Path,
+) -> None:
+    """A run a newer solar-challenge saved is in a format past every step's, so no step brings its files forward or reports them; its load refuses it, naming the newer solar-challenge."""
+    run_id = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="saved-by-a-newer-solar-challenge"
+    )
+    run_dir = _run_dir(store_at_version_1, run_id)
+    write_run_documents(run_dir, (), RUN_FORMAT_VERSION + 1)
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (report.unmigrated_runs, report.caught_up_runs) == ((), ())
+    assert _files_of(run_dir) == files_before
+    with pytest.raises(StoredRunUnreadable) as refused:
+        _storage_of(store_at_version_1).load_run(run_id)
+    assert (refused.value.document, refused.value.field) == ("format.json", "format_version")
+    assert "a newer solar-challenge saved it" in refused.value.reason
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_again_once_it_can_migrates_the_store(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A directory in the place of the legacy fleet run's format.json stands in for a file a step cannot write, e.g. on a full disk.
+
+    The step stops there, leaving the database at version 1 and no temporary file in the run's
+    directory; the runs it brought forward before the fault keep their format.json naming 2, so
+    the migration run again brings them on by the steps after v2 alone.
+    """
+    fleet_dir = _run_dir(store_at_version_1, legacy_run_ids["legacy_fleet"])
+    _put_a_directory_in_place_of(fleet_dir / "format.json")
+    fleet_files_before, rows_before = _files_of(fleet_dir), runs_rows_of(store_at_version_1)
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (refused.value.path, refused.value.step) == (store_at_version_1, MIGRATIONS[1])
+    assert isinstance(refused.value.__cause__, OSError)
+    message = str(refused.value)
+    for named in [str(store_at_version_1), "schema version 2", "stays at version 1", str(fleet_dir / "format.json")]:
+        assert named in message, (named, message)
+    assert refused.value.migrated == MigrationReport(store_at_version_1, 1, 1, ())
+    assert user_version_of(store_at_version_1) == 1
+    assert runs_rows_of(store_at_version_1) == rows_before
+    assert _files_of(fleet_dir) == fleet_files_before
+
+    (fleet_dir / "format.json").rmdir()
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_1,
+        from_version=1,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[1:],
+        dropped_values=_values_the_steps_drop(legacy_run_ids),
+        rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
+    )
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+def test_migrate_store_refused_by_a_run_s_file_it_cannot_write_carries_the_runs_it_brought_forward_before_and_the_values_it_dropped_from_them(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A directory in the place of the format.json of a copy of pre_469_home stands in for a file a step cannot write, e.g. on a full disk.
+
+    Runs are brought forward in order of id, and 'unwritable' sorts after every other run, so v2
+    brings each other run's files forward before the fault, and they stay so; among them is a
+    copy of pre_469_home holding a figure no field has, which v2 drops. The refusal carries
+    those runs and that value. Run again once the fault is gone, the migration leaves those
+    files as they are, so it reports only the value v2 drops from that copy's runs row.
+    """
+    retired = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-figure")
+    unwritable = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="unwritable"
+    )
+    unwritable_marker = _run_dir(store_at_version_1, unwritable) / "format.json"
+    _put_a_directory_in_place_of(unwritable_marker)
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, OSError)
+    assert user_version_of(store_at_version_1) == 1
+    brought_forward = tuple(sorted([*legacy_run_ids.values(), retired]))
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=brought_forward, dropped_values=(DroppedValue(retired, "summary.json", "retired_figure", 12.5),)
+    )
+    markers = [json.loads((_run_dir(store_at_version_1, run_id) / "format.json").read_text()) for run_id in brought_forward]
+    assert markers == [{"format_version": 2}] * len(brought_forward)
+    assert unwritable_marker.is_dir()
+
+    unwritable_marker.rmdir()
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=1,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[1:],
+        dropped_values=(
+            DroppedValue(retired, "runs.summary_json", "retired_figure", 12.5),
+            *_values_the_steps_drop(legacy_run_ids),
+        ),
+        rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
+    )
+
+
+def test_migrate_store_refused_by_a_run_s_format_json_it_cannot_write_carries_the_documents_of_that_run_it_wrote_and_the_values_it_dropped_from_them(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A directory in the place of the format.json of a copy of pre_469_home holding a figure no field has stands in for a file a step cannot write, e.g. on a full disk.
+
+    v2 drops the figure from that run's summary.json, the one document of it the step changes,
+    and writes it before the fault, so it stays so while the run's format.json names no format.
+    The refusal carries that run, with summary.json and the value dropped from it, beside the
+    runs brought forward before it. Run again once the fault is gone, the migration brings the
+    run forward from the first format again, but v2 drops nothing from the summary.json it
+    already brought forward, so it reports only the value it drops from the run's runs row.
+    """
+    unwritable = _install_a_copy_holding_a_retired_figure(store_at_version_1, "unwritable")
+    run_dir = _run_dir(store_at_version_1, unwritable)
+    _put_a_directory_in_place_of(run_dir / "format.json")
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, OSError)
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=tuple(sorted(legacy_run_ids.values())),
+        dropped_values=(DroppedValue(unwritable, "summary.json", "retired_figure", 12.5),),
+        partly_brought_forward_runs=(PartlyBroughtForwardRun(unwritable, ("summary.json",)),),
+    )
+    assert "retired_figure" not in json.loads((run_dir / "summary.json").read_text())
+    assert (run_dir / "format.json").is_dir()
+
+    (run_dir / "format.json").rmdir()
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=1,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[1:],
+        dropped_values=(
+            DroppedValue(unwritable, "runs.summary_json", "retired_figure", 12.5),
+            *_values_the_steps_drop(legacy_run_ids),
+        ),
+        rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
+    )
+
+
+def _os_replace_failing_onto_a_file_named(name: str) -> Callable[[str | os.PathLike[str], str | os.PathLike[str]], None]:
+    """os.replace, but failing as on a full disk to move a file onto one named *name*."""
+    replace = os.replace
+
+    def replace_unless_onto_name(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        if Path(destination).name == name:
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), os.fspath(destination))
+        replace(source, destination)
+
+    return replace_unless_onto_name
+
+
+def test_migrate_store_refused_by_a_run_s_summary_json_it_cannot_write_carries_only_the_values_dropped_from_the_config_json_it_wrote_before_it(
+    store_at_version_1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """os.replace failing to move a run's new summary.json into place, as on a full disk, stops v2 once it has written that run's config.json.
+
+    v2 drops a figure no field has from the copy of pre_469_home's summary.json, and a setting no
+    field has from its config.json. The refusal carries the run with config.json and the setting
+    dropped from it, but not the figure: summary.json was not written, so the migration run again
+    reads it in the first format, drops the figure and reports it. No stand-in on disk fails a
+    document's write while the document still reads, so the move itself fails here.
+    """
+    run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "unwritable-summary")
+    run_dir = _run_dir(store_at_version_1, run_id)
+    _edit_stored_document(run_dir / "config.json", _setting("retired_setting", 0.5))
+
+    with monkeypatch.context() as patched, pytest.raises(MigrationRefused) as refused:
+        patched.setattr(os, "replace", _os_replace_failing_onto_a_file_named("summary.json"))
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, OSError)
+    assert str(run_dir / "summary.json") in str(refused.value), str(refused.value)
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        dropped_values=(DroppedValue(run_id, "config.json", "retired_setting", 0.5),),
+        partly_brought_forward_runs=(PartlyBroughtForwardRun(run_id, ("config.json",)),),
+    )
+    assert "retired_setting" not in json.loads((run_dir / "config.json").read_text())
+    assert json.loads((run_dir / "summary.json").read_text())["retired_figure"] == 12.5
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=1,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[1:],
+        dropped_values=(
+            DroppedValue(run_id, "summary.json", "retired_figure", 12.5),
+            DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+        ),
+    )
+
+
+def test_migrate_store_refuses_a_step_whose_run_file_part_cannot_read_the_runs_table_and_carries_no_run_files(
+    store_at_version_1: Path,
+) -> None:
+    """A store at version 1 with no runs table stands in for one whose runs table cannot be read as v2's run-file part starts: it has written nothing, so the refusal names no run."""
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute("DROP TABLE runs")
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, sqlite3.OperationalError)
+    assert refused.value.migrated == MigrationReport(store_at_version_1, 1, 1, ())
+    assert refused.value.files_brought_forward == RunFilesBroughtForward()
+    assert user_version_of(store_at_version_1) == 1
+
+
+@_NEEDS_PYARROW
+def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_forward_migrates_the_store_when_run_again(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A trigger refusing each update of a runs row fails version 2's transaction, once its run-file part has given every run its format.json.
+
+    The refusal names each run whose files stay brought forward; v2 drops only null keys from
+    them, so it names no value. Run again once the trigger is dropped, the migration leaves
+    those files as they are until v3, as they are in format 2 already, then brings them forward
+    by each step from v3 to v10, and brings the runs rows forward.
+    """
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute(
+            "CREATE TRIGGER refuse_run_updates BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'no run may be updated'); END"
+        )
+    rows_before = runs_rows_of(store_at_version_1)
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert "no run may be updated" in str(refused.value)
+    assert user_version_of(store_at_version_1) == 1
+    assert runs_rows_of(store_at_version_1) == rows_before
+    files_after_refusal = {run_id: _files_of(_run_dir(store_at_version_1, run_id)) for run_id in legacy_run_ids.values()}
+    markers = [json.loads(files["format.json"]) for files in files_after_refusal.values()]
+    assert markers == [{"format_version": 2}] * len(legacy_run_ids)
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(runs=tuple(sorted(legacy_run_ids.values())))
+
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute("DROP TRIGGER refuse_run_updates")
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_1,
+        from_version=1,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[1:],
+        dropped_values=_values_the_steps_drop(legacy_run_ids),
+        rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
+    )
+    config_rewritten = {legacy_run_ids[name] for version, name in _CONFIG_EACH_RUN_DOCUMENT_STEP_REWRITES if version > 2}
+    for name, run_id in legacy_run_ids.items():
+        before, after = files_after_refusal[run_id], _files_of(_run_dir(store_at_version_1, run_id))
+        summary_files, _ = _summaries_rewritten(name, 1)
+        assert {path for path in before if after[path] != before[path]} == {
+            "format.json",
+            *(("config.json",) if run_id in config_rewritten else ()),
+            *summary_files,
+        }, name
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+    record = storage.run_record(legacy_run_ids["pre_786_dispatch_home"])
+    assert record is not None
+    [config] = record.home_configs() or ()
+    assert config.battery_config is not None
+    assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
+
+
+def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v2_and_run_again_goes_on_from_version_2(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """Version 3's step is refused once version 2's has committed, so the value v2 dropped from the copy of pre_469_home is in the report the refusal carries, and only there.
+
+    v3 brought every run's files forward before its transaction failed, so the refusal also
+    carries those runs and v3's rewrites of the pre-787 fleet's config.json, in
+    files_brought_forward. Run again, the migration goes on from version 2, leaves those files as
+    they are, and so reports v3's rewrites of that fleet's runs row alone, then v4's of the pre-839
+    fleet's config.json and runs row, and v6's drops of the pre-975 fleet's SEG revenue pair from
+    its summary.json and runs row, then v9's of its home summaries' seg_revenue_gbp.
+    """
+    run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-figure")
+
+    with (
+        the_step_to_version_3_refused(store_at_version_1, legacy_run_ids["pre_787_dispatch_fleet"]),
+        pytest.raises(MigrationRefused) as refused,
+    ):
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (refused.value.path, refused.value.step) == (store_at_version_1, MIGRATIONS[2])
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert "stays at version 2" in str(refused.value)
+    assert user_version_of(store_at_version_1) == 2
+    assert refused.value.migrated == MigrationReport(
+        path=store_at_version_1,
+        from_version=1,
+        to_version=2,
+        applied_steps=(MIGRATIONS[1],),
+        dropped_values=(
+            DroppedValue(run_id, "summary.json", "retired_figure", 12.5),
+            DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+        ),
+    )
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=tuple(sorted([*legacy_run_ids.values(), run_id])),
+        rewritten_values=tuple(
+            each
+            for each in _values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"])
+            if each.document == "config.json"
+        ),
+    )
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_1,
+        from_version=2,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[2:],
+        dropped_values=_values_the_steps_drop(legacy_run_ids),
+        rewritten_values=(
+            *(
+                each
+                for each in _values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"])
+                if each.document == "runs.config_json"
+            ),
+            *_values_v4_and_v8_change_in_the_pre_839_fleet(legacy_run_ids["pre_839_flat_grid_charging_fleet"]),
+        ),
+    )
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_writes_nothing_to_a_store_at_the_schema_version_nor_to_its_runs_files(tmp_path: Path) -> None:
+    """Every run of a store at SCHEMA_VERSION is in the current format, so no run-document step is pending."""
+    storage = empty_run_storage(tmp_path)
+    store_home_run(storage, "home-1", make_home_config(), make_sim_results(days=1))
+    files_before, bytes_before = _files_of(stored_run_dir(storage, "home-1")), storage.database.path.read_bytes()
+
+    report = migrate_store(storage.database.path, storage.data_dir)
+
+    assert report.applied_steps == ()
+    assert storage.database.path.read_bytes() == bytes_before
+    assert _files_of(stored_run_dir(storage, "home-1")) == files_before
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_again_once_it_can_brings_the_run_forward(
+    tmp_path: Path,
+) -> None:
+    """A directory in the place of the format.json of a run in format 1, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write, e.g. on a full disk.
+
+    The catch-up writes the run's config.json, whose battery v7 rids of its efficiency, and its
+    summary.json, which v5 gives a window, before the fault, and they stay so; the refusal names
+    them, and the rest of the run's files are as they were.
+    """
+    store = open_database(tmp_path / "store" / "solar-challenge.db").path
+    run_id = install_stored_run_fixture("pre_469_home", Database(store), store.parent)
+    marker = _run_dir(store, run_id) / "format.json"
+    _put_a_directory_in_place_of(marker)
+    files_before = _files_of(_run_dir(store, run_id))
+
+    with pytest.raises(LaggingRunsRefused) as refused:
+        migrate_store(store, store.parent)
+
+    assert isinstance(refused.value.__cause__, OSError)
+    message = str(refused.value)
+    for named in [str(store), f"schema version {SCHEMA_VERSION}, as it was", str(RUN_FORMAT_VERSION), str(marker)]:
+        assert named in message, (named, message)
+    assert refused.value.path == store
+    assert refused.value.migrated == MigrationReport(store, SCHEMA_VERSION, SCHEMA_VERSION, ())
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        partly_brought_forward_runs=(PartlyBroughtForwardRun(run_id, ("config.json", "summary.json")),)
+    )
+    assert user_version_of(store) == SCHEMA_VERSION
+    files_after = _files_of(_run_dir(store, run_id))
+    assert {path for path in files_before if files_after[path] != files_before[path]} == {"config.json", "summary.json"}
+
+    marker.rmdir()
+    report = migrate_store(store, store.parent)
+
+    assert report.caught_up_runs == (run_id,)
+    assert _storage_of(store).load_run(run_id).run_id == run_id
+
+
+def test_migrate_store_refused_by_a_lagging_run_s_file_it_cannot_write_carries_the_lagging_runs_it_brought_forward_before_and_the_values_it_dropped_from_them(
+    tmp_path: Path,
+) -> None:
+    """A directory in the place of the format.json of a lagging copy of pre_469_home, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write, e.g. on a full disk.
+
+    Runs are brought forward in order of id, and 'retired-figure' sorts before 'unwritable', so
+    the catch-up brings that lagging copy of pre_469_home forward before the fault, dropping a
+    figure no field has from its summary.json, and its files stay so. It has also written the
+    config.json of 'unwritable', whose battery v7 rids of its efficiency, and its summary.json,
+    which v5 gives a window. The refusal carries that run and that value, and those documents of
+    'unwritable'. Run again once the fault is gone, the migration
+    leaves those files as they are, so it reports only the value it drops from that run's runs row.
+    """
+    store = open_database(tmp_path / "store" / "solar-challenge.db").path
+    retired = _install_a_copy_holding_a_retired_figure(store, "retired-figure")
+    unwritable = install_stored_run_fixture("pre_469_home", Database(store), store.parent, run_id="unwritable")
+    unwritable_marker = _run_dir(store, unwritable) / "format.json"
+    _put_a_directory_in_place_of(unwritable_marker)
+
+    with pytest.raises(LaggingRunsRefused) as refused:
+        migrate_store(store, store.parent)
+
+    assert isinstance(refused.value.__cause__, OSError)
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=(retired,),
+        dropped_values=(DroppedValue(retired, "summary.json", "retired_figure", 12.5),),
+        partly_brought_forward_runs=(PartlyBroughtForwardRun(unwritable, ("config.json", "summary.json")),),
+    )
+    assert json.loads((_run_dir(store, retired) / "format.json").read_text()) == {"format_version": RUN_FORMAT_VERSION}
+
+    unwritable_marker.rmdir()
+    report = migrate_store(store, store.parent)
+
+    assert report == MigrationReport(
+        store,
+        SCHEMA_VERSION,
+        SCHEMA_VERSION,
+        (),
+        dropped_values=(DroppedValue(retired, "runs.summary_json", "retired_figure", 12.5),),
+        caught_up_runs=(retired, unwritable),
+    )
+
+
+def test_migrate_store_refused_by_a_lagging_run_s_format_json_it_cannot_write_carries_the_documents_of_that_run_it_wrote_and_the_values_it_dropped_from_them(
+    tmp_path: Path,
+) -> None:
+    """A directory in the place of the format.json of a lagging copy of pre_469_home holding a figure no field has, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write, e.g. on a full disk.
+
+    The catch-up writes that run's config.json, whose battery v7 rids of its efficiency, and its
+    summary.json, the figure dropped, before the fault, so the refusal carries the run, with
+    those documents and the value dropped from its summary.json. Run again once the
+    fault is gone, the migration catches the run up and reports only the value it drops from the
+    run's runs row.
+    """
+    store = open_database(tmp_path / "store" / "solar-challenge.db").path
+    unwritable = _install_a_copy_holding_a_retired_figure(store, "unwritable")
+    marker = _run_dir(store, unwritable) / "format.json"
+    _put_a_directory_in_place_of(marker)
+
+    with pytest.raises(LaggingRunsRefused) as refused:
+        migrate_store(store, store.parent)
+
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        dropped_values=(DroppedValue(unwritable, "summary.json", "retired_figure", 12.5),),
+        partly_brought_forward_runs=(PartlyBroughtForwardRun(unwritable, ("config.json", "summary.json")),),
+    )
+
+    marker.rmdir()
+    report = migrate_store(store, store.parent)
+
+    assert report.caught_up_runs == (unwritable,)
+    assert report.dropped_values == (DroppedValue(unwritable, "runs.summary_json", "retired_figure", 12.5),)
+
+
+def test_migrate_store_refused_at_the_catch_up_s_transaction_carries_the_lagging_runs_whose_files_it_brought_forward_and_their_values(
+    tmp_path: Path,
+) -> None:
+    """A trigger refusing each update of a runs row fails the catch-up's transaction, once its run-file part has brought a lagging run's files forward, dropping a figure no field has.
+
+    The catch-up reads that run's runs row from RUN_FORMAT_VERSION, which refuses the figure,
+    then from the first format, from which v2 drops it, so the row is to be updated, which the
+    trigger refuses. The run's files stay brought forward, so the refusal carries the run and
+    the value dropped from its summary.json. Run again once the trigger is dropped, the
+    migration leaves those files as they are and reports only the value it drops from the row.
+    """
+    store = open_database(tmp_path / "store" / "solar-challenge.db").path
+    retired = _install_a_copy_holding_a_retired_figure(store, "retired-figure")
+    with Database(store).transaction() as conn:
+        conn.execute(
+            "CREATE TRIGGER refuse_run_updates BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'no run may be updated'); END"
+        )
+
+    with pytest.raises(LaggingRunsRefused) as refused:
+        migrate_store(store, store.parent)
+
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert refused.value.migrated == MigrationReport(store, SCHEMA_VERSION, SCHEMA_VERSION, ())
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=(retired,), dropped_values=(DroppedValue(retired, "summary.json", "retired_figure", 12.5),)
+    )
+
+    with Database(store).transaction() as conn:
+        conn.execute("DROP TRIGGER refuse_run_updates")
+    report = migrate_store(store, store.parent)
+
+    assert report.caught_up_runs == (retired,)
+    assert report.dropped_values == (DroppedValue(retired, "runs.summary_json", "retired_figure", 12.5),)
+
+
+def test_a_lagging_runs_refused_is_not_a_value_error() -> None:
+    """No request causes it: the migration that meets the fault refuses to go on."""
+    assert not issubclass(LaggingRunsRefused, ValueError)
+
+
+def test_a_lagging_runs_refused_after_its_migration_s_steps_names_the_version_they_brought_the_store_from(
+    tmp_path: Path,
+) -> None:
+    """The catch-up runs after the steps its migration applied, which stay applied, so a store it refuses then was not at SCHEMA_VERSION before.
+
+    No store makes the catch-up fail right after steps, as once they have run it has nothing left
+    to write, so the refusal is built here from the report such a migration carries.
+    """
+    path = tmp_path / "store.db"
+    fault = sqlite3.OperationalError("disk I/O error")
+    migrated = MigrationReport(path, 1, SCHEMA_VERSION, MIGRATIONS[1:])
+
+    refused = LaggingRunsRefused(migrated, fault)
+
+    message = str(refused)
+    for named in [str(path), f"schema version {SCHEMA_VERSION}", "brought it from version 1", str(fault)]:
+        assert named in message, (named, message)
+    assert "as it was" not in message
+    assert refused.migrated is migrated
+    assert refused.path == path
+
+
+def test_a_lagging_runs_refused_refuses_the_report_of_a_migration_that_left_the_store_below_the_schema_version(
+    tmp_path: Path,
+) -> None:
+    """The catch-up runs once the store is at SCHEMA_VERSION, the version the refusal says it stays at."""
+    left_at_version_2 = MigrationReport(tmp_path / "store.db", 1, 2, (MIGRATIONS[1],))
+
+    with pytest.raises(ValueError) as refused:
+        LaggingRunsRefused(left_at_version_2, sqlite3.OperationalError("disk I/O error"))
+
+    for named in [f"store at schema version {SCHEMA_VERSION}", "left the store at version 2"]:
+        assert named in str(refused.value), (named, str(refused.value))
+
+
+def test_a_migration_report_lists_each_value_dropped_each_value_rewritten_and_each_run_left_unmigrated_after_the_steps(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "store.db"
+    dropped = DroppedValue("run-1", "summary.json", "retired_figure", 12.5)
+    rewritten = RewrittenValue("run-3", "config.json", "homes[2].dispatch_strategy", "tou_optimized", "greedy")
+    unmigrated = UnmigratedRun(
+        "run-2", "runs.summary_json", "total_generation_kwh", "is missing, and SummaryStatistics has no default for it"
+    )
+    report = MigrationReport(
+        path,
+        from_version=1,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[1:],
+        dropped_values=(dropped,),
+        unmigrated_runs=(unmigrated,),
+        rewritten_values=(rewritten,),
+    )
+
+    lines = str(report).splitlines()
+
+    steps = [f"  {step.version}. {step.description}" for step in MIGRATIONS[1:]]
+    assert lines[: 1 + len(steps)] == [
+        f"Migrated the dashboard database {path} from schema version 1 to {SCHEMA_VERSION}:",
+        *steps,
+    ]
+    [dropped_line] = [line for line in lines if "run-1" in line]
+    [unmigrated_line] = [line for line in lines if "run-2" in line]
+    [rewritten_line] = [line for line in lines if "run-3" in line]
+    for named in ["summary.json", "retired_figure", "12.5"]:
+        assert named in dropped_line, (named, dropped_line)
+    assert rewritten_line == '  run \'run-3\': config.json\'s homes[2].dispatch_strategy was "tou_optimized", now "greedy"'
+    assert lines[lines.index(rewritten_line) - 1].startswith("Rewrote each value below"), lines
+    for named in ["runs.summary_json", "total_generation_kwh", unmigrated.reason]:
+        assert named in unmigrated_line, (named, unmigrated_line)
+    assert len(steps) < lines.index(dropped_line) < lines.index(rewritten_line) < lines.index(unmigrated_line)
+
+
+def test_a_migration_report_of_no_step_lists_each_run_brought_forward_and_each_run_left(tmp_path: Path) -> None:
+    """A store at SCHEMA_VERSION has no step to apply, but a migration of it still brings forward, or leaves, the runs an earlier migration left."""
+    path = tmp_path / "store.db"
+    unmigrated = UnmigratedRun(
+        "run-2", "summary.json", "total_generation_kwh", "is missing, and SummaryStatistics has no default for it"
+    )
+    report = MigrationReport(
+        path, SCHEMA_VERSION, SCHEMA_VERSION, (), caught_up_runs=("run-4",), unmigrated_runs=(unmigrated,)
+    )
+    leaving_only = MigrationReport(path, SCHEMA_VERSION, SCHEMA_VERSION, (), unmigrated_runs=(unmigrated,))
+
+    lines = str(report).splitlines()
+
+    assert str(path) in lines[0]
+    assert f"schema version {SCHEMA_VERSION}" in lines[0]
+    assert "nothing to migrate" not in str(report)
+    assert lines[lines.index("  run 'run-4'") - 1].startswith("Brought forward"), lines
+    [unmigrated_line] = [line for line in lines if "run-2" in line]
+    assert lines[lines.index(unmigrated_line) - 1].startswith("Left each run below"), lines
+    assert "nothing to migrate" not in str(leaving_only)
+    assert f"  {unmigrated}" in str(leaving_only).splitlines()

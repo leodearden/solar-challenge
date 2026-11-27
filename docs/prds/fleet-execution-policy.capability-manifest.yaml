@@ -76,11 +76,11 @@ tasks:
           paths: ["src/solar_challenge/fleet.py"]
           expect: present
       - name: "cli-prints-notes"
-        binding: "grep:cli/utils.py::_print_error_verbatim prints str(error) only today; α prints each note"
+        binding: "grep:cli/utils.py::_print_error_verbatim prints error_text_with_notes(error), the error's text then each note (notes since α, the shared reader since task 1449)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "__notes__"
+          pattern: "error_text_with_notes\\("
           paths: ["src/solar_challenge/cli/utils.py"]
           expect: present
       - name: "fleet-tests-drive-the-runner"
@@ -312,7 +312,7 @@ tasks:
           kind: manual
           reason: "B16 and B17 pin the count and the refusals"
   - label: "ζ"
-    task_id: null
+    task_id: 892
     title: "Retire the solve's implicit simulator and export the runner (held for S29)"
     note: "Held leaf: x_seam_wait {stream: S29, contract: the surface bump release window}; depends on γ; excluded from this batch's commit_planning. Conditional on lead Q2."
     capabilities:
@@ -325,10 +325,10 @@ tasks:
           paths: ["src/solar_challenge/__init__.py"]
           expect: present
       - name: "solve-default-retired"
-        binding: "grep:tests/unit/test_public_api_surface.py::FROZEN_SURFACE pins solve_cost_recovery_rate's simulate as Optional[...] = None"
+        binding: "grep:tests/unit/test_public_api_surface.py::FROZEN_SURFACE pins solve_cost_recovery_rate's simulate as Callable[...] | None = None (its spelling since task 924)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "\"solve_cost_recovery_rate\": .*simulate: Optional"
+          pattern: "\"solve_cost_recovery_rate\": .*simulate: Callable.*None = None"
           paths: ["tests"]
           expect: absent

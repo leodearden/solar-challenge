@@ -4,90 +4,49 @@
 
 All tests are offline (the fleet simulator is injected through Click's context
 object) and run without @pytest.mark.slow so they execute in the offline verify
-loop.  This file must NOT be added to tests/unit/test_marker_registration.py's
-INTEGRATION_FILES allow-list.
+loop.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import NoReturn
 
-import pandas as pd
 import pytest
 import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
-from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig
-from tests._cli_fleet_simulator import invoke_finance_run
+from solar_challenge.fleet import FleetConfig, FleetResults
+from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
+from tests._finance_builders import make_fleet_results
+from tests._markdown_tables import row_cells
+from tests.integration._helpers import SCENARIO
 
 
 # ---------------------------------------------------------------------------
-# §A — Helper factories (adapted from test_cost_recovery_cli.py)
+# §A — The patched CLI tests' scenario writer
 # ---------------------------------------------------------------------------
-
-
-def _make_home_config() -> HomeConfig:
-    """Build a minimal HomeConfig for fixture use."""
-    return HomeConfig(
-        pv_config=PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0),
-        load_config=LoadConfig(annual_consumption_kwh=3500.0),
-        location=Location.bristol(),
-    )
-
-
-def _make_sim_results(
-    self_kwh: float = 2000.0,
-    export_kwh: float = 800.0,
-    import_kwh: float = 1200.0,
-    n_minutes: int = 525600,
-) -> SimulationResults:
-    """Build a minimal SimulationResults series."""
-    idx = pd.date_range("2024-01-01", periods=n_minutes, freq="1min", tz="Europe/London")
-    sc_kw = self_kwh / (n_minutes / 60.0)
-    exp_kw = export_kwh / (n_minutes / 60.0)
-    imp_kw = import_kwh / (n_minutes / 60.0)
-    gen_kw = sc_kw + exp_kw
-    demand_kw = sc_kw + imp_kw
-    zeros = pd.Series(0.0, index=idx)
-    return SimulationResults(
-        generation=pd.Series(gen_kw, index=idx),
-        demand=pd.Series(demand_kw, index=idx),
-        self_consumption=pd.Series(sc_kw, index=idx),
-        battery_charge=zeros.copy(),
-        battery_discharge=zeros.copy(),
-        battery_soc=zeros.copy(),
-        grid_import=pd.Series(imp_kw, index=idx),
-        grid_export=pd.Series(exp_kw, index=idx),
-        import_cost=zeros.copy(),
-        export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
-        grid_charge_cost=None,
-    )
-
-
-def _make_fleet_results(n_homes: int = 5) -> FleetResults:
-    """Build a minimal FleetResults for offline testing."""
-    homes = [_make_home_config() for _ in range(n_homes)]
-    per_home = [_make_sim_results() for _ in range(n_homes)]
-    return FleetResults(per_home_results=per_home, home_configs=homes)
 
 
 def _write_scenario(
     tmp_path: Path,
     *,
     name: str = "Flex CLI Test",
-    flex_band: str | None = None,
+    flex_band: object = None,
+    events_block: dict[str, object] | None = None,
     n_homes: int = 5,
 ) -> Path:
     """Write a minimal fleet scenario YAML to tmp_path.
 
     When flex_band is not None, the top-level ``flex_band`` key is written so
-    the CLI can pick it up as the scenario-level default.
+    the CLI can pick it up as the scenario-level default.  When
+    events_block is not None, the finance block prices grid services at events
+    (a grid_services_model block of ``type: capacity_at_events``) with its keys.
     """
+    finance: dict[str, object] = {"standing_charge_pence_per_day": 28.0}
+    if events_block is not None:
+        finance["grid_services_model"] = {"type": "capacity_at_events", **events_block}
     scenario: dict = {  # type: ignore[type-arg]
         "name": name,
         "location": {
@@ -102,9 +61,7 @@ def _write_scenario(
             "battery": {"capacity_kwh": 5.0},
             "load": {"annual_consumption_kwh": 3500},
         },
-        "finance": {
-            "standing_charge_pence_per_day": 28.0,
-        },
+        "finance": finance,
     }
     if flex_band is not None:
         scenario["flex_band"] = flex_band
@@ -122,8 +79,8 @@ def _write_scenario(
 
 @pytest.fixture(scope="module")
 def flex_fleet_results() -> FleetResults:
-    """Module-scoped: build FleetResults once per module."""
-    return _make_fleet_results()
+    """Five default homes, each self-consuming 2,000 kWh, exporting 800 and importing 1,200 a year."""
+    return make_fleet_results(n_homes=5, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
 
 
 # ---------------------------------------------------------------------------
@@ -226,12 +183,59 @@ class TestFinanceFlexCLIBehaviour:
             f"'Flexibility Value' should NOT appear when no band is set:\n{result.output}"
         )
 
+    def test_with_no_grid_services_pricing_the_grid_services_row_is_the_consulting_band_not_booked(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        """B11: a scenario that prices no grid services renders the central band's grid-services figure, labelled not booked, and no Grid Services Income section."""
+        scenario_file = _write_scenario(tmp_path / "not-booked")
+
+        result = invoke_finance_run(["--flex-band", "central", str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 0, result.output
+        lines = result.output.splitlines()
+        assert (
+            "| Grid services (consulting planning band, not booked: the scenario prices no grid services) "
+            "| £30 | £12.0/kW |"
+        ) in lines, result.output
+        assert "| **Headline total** | **£280** | — |" in lines, result.output
+        assert "## Grid Services Income" not in result.output
+        assert "PRD §6" not in result.output
+        assert "docs/flexibility-buildability.md" in result.output
+
+    def test_under_flat_pricing_the_booked_row_divides_the_income_by_the_battery_homes_alone(
+        self, tmp_path: Path
+    ) -> None:
+        """B11 on three 2.5 kW battery homes and two PV-only homes priced flat at £4.0/kW-yr: £30 a year, £10 per battery home, not £6 per home."""
+        load = {"annual_consumption_kwh": 3500}
+        battery_home = {"pv": {"capacity_kw": 4.0}, "battery": {"capacity_kwh": 5.0, "max_discharge_kw": 2.5}, "load": load}
+        pv_only_home = {"pv": {"capacity_kw": 4.0}, "load": load}
+        finance = {
+            "standing_charge_pence_per_day": 28.0,
+            "grid_services_model": {"type": "flat", "income_per_kw_per_year_gbp": 4.0},
+        }
+        path = tmp_path / "mixed_fleet.yaml"
+        path.write_text(
+            yaml.safe_dump({"name": "Mixed fleet", "homes": [battery_home] * 3 + [pv_only_home] * 2, "finance": finance})
+        )
+
+        def simulate(fleet_config: FleetConfig, _start: object, _end: object) -> FleetResults:
+            return make_fleet_results(homes=fleet_config.homes, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+
+        result = invoke_cli(["finance", "run", str(path), "--flex-band", "central"], answering(simulate))
+
+        assert result.exit_code == 0, result.output
+        assert row_cells(
+            result.output, "### This window's fleet, the same under every assumption", "Annual fleet income"
+        ) == ["£30"]
+        assert "| Grid services (booked) | £10 | £4.0/kW |" in result.output.splitlines(), result.output
+
     def test_invalid_flex_band_exits_nonzero(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """--flex-band bogus must exit with a non-zero code.
 
-        (d) FlexBand enum gives typer-native rejection; CliRunner must report exit != 0.
+        (d) --flex-band is typed GridServicesBand, so Typer refuses the value
+        itself; CliRunner must report exit != 0.
         """
         scenario_file = _write_scenario(tmp_path / "d")
 
@@ -248,10 +252,10 @@ class TestFinanceFlexCLIBehaviour:
     def test_invalid_scenario_flex_band_exits_nonzero(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
-        """A scenario-level flex_band with an unknown value must exit non-zero.
+        """A scenario-level flex_band with an unknown value must exit 1 with a configuration error.
 
-        This validates the scenario-key rejection path (goes via resolve_flex_band →
-        ValueError → handle_errors → Exit(1)), which is distinct from the typer-enum
+        This validates the scenario-key rejection path (goes via GridServicesBand.parse →
+        ConfigurationError → handle_errors → Exit(1)), which is distinct from the typer-enum
         rejection of an invalid CLI flag.
         """
         # Scenario has flex_band: bogus (not low/central/high)
@@ -260,18 +264,19 @@ class TestFinanceFlexCLIBehaviour:
 
         result = invoke_finance_run([str(scenario_file)], fr)
 
-        assert result.exit_code != 0, (
-            f"Expected non-zero exit for invalid scenario flex_band 'bogus', "
+        assert result.exit_code == 1, (
+            f"Expected exit 1 for invalid scenario flex_band 'bogus', "
             f"got {result.exit_code}.\n{result.output}"
         )
+        assert "Configuration error:" in result.output, result.output
 
     def test_scenario_flex_band_case_insensitive(
         self, tmp_path: Path, flex_fleet_results: FleetResults
     ) -> None:
         """Scenario-level flex_band with mixed case (e.g. 'Central') must work.
 
-        The YAML value is normalised to lowercase before being passed to
-        resolve_flex_band, matching the CLI's case-insensitive FlexBand enum.
+        A string key is lower-cased, then parsed through GridServicesBand,
+        matching the case-insensitive --flex-band flag.
         """
         # Scenario has flex_band: Central (capital C)
         scenario_file = _write_scenario(tmp_path / "e_case", flex_band="Central")
@@ -292,6 +297,110 @@ class TestFinanceFlexCLIBehaviour:
 
 
 # ---------------------------------------------------------------------------
+# §D2 — Every band entry point refuses in the one vocabulary's words
+# (docs/prds/grid-services-pricing-model.md §9 C10)
+# ---------------------------------------------------------------------------
+
+
+def _whitespace_normalised(output: str) -> str:
+    """*output* with every run of whitespace one space, so Rich's line wrapping cannot split a message."""
+    return " ".join(output.split())
+
+
+def _simulate_must_not_run(fleet_config: object, start: object, end: object) -> NoReturn:
+    pytest.fail("finance run simulated a fleet before refusing its band")
+
+
+class TestFinanceFlexCLIBandEntryPoints:
+    """The scenario's flex_band key, an events block's band and --flex-band each refuse a non-band naming low, central, high."""
+
+    def test_scenario_flex_band_medium_is_refused_before_any_simulation(self, tmp_path: Path) -> None:
+        scenario_file = _write_scenario(tmp_path, flex_band="medium")
+
+        result = invoke_cli(["finance", "run", str(scenario_file)], answering(_simulate_must_not_run))
+
+        assert result.exit_code == 1, result.output
+        assert (
+            "Configuration error: flex_band must be one of low, central, high, got 'medium'"
+            in _whitespace_normalised(result.output)
+        ), result.output
+
+    @pytest.mark.parametrize("value", [1, 5])
+    def test_a_scenario_flex_band_that_is_not_a_string_is_refused(self, tmp_path: Path, value: int) -> None:
+        scenario_file = _write_scenario(tmp_path, flex_band=value)
+
+        result = invoke_cli(["finance", "run", str(scenario_file)], answering(_simulate_must_not_run))
+
+        assert result.exit_code == 1, result.output
+        assert (
+            f"Configuration error: flex_band must be one of low, central, high, got {value!r}"
+            in _whitespace_normalised(result.output)
+        ), result.output
+
+    def test_an_events_band_medium_is_refused(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        scenario_file = _write_scenario(tmp_path, events_block={"band": "medium"})
+
+        result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 1, result.output
+        assert (
+            "Configuration error: finance.grid_services_model: "
+            "GridServicesEventsConfig.band must be one of low, central, high, got 'medium'"
+        ) in _whitespace_normalised(result.output), result.output
+
+    def test_flex_band_flag_medium_lists_the_bands(self, tmp_path: Path) -> None:
+        """Typer refuses --flex-band medium as a usage error naming it and each band, in whatever words Typer chooses."""
+        scenario_file = _write_scenario(tmp_path)
+
+        result = CliRunner().invoke(
+            app,
+            ["finance", "run", "--flex-band", "medium", str(scenario_file)],
+            env={"COLUMNS": "200"},
+        )
+
+        assert result.exit_code == 2, result.output
+        words = set(re.findall(r"\w+", result.output))
+        assert {"medium", "low", "central", "high"} <= words, result.output
+
+    def test_flex_band_flag_high_labels_the_block_with_the_bands_value(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        """The block names the band by its value, never its repr, and quotes the rate table's high flat rate."""
+        scenario_file = _write_scenario(tmp_path)
+
+        result = invoke_finance_run(["--flex-band", "high", str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 0, result.output
+        assert "Band: **high**" in result.output, result.output
+        assert "£48.0/kW-discharge/yr" in result.output, result.output
+
+
+# ---------------------------------------------------------------------------
+# §D3 — The events block's delivery baseline refuses in its vocabulary's words
+# (docs/prds/grid-services-pricing-model.md §9 P7)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceRunEventsDeliveryBaseline:
+    """An events block's delivery_baseline refuses a value other than operational or capacity, naming both."""
+
+    def test_an_events_delivery_baseline_metered_is_refused(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        scenario_file = _write_scenario(tmp_path, events_block={"delivery_baseline": "metered"})
+
+        result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 1, result.output
+        assert (
+            "Configuration error: finance.grid_services_model: "
+            "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
+        ) in _whitespace_normalised(result.output), result.output
+
+
+# ---------------------------------------------------------------------------
 # §E — Named user-observable signal test (step-5 RED driver)
 # ---------------------------------------------------------------------------
 
@@ -305,13 +414,12 @@ class TestFinanceFlexNamedScenario:
     """
 
     def test_bristol_flex_scenario_renders_central_block(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flex_fleet_results: FleetResults
     ) -> None:
-        """finance run scenarios/bristol-phase1-flex.yaml → Flexibility Value block with 'central'."""
-        scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
-        fr = _make_fleet_results()
+        """finance run on the board scenario renders the central Flexibility Value block from any cwd."""
+        monkeypatch.chdir(tmp_path)
 
-        result = invoke_finance_run([str(scenario_path)], fr)
+        result = invoke_finance_run([str(SCENARIO)], flex_fleet_results)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"

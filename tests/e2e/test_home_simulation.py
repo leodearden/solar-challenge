@@ -9,7 +9,11 @@ outside the fleet load component's fixed range as an error, sending
 nothing, and sends either end of that range. It also checks that the form
 leaves a custom range's dates to the server: it sends a single-day range,
 which the server accepts, and shows the server's refusal of a range that
-ends before it starts.
+ends before it starts, leaving an earlier run's results link as the fleet
+page does. And it checks that a blank System Losses input sends
+no system_losses, leaving the server's default, and shows "PVWatts default"
+beside its label, that a typed one is sent and shown as typed, and that the
+page shows the server's refusal of one PVConfig refuses.
 """
 
 import re
@@ -20,7 +24,7 @@ import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
 from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, page_limits
 from tests.e2e._home_form import (
     FIRST_DAY,
     SECOND_DAY,
@@ -28,8 +32,7 @@ from tests.e2e._home_form import (
     submit_custom_range,
     submit_two_day_run,
 )
-
-pytestmark = pytest.mark.e2e
+from tests.e2e._job_requests import a_job_state, job_state_frame
 
 
 # ── Form defaults ─────────────────────────────────────────────────────
@@ -129,7 +132,7 @@ def _choose_variant(page: Page, block: _OptionalBlock, variant: str) -> None:
 
 
 _HEAT_PUMP = _OptionalBlock(
-    "Heat Pump", "Enable Heat Pump", "Heat Pump Type", "heat_pump", "type"
+    "Heat Pump", "Enable Heat Pump", "Heat Pump Type", "heat_pump", "heat_pump_type"
 )
 _TARIFF = _OptionalBlock("Tariff", "Enable Tariff", "Tariff Type", "tariff", "type")
 _SEG = _OptionalBlock(
@@ -196,6 +199,27 @@ def test_seg_custom_rate_form_submission_is_accepted(
     assert response.status == 201, response.text()
 
 
+def test_heat_pump_gshp_run_with_its_capacity_set_is_accepted(
+    page: Page, live_server: str
+) -> None:
+    """Run with the heat pump on, GSHP picked and Thermal Capacity set to 12 kW: /api/simulate/home accepts what the form sends (201)."""
+    page.goto(live_server + "/simulate/home")
+    _switch_on(page, _HEAT_PUMP.tab, _HEAT_PUMP.switch_name)
+    _choose_variant(page, _HEAT_PUMP, "GSHP")
+    page.get_by_role("slider", name="Thermal Capacity", exact=True).fill("12")
+    response = submit_two_day_run(page)
+
+    sent = response.request.post_data_json.get(_HEAT_PUMP.payload_key) or {}
+    assert {key: sent.get(key) for key in ("heat_pump_type", "thermal_capacity_kw")} == {
+        "heat_pump_type": "GSHP",
+        "thermal_capacity_kw": 12,
+    }, (
+        "The submitted 'heat_pump' block does not carry the GSHP and its typed capacity "
+        "under config's keys, so a 201 would say nothing about the GSHP-with-capacity path."
+    )
+    assert response.status == 201, response.text()
+
+
 # ── Tab navigation ───────────────────────────────────────────────────
 
 
@@ -229,20 +253,14 @@ def test_submit_button_exists(page: Page, live_server: str) -> None:
 
 
 def test_form_validation_pv_range(page: Page, live_server: str) -> None:
-    """The PV capacity input enforces min/max constraints via HTML attributes."""
+    """The PV capacity slider spans the pv component's value_range, as page_limits() gives it."""
     page.goto(live_server + "/simulate/home")
+    value_range = page_limits().components["pv"].value_range
 
     pv_input = page.locator("#pv_kw")
     expect(pv_input).to_be_visible()
-
-    # Check that the range input has min/max constraints
-    min_val = pv_input.get_attribute("min")
-    max_val = pv_input.get_attribute("max")
-
-    assert min_val is not None, "PV input should have a 'min' attribute"
-    assert max_val is not None, "PV input should have a 'max' attribute"
-    assert float(min_val) >= 0.5, f"PV min should be >= 0.5, got {min_val}"
-    assert float(max_val) <= 20, f"PV max should be <= 20, got {max_val}"
+    expect(pv_input).to_have_attribute("min", str(value_range.low))
+    expect(pv_input).to_have_attribute("max", str(value_range.high))
 
 
 # ── Form validation (annual consumption range) ──────────────────────
@@ -267,13 +285,35 @@ def _validation_errors(page: Page) -> Locator:
     return heading.locator("xpath=..").get_by_role("listitem")
 
 
+def test_a_battery_beyond_the_battery_range_is_listed_as_an_error_and_never_sent(
+    page: Page, live_server: str, home_run_submissions: list[Any]
+) -> None:
+    """A preset's 500 kWh battery, past the slider's end, is an error naming both ends of the battery component's value_range, and Run Simulation sends nothing."""
+    value_range = page_limits().components["battery"].value_range
+    page.route(
+        "**/api/presets",
+        lambda route: route.fulfill(
+            json=[{"name": "Big battery", "pv_kw": 4.0, "battery_kwh": 500, "consumption_kwh": 3500}]
+        ),
+    )
+    page.goto(live_server + "/simulate/home")
+    page.get_by_label("Preset", exact=True).select_option("Big battery")
+
+    page.get_by_role("button", name="Run Simulation").click()
+
+    expect(_validation_errors(page).filter(has_text="Battery")).to_have_text(
+        [f"Battery capacity must be between {value_range.low:g} and {value_range.high:g} kWh"]
+    )
+    assert home_run_submissions == []
+
+
 @pytest.mark.parametrize("beyond", ["below", "above"])
 def test_consumption_beyond_the_load_range_is_listed_as_an_error_and_never_sent(
     page: Page, live_server: str, home_run_submissions: list[Any], beyond: str
 ) -> None:
-    """A consumption one step beyond either end of the load component's fixed range is an error naming both ends, and Run Simulation sends nothing."""
+    """A consumption one step beyond either end of the load component's value_range is an error naming both ends, and Run Simulation sends nothing."""
     load = FLEET_COMPONENTS["load"]
-    low, high = load.fixed_range
+    low, high = load.value_range.low, load.value_range.high
     value = low - load.step if beyond == "below" else high + load.step
     page.goto(live_server + "/simulate/home")
     open_tab(page, "Load")
@@ -292,9 +332,8 @@ def test_consumption_beyond_the_load_range_is_listed_as_an_error_and_never_sent(
 def test_consumption_at_either_end_of_the_load_range_is_sent_and_accepted(
     page: Page, live_server: str, end: str
 ) -> None:
-    """A consumption at either end of the load component's fixed range passes the page's check, and /api/simulate/home accepts what the form sends (201)."""
-    low, high = FLEET_COMPONENTS["load"].fixed_range
-    value = low if end == "low" else high
+    """A consumption at either end of the load component's value_range passes the page's check, and /api/simulate/home accepts what the form sends (201)."""
+    value = getattr(FLEET_COMPONENTS["load"].value_range, end)
     page.goto(live_server + "/simulate/home")
     open_tab(page, "Load")
     page.locator("#consumption_kwh").fill(f"{value:g}")
@@ -320,5 +359,132 @@ def test_reversed_custom_range_shows_the_servers_refusal(page: Page, live_server
     page.goto(live_server + "/simulate/home")
     response = submit_custom_range(page, SECOND_DAY, FIRST_DAY)
 
+    assert response.status == 400, response.text()
+    expect(page.get_by_role("alert")).to_have_text(response.json()["error"])
+
+
+COMPLETED_RUN_ID = "run-1"
+
+
+@pytest.fixture
+def forward_home_runs_complete_at_once(page: Page) -> None:
+    """Answer each home run the page submits whose range runs forward as a job that completes at once as COMPLETED_RUN_ID, with the results_url the server answers for it, so no job reaches the live server's JobManager.
+
+    A range that ends before it starts continues to the live server, whose refusal queues no job.
+    """
+
+    def _complete_at_once(route: Route) -> None:
+        sent = route.request.post_data_json
+        if sent["start"] > sent["end"]:
+            route.continue_()
+            return
+        route.fulfill(
+            status=201,
+            json={
+                "job_id": "job-1",
+                "run_id": COMPLETED_RUN_ID,
+                "results_url": f"/results/{COMPLETED_RUN_ID}",
+            },
+        )
+
+    page.route("**/api/simulate/home", _complete_at_once)
+    completion = job_state_frame(a_job_state("job-1", COMPLETED_RUN_ID, "completed"), version=5)
+    page.route(
+        "**/api/jobs/job-1/progress",
+        lambda route: route.fulfill(content_type="text/event-stream", body=completion),
+    )
+
+
+@pytest.mark.usefixtures("forward_home_runs_complete_at_once")
+def test_a_run_the_server_refuses_leaves_the_earlier_runs_results_link(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """Run a reversed custom range after a run that completed: the page shows the server's refusal and leaves that run's View Results link, as the fleet page does, since a refusal is no run to replace it."""
+    earlier_results = f"/results/{COMPLETED_RUN_ID}"
+    page.goto(live_server + "/simulate/home")
+    submit_two_day_run(page)
+    results_link = page.get_by_role("link", name="View Results", exact=True)
+    expect(results_link).to_have_attribute("href", earlier_results)
+
+    assert page_errors == [], f"Errors on /simulate/home: {page_errors}"
+    response = submit_custom_range(page, SECOND_DAY, FIRST_DAY)
+
+    assert response.status == 400, response.text()
+    expect(page.get_by_role("alert")).to_have_text(response.json()["error"])
+    expect(results_link).to_have_attribute("href", earlier_results)
+
+
+# ── PV system losses: blank leaves the server's default ──────────────
+
+
+def _type_system_losses(page: Page, text: str) -> None:
+    """Type `text` into the System Losses input on the PV tab, replacing what it held."""
+    open_tab(page, "PV")
+    page.locator("#system_losses").fill(text)
+
+
+@pytest.mark.parametrize(
+    "typed_then_cleared",
+    [
+        pytest.param(False, id="untouched"),
+        pytest.param(True, id="typed-then-cleared"),
+    ],
+)
+def test_blank_system_losses_is_not_sent_and_the_run_is_accepted(
+    page: Page, live_server: str, typed_then_cleared: bool
+) -> None:
+    """Run with System Losses blank, untouched or typed in and cleared: the form sends no system_losses, and /api/simulate/home accepts the run (201)."""
+    page.goto(live_server + "/simulate/home")
+    if typed_then_cleared:
+        _type_system_losses(page, "0.05")
+        _type_system_losses(page, "")
+    response = submit_two_day_run(page)
+
+    assert "system_losses" not in response.request.post_data_json
+    assert response.status == 201, response.text()
+
+
+def test_typed_system_losses_is_sent_and_accepted(page: Page, live_server: str) -> None:
+    """Run with 0.05 typed as System Losses: the form sends the fraction typed, and /api/simulate/home accepts it (201)."""
+    page.goto(live_server + "/simulate/home")
+    _type_system_losses(page, "0.05")
+    response = submit_two_day_run(page)
+
+    assert response.request.post_data_json["system_losses"] == 0.05
+    assert response.status == 201, response.text()
+
+
+@pytest.mark.parametrize(
+    ("typed", "shown"),
+    [
+        pytest.param((), "PVWatts default", id="untouched"),
+        pytest.param(("0.05", ""), "PVWatts default", id="typed-then-cleared"),
+        pytest.param(("0.05",), "0.05", id="typed"),
+    ],
+)
+def test_system_losses_shows_the_typed_fraction_and_pvwatts_default_while_blank(
+    page: Page, live_server: str, typed: tuple[str, ...], shown: str
+) -> None:
+    """Type each of `typed` in turn into System Losses: beside its label the field shows `shown`, the fraction typed, or "PVWatts default" while it is blank."""
+    page.goto(live_server + "/simulate/home")
+    for text in typed:
+        _type_system_losses(page, text)
+
+    value_beside_label = page.locator("label[for='system_losses'] ~ span")
+    expect(value_beside_label).to_have_text(shown)
+
+
+def test_system_losses_pvconfig_refuses_shows_the_servers_refusal(
+    page: Page, live_server: str
+) -> None:
+    """Run with 1 typed as System Losses, a fraction PVConfig refuses: /api/simulate/home refuses it (400), and the page shows the server's error as an alert."""
+    page.goto(live_server + "/simulate/home")
+    _type_system_losses(page, "1")
+    response = submit_two_day_run(page)
+
+    assert response.request.post_data_json["system_losses"] == 1, (
+        "The submitted payload does not carry the typed system losses, "
+        "so a 400 would say nothing about the server's refusal of them."
+    )
     assert response.status == 400, response.text()
     expect(page.get_by_role("alert")).to_have_text(response.json()["error"])

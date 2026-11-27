@@ -1,7 +1,9 @@
 """Tests for Smart Export Guarantee (SEG) tariff and revenue calculation."""
 
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, resolve_seg_tariff
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 class TestSEGTariffBasics:
@@ -28,24 +30,36 @@ class TestSEGTariffBasics:
         tariff = SEGTariff(name="Octopus Energy", rate_pence_per_kwh=4.1)
         assert tariff.name == "Octopus Energy"
 
+    def test_a_whole_rate_is_held_as_the_float_it_reads(self) -> None:
+        rate = SEGTariff("Supplier", 4).rate_pence_per_kwh
+        assert rate == 4.0
+        assert type(rate) is float
+
 
 class TestSEGTariffValidation:
     """Test SEGTariff parameter validation."""
 
-    def test_negative_rate_raises_value_error(self):
-        """Negative rate raises ValueError."""
-        with pytest.raises(ValueError):
+    def test_negative_rate_raises_configuration_error(self):
+        """Negative rate raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
             SEGTariff(name="Bad Rate", rate_pence_per_kwh=-1.0)
 
     def test_negative_rate_error_message(self):
-        """ValueError message mentions the invalid rate."""
-        with pytest.raises(ValueError, match="non-negative"):
+        """The refusal names the field, its bound and the invalid rate."""
+        with pytest.raises(ConfigurationError) as exc_info:
             SEGTariff(name="Bad Rate", rate_pence_per_kwh=-0.5)
+        assert str(exc_info.value) == "rate_pence_per_kwh must be at least 0, got -0.5"
 
     def test_very_negative_rate_raises(self):
-        """Strongly negative rate also raises ValueError."""
-        with pytest.raises(ValueError):
+        """Strongly negative rate also raises ConfigurationError."""
+        with pytest.raises(ConfigurationError):
             SEGTariff(name="Bad Rate", rate_pence_per_kwh=-100.0)
+
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_rate_that_is_not_a_finite_number_is_refused_naming_it(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            SEGTariff("Supplier", value)
+        assert str(exc_info.value) == f"rate_pence_per_kwh must be a finite number, got {value!r}"
 
 
 class TestSEGTariffImmutability:

@@ -1,16 +1,16 @@
 document.addEventListener('alpine:init', () => {
     // One job's progress, for the tracker that templates/simulate/partials/progress-tracker.html writes.
-    // It follows the job's progress stream from init until the job completes or fails, or the tracker is removed.
-    Alpine.data('progressTracker', (jobId) => ({
+    // It follows the job with followJobProgress from init until the job ends, the page loses its stream, or the tracker is removed.
+    Alpine.data('progressTracker', (jobId, resultsUrl) => ({
         status: 'queued',
         step: 'Queued',
         message: 'Waiting to start...',
         progress: 0,
         elapsed: 0,
         error: '',
-        completedRunId: '',
+        resultsUrl,
         reconnecting: false,
-        _stream: null,
+        _stopFollowing: null,
         _timer: null,
 
         init() {
@@ -18,13 +18,11 @@ document.addEventListener('alpine:init', () => {
             this._timer = setInterval(() => {
                 this.elapsed = Math.floor((Date.now() - startTime) / 1000);
             }, 1000);
-            this._stream = new EventSource('/api/jobs/' + jobId + '/progress');
-            this._stream.addEventListener('progress', (e) => this._onProgress(e.data));
-            this._stream.addEventListener('complete', (e) => this._onComplete(e.data));
-            onJobProgressStreamErrors(this._stream, {
-                failed: (eventData) => this._onFailed(eventData),
-                reconnecting: (reconnecting) => { this.reconnecting = reconnecting; },
-                lost: () => this._onLost(),
+            this._stopFollowing = followJobProgress(jobId, {
+                onState: (state) => this._show(state),
+                onEnd: (state) => this._end(state),
+                onReconnecting: (reconnecting) => { this.reconnecting = reconnecting; },
+                onLost: () => this._lose(),
             });
         },
 
@@ -38,33 +36,29 @@ document.addEventListener('alpine:init', () => {
             return m > 0 ? m + 'm ' + s + 's' : s + 's';
         },
 
-        _onProgress(eventData) {
-            const data = JSON.parse(eventData);
-            if (data.progress_pct !== undefined) this.progress = data.progress_pct;
-            if (data.current_step) this.step = data.current_step;
-            if (data.message) this.message = data.message;
-            if (data.status) this.status = data.status;
+        // Show a state the job reports, a JobState
+        _show(state) {
+            this.status = state.status;
+            this.progress = state.progress_pct;
+            this.step = state.current_step;
+            this.message = state.message;
         },
 
-        // A complete or error event ends the job: its handler stops first, so an event it cannot read still ends the stream
-        _onComplete(eventData) {
+        // Show how the job ended: its final state, or null if the server no longer tracks it.
+        // A failed job's message is shown as its error, and the message line keeps its last progress message.
+        _end(state) {
             this._stop();
-            const data = JSON.parse(eventData);
-            this.status = 'completed';
-            this.progress = 100;
-            this.step = 'Done';
-            this.message = data.message || 'Simulation completed successfully';
-            if (data.run_id) this.completedRunId = data.run_id;
+            if (state === null) {
+                this.status = 'untracked';
+            } else if (state.status === 'failed') {
+                this.status = 'failed';
+                this.error = state.message;
+            } else {
+                this._show(state);
+            }
         },
 
-        _onFailed(eventData) {
-            this._stop();
-            const data = JSON.parse(eventData);
-            this.status = 'failed';
-            this.error = data.message || data.error || 'An unexpected error occurred';
-        },
-
-        _onLost() {
+        _lose() {
             this._stop();
             this.status = 'failed';
             this.error = 'Lost connection to server';
@@ -72,9 +66,9 @@ document.addEventListener('alpine:init', () => {
 
         _stop() {
             this.reconnecting = false;
-            if (this._stream) {
-                this._stream.close();
-                this._stream = null;
+            if (this._stopFollowing) {
+                this._stopFollowing();
+                this._stopFollowing = null;
             }
             if (this._timer) {
                 clearInterval(this._timer);

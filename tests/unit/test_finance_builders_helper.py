@@ -1,25 +1,42 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Unit tests for tests/_finance_builders.py, the finance tests' synthetic homes, scenarios and constant-power simulation results."""
+"""Unit tests for tests/_finance_builders.py, the finance tests' synthetic homes, scenarios and constant-power simulation results, priced as simulate_home prices them."""
 
 import dataclasses
+from datetime import date
 
+import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import FleetResults
-from solar_challenge.home import calculate_summary
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.home import RunPricing, calculate_summary
+from solar_challenge.projection import project_multi_year
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
     make_home_config,
+    make_period,
+    make_pv_config,
     make_scenario,
     make_scenario_and_finance,
+    make_scenario_of,
     make_sim_results,
+    make_sized_home,
+    make_window,
 )
 
 
-@pytest.mark.parametrize("days", [pytest.param(365, id="full-year"), pytest.param(3, id="short-window")])
+@pytest.mark.parametrize(
+    "days",
+    [
+        pytest.param(365, id="full-year"),
+        pytest.param(3, id="short-window"),
+        pytest.param(182, id="ending-in-bst"),
+    ],
+)
 def test_sim_results_summary_totals_are_the_arguments(days: int) -> None:
     summary = calculate_summary(
         make_sim_results(
@@ -27,7 +44,6 @@ def test_sim_results_summary_totals_are_the_arguments(days: int) -> None:
             export_kwh=1000.0,
             import_kwh=500.0,
             discharge_kwh=800.0,
-            export_revenue_gbp=150.0,
             days=days,
         )
     )
@@ -39,11 +55,114 @@ def test_sim_results_summary_totals_are_the_arguments(days: int) -> None:
     assert summary.total_battery_discharge_kwh == pytest.approx(800.0)
     assert summary.total_generation_kwh == pytest.approx(3000.0 + 1000.0)
     assert summary.total_demand_kwh == pytest.approx(3000.0 + 500.0 - 800.0)
-    assert summary.total_export_revenue_gbp == pytest.approx(150.0)
 
 
-def test_sim_results_default_to_a_full_year() -> None:
-    assert calculate_summary(make_sim_results()).simulation_days == 365
+@pytest.mark.parametrize(
+    ("pricing", "tariff_rate", "import_cost_gbp", "export_revenue_gbp"),
+    [
+        pytest.param(RunPricing(0.25, 4.0), 0.25, 300.0, 32.0, id="import-and-export-priced"),
+        pytest.param(RunPricing(0.25, None), 0.25, 300.0, 0.0, id="import-priced"),
+        pytest.param(RunPricing(None, 4.0), 0.0, 0.0, 32.0, id="export-priced"),
+    ],
+)
+def test_sim_results_price_each_flow_at_its_given_rate_and_record_the_pricing(
+    pricing: RunPricing, tariff_rate: float, import_cost_gbp: float, export_revenue_gbp: float
+) -> None:
+    """1,200 kWh imported at 0.25 £/kWh cost £300, and 800 kWh exported at 4.0 p/kWh earn £32."""
+    results = make_sim_results(self_kwh=2200.0, export_kwh=800.0, import_kwh=1200.0, pricing=pricing)
+    summary = calculate_summary(results)
+
+    assert summary.total_import_cost_gbp == pytest.approx(import_cost_gbp)
+    assert summary.total_export_revenue_gbp == pytest.approx(export_revenue_gbp)
+    assert (results.tariff_rate == tariff_rate).all()
+    assert results.pricing == pricing
+
+
+@pytest.mark.parametrize(
+    ("given", "recorded"),
+    [
+        pytest.param({}, RunPricing(None, None), id="unpriced-by-default"),
+        pytest.param({"pricing": None}, None, id="no-pricing"),
+    ],
+)
+def test_sim_results_no_tariff_priced_have_no_import_cost_export_revenue_or_tariff_rate(
+    given: dict[str, RunPricing | None], recorded: RunPricing | None
+) -> None:
+    """By default the results are priced as simulate_home prices a home with no tariff and no SEG."""
+    results = make_sim_results(export_kwh=800.0, import_kwh=1200.0, **given)
+
+    assert results.pricing == recorded
+    for series in (results.import_cost, results.export_revenue, results.tariff_rate):
+        assert (series == 0.0).all(), series.name
+
+
+@pytest.mark.parametrize(
+    ("first_day", "days"),
+    [
+        pytest.param(date(2021, 1, 1), 1, id="one-day"),
+        pytest.param(date(2021, 1, 1), 182, id="ending-in-bst"),
+        pytest.param(date(2021, 1, 1), 365, id="calendar-year-2021"),
+        pytest.param(date(2024, 3, 31), 2, id="across-the-spring-forward"),
+        pytest.param(date(2024, 1, 1), 366, id="leap-year-2024"),
+        pytest.param(date(2024, 1, 1), 400, id="across-two-years"),
+    ],
+)
+def test_sim_results_summary_covers_make_window_of_the_same_days(first_day: date, days: int) -> None:
+    summary = calculate_summary(make_sim_results(days=days, first_day=first_day))
+
+    assert summary.window == make_window(days=days, first_day=first_day)
+    assert summary.simulation_days == days
+
+
+def test_sim_results_at_a_minute_cadence_are_the_minute_rows_of_their_window() -> None:
+    results = make_sim_results(
+        days=2,
+        first_day=date(2024, 3, 31),
+        cadence=ONE_MINUTE,
+        self_kwh=30.0,
+        export_kwh=10.0,
+        import_kwh=5.0,
+    )
+    summary = calculate_summary(results)
+
+    assert len(results.generation) == (23 + 24) * 60
+    assert summary.window == make_window(days=2, first_day=date(2024, 3, 31), cadence=ONE_MINUTE)
+    assert summary.simulation_days == 2
+    assert summary.total_self_consumption_kwh == pytest.approx(30.0)
+    assert summary.total_grid_export_kwh == pytest.approx(10.0)
+    assert summary.total_grid_import_kwh == pytest.approx(5.0)
+
+
+def test_sim_results_default_to_one_whole_calendar_year() -> None:
+    summary = calculate_summary(make_sim_results())
+    window = summary.window
+
+    assert summary.simulation_days == 365
+    assert window is not None
+    assert (window.first_day.month, window.first_day.day) == (1, 1)
+    assert (window.last_day.month, window.last_day.day) == (12, 31)
+    assert not window.extrapolated
+    assert window.annualisation_scale == 1.0
+
+
+def test_period_is_make_windows_days_at_one_minute_on_its_clock() -> None:
+    window = make_window()
+
+    assert make_period() == SimulationWindow(window.first_day, window.last_day, ONE_MINUTE, window.timezone)
+
+
+def test_a_projection_of_the_builders_scenario_and_default_results_is_annualised_from_the_period_it_simulated() -> None:
+    scenario, finance = make_scenario_and_finance()
+    simulated: list[tuple[date, date]] = []
+
+    def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        simulated.append((start.date(), end.date()))
+        return make_fleet_results(homes=fleet_config.homes)
+
+    curve = project_multi_year(scenario, finance, simulate=simulate)
+
+    assert curve.annualised_from is not None
+    assert set(simulated) == {(curve.annualised_from.first_day, curve.annualised_from.last_day)}
 
 
 def test_fleet_results_pair_each_default_home_with_the_given_annual_totals() -> None:
@@ -52,21 +171,19 @@ def test_fleet_results_pair_each_default_home_with_the_given_annual_totals() -> 
         self_kwh=2000.0,
         export_kwh=800.0,
         import_kwh=1200.0,
-        export_revenue_gbp=40.0,
     )
 
-    assert fleet.home_configs == [make_home_config()] * 3
+    assert fleet.home_configs == (make_home_config(),) * 3
     per_home_totals = [
         (
             summary.total_self_consumption_kwh,
             summary.total_grid_export_kwh,
             summary.total_grid_import_kwh,
-            summary.total_export_revenue_gbp,
             summary.simulation_days,
         )
         for summary in map(calculate_summary, fleet.per_home_results)
     ]
-    assert per_home_totals == [pytest.approx((2000.0, 800.0, 1200.0, 40.0, 365))] * 3
+    assert per_home_totals == [pytest.approx((2000.0, 800.0, 1200.0, 365))] * 3
 
 
 def test_fleet_results_pair_the_given_homes_with_the_totals_over_the_window() -> None:
@@ -78,23 +195,29 @@ def test_fleet_results_pair_the_given_homes_with_the_totals_over_the_window() ->
         export_kwh=10.0,
         import_kwh=5.0,
         discharge_kwh=8.0,
-        export_revenue_gbp=1.5,
         days=3,
     )
 
-    assert fleet.home_configs == homes
+    assert fleet.home_configs == tuple(homes)
     per_home_totals = [
         (
             summary.total_self_consumption_kwh,
             summary.total_grid_export_kwh,
             summary.total_grid_import_kwh,
             summary.total_battery_discharge_kwh,
-            summary.total_export_revenue_gbp,
             summary.simulation_days,
         )
         for summary in map(calculate_summary, fleet.per_home_results)
     ]
-    assert per_home_totals == [pytest.approx((30.0, 10.0, 5.0, 8.0, 1.5, 3))] * 2
+    assert per_home_totals == [pytest.approx((30.0, 10.0, 5.0, 8.0, 3))] * 2
+
+
+def test_fleet_results_give_each_home_the_given_pricing() -> None:
+    pricing = RunPricing(0.25, 4.0)
+
+    fleet = make_fleet_results(n_homes=2, pricing=pricing)
+
+    assert [results.pricing for results in fleet.per_home_results] == [pricing] * 2
 
 
 def test_fleet_results_refuse_both_homes_and_n_homes() -> None:
@@ -107,7 +230,7 @@ def test_fleet_results_of_pair_each_given_result_in_order_with_a_default_home() 
 
     fleet = make_fleet_results_of(per_home_results)
 
-    assert fleet.home_configs == [make_home_config()] * 2
+    assert fleet.home_configs == (make_home_config(),) * 2
     assert [
         calculate_summary(results).total_self_consumption_kwh for results in fleet.per_home_results
     ] == pytest.approx([18.0, 6.0])
@@ -119,7 +242,7 @@ def test_fleet_results_of_pair_the_given_results_in_order_with_the_given_homes()
 
     fleet = make_fleet_results_of(per_home_results, homes=homes)
 
-    assert fleet.home_configs == homes
+    assert fleet.home_configs == tuple(homes)
     assert [
         calculate_summary(results).total_self_consumption_kwh for results in fleet.per_home_results
     ] == pytest.approx([18.0, 6.0])
@@ -151,16 +274,42 @@ def test_home_config_is_the_default_home_with_the_given_battery() -> None:
     assert dataclasses.replace(home, battery_config=None) == make_home_config()
 
 
+def test_sized_home_is_the_default_home_fitted_with_the_given_install() -> None:
+    home = make_sized_home(pv_kwp=5.5, battery_kwh=5.0, inverter_kw=3.6)
+
+    assert home.pv_config == dataclasses.replace(make_pv_config(), capacity_kw=5.5, inverter_capacity_kw=3.6)
+    assert home.battery_config == BatteryConfig(capacity_kwh=5.0)
+    assert dataclasses.replace(home, pv_config=make_pv_config(), battery_config=None) == make_home_config()
+
+
+def test_sized_home_has_no_battery_and_an_inverter_sized_to_the_array_by_default() -> None:
+    home = make_sized_home(pv_kwp=3.0)
+
+    assert home.battery_config is None
+    assert home.pv_config.inverter_capacity_kw is None
+    assert home.pv_config.effective_inverter_capacity_kw == 3.0
+
+
 def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
     scenario = make_scenario(n_homes=2, seg_tariff_pence_per_kwh=5.0)
 
-    assert scenario.homes == [make_home_config()] * 2
+    assert scenario.homes == (make_home_config(),) * 2
     assert scenario.seg_tariff_pence_per_kwh == 5.0
 
     default_scenario = make_scenario()
 
-    assert default_scenario.homes == [make_home_config()]
+    assert default_scenario.homes == (make_home_config(),)
     assert default_scenario.seg_tariff_pence_per_kwh is None
+
+
+def test_scenario_carries_the_given_finance_block() -> None:
+    finance = FinanceConfig(standing_charge_pence_per_day=28.0)
+
+    scenario = make_scenario(n_homes=2, finance=finance)
+
+    assert scenario.finance is finance
+    assert scenario.homes == (make_home_config(),) * 2
+    assert make_scenario().finance is None
 
 
 def test_scenario_builders_give_every_home_the_given_battery() -> None:
@@ -169,8 +318,17 @@ def test_scenario_builders_give_every_home_the_given_battery() -> None:
 
     scenario, _ = make_scenario_and_finance(n_homes=2, battery_config=battery)
 
-    assert make_scenario(n_homes=2, battery_config=battery).homes == [battery_home] * 2
-    assert scenario.homes == [battery_home] * 2
+    assert make_scenario(n_homes=2, battery_config=battery).homes == (battery_home,) * 2
+    assert scenario.homes == (battery_home,) * 2
+
+
+def test_scenario_of_holds_exactly_the_given_homes() -> None:
+    homes = [make_sized_home(pv_kwp=4.0, battery_kwh=5.0), make_sized_home(pv_kwp=3.0)]
+
+    scenario = make_scenario_of(homes)
+
+    assert scenario.homes == tuple(homes)
+    assert dataclasses.replace(scenario, homes=[make_home_config()]) == make_scenario()
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,14 @@
-"""Tests for PV configuration."""
+"""Tests for the pvlib system and model chain built from a PVConfig, from the module, inverter and wiring create_pv_system picks to the AC power simulate_pv_output returns."""
 
 import dataclasses
+import inspect
 import math
+import os
 import re
+import subprocess
+import sys
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -14,8 +19,6 @@ from solar_challenge.pv import (
     DEFAULT_CEC_MODULE,
     CecInverter,
     PVConfig,
-    apply_degradation,
-    calculate_degradation_factor,
     candidate_cec_inverters,
     cec_module_params,
     create_model_chain,
@@ -24,171 +27,21 @@ from solar_challenge.pv import (
     create_pvwatts_inverter_params,
     create_simple_inverter_params,
     create_simple_module_params,
-    interpolate_to_minute_resolution,
+    run_model_chain,
     simulate_pv_output,
     usable_cec_inverters,
     wired_dc_capacity_kw,
 )
-
-
-class TestPVConfigBasics:
-    """Test basic PVConfig functionality."""
-
-    def test_create_with_all_params(self):
-        """PVConfig can be created with all parameters."""
-        config = PVConfig(
-            capacity_kw=5.0,
-            azimuth=170.0,
-            tilt=30.0,
-            name="Test system"
-        )
-        assert config.capacity_kw == 5.0
-        assert config.azimuth == 170.0
-        assert config.tilt == 30.0
-        assert config.name == "Test system"
-
-    def test_default_values(self):
-        """PVConfig uses correct defaults."""
-        config = PVConfig(capacity_kw=4.0)
-        assert config.azimuth == 180.0  # South-facing
-        assert config.tilt == 35.0  # UK optimal
-        assert config.name == ""
-
-    def test_degradation_fields_default_values(self):
-        """PVConfig exposes system_age_years and degradation_rate_per_year with correct defaults."""
-        config = PVConfig(capacity_kw=4.0)
-        assert config.system_age_years == 0.0
-        assert config.degradation_rate_per_year == 0.005
-
-    def test_degradation_fields_store_explicit_values(self):
-        """PVConfig stores explicitly provided system_age_years and degradation_rate_per_year."""
-        config = PVConfig(capacity_kw=4.0, system_age_years=20, degradation_rate_per_year=0.01)
-        assert config.system_age_years == 20.0
-        assert config.degradation_rate_per_year == 0.01
-
-
-class TestPVConfigDefaults:
-    """Test default system configurations."""
-
-    def test_default_4kw(self):
-        """Default 4 kW system has correct values."""
-        config = PVConfig.default_4kw()
-        assert config.capacity_kw == 4.0
-        assert config.azimuth == 180.0
-        assert config.tilt == 35.0
-        assert config.name  # Has a name
-
-
-class TestPVConfigValidation:
-    """Test parameter validation."""
-
-    def test_capacity_must_be_positive(self):
-        """Capacity <= 0 raises error."""
-        with pytest.raises(ValueError, match="Capacity"):
-            PVConfig(capacity_kw=0)
-        with pytest.raises(ValueError, match="Capacity"):
-            PVConfig(capacity_kw=-1.0)
-
-    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
-    @pytest.mark.parametrize(
-        ("field", "invariant"),
-        [
-            ("capacity_kw", "Capacity must be positive and finite"),
-            ("inverter_capacity_kw", "Inverter capacity must be positive and finite"),
-        ],
-    )
-    def test_a_capacity_that_is_not_finite_is_refused(
-        self, field: str, invariant: str, value: float
-    ) -> None:
-        with pytest.raises(ValueError, match=re.escape(f"{invariant}, got {value} kW")):
-            dataclasses.replace(PVConfig(capacity_kw=4.0), **{field: value})
-
-    def test_azimuth_range(self):
-        """Azimuth must be 0-360."""
-        # Valid boundary values
-        PVConfig(capacity_kw=1.0, azimuth=0.0)
-        PVConfig(capacity_kw=1.0, azimuth=360.0)
-
-        # Invalid values
-        with pytest.raises(ValueError, match="Azimuth"):
-            PVConfig(capacity_kw=1.0, azimuth=-1.0)
-        with pytest.raises(ValueError, match="Azimuth"):
-            PVConfig(capacity_kw=1.0, azimuth=361.0)
-
-    def test_tilt_range(self):
-        """Tilt must be 0-90."""
-        # Valid boundary values
-        PVConfig(capacity_kw=1.0, tilt=0.0)
-        PVConfig(capacity_kw=1.0, tilt=90.0)
-
-        # Invalid values
-        with pytest.raises(ValueError, match="Tilt"):
-            PVConfig(capacity_kw=1.0, tilt=-1.0)
-        with pytest.raises(ValueError, match="Tilt"):
-            PVConfig(capacity_kw=1.0, tilt=91.0)
-
-    def test_system_age_must_be_non_negative(self):
-        """system_age_years < 0 raises ValueError with 'non-negative' message."""
-        with pytest.raises(ValueError, match="non-negative"):
-            PVConfig(capacity_kw=4.0, system_age_years=-1.0)
-        with pytest.raises(ValueError, match="non-negative"):
-            PVConfig(capacity_kw=4.0, system_age_years=-0.001)
-
-    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
-    def test_a_system_age_that_is_not_finite_is_refused(self, value: float) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"System age must be non-negative and finite, got {value}"),
-        ):
-            dataclasses.replace(PVConfig(capacity_kw=4.0), system_age_years=value)
-
-    def test_degradation_rate_must_be_zero_to_one(self):
-        """degradation_rate_per_year outside [0, 1] raises ValueError with '0-1' message."""
-        with pytest.raises(ValueError, match="0-1"):
-            PVConfig(capacity_kw=4.0, degradation_rate_per_year=1.5)
-        with pytest.raises(ValueError, match="0-1"):
-            PVConfig(capacity_kw=4.0, degradation_rate_per_year=-0.1)
-
-    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
-    def test_a_degradation_rate_that_is_not_finite_is_refused(self, value: float) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"Degradation rate must be 0-1, got {value}"),
-        ):
-            dataclasses.replace(PVConfig(capacity_kw=4.0), degradation_rate_per_year=value)
-
-    def test_system_age_valid_boundaries(self):
-        """Valid boundary values for system_age_years are accepted without error."""
-        PVConfig(capacity_kw=4.0, system_age_years=0.0)  # new system
-        PVConfig(capacity_kw=4.0, system_age_years=5.5)  # fractional years
-        PVConfig(capacity_kw=4.0, system_age_years=25.0)  # old system
-
-    def test_degradation_rate_valid_boundaries(self):
-        """Valid boundary values for degradation_rate_per_year are accepted without error."""
-        PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.0)   # no degradation
-        PVConfig(capacity_kw=4.0, degradation_rate_per_year=1.0)   # max rate
-        PVConfig(capacity_kw=4.0, degradation_rate_per_year=0.005) # default rate
-
-
-class TestSystemLossesConfig:
-    """PVConfig.system_losses is the fraction of each array's DC power lost before the inverter."""
-
-    def test_the_default_is_pvwatts_v5s_loss_budget(self) -> None:
-        assert PVConfig(capacity_kw=4.0).system_losses == pytest.approx(
-            pvlib.pvsystem.pvwatts_losses() / 100
-        )
-
-    @pytest.mark.parametrize("value", [-0.01, 1.0, 14.0, math.nan, math.inf, -math.inf])
-    def test_a_loss_outside_zero_to_one_is_refused(self, value: float) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"System losses must be a fraction in [0, 1), got {value}"),
-        ):
-            dataclasses.replace(PVConfig(capacity_kw=4.0), system_losses=value)
-
-    @pytest.mark.parametrize("value", [0.0, 0.05, 0.99])
-    def test_a_loss_in_zero_to_one_is_kept(self, value: float) -> None:
-        assert PVConfig(capacity_kw=4.0, system_losses=value).system_losses == value
+from tests._pv_modules import (
+    default_module,
+    default_module_beyond_every_mppt_window,
+    desoto_module,
+    pvsyst_module,
+    pvwatts_300_w_module,
+    sapm_library_module,
+)
+from tests._pv_refusals import one_refusal_at_construction_and_at_use
+from tests._pv_runs import clear_day_kwh, clear_day_weather, per_array
 
 
 class TestCreatePVSystem:
@@ -217,8 +70,23 @@ class TestCreatePVSystem:
         assert "Paco" in system.inverter_parameters
 
 
+def _assert_wires_the_default_cec_row(system: pvlib.pvsystem.PVSystem) -> None:
+    """Each array of the system carries exactly the row of pvlib's CEC module library that DEFAULT_CEC_MODULE names, as a fresh read of that library gives it."""
+    expected_row = pvlib.pvsystem.retrieve_sam("CECMod")[DEFAULT_CEC_MODULE]
+    for array in system.arrays:
+        pd.testing.assert_series_equal(
+            pd.Series(array.module_parameters), expected_row, check_names=False
+        )
+
+
 class TestCECLibraryReuse:
-    """The CEC module and inverter libraries are parsed once, and each system gets its own parameters."""
+    """The CEC module and inverter libraries are parsed once and never copied, and each system gets its own parameters."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def cec_library_shapes(cls) -> set[tuple[int, ...]]:
+        """The shapes of pvlib's CEC module and inverter libraries, read once for this class's tests."""
+        return {pvlib.pvsystem.retrieve_sam(library).shape for library in ("CECMod", "CECInverter")}
 
     def test_sam_libraries_are_read_at_most_once_across_systems(self, monkeypatch):
         reads = []
@@ -236,16 +104,67 @@ class TestCECLibraryReuse:
         assert reads.count("CECMod") <= 1, f"SAM library reads: {reads}"
         assert reads.count("CECInverter") <= 1, f"SAM library reads: {reads}"
 
-    def test_customised_system_leaves_later_default_systems_unchanged(self):
-        baseline = create_pv_system(PVConfig(capacity_kw=4.0))
+    @pytest.mark.parametrize(
+        "read_rows",
+        [
+            pytest.param(lambda: cec_module_params(DEFAULT_CEC_MODULE), id="cec_module_params"),
+            pytest.param(lambda: create_pv_system(PVConfig(capacity_kw=4.0)), id="a-default-system"),
+            pytest.param(
+                lambda: create_pv_system(
+                    PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module())
+                ),
+                id="a-module-without-T_NOCT-or-A_c",
+            ),
+        ],
+    )
+    def test_reading_library_rows_copies_no_library_frame(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        cec_library_shapes: set[tuple[int, ...]],
+        read_rows: Callable[[], object],
+    ) -> None:
+        """Once the libraries are parsed and cached, reading their rows copies no frame of a library's shape."""
+        read_rows()
+        copied_shapes: list[tuple[int, ...]] = []
+        real_copy = pd.DataFrame.copy
+
+        def recording_copy(frame: pd.DataFrame, *args: Any, **kwargs: Any) -> pd.DataFrame:
+            copied_shapes.append(frame.shape)
+            return real_copy(frame, *args, **kwargs)
+
+        monkeypatch.setattr(pd.DataFrame, "copy", recording_copy)
+
+        read_rows()
+
+        assert cec_library_shapes.isdisjoint(copied_shapes), f"frames copied: {copied_shapes}"
+
+    def test_customised_system_leaves_later_default_systems_unchanged(self) -> None:
         create_pv_system(
-            PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003, inverter_efficiency=0.90)
+            PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003, module_efficiency=0.15)
         )
 
         later = create_pv_system(PVConfig(capacity_kw=4.0))
 
-        assert "gamma_pdc" not in later.arrays[0].module_parameters
-        assert later.inverter_parameters["Pdco"] == baseline.inverter_parameters["Pdco"]
+        _assert_wires_the_default_cec_row(later)
+
+    @pytest.mark.parametrize(
+        "get_default_module",
+        [
+            pytest.param(lambda: cec_module_params(DEFAULT_CEC_MODULE), id="cec_module_params"),
+            pytest.param(
+                lambda: create_pv_system(PVConfig(capacity_kw=4.0)).arrays[0].module_parameters,
+                id="an-earlier-default-system",
+            ),
+        ],
+    )
+    def test_an_edited_default_module_leaves_later_default_systems_unchanged(
+        self, get_default_module: Callable[[], dict[str, float]]
+    ) -> None:
+        get_default_module()["A_c"] = 99.0
+
+        later = create_pv_system(PVConfig(capacity_kw=4.0))
+
+        _assert_wires_the_default_cec_row(later)
 
     def test_each_system_keeps_its_own_inverter_efficiency(self) -> None:
         configs = (PVConfig(capacity_kw=4.0), PVConfig(capacity_kw=4.0, inverter_efficiency=0.90))
@@ -323,13 +242,60 @@ class TestCreateModelChain:
         assert mc.location.longitude == location.longitude
 
 
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+class TestRunModelChain:
+    """run_model_chain is the one way a chain runs, and no run of it raises a RuntimeWarning."""
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(PVConfig.default_4kw(), id="one-array"),
+            pytest.param(PVConfig(capacity_kw=7.6), id="two-arrays"),
+        ],
+    )
+    def test_it_runs_the_chain_it_is_given_over_the_weather(self, config: PVConfig) -> None:
+        chain = create_model_chain(config, Location.bristol())
+        weather = clear_day_weather()
+
+        run = run_model_chain(chain, weather)
+
+        assert run is chain
+        pd.testing.assert_index_equal(run.results.ac.index, weather.index)
+        assert run.results.ac.max() > 0
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(PVConfig.default_4kw(), id="default-4kw"),
+            pytest.param(
+                dataclasses.replace(PVConfig.default_4kw(), system_age_years=20.0),
+                id="default-4kw-at-20-years",
+            ),
+            pytest.param(
+                PVConfig(capacity_kw=8.0, inverter_capacity_kw=3.68), id="8kw-on-3.68kw"
+            ),
+        ],
+    )
+    def test_simulate_pv_output_is_the_run_chains_ac_in_kw_clipped_at_0(
+        self, config: PVConfig
+    ) -> None:
+        bristol = Location.bristol()
+        day = clear_day_weather()
+
+        run = run_model_chain(create_model_chain(config, bristol), day)
+
+        pd.testing.assert_series_equal(
+            simulate_pv_output(config, bristol, day), (run.results.ac / 1000).clip(lower=0)
+        )
+
+
 class TestSimulatePVOutput:
     """Test simulate_pv_output function."""
 
     @pytest.fixture
-    def sample_weather_data(self, clear_june_daytime: pd.DataFrame) -> pd.DataFrame:
+    def sample_weather_data(self) -> pd.DataFrame:
         """The clear June daytime, with air temperature and wind that rise and fall through the day."""
-        return clear_june_daytime.assign(
+        return clear_june_daytime().assign(
             temp_air=[15, 17, 19, 21, 23, 24, 24, 23, 21, 19, 17, 15],
             wind_speed=[2, 2, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2],
         )
@@ -350,6 +316,17 @@ class TestSimulatePVOutput:
         # Peak should not exceed system capacity by much
         assert output.max() < config.capacity_kw * 1.2  # Allow some tolerance
 
+    def test_an_undersized_inverter_clips_the_ac_at_its_rating(self) -> None:
+        config = PVConfig(capacity_kw=4.0, inverter_capacity_kw=3.0)
+        rating_kw = create_pv_system(config).inverter_parameters["Paco"] / 1000
+
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime()).max()
+
+        assert peak_kw == pytest.approx(rating_kw), (
+            f"{config.capacity_kw} kW of modules on a {rating_kw:.3f} kW inverter peaked at "
+            f"{peak_kw:.3f} kW on the clear June day"
+        )
+
     def test_no_negative_values(self, sample_weather_data):
         """AC power output has no negative values."""
         config = PVConfig(capacity_kw=4.0)
@@ -365,355 +342,27 @@ class TestSimulatePVOutput:
         # Last entry has zero irradiance
         assert output.iloc[-1] == pytest.approx(0.0, abs=0.01)
 
-    def test_degradation_applied_in_live_path(self, sample_weather_data):
-        """simulate_pv_output with system_age_years=20 returns 90% of the age-0 output.
-
-        This is the live-path signal test: it verifies that degradation is wired into
-        the production function, not just the standalone apply_degradation helper.
-        The pre-degradation ac_power is identical for age-0 and age-20 (the new fields
-        don't enter the pvlib model chain), so the ratio is exactly 0.90.
-        """
-        location = Location.bristol()
-        age0_config = PVConfig(capacity_kw=4.0)
-        age20_config = PVConfig(capacity_kw=4.0, system_age_years=20)
-
-        age0 = simulate_pv_output(age0_config, location, sample_weather_data)
-        age20 = simulate_pv_output(age20_config, location, sample_weather_data)
-
-        # Ensure there is meaningful generation (not all-zero)
-        assert age0.sum() > 0
-
-        # age-20 output must be exactly 90% of age-0 (factor = 1 - 20*0.005 = 0.90)
-        assert age20.sum() == pytest.approx(0.90 * age0.sum(), rel=1e-6)
-        assert np.allclose(age20.values, (age0 * 0.90).values)
-
-    def test_fully_degraded_system_yields_zero(self, sample_weather_data):
-        """A fully degraded system (age*rate > 1) yields all-zero generation, not negative.
-
-        calculate_degradation_factor clamps the factor to max(0.0, factor). With
-        system_age_years=300 and degradation_rate_per_year=0.01 the raw factor would
-        be 1 - 300*0.01 = -2.0, which is clamped to 0.0. This exercises that branch
-        via the live simulate_pv_output path so negative output is never returned.
-        """
+    @pytest.mark.parametrize("capacity_kw", [4.0, 7.6], ids=["one-array", "two-arrays"])
+    def test_fully_degraded_system_yields_zero(
+        self, sample_weather_data: pd.DataFrame, capacity_kw: float
+    ) -> None:
+        """A fully degraded system (age*rate > 1) yields all-zero generation, not negative, from one array and from two."""
         location = Location.bristol()
         # Confirm there is meaningful pre-degradation generation (non-trivial fixture)
-        age0_config = PVConfig(capacity_kw=4.0)
+        age0_config = PVConfig(capacity_kw=capacity_kw)
         age0 = simulate_pv_output(age0_config, location, sample_weather_data)
         assert age0.sum() > 0, "fixture must produce non-zero generation for this test to be meaningful"
 
         # 300 years * 0.01/yr = raw factor -2.0 → clamped to 0.0 → all-zero output
         fully_degraded_config = PVConfig(
-            capacity_kw=4.0,
+            capacity_kw=capacity_kw,
             system_age_years=300,
             degradation_rate_per_year=0.01,
         )
         output = simulate_pv_output(fully_degraded_config, location, sample_weather_data)
-        # Factor == 0.0 is exact (clamped integer multiplication), so == 0.0 is safe
         assert (output == 0.0).all(), (
             "Fully degraded system must produce zero output, not negative values"
         )
-
-
-class TestInterpolateToMinuteResolution:
-    """Test PV-007: 1-minute resolution interpolation."""
-
-    @pytest.fixture
-    def hourly_power(self) -> pd.Series:
-        """Sample hourly power data."""
-        index = pd.date_range("2024-06-21 10:00", periods=3, freq="1h")
-        return pd.Series([2.0, 3.0, 1.5], index=index, name="power_kw")
-
-    def test_output_has_minute_frequency(self, hourly_power):
-        """Output has 1-minute frequency."""
-        minute_power = interpolate_to_minute_resolution(hourly_power)
-        # 3 hours = 180 minutes
-        assert len(minute_power) == 180
-
-    def test_preserves_energy_totals(self, hourly_power):
-        """Total energy is preserved after interpolation."""
-        minute_power = interpolate_to_minute_resolution(hourly_power)
-        # Energy = power * time
-        # Hourly energy: sum of (power_kW * 1 hour) = 6.5 kWh
-        # Minute energy: sum of (power_kW * 1/60 hour)
-        hourly_total = hourly_power.sum()  # kWh (assuming 1-hour intervals)
-        minute_total = minute_power.sum() / 60  # Convert minute sum to kWh
-        assert minute_total == pytest.approx(hourly_total, rel=0.01)
-
-    def test_no_negative_values(self, hourly_power):
-        """Output has no negative values."""
-        minute_power = interpolate_to_minute_resolution(hourly_power)
-        assert (minute_power >= 0).all()
-
-    def test_values_within_hour_are_constant(self, hourly_power):
-        """Values within each hour are the same (forward-fill)."""
-        minute_power = interpolate_to_minute_resolution(hourly_power)
-        # First 60 minutes should all equal 2.0
-        first_hour = minute_power.iloc[:60]
-        assert (first_hour == 2.0).all()
-
-    def test_handles_timezone_aware_index(self):
-        """Works with timezone-aware index."""
-        index = pd.date_range(
-            "2024-06-21 10:00", periods=2, freq="1h", tz="Europe/London"
-        )
-        hourly_power = pd.Series([2.0, 3.0], index=index)
-        minute_power = interpolate_to_minute_resolution(hourly_power)
-        assert minute_power.index.tz is not None
-
-
-class TestDegradationFactor:
-    """Test PV-006: Annual degradation calculation."""
-
-    def test_year_zero_no_degradation(self):
-        """Year 0 = 100% capacity (factor = 1.0)."""
-        factor = calculate_degradation_factor(0)
-        assert factor == 1.0
-
-    def test_year_one_default_rate(self):
-        """Year 1 with default rate = 99.5%."""
-        factor = calculate_degradation_factor(1)
-        assert factor == pytest.approx(0.995, rel=1e-6)
-
-    def test_year_ten_default_rate(self):
-        """Year 10 with default rate = 95%."""
-        factor = calculate_degradation_factor(10)
-        assert factor == pytest.approx(0.95, rel=1e-6)
-
-    def test_year_twenty_default_rate(self):
-        """Year 20 with default rate = 90%."""
-        factor = calculate_degradation_factor(20)
-        assert factor == pytest.approx(0.90, rel=1e-6)
-
-    def test_custom_degradation_rate(self):
-        """Custom degradation rate applied correctly."""
-        # 1% per year, year 10 = 90%
-        factor = calculate_degradation_factor(10, degradation_rate_per_year=0.01)
-        assert factor == pytest.approx(0.90, rel=1e-6)
-
-    def test_fractional_years(self):
-        """Fractional years work correctly."""
-        factor = calculate_degradation_factor(5.5, degradation_rate_per_year=0.01)
-        # 1 - (5.5 * 0.01) = 0.945
-        assert factor == pytest.approx(0.945, rel=1e-6)
-
-    def test_negative_age_raises(self):
-        """Negative system age raises error."""
-        with pytest.raises(ValueError, match="non-negative"):
-            calculate_degradation_factor(-1)
-
-    @pytest.mark.parametrize("age", [math.nan, math.inf, -math.inf])
-    def test_a_non_finite_age_raises(self, age: float) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"System age must be non-negative and finite, got {age}"),
-        ):
-            calculate_degradation_factor(age)
-
-    def test_invalid_rate_raises(self):
-        """Invalid degradation rate raises error."""
-        with pytest.raises(ValueError, match="0-1"):
-            calculate_degradation_factor(5, degradation_rate_per_year=1.5)
-        with pytest.raises(ValueError, match="0-1"):
-            calculate_degradation_factor(5, degradation_rate_per_year=-0.1)
-
-    @pytest.mark.parametrize("rate", [math.nan, math.inf, -math.inf])
-    def test_a_non_finite_rate_raises(self, rate: float) -> None:
-        with pytest.raises(
-            ValueError,
-            match=re.escape(f"Degradation rate must be 0-1, got {rate}"),
-        ):
-            calculate_degradation_factor(5, degradation_rate_per_year=rate)
-
-    def test_factor_clamped_at_zero(self):
-        """Factor can't go below zero."""
-        # At 200 years with 1% rate, would be negative, but clamped
-        factor = calculate_degradation_factor(200, degradation_rate_per_year=0.01)
-        assert factor == 0.0
-
-
-class TestApplyDegradation:
-    """Test applying degradation to generation series."""
-
-    @pytest.fixture
-    def sample_generation(self) -> pd.Series:
-        """Sample generation data."""
-        index = pd.date_range("2024-06-21 10:00", periods=5, freq="1h")
-        return pd.Series([1.0, 2.0, 3.0, 2.0, 1.0], index=index, name="generation_kw")
-
-    def test_year_zero_no_change(self, sample_generation):
-        """Year 0 degradation doesn't change values."""
-        degraded = apply_degradation(sample_generation, system_age_years=0)
-        assert (degraded == sample_generation).all()
-
-    def test_year_ten_reduces_by_five_percent(self, sample_generation):
-        """Year 10 reduces generation by 5% (default rate)."""
-        degraded = apply_degradation(sample_generation, system_age_years=10)
-        expected = sample_generation * 0.95
-        assert np.allclose(degraded.values, expected.values)
-
-    def test_preserves_index(self, sample_generation):
-        """Degradation preserves the series index."""
-        degraded = apply_degradation(sample_generation, system_age_years=5)
-        assert (degraded.index == sample_generation.index).all()
-
-    def test_custom_rate(self, sample_generation):
-        """Custom degradation rate applied correctly."""
-        # 2% per year, year 5 = 10% loss = 90% remaining
-        degraded = apply_degradation(
-            sample_generation,
-            system_age_years=5,
-            degradation_rate_per_year=0.02
-        )
-        expected = sample_generation * 0.90
-        assert np.allclose(degraded.values, expected.values)
-
-
-class TestConfigurablePanelParameters:
-    """Test PV-004: Configurable panel parameters."""
-
-    def test_default_module_efficiency(self):
-        """Default module efficiency is 20%."""
-        config = PVConfig(capacity_kw=4.0)
-        assert config.module_efficiency == 0.20
-
-    def test_custom_module_efficiency(self):
-        """Module efficiency can be customized."""
-        config = PVConfig(capacity_kw=4.0, module_efficiency=0.22)
-        assert config.module_efficiency == 0.22
-
-    def test_invalid_module_efficiency_raises(self):
-        """Invalid module efficiency raises error."""
-        with pytest.raises(ValueError, match="Module efficiency"):
-            PVConfig(capacity_kw=4.0, module_efficiency=0)
-        with pytest.raises(ValueError, match="Module efficiency"):
-            PVConfig(capacity_kw=4.0, module_efficiency=1.5)
-
-    def test_default_temperature_coefficient(self):
-        """Default temperature coefficient is -0.4%/°C."""
-        config = PVConfig(capacity_kw=4.0)
-        assert config.temperature_coefficient == -0.004
-
-    def test_custom_temperature_coefficient(self):
-        """Temperature coefficient can be customized."""
-        config = PVConfig(capacity_kw=4.0, temperature_coefficient=-0.003)
-        assert config.temperature_coefficient == -0.003
-
-    def test_invalid_temperature_coefficient_raises(self):
-        """Invalid temperature coefficient raises error."""
-        with pytest.raises(ValueError, match="Temperature coefficient"):
-            PVConfig(capacity_kw=4.0, temperature_coefficient=0)
-        with pytest.raises(ValueError, match="Temperature coefficient"):
-            PVConfig(capacity_kw=4.0, temperature_coefficient=-1.5)
-
-    def test_custom_module_params(self):
-        """Custom module parameters can be provided."""
-        custom_params = {"STC": 450, "pdc0": 450}
-        config = PVConfig(capacity_kw=4.0, custom_module_params=custom_params)
-        assert config.custom_module_params == custom_params
-
-    def test_create_simple_module_params(self):
-        """create_simple_module_params creates valid parameters."""
-        params = create_simple_module_params(
-            efficiency=0.22,
-            temperature_coefficient=-0.003,
-            module_power_w=450.0
-        )
-        assert params["gamma_pdc"] == -0.003
-        assert params["efficiency"] == 0.22
-        assert params["STC"] == 450.0
-
-    def test_custom_module_params_used_in_system(self):
-        """Custom module parameters are used when creating PVSystem."""
-        custom_params = create_simple_module_params(
-            efficiency=0.22,
-            temperature_coefficient=-0.003
-        )
-        config = PVConfig(capacity_kw=4.0, custom_module_params=custom_params)
-        system = create_pv_system(config)
-        array_params = system.arrays[0].module_parameters
-        assert array_params["gamma_pdc"] == -0.003
-
-
-class TestConfigurableInverterParameters:
-    """Test PV-005: Configurable inverter parameters."""
-
-    def test_default_inverter_efficiency(self):
-        """Default inverter efficiency is 96%."""
-        config = PVConfig(capacity_kw=4.0)
-        assert config.inverter_efficiency == 0.96
-
-    def test_custom_inverter_efficiency(self):
-        """Inverter efficiency can be customized."""
-        config = PVConfig(capacity_kw=4.0, inverter_efficiency=0.97)
-        assert config.inverter_efficiency == 0.97
-
-    def test_invalid_inverter_efficiency_raises(self):
-        """Invalid inverter efficiency raises error."""
-        with pytest.raises(ValueError, match="Inverter efficiency"):
-            PVConfig(capacity_kw=4.0, inverter_efficiency=0)
-        with pytest.raises(ValueError, match="Inverter efficiency"):
-            PVConfig(capacity_kw=4.0, inverter_efficiency=1.1)
-
-    def test_default_inverter_capacity(self):
-        """Default inverter capacity matches DC capacity."""
-        config = PVConfig(capacity_kw=4.0)
-        assert config.inverter_capacity_kw is None
-        assert config.effective_inverter_capacity_kw == 4.0
-
-    def test_custom_inverter_capacity(self):
-        """Inverter capacity can be customized."""
-        config = PVConfig(capacity_kw=4.0, inverter_capacity_kw=3.5)
-        assert config.inverter_capacity_kw == 3.5
-        assert config.effective_inverter_capacity_kw == 3.5
-
-    def test_invalid_inverter_capacity_raises(self):
-        """Invalid inverter capacity raises error."""
-        with pytest.raises(ValueError, match="Inverter capacity"):
-            PVConfig(capacity_kw=4.0, inverter_capacity_kw=0)
-        with pytest.raises(ValueError, match="Inverter capacity"):
-            PVConfig(capacity_kw=4.0, inverter_capacity_kw=-1)
-
-    def test_custom_inverter_params(self):
-        """Custom inverter parameters can be provided."""
-        custom_params = {"Paco": 3500, "Pdco": 3700}
-        config = PVConfig(capacity_kw=4.0, custom_inverter_params=custom_params)
-        assert config.custom_inverter_params == custom_params
-
-    def test_create_simple_inverter_params(self):
-        """create_simple_inverter_params creates valid parameters."""
-        params = create_simple_inverter_params(
-            efficiency=0.97,
-            capacity_w=5000
-        )
-        assert params["Paco"] == 5000.0
-        assert params["efficiency"] == 0.97
-
-    def test_create_pvwatts_inverter_params(self):
-        """create_pvwatts_inverter_params describes a PVWatts inverter that clips at capacity_w."""
-        params = create_pvwatts_inverter_params(efficiency=0.97, capacity_w=5000)
-        overload_w = 1.5 * params["pdc0"]
-
-        assert params["eta_inv_nom"] == 0.97
-        assert pvlib.inverter.pvwatts(overload_w, **params) == pytest.approx(5000.0)
-
-    def test_custom_inverter_params_used_in_system(self):
-        """Custom inverter parameters are used when creating PVSystem."""
-        custom_params = create_simple_inverter_params(
-            efficiency=0.97,
-            capacity_w=3500
-        )
-        config = PVConfig(capacity_kw=4.0, custom_inverter_params=custom_params)
-        system = create_pv_system(config)
-        assert system.inverter_parameters["Paco"] == 3500.0
-
-    def test_undersized_inverter_causes_clipping(self):
-        """Undersized inverter causes output clipping."""
-        # Create system with 4 kW DC but only 3 kW inverter
-        config_undersized = PVConfig(capacity_kw=4.0, inverter_capacity_kw=3.0)
-        system = create_pv_system(config_undersized)
-        # Inverter should be sized to approximately 3 kW
-        # (CEC database finds closest match)
-        assert system.inverter_parameters["Paco"] < 4000
 
 
 FLAT_INVERTER_EFFICIENCY = 0.96
@@ -762,12 +411,6 @@ def _wiring(system: pvlib.pvsystem.PVSystem) -> list[tuple[int, int]]:
     return [(array.modules_per_string, array.strings) for array in system.arrays]
 
 
-def _dc_per_array(chain: pvlib.modelchain.ModelChain) -> tuple[pd.DataFrame, ...]:
-    """The run's DC results, one frame per array: pvlib gives a bare frame for one array."""
-    dc = chain.results.dc
-    return dc if isinstance(dc, tuple) else (dc,)
-
-
 def _usable_cec_inverter_numbers() -> pd.DataFrame:
     """The CEC catalogue's inverters with a positive finite rating, start-up power, nominal voltage and MPPT window, as numbers."""
     catalogue = pvlib.pvsystem.retrieve_sam("CECInverter")
@@ -777,7 +420,6 @@ def _usable_cec_inverter_numbers() -> pd.DataFrame:
     return numbers[((numbers > 0) & np.isfinite(numbers)).all(axis=1)]
 
 
-@pytest.fixture
 def clear_june_daytime() -> pd.DataFrame:
     """Hourly weather for a cloudless midsummer day, 06:00-17:00 London time."""
     index = pd.date_range("2024-06-21 06:00", periods=12, freq="1h", tz="Europe/London")
@@ -793,7 +435,6 @@ def clear_june_daytime() -> pd.DataFrame:
     )
 
 
-@pytest.fixture
 def overcast_january_daytime() -> pd.DataFrame:
     """Hourly weather for a dull midwinter day, 08:00-16:00 London time, diffuse light only."""
     index = pd.date_range("2024-01-15 08:00", periods=9, freq="1h", tz="Europe/London")
@@ -802,6 +443,21 @@ def overcast_january_daytime() -> pd.DataFrame:
         {"ghi": diffuse, "dni": 0, "dhi": diffuse, "temp_air": 5, "wind_speed": 2},
         index=index,
     )
+
+
+CLEAR_AND_OVERCAST_DAYS = [
+    pytest.param(day, id=day.__name__) for day in (clear_june_daytime, overcast_january_daytime)
+]
+
+
+def with_stc_at_its_maximum_power(sapm_module: dict[str, float]) -> dict[str, float]:
+    """The SAPM module rated at its maximum power at reference conditions, Impo x Vmpo, as its STC."""
+    return {**sapm_module, "STC": sapm_module["Impo"] * sapm_module["Vmpo"]}
+
+
+def rated_sapm_module() -> dict[str, float]:
+    """sapm_library_module() rated at its maximum power at reference conditions (with_stc_at_its_maximum_power)."""
+    return with_stc_at_its_maximum_power(sapm_library_module())
 
 
 class TestInverterMatchesStringVoltage:
@@ -880,13 +536,15 @@ class TestInverterMatchesStringVoltage:
     @pytest.mark.parametrize("config", SYSTEM_SIZE_CONFIGS, ids=_config_id)
     @pytest.mark.parametrize(
         ("day", "floor"),
-        [("clear_june_daytime", 0.92), ("overcast_january_daytime", 0.5)],
-        ids=["clear", "overcast"],
+        [
+            pytest.param(clear_june_daytime, 0.92, id="clear"),
+            pytest.param(overcast_january_daytime, 0.5, id="overcast"),
+        ],
     )
     def test_ac_energy_stays_a_physical_fraction_of_a_flat_inverter_of_the_same_rating(
-        self, request: pytest.FixtureRequest, config: PVConfig, day: str, floor: float
+        self, config: PVConfig, day: Callable[[], pd.DataFrame], floor: float
     ) -> None:
-        weather = request.getfixturevalue(day)
+        weather = day()
         flat_inverter = create_simple_inverter_params(
             efficiency=FLAT_INVERTER_EFFICIENCY,
             capacity_w=config.effective_inverter_capacity_kw * 1000,
@@ -901,7 +559,7 @@ class TestInverterMatchesStringVoltage:
         ceiling = 1 / FLAT_INVERTER_EFFICIENCY
         assert floor <= ratio <= ceiling, (
             f"{config.capacity_kw} kW dc on a {config.effective_inverter_capacity_kw} kW "
-            f"inverter on the {day} gave {actual_kwh:.3f} kWh, {ratio:.3f} of the flat-"
+            f"inverter on the {day.__name__} gave {actual_kwh:.3f} kWh, {ratio:.3f} of the flat-"
             f"{FLAT_INVERTER_EFFICIENCY:.0%} reference's {reference_kwh:.3f} kWh "
             f"(physical range {floor} to {ceiling:.4f})"
         )
@@ -918,10 +576,8 @@ class TestInverterMatchesStringVoltage:
 
     def test_a_sapm_module_needs_an_explicit_inverter(self) -> None:
         """A SAPM module has no V_mp_ref to voltage-match a CEC inverter to, and no pdc0 and gamma_pdc for a PVWatts inverter."""
-        sapm_module = dict(pvlib.pvsystem.retrieve_sam("SandiaMod").iloc[:, 0])
-
         with pytest.raises(ValueError, match="custom_inverter_params"):
-            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=sapm_module))
+            create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=rated_sapm_module()))
 
 
 class TestBatteryInverterChargersAreNotPicked:
@@ -933,16 +589,14 @@ class TestBatteryInverterChargersAreNotPicked:
     (docs/pv-inverter-string-matching.md §7).
     """
 
-    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
     @pytest.mark.parametrize("config", NEAREST_RATED_TO_A_BATTERY_INVERTER_CONFIGS, ids=_config_id)
     def test_strings_deliver_a_clear_summer_days_dc_energy_above_the_mppt_floor(
-        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+        self, config: PVConfig
     ) -> None:
-        chain = create_model_chain(config, Location.bristol())
-        chain.run_model(clear_june_daytime)
+        chain = run_model_chain(create_model_chain(config, Location.bristol()), clear_june_daytime())
         floor_v = chain.system.inverter_parameters["Mppt_low"]
 
-        arrays = _dc_per_array(chain)
+        arrays = per_array(chain.results.dc)
         dc_wh = sum(array["p_mp"].sum() for array in arrays)
         below_floor_wh = sum(array["p_mp"][array["v_mp"] < floor_v].sum() for array in arrays)
         share = below_floor_wh / dc_wh
@@ -1080,12 +734,12 @@ class TestPVWattsModule:
     """A module without a voltage model runs on pvlib's PVWatts DC and inverter models."""
 
     @pytest.mark.parametrize("module_power_w", [250.0, 400.0, 500.0])
-    @pytest.mark.parametrize("day", ["clear_june_daytime", "overcast_january_daytime"])
+    @pytest.mark.parametrize("day", CLEAR_AND_OVERCAST_DAYS)
     def test_yields_the_energy_per_kwp_of_the_default_module(
-        self, request: pytest.FixtureRequest, module_power_w: float, day: str
+        self, module_power_w: float, day: Callable[[], pd.DataFrame]
     ) -> None:
         """Each rating divides 4 kW exactly, so every system wires the same 4 kW as the default's 10 x 400.4 W."""
-        weather = request.getfixturevalue(day)
+        weather = day()
         default = PVConfig(capacity_kw=4.0)
         pvwatts = dataclasses.replace(
             default,
@@ -1097,37 +751,34 @@ class TestPVWattsModule:
 
         ratio = pvwatts_kwh / default_kwh
         assert 0.9 <= ratio <= 1.1, (
-            f"4 kW of {module_power_w:.0f} W PVWatts modules on the {day} gave "
+            f"4 kW of {module_power_w:.0f} W PVWatts modules on the {day.__name__} gave "
             f"{pvwatts_kwh:.3f} kWh, {ratio:.3f} of the default module's {default_kwh:.3f} kWh"
         )
 
-    def test_the_automatic_inverter_clips_at_the_configured_ac_capacity(
-        self, clear_june_daytime: pd.DataFrame
-    ) -> None:
+    def test_the_automatic_inverter_clips_at_the_configured_ac_capacity(self) -> None:
         config = PVConfig(
             capacity_kw=4.0,
             inverter_capacity_kw=3.0,
             custom_module_params=create_simple_module_params(),
         )
 
-        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime).max()
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime()).max()
 
         assert peak_kw == pytest.approx(3.0), (
             f"a 3 kW inverter on 4 kW of modules peaked at {peak_kw:.3f} kW"
         )
 
-    def test_the_automatic_inverter_runs_at_the_configured_efficiency(
-        self, clear_june_daytime: pd.DataFrame
-    ) -> None:
+    def test_the_automatic_inverter_runs_at_the_configured_efficiency(self) -> None:
         at_96_percent = PVConfig(
             capacity_kw=4.0,
             inverter_efficiency=0.96,
             custom_module_params=create_simple_module_params(),
         )
         at_90_percent = dataclasses.replace(at_96_percent, inverter_efficiency=0.90)
+        weather = clear_june_daytime()
 
-        kwh_at_96_percent = simulate_pv_output(at_96_percent, Location.bristol(), clear_june_daytime).sum()
-        kwh_at_90_percent = simulate_pv_output(at_90_percent, Location.bristol(), clear_june_daytime).sum()
+        kwh_at_96_percent = simulate_pv_output(at_96_percent, Location.bristol(), weather).sum()
+        kwh_at_90_percent = simulate_pv_output(at_90_percent, Location.bristol(), weather).sum()
 
         assert kwh_at_90_percent / kwh_at_96_percent == pytest.approx(0.90 / 0.96, rel=0.01), (
             f"a 90% inverter gave {kwh_at_90_percent:.3f} kWh against "
@@ -1158,14 +809,15 @@ class TestCecInverterEfficiency:
 
     @pytest.mark.parametrize("capacity_kw", [3.68, 5.0])
     def test_ac_energy_rises_with_the_configured_efficiency_through_the_default(
-        self, capacity_kw: float, clear_june_daytime: pd.DataFrame
+        self, capacity_kw: float
     ) -> None:
         efficiencies = (0.95, 0.955, 0.96, 0.965, 0.97)
+        weather = clear_june_daytime()
         kwh = [
             simulate_pv_output(
                 PVConfig(capacity_kw=capacity_kw, inverter_efficiency=efficiency),
                 Location.bristol(),
-                clear_june_daytime,
+                weather,
             ).sum()
             for efficiency in efficiencies
         ]
@@ -1204,39 +856,92 @@ class TestInverterModelMatchesModuleModel:
         with pytest.raises(ValueError, match="PVWatts"):
             create_model_chain(config, Location.bristol())
 
-    def test_a_pvwatts_module_takes_custom_pvwatts_inverter_parameters(
-        self, clear_june_daytime: pd.DataFrame
-    ) -> None:
+    def test_a_pvwatts_module_takes_custom_pvwatts_inverter_parameters(self) -> None:
         config = PVConfig(
             capacity_kw=4.0,
             custom_module_params=create_simple_module_params(),
             custom_inverter_params=create_pvwatts_inverter_params(capacity_w=3000.0),
         )
 
-        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime).max()
+        peak_kw = simulate_pv_output(config, Location.bristol(), clear_june_daytime()).max()
 
         assert peak_kw == pytest.approx(3.0), (
             f"a custom 3 kW PVWatts inverter on 4 kW of PVWatts modules peaked at {peak_kw:.3f} kW"
         )
 
 
+def _wired_module_count(system: pvlib.pvsystem.PVSystem) -> int:
+    """The modules wired across all of the system's arrays."""
+    return sum(array.modules_per_string * array.strings for array in system.arrays)
+
+
+def _dc_power_at_stc_w(config: PVConfig) -> float:
+    """The DC power, in W, that config's model chain gives before system losses at STC: 1000 W/m2 on cells at 25 C."""
+    chain = create_model_chain(dataclasses.replace(config, system_losses=0.0), Location.bristol())
+    at_stc = pd.DataFrame(
+        {"effective_irradiance": [1000.0], "cell_temperature": [25.0]},
+        index=pd.DatetimeIndex(["2024-06-21 12:00"], tz="Europe/London"),
+    )
+    chain.run_model_from_effective_irradiance((at_stc,) * len(chain.system.arrays))
+    return sum(
+        float((dc["p_mp"] if isinstance(dc, pd.DataFrame) else dc).iloc[0])
+        for dc in per_array(chain.results.dc)
+    )
+
+
 class TestWiredDcCapacity:
-    """wired_dc_capacity_kw is the DC capacity create_pv_system wires: a whole number of modules, so not always the configured capacity_kw."""
+    """create_pv_system wires the whole number of modules nearest capacity_kw, each rated at its pdc0 if it has PVWatts parameters and at its STC otherwise; wired_dc_capacity_kw is the DC those modules give at STC."""
 
     @pytest.mark.parametrize(
-        "config", [PVConfig(capacity_kw=0.3), *SYSTEM_SIZE_CONFIGS], ids=_config_id
+        "config",
+        [
+            PVConfig(capacity_kw=0.3),
+            *SYSTEM_SIZE_CONFIGS,
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module()),
+                id="pvwatts-module-without-STC",
+            ),
+            pytest.param(
+                PVConfig(
+                    capacity_kw=1.1,
+                    custom_module_params=create_simple_module_params(module_power_w=250.0),
+                ),
+                id="create_simple_module_params",
+            ),
+        ],
+        ids=_config_id,
     )
-    def test_is_the_dc_of_the_modules_create_pv_system_wires(self, config: PVConfig) -> None:
-        system = create_pv_system(config)
-        wired_w = sum(
-            array.modules_per_string * array.strings * array.module_parameters["STC"]
-            for array in system.arrays
+    def test_is_the_dc_the_model_chain_gives_at_stc(self, config: PVConfig) -> None:
+        wired_kw = wired_dc_capacity_kw(config)
+        dc_at_stc_w = _dc_power_at_stc_w(config)
+
+        assert wired_kw * 1000 == pytest.approx(dc_at_stc_w, rel=1e-6), (
+            f"{config.capacity_kw} kW wires {wired_kw:.6f} kWp, but its model chain gives "
+            f"{dc_at_stc_w:.3f} W of DC at STC"
         )
 
-        assert wired_dc_capacity_kw(config) == pytest.approx(wired_w / 1000), (
-            f"{config.capacity_kw} kW wired as {_wiring(system)} "
-            f"(modules per string, strings) is {wired_w:.0f} W of modules"
+    @pytest.mark.parametrize(
+        ("config", "modules", "module_w"),
+        [
+            pytest.param(
+                PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module()),
+                13,
+                300.0,
+                id="4kW-of-300W-pvwatts-modules-without-STC",
+            ),
+            pytest.param(PVConfig(capacity_kw=0.3), 1, 400.428, id="0.3kW-of-the-default-module"),
+            pytest.param(PVConfig(capacity_kw=4.0), 10, 400.428, id="4kW-of-the-default-module"),
+        ],
+    )
+    def test_wires_the_whole_modules_nearest_the_capacity_at_their_rating(
+        self, config: PVConfig, modules: int, module_w: float
+    ) -> None:
+        system = create_pv_system(config)
+
+        assert _wired_module_count(system) == modules, (
+            f"{config.capacity_kw} kW wired as {_wiring(system)} (modules per string, strings)"
         )
+        assert wired_dc_capacity_kw(config) == pytest.approx(modules * module_w / 1000)
 
     @pytest.mark.parametrize(
         ("capacity_kw", "expected_kw"), [(4.0, 4.0), (1.1, 1.0), (0.3, 0.25)]
@@ -1250,6 +955,442 @@ class TestWiredDcCapacity:
         )
 
         assert wired_dc_capacity_kw(config) == pytest.approx(expected_kw)
+
+    @pytest.mark.parametrize(
+        "custom_inverter_params",
+        [None, create_simple_inverter_params()],
+        ids=["voltage-matched-inverter", "custom-sandia-inverter"],
+    )
+    def test_a_module_with_neither_pdc0_nor_stc_is_refused_at_construction_and_at_use(
+        self, custom_inverter_params: dict[str, float] | None
+    ) -> None:
+        """A PVConfig keeps the caller's own module dict, so an STC deleted after construction reaches use, which refuses the module as construction does, before it reads any inverter."""
+        module = rated_sapm_module()
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=module,
+            custom_inverter_params=custom_inverter_params,
+        )
+        del module["STC"]
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
+
+    @pytest.mark.parametrize(
+        "module_efficiency", [None, 0.2], ids=["own-area", "set-module_efficiency"]
+    )
+    @pytest.mark.parametrize(
+        ("build", "key", "value"),
+        [
+            pytest.param(pvwatts_300_w_module, "pdc0", 0.0, id="pdc0-0"),
+            pytest.param(pvwatts_300_w_module, "pdc0", -250.0, id="pdc0-negative"),
+            pytest.param(pvwatts_300_w_module, "pdc0", math.nan, id="pdc0-nan"),
+            pytest.param(pvwatts_300_w_module, "pdc0", math.inf, id="pdc0-inf"),
+            pytest.param(pvwatts_300_w_module, "pdc0", "300", id="pdc0-text"),
+            pytest.param(default_module, "STC", 0.0, id="STC-0"),
+            pytest.param(default_module, "STC", -400.0, id="STC-negative"),
+            pytest.param(default_module, "STC", math.nan, id="STC-nan"),
+            pytest.param(default_module, "STC", "400.428", id="STC-text"),
+            pytest.param(pvwatts_300_w_module, "pdc0", True, id="pdc0-bool"),
+            pytest.param(pvwatts_300_w_module, "pdc0", np.True_, id="pdc0-numpy-bool"),
+        ],
+    )
+    def test_a_rating_that_is_not_a_finite_number_above_0_is_refused_at_construction_and_at_use(
+        self,
+        build: Callable[[], dict[str, float]],
+        key: str,
+        value: float | str | np.bool_,
+        module_efficiency: float | None,
+    ) -> None:
+        """The rating counts the modules and sizes their area, so a rating that is not a finite number above 0 is refused, naming its key and value, by construction and use alike, before either divides by it; so is text that reads as such a number, from either key (docs/pv-cell-temperature.md §1 says why); so is a boolean, Python's or numpy's, though float() reads it as 1.0 or 0.0."""
+        module = build()
+        config = PVConfig(
+            capacity_kw=4.0, custom_module_params=module, module_efficiency=module_efficiency
+        )
+        module[key] = value
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert key in re.findall(r"\w+", message), message
+        assert repr(value) in message, message
+
+    @pytest.mark.parametrize(
+        "rating",
+        [
+            pytest.param(300, id="int"),
+            pytest.param(np.int64(300), id="numpy-int64"),
+            pytest.param(np.float32(300.0), id="numpy-float32"),
+        ],
+    )
+    def test_a_python_or_numpy_number_rating_is_read_as_its_number(
+        self, rating: int | np.int64 | np.float32
+    ) -> None:
+        """A rating read from a numpy or pandas source is a numpy scalar, so any real number, Python's or numpy's, rates the module, not only a Python float."""
+        config = PVConfig(
+            capacity_kw=4.0, custom_module_params={**pvwatts_300_w_module(), "pdc0": rating}
+        )
+
+        assert wired_dc_capacity_kw(config) == pytest.approx(3.9)
+
+    @pytest.mark.parametrize(
+        "module",
+        [
+            pytest.param(rated_sapm_module, id="rated_sapm_module"),
+            pytest.param(
+                default_module_beyond_every_mppt_window, id="module_beyond_every_mppt_window"
+            ),
+        ],
+    )
+    def test_refuses_a_config_create_pv_system_refuses(
+        self, module: Callable[[], dict[str, float]]
+    ) -> None:
+        """The wired DC is that of the system create_pv_system builds, so there is none where it builds none."""
+        config = PVConfig(capacity_kw=4.0, custom_module_params=module())
+
+        with pytest.raises(ValueError) as building:
+            create_pv_system(config)
+        with pytest.raises(ValueError) as wiring:
+            wired_dc_capacity_kw(config)
+
+        assert str(wiring.value) == str(building.value)
+
+
+CHECKED_KEYS_OF_THE_DEFAULT_MODULE = (
+    "alpha_sc",
+    "a_ref",
+    "I_L_ref",
+    "I_o_ref",
+    "R_sh_ref",
+    "R_s",
+    "Adjust",
+    "T_NOCT",
+    "A_c",
+    "V_mp_ref",
+)
+"""The module parameters default_module() gives that the number rule checks, each a finite float in pvlib's CECMod row."""
+
+OPTIONAL_KEYS_OF_A_CEC_MODULE_AS_TEXT = (
+    ("EgRef", "1.121"),
+    ("dEgdT", "-0.0002677"),
+    ("irrad_ref", "1000"),
+    ("temp_ref", "25"),
+    ("FD", "1"),
+    ("n", "1.526"),
+    ("K", "4"),
+    ("L", "0.002"),
+    ("n_ar", "1.3"),
+)
+"""Keys that pvlib defaults when a CEC module lacks them (calcparams_cec's, the effective irradiance's FD and the physical IAM's), each with the text of a number pvlib reads there: its default, or for n_ar, whose default None applies no anti-reflective coating, a coating's refractive index."""
+
+SAPM_DC_KEYS = (
+    "C0",
+    "C1",
+    "C2",
+    "C3",
+    "Isco",
+    "Impo",
+    "Voco",
+    "Vmpo",
+    "Aisc",
+    "Aimp",
+    "Bvoco",
+    "Mbvoc",
+    "Bvmpo",
+    "Mbvmp",
+    "N",
+    "Cells_in_Series",
+)
+"""The SAPM module parameters that pvlib's sapm reads into the power and voltages an inverter reads."""
+
+PVSYST_ONLY_KEYS = ("gamma_ref", "mu_gamma", "R_sh_0", "R_sh_exp", "cells_in_series")
+"""The module parameters that pvlib's calcparams_pvsyst reads and its calcparams_cec does not."""
+
+PVLIB_READERS_OF_NAMED_MODULE_PARAMETERS = (
+    (pvlib.pvsystem.calcparams_cec, default_module),
+    (pvlib.pvsystem.calcparams_desoto, desoto_module),
+    (pvlib.pvsystem.calcparams_pvsyst, pvsyst_module),
+    (pvlib.pvsystem.pvwatts_dc, pvwatts_300_w_module),
+    (pvlib.iam.physical, default_module),
+)
+"""The pvlib functions the chain runs that take module parameters as named arguments, each with a builder of a module the chain runs it on; pvlib's sapm takes the module whole, so SAPM_DC_KEYS names its keys."""
+
+READER_ARGUMENTS_NOT_READ_AS_MODULE_NUMBERS = frozenset(
+    {"effective_irradiance", "temp_cell", "aoi", "cap_adjustment"}
+)
+"""The readers' arguments that are not module parameters read as numbers: the irradiance, cell temperature and angle of incidence the chain computes, and pvwatts_dc's flag cap_adjustment (TestAModuleFlagAModelReadsIsTrueOrFalse)."""
+
+MODULE_NUMBERS_PVLIB_READERS_TAKE_BY_NAME = [
+    pytest.param(build, key, id=f"{reader.__name__}-{key}")
+    for reader, build in PVLIB_READERS_OF_NAMED_MODULE_PARAMETERS
+    for key in inspect.signature(reader).parameters
+    if key not in READER_ARGUMENTS_NOT_READ_AS_MODULE_NUMBERS
+]
+"""Each module parameter that one of those readers takes by name, as the installed pvlib's signature names it, with the builder of the reader's module."""
+
+_REFUSAL_OF_THE_DEFAULT_MODULE_WITH_KEYS_AS_TEXT = """
+import sys
+
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.pv import DEFAULT_CEC_MODULE, PVConfig, cec_module_params
+
+module = cec_module_params(DEFAULT_CEC_MODULE)
+module.update({key: str(module[key]) for key in sys.argv[1:]})
+try:
+    PVConfig(capacity_kw=4.0, custom_module_params=module)
+except ConfigurationError as refusal:
+    print(refusal)
+"""
+"""A program printing PVConfig's refusal of default_module() with each key its arguments name given as text."""
+
+
+def _refusal_in_a_process_under_hash_seed(hash_seed: str, keys_as_text: tuple[str, ...]) -> str:
+    """The refusal a fresh interpreter, with PYTHONHASHSEED=hash_seed, prints for default_module() with keys_as_text given as text."""
+    child = subprocess.run(
+        [sys.executable, "-c", _REFUSAL_OF_THE_DEFAULT_MODULE_WITH_KEYS_AS_TEXT, *keys_as_text],
+        env={**os.environ, "PYTHONHASHSEED": hash_seed},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert child.returncode == 0, child.stderr
+    return child.stdout
+
+
+def _assert_refused_naming_key_and_value(
+    build: Callable[[], dict[str, Any]],
+    key: str,
+    value: object,
+    wording: str,
+    *,
+    temperature_coefficient: float | None = None,
+    custom_inverter_params: dict[str, float] | None = None,
+) -> None:
+    """Assert that once build()'s module gives key as value, construction and use refuse a 4 kW PVConfig of it with one message, which names the key and the value and holds wording.
+
+    The module is edited after construction, since PVConfig keeps the caller's dict, so
+    that use meets the value too (tests/_pv_refusals.py).
+    """
+    module = build()
+    config = PVConfig(
+        capacity_kw=4.0,
+        custom_module_params=module,
+        temperature_coefficient=temperature_coefficient,
+        custom_inverter_params=custom_inverter_params,
+    )
+    module[key] = value
+
+    message = one_refusal_at_construction_and_at_use(config)
+    assert key in re.findall(r"\w+", message), message
+    assert repr(value) in message, message
+    assert wording in message, message
+
+
+class TestAModuleParameterAModelReadsIsAFiniteNumber:
+    """pvlib's model chain, NOCT-SAM and the string wiring read the module's own gamma_pdc, CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults when a module lacks them, T_NOCT, A_c and V_mp_ref, so construction and use refuse one that is not a finite number, naming its key and value; SAPM's i_x and i_xx parameters, which no inverter reads, stay unchecked."""
+
+    @pytest.mark.parametrize(
+        "temperature_coefficient", [None, -0.004], ids=["no-set-coefficient", "set-coefficient"]
+    )
+    @pytest.mark.parametrize(
+        ("build", "key", "value"),
+        [
+            pytest.param(pvwatts_300_w_module, "gamma_pdc", "-0.004", id="gamma_pdc-text"),
+            pytest.param(pvwatts_300_w_module, "gamma_pdc", math.inf, id="gamma_pdc-inf"),
+            *[
+                pytest.param(default_module, key, str(default_module()[key]), id=f"{key}-text")
+                for key in CHECKED_KEYS_OF_THE_DEFAULT_MODULE
+            ],
+            pytest.param(default_module, "alpha_sc", math.nan, id="alpha_sc-nan"),
+            pytest.param(default_module, "T_NOCT", math.nan, id="T_NOCT-nan"),
+            pytest.param(default_module, "A_c", math.nan, id="A_c-nan"),
+            pytest.param(default_module, "R_s", True, id="R_s-bool"),
+            pytest.param(default_module, "Adjust", np.True_, id="Adjust-numpy-bool"),
+            *[
+                pytest.param(default_module, key, text, id=f"{key}-text")
+                for key, text in OPTIONAL_KEYS_OF_A_CEC_MODULE_AS_TEXT
+            ],
+            pytest.param(default_module, "EgRef", math.nan, id="EgRef-nan"),
+            pytest.param(default_module, "temp_ref", math.nan, id="temp_ref-nan"),
+            pytest.param(default_module, "FD", math.nan, id="FD-nan"),
+            pytest.param(default_module, "n", math.nan, id="n-nan"),
+            pytest.param(default_module, "irrad_ref", math.inf, id="irrad_ref-inf"),
+            pytest.param(pvwatts_300_w_module, "temp_ref", "25", id="pvwatts-temp_ref-text"),
+            pytest.param(pvwatts_300_w_module, "k", "0.01", id="k-text"),
+            pytest.param(pvwatts_300_w_module, "k", math.nan, id="k-nan"),
+            pytest.param(pvwatts_300_w_module, "k", None, id="k-none"),
+        ],
+    )
+    def test_one_that_is_not_is_refused_at_construction_and_at_use_naming_its_key_and_value(
+        self,
+        build: Callable[[], dict[str, float]],
+        key: str,
+        value: float | str | np.bool_ | None,
+        temperature_coefficient: float | None,
+    ) -> None:
+        """A set temperature coefficient replaces a module's Adjust or gamma_pdc, and its reach check's calcparams_cec reads the CEC parameters and the keys pvlib defaults, yet the module's own key is refused first."""
+        _assert_refused_naming_key_and_value(
+            build, key, value, "must be a finite number", temperature_coefficient=temperature_coefficient
+        )
+
+    @pytest.mark.parametrize(("build", "key"), MODULE_NUMBERS_PVLIB_READERS_TAKE_BY_NAME)
+    def test_each_module_parameter_a_pvlib_reader_takes_by_name_is_refused_as_text(
+        self, build: Callable[[], dict[str, float]], key: str
+    ) -> None:
+        """The chain passes these readers the module's own values by name, so a parameter a pvlib release adds or renames gets a case here, which fails until the rule checks it (docs/pv-module-settings.md §4)."""
+        _assert_refused_naming_key_and_value(build, key, "1", "must be a finite number")
+
+    @pytest.mark.parametrize(
+        ("build", "key", "value"),
+        [
+            *[
+                pytest.param(rated_sapm_module, key, str(rated_sapm_module()[key]), id=f"sapm-{key}-text")
+                for key in SAPM_DC_KEYS
+            ],
+            pytest.param(rated_sapm_module, "C0", math.nan, id="sapm-C0-nan"),
+            pytest.param(rated_sapm_module, "N", math.nan, id="sapm-N-nan"),
+            *[
+                pytest.param(pvsyst_module, key, str(pvsyst_module()[key]), id=f"pvsyst-{key}-text")
+                for key in PVSYST_ONLY_KEYS
+            ],
+            pytest.param(pvsyst_module, "gamma_ref", math.nan, id="pvsyst-gamma_ref-nan"),
+        ],
+    )
+    def test_a_sapm_or_pvsyst_dc_parameter_that_is_not_is_refused_at_construction_and_at_use_naming_its_key_and_value(
+        self, build: Callable[[], dict[str, float]], key: str, value: float | str
+    ) -> None:
+        """Neither form takes a set temperature coefficient, and a SAPM module has no V_mp_ref to pick a CEC inverter by, so each runs with the simple inverter."""
+        _assert_refused_naming_key_and_value(
+            build,
+            key,
+            value,
+            "must be a finite number",
+            custom_inverter_params=create_simple_inverter_params(),
+        )
+
+    @pytest.mark.parametrize(
+        ("build", "dc_model"),
+        [
+            pytest.param(desoto_module, "desoto", id="desoto"),
+            pytest.param(pvsyst_module, "pvsyst", id="pvsyst"),
+        ],
+    )
+    def test_a_desoto_or_pvsyst_module_runs_that_dc_model_and_simulates(
+        self, build: Callable[[], dict[str, float]], dc_model: str
+    ) -> None:
+        """The refusals of these forms' keys edit these modules, so pvlib must read each in its form: its chain runs that DC model, and the clear day yields a positive, finite energy."""
+        config = PVConfig(capacity_kw=4.0, custom_module_params=build())
+
+        assert create_model_chain(config, Location.bristol()).dc_model.__name__ == dc_model
+        kwh = clear_day_kwh(config)
+        assert math.isfinite(kwh) and kwh > 0, kwh
+
+    def test_a_sapm_module_whose_i_x_and_i_xx_parameters_are_nan_simulates(self) -> None:
+        """pvlib's sapm reads IXO, IXXO and C4 to C7 only into i_x and i_xx, which no inverter reads, and 10 SandiaMod rows give them NaN, so the rule leaves them unchecked and this row, one of them, simulates (docs/pv-module-settings.md §3)."""
+        row = dict(pvlib.pvsystem.retrieve_sam("SandiaMod")["Panasonic_VBHN235SA06B__2013_"])
+        assert all(math.isnan(row[key]) for key in ("IXO", "IXXO", "C4", "C5", "C6", "C7")), row
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=with_stc_at_its_maximum_power(row),
+            custom_inverter_params=create_simple_inverter_params(),
+        )
+
+        kwh = clear_day_kwh(config)
+        assert math.isfinite(kwh) and kwh > 0, kwh
+
+    @pytest.mark.parametrize("hash_seed", ["0", "1"], ids=["hash-seed-0", "hash-seed-1"])
+    def test_several_that_are_not_are_refused_naming_the_first_in_sorted_order_under_any_hash_seed(
+        self, hash_seed: str
+    ) -> None:
+        """A set of the checked keys iterates in an order PYTHONHASHSEED varies, so the rule reads them sorted: a module with every one given as text is refused naming A_c, the first, under any seed."""
+        refusal = _refusal_in_a_process_under_hash_seed(hash_seed, CHECKED_KEYS_OF_THE_DEFAULT_MODULE)
+
+        named = [word for word in re.findall(r"\w+", refusal) if word in CHECKED_KEYS_OF_THE_DEFAULT_MODULE]
+        assert named == ["A_c"], refusal
+
+    def test_a_text_a_c_is_refused_though_a_set_module_efficiency_replaces_it(self) -> None:
+        module = default_module()
+        config = PVConfig(capacity_kw=4.0, custom_module_params=module, module_efficiency=0.2)
+        module["A_c"] = "1.99"
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert "A_c" in re.findall(r"\w+", message), message
+        assert "'1.99'" in message, message
+
+    @pytest.mark.parametrize(
+        "t_noct",
+        [
+            pytest.param(46, id="int"),
+            pytest.param(np.int64(46), id="numpy-int64"),
+            pytest.param(np.float32(46.5), id="numpy-float32"),
+        ],
+    )
+    def test_a_python_or_numpy_number_is_read_as_its_number(
+        self, t_noct: int | np.int64 | np.float32
+    ) -> None:
+        config = PVConfig(capacity_kw=4.0, custom_module_params={**default_module(), "T_NOCT": t_noct})
+
+        for array in create_pv_system(config).arrays:
+            assert array.temperature_model_parameters["noct"] == t_noct
+
+    def test_text_in_a_key_no_model_reads_is_kept(self) -> None:
+        """pvlib's own CECMod rows hold text, such as their Technology, so only the keys a model reads are checked."""
+        module = default_module()
+        assert isinstance(module["Technology"], str), module["Technology"]
+
+        for array in create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=module)).arrays:
+            assert array.module_parameters["Technology"] == module["Technology"]
+
+
+def pvwatts_300_w_module_with_a_k() -> dict[str, float]:
+    """pvwatts_300_w_module() with pvwatts_dc's k at 0.01: pvwatts_dc reads cap_adjustment only when a module gives k."""
+    return {**pvwatts_300_w_module(), "k": 0.01}
+
+
+class TestAModuleFlagAModelReadsIsTrueOrFalse:
+    """pvlib's pvwatts_dc reads the module's own cap_adjustment, a flag, so construction and use refuse one that is not true or false, naming its key and value."""
+
+    @pytest.mark.parametrize(
+        "temperature_coefficient", [None, -0.004], ids=["no-set-coefficient", "set-coefficient"]
+    )
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("False", id="cap_adjustment-text-False"),
+            pytest.param("true", id="cap_adjustment-text-true"),
+            pytest.param(0.0, id="cap_adjustment-0.0"),
+            pytest.param(1, id="cap_adjustment-1"),
+            pytest.param(None, id="cap_adjustment-none"),
+        ],
+    )
+    def test_a_cap_adjustment_that_is_not_true_or_false_is_refused_at_construction_and_at_use_naming_its_value(
+        self, value: str | float | None, temperature_coefficient: float | None
+    ) -> None:
+        """pvlib reads the flag by its truthiness, so the text "False" would turn the cap on (docs/pv-module-settings.md §3)."""
+        _assert_refused_naming_key_and_value(
+            pvwatts_300_w_module_with_a_k,
+            "cap_adjustment",
+            value,
+            "must be true or false",
+            temperature_coefficient=temperature_coefficient,
+        )
+
+    @pytest.mark.parametrize(
+        "flag",
+        [
+            pytest.param(True, id="True"),
+            pytest.param(False, id="False"),
+            pytest.param(np.True_, id="numpy-True"),
+        ],
+    )
+    def test_a_python_or_numpy_bool_cap_adjustment_is_kept(self, flag: bool | np.bool_) -> None:
+        """The number rule refuses a bool, so the flag is never one of the keys it checks."""
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params={**pvwatts_300_w_module_with_a_k(), "cap_adjustment": flag},
+        )
+
+        for array in create_pv_system(config).arrays:
+            assert array.module_parameters["cap_adjustment"] is flag
 
 
 LINEAR_INVERTER_CONFIG = PVConfig(
@@ -1271,36 +1412,63 @@ CHAIN_BUILDERS = [
 ]
 
 
-class TestSystemLossesReachTheInverterAsDCPower:
-    """Each array's DC power falls by PVConfig.system_losses before the inverter, at unchanged voltage."""
+AGES_AND_DEGRADATION_FACTORS = [
+    pytest.param(0.0, 1.0, id="new"),
+    pytest.param(20.0, 0.90, id="20-years"),
+]
+
+
+class TestSystemLossesAndAgeingReachTheInverterAsDCPower:
+    """Each array's DC power falls by PVConfig.system_losses and by the modules' ageing before the inverter, at unchanged voltage."""
 
     @pytest.mark.parametrize(
-        "config",
+        ("config", "degradation_factor"),
         [
-            pytest.param(LINEAR_INVERTER_CONFIG, id="default-losses"),
+            pytest.param(LINEAR_INVERTER_CONFIG, 1.0, id="default-losses"),
             pytest.param(
-                dataclasses.replace(LINEAR_INVERTER_CONFIG, system_losses=0.05), id="5%-losses"
+                dataclasses.replace(LINEAR_INVERTER_CONFIG, system_losses=0.05),
+                1.0,
+                id="5%-losses",
+            ),
+            pytest.param(
+                dataclasses.replace(LINEAR_INVERTER_CONFIG, system_age_years=20.0),
+                0.90,
+                id="20-years",
+            ),
+            pytest.param(
+                dataclasses.replace(
+                    LINEAR_INVERTER_CONFIG,
+                    system_losses=0.05,
+                    system_age_years=10.0,
+                    degradation_rate_per_year=0.01,
+                ),
+                0.90,
+                id="5%-losses-10-years-at-1%",
             ),
         ],
     )
-    @pytest.mark.parametrize("day", ["clear_june_daytime", "overcast_january_daytime"])
+    @pytest.mark.parametrize("day", CLEAR_AND_OVERCAST_DAYS)
     def test_a_linear_inverter_passes_on_exactly_the_kept_fraction(
-        self, request: pytest.FixtureRequest, config: PVConfig, day: str
+        self, config: PVConfig, degradation_factor: float, day: Callable[[], pd.DataFrame]
     ) -> None:
         """The simple inverter's AC is (Paco / Pdco) x DC power whatever the voltage, and 4 kW of modules never reach its 8 kW rating."""
-        weather = request.getfixturevalue(day)
-        lossless = dataclasses.replace(config, system_losses=0.0)
+        weather = day()
+        reference = dataclasses.replace(config, system_losses=0.0, system_age_years=0.0)
 
-        lossless_kwh = simulate_pv_output(lossless, Location.bristol(), weather).sum()
+        reference_kwh = simulate_pv_output(reference, Location.bristol(), weather).sum()
         kwh = simulate_pv_output(config, Location.bristol(), weather).sum()
 
-        assert lossless_kwh > 0
-        assert kwh / lossless_kwh == pytest.approx(1 - config.system_losses, rel=1e-9), (
-            f"{config.system_losses:.4%} system losses on the {day} kept {kwh:.4f} kWh "
-            f"of the lossless {lossless_kwh:.4f} kWh"
+        kept = (1 - config.system_losses) * degradation_factor
+        assert reference_kwh > 0
+        assert kwh / reference_kwh == pytest.approx(kept, rel=1e-9), (
+            f"{config.system_losses:.4%} system losses at {config.system_age_years:g} years "
+            f"({config.degradation_rate_per_year:.1%}/year) on the {day.__name__} kept "
+            f"{kwh:.4f} kWh of the same system's new and lossless {reference_kwh:.4f} kWh"
         )
 
-    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    @pytest.mark.parametrize(
+        ("system_age_years", "degradation_factor"), AGES_AND_DEGRADATION_FACTORS
+    )
     @pytest.mark.parametrize("build", CHAIN_BUILDERS)
     @pytest.mark.parametrize(
         ("capacity_kw", "array_count"), [(4.0, 1), (7.6, 2)], ids=["one-array", "two-arrays"]
@@ -1310,44 +1478,58 @@ class TestSystemLossesReachTheInverterAsDCPower:
         build: Callable[[PVConfig], pvlib.modelchain.ModelChain],
         capacity_kw: float,
         array_count: int,
-        clear_june_daytime: pd.DataFrame,
+        system_age_years: float,
+        degradation_factor: float,
     ) -> None:
         """The Sandia and ADR inverters read v_mp, and create_pv_system matches the strings' voltage to the inverter's MPPT window."""
-        config = PVConfig(capacity_kw=capacity_kw)
-        lossy = build(config)
-        lossless = build(dataclasses.replace(config, system_losses=0.0))
-        assert len(lossy.system.arrays) == array_count, (
-            f"{capacity_kw} kW was wired as {_wiring(lossy.system)} (modules per string, "
+        config = PVConfig(capacity_kw=capacity_kw, system_age_years=system_age_years)
+        chain = build(config)
+        reference = build(dataclasses.replace(config, system_losses=0.0, system_age_years=0.0))
+        assert len(chain.system.arrays) == array_count, (
+            f"{capacity_kw} kW was wired as {_wiring(chain.system)} (modules per string, "
             f"strings), not as the {array_count} array(s) this case covers"
         )
 
-        lossy.run_model(clear_june_daytime)
-        lossless.run_model(clear_june_daytime)
+        weather = clear_june_daytime()
+        run_model_chain(chain, weather)
+        run_model_chain(reference, weather)
 
-        kept = 1 - config.system_losses
-        for lossy_dc, lossless_dc in zip(_dc_per_array(lossy), _dc_per_array(lossless), strict=True):
-            np.testing.assert_allclose(lossy_dc["p_mp"], lossless_dc["p_mp"] * kept)
-            np.testing.assert_allclose(lossy_dc["i_mp"], lossless_dc["i_mp"] * kept)
-            pd.testing.assert_series_equal(lossy_dc["v_mp"], lossless_dc["v_mp"])
+        kept = (1 - config.system_losses) * degradation_factor
+        for dc, reference_dc in zip(
+            per_array(chain.results.dc), per_array(reference.results.dc), strict=True
+        ):
+            np.testing.assert_allclose(dc["p_mp"], reference_dc["p_mp"] * kept)
+            np.testing.assert_allclose(dc["i_mp"], reference_dc["i_mp"] * kept)
+            pd.testing.assert_series_equal(dc["v_mp"], reference_dc["v_mp"])
 
-    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
     @pytest.mark.parametrize(
-        "config",
+        ("config", "degradation_factor"),
         [
-            pytest.param(PVConfig(capacity_kw=4.0), id="default-losses"),
-            pytest.param(PVConfig(capacity_kw=4.0, system_losses=0.0), id="no-losses"),
+            pytest.param(PVConfig(capacity_kw=4.0), 1.0, id="default-losses"),
+            pytest.param(PVConfig(capacity_kw=4.0, system_losses=0.0), 1.0, id="no-losses"),
+            pytest.param(
+                PVConfig(capacity_kw=4.0, system_losses=0.0, system_age_years=20.0),
+                0.90,
+                id="20-years-no-losses",
+            ),
+            pytest.param(PVConfig(capacity_kw=4.0, system_age_years=20.0), 0.90, id="20-years"),
         ],
     )
     def test_a_run_chain_records_the_fraction_of_dc_power_it_kept(
-        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+        self, config: PVConfig, degradation_factor: float
     ) -> None:
         """results.losses holds the kept fraction, as pvlib's own losses models record it: 1 with no loss."""
         chain = create_model_chain(config, Location.bristol())
 
-        chain.run_model(clear_june_daytime)
+        run_model_chain(chain, clear_june_daytime())
 
-        assert chain.results.losses == pytest.approx(1 - config.system_losses)
+        assert chain.results.losses == pytest.approx(
+            (1 - config.system_losses) * degradation_factor
+        )
 
+    @pytest.mark.parametrize(
+        ("system_age_years", "degradation_factor"), AGES_AND_DEGRADATION_FACTORS
+    )
     @pytest.mark.parametrize(
         "config",
         [
@@ -1363,22 +1545,32 @@ class TestSystemLossesReachTheInverterAsDCPower:
         ],
     )
     def test_an_inverter_limited_array_still_reaches_its_rating(
-        self, config: PVConfig, clear_june_daytime: pd.DataFrame
+        self, config: PVConfig, system_age_years: float, degradation_factor: float
     ) -> None:
         """A derate of the AC instead would cap the peak below the rating and take the whole fraction of the energy."""
-        lossy = simulate_pv_output(config, Location.bristol(), clear_june_daytime)
-        lossless = simulate_pv_output(
-            dataclasses.replace(config, system_losses=0.0), Location.bristol(), clear_june_daytime
+        weather = clear_june_daytime()
+        output = simulate_pv_output(
+            dataclasses.replace(config, system_age_years=system_age_years),
+            Location.bristol(),
+            weather,
         )
-        system = f"{config.capacity_kw} kW on a {config.effective_inverter_capacity_kw} kW inverter"
+        reference = simulate_pv_output(
+            dataclasses.replace(config, system_losses=0.0, system_age_years=0.0),
+            Location.bristol(),
+            weather,
+        )
+        system = (
+            f"{config.capacity_kw} kW on a {config.effective_inverter_capacity_kw} kW inverter "
+            f"at {system_age_years:g} years"
+        )
 
-        assert lossy.max() == pytest.approx(lossless.max()), (
-            f"{system} peaked at {lossy.max():.3f} kW with system losses "
-            f"and at {lossless.max():.3f} kW without"
+        assert output.max() == pytest.approx(reference.max()), (
+            f"{system} peaked at {output.max():.3f} kW with its system losses and ageing, "
+            f"and at {reference.max():.3f} kW new and lossless"
         )
-        kept = 1 - config.system_losses
-        assert kept * lossless.sum() < lossy.sum() < lossless.sum(), (
-            f"{system} kept {lossy.sum() / lossless.sum():.4f} of its lossless energy on the clear "
-            f"June day; with the inverter clipping, it should keep more than its DC's {kept:.4f} "
-            "and less than all of it"
+        kept = (1 - config.system_losses) * degradation_factor
+        assert kept * reference.sum() < output.sum() < reference.sum(), (
+            f"{system} kept {output.sum() / reference.sum():.4f} of its new and lossless energy "
+            "on the clear June day; with the inverter clipping, it should keep more than its "
+            f"DC's {kept:.4f} and less than all of it"
         )

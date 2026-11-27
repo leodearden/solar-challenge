@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import chart_panel, stat_card %}
+{% from "components/macros.html" import card, chart_scripts, chart_tabs, stat_card %}
 
 {% block title %}Results: {{ run_name }} - Solar Challenge{% endblock %}
 
@@ -26,60 +26,10 @@
 </div>
 
 {# ===== Tabbed Chart Display ===== #}
-<div x-data="{ activeTab: 'aggregate' }" class="mb-8">
-    {# Tab Navigation #}
-    <div class="border-b border-slate-200 dark:border-slate-700 mb-6">
-        <nav class="-mb-px flex space-x-6" aria-label="Chart tabs" role="tablist">
-            <button
-                @click="activeTab = 'aggregate'"
-                :class="activeTab === 'aggregate'
-                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300'"
-                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors"
-                role="tab"
-                :aria-selected="activeTab === 'aggregate'"
-            >Aggregate</button>
-            <button
-                @click="activeTab = 'per_home'"
-                :class="activeTab === 'per_home'
-                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300'"
-                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors"
-                role="tab"
-                :aria-selected="activeTab === 'per_home'"
-            >Per-Home</button>
-            <button
-                @click="activeTab = 'distributions'"
-                :class="activeTab === 'distributions'
-                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300'"
-                class="whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors"
-                role="tab"
-                :aria-selected="activeTab === 'distributions'"
-            >Distributions</button>
-        </nav>
-    </div>
-
-    {# ===== Tab 1: Aggregate ===== #}
-    <div x-show="activeTab === 'aggregate'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-aggregate-timeline', 'Fleet Aggregate Power Flow', charts.aggregate_timeline, '500px') }}
-        {{ chart_panel('chart-grid-impact', 'Net Grid Impact', charts.grid_impact, '450px') }}
-    </div>
-
-    {# ===== Tab 2: Per-Home ===== #}
-    <div x-show="activeTab === 'per_home'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-heatmap', 'Per-Home Energy Metrics', charts.heatmap, '450px') }}
-        {{ chart_panel('chart-box-plots', 'Energy Metrics Distribution', charts.box_plots, '450px') }}
-    </div>
-
-    {# ===== Tab 3: Distributions ===== #}
-    <div x-show="activeTab === 'distributions'" x-cloak class="space-y-6">
-        {{ chart_panel('chart-distribution-histograms', 'Fleet Distribution Histograms', charts.distribution_histograms, '400px', empty_message='No distribution data available.') }}
-    </div>
-</div>
+{{ chart_tabs(tabs) }}
 
 {# ===== Action Buttons ===== #}
-<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6">
+{% call card(classes='p-6') %}
     <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Actions</h3>
     <div class="flex flex-wrap gap-3">
         <a href="{{ url_for('api.history_export_csv', run_id=run_id) }}"
@@ -95,11 +45,10 @@
             New Fleet Simulation
         </a>
     </div>
-</div>
+{% endcall %}
 
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
-<script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
+{{ chart_scripts() }}
 {% endblock %}

@@ -1,33 +1,21 @@
 """End-to-end tests for dark mode class propagation across pages.
 
-Verifies that setting localStorage theme=dark and reloading causes
-<html class="dark"> on every main page.
+Verifies that each main page opened with localStorage theme=dark has
+<html class="dark">.
 The module also toggles the theme live on a results page, to check what the toggle does to the page's charts.
+It checks that every grid, zero and polar axis line of each chart on the results and compare pages takes the
+dark theme's grid colour, whether the page loads dark or is switched to dark.
+It also checks that no bar a chart draws on those pages is outlined on the dark card.
 """
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
-pytestmark = pytest.mark.e2e
-
-
-def _enable_dark_mode_and_reload(page: Page, url: str) -> None:
-    """Navigate to url, set localStorage theme to dark, then reload."""
-    page.goto(url)
-    page.wait_for_load_state("domcontentloaded")
-    page.evaluate("() => localStorage.setItem('theme', 'dark')")
-    page.reload()
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(500)
-
-
-def _assert_dark_class_on_html(page: Page, page_name: str) -> None:
-    """Assert that <html> element has the 'dark' class."""
-    html_class = page.evaluate("() => document.documentElement.classList.contains('dark')")
-    assert html_class is True, (
-        f"Expected <html class='dark'> on {page_name}, "
-        f"but dark class is missing"
-    )
+from tests.e2e._chart_tabs import open_chart_tab
 
 
 def _plotly_background_colors(page: Page) -> list[str]:
@@ -47,9 +35,20 @@ def _plotly_background_colors(page: Page) -> list[str]:
     return colors
 
 
-# The paper colour chart-renderer.js paints a chart in each theme: the computed
-# background-color of the chart's first .main-svg, as _plotly_background_colors reads it.
-_PAPER_COLOURS = {"light": "rgb(255, 255, 255)", "dark": "rgb(30, 41, 59)"}
+@dataclass(frozen=True)
+class _Chrome:
+    """The colours of a chart's chrome: text, for its titles, legends and tick labels, and grid, for its grid, zero and polar axis lines."""
+
+    text: str
+    grid: str
+
+
+# The chrome each theme draws a chart in: the color and --chart-grid of chart_panel's container,
+# as getComputedStyle reads them in that theme from the chart's texts and lines.
+_CHROME = {
+    "light": _Chrome(text="rgb(30, 41, 59)", grid="rgb(226, 232, 240)"),
+    "dark": _Chrome(text="rgb(226, 232, 240)", grid="rgb(51, 65, 85)"),
+}
 
 
 def _open_in_theme(page: Page, url: str, theme: str) -> None:
@@ -58,9 +57,9 @@ def _open_in_theme(page: Page, url: str, theme: str) -> None:
     page.goto(url)
 
 
-def _show_tab(page: Page, name: str) -> None:
-    """Click the tab named name."""
-    page.get_by_role("tab", name=name, exact=True).click()
+def _expect_dark_class_on_html(page: Page) -> None:
+    """Wait until the <html> element of page has the 'dark' class."""
+    expect(page.locator("html"), f"Expected <html class='dark'> on {page.url}").to_contain_class("dark")
 
 
 def _toggle_theme(page: Page) -> None:
@@ -68,9 +67,27 @@ def _toggle_theme(page: Page) -> None:
     page.get_by_role("button", name="Toggle dark mode").click()
 
 
-def _paper(page: Page, chart_id: str) -> Locator:
-    """The element whose background-color is the paper colour of the chart in the container chart_id."""
-    return page.locator(f"#{chart_id} .main-svg").first
+def _expect_titled_in(chart: Locator, theme: str) -> None:
+    """Wait until the chart in the container chart has its title in theme's text colour, the mark of a chart drawn in theme's chrome."""
+    expect(chart.locator(".gtitle")).to_have_css("fill", _CHROME[theme].text)
+
+
+def _expect_drawn_in(page: Page, chart_id: str, theme: str) -> None:
+    """Wait until the chart in the container chart_id shows theme's chrome: its title in the text colour and its first y grid line in the grid colour."""
+    chart = page.locator(f"#{chart_id}")
+    _expect_titled_in(chart, theme)
+    expect(chart.locator("path.ygrid").first).to_have_css("stroke", _CHROME[theme].grid)
+
+
+def _chart_tab_panels(tablist: Locator) -> Locator:
+    """The chart tabs' panels: a tab's panel is an x-show child of chart_tabs' root, one per tab in the tabs' order."""
+    return tablist.locator("xpath=../../*[@x-show]")
+
+
+def _expect_each_chart_titled_in(panel: Locator, theme: str) -> None:
+    """Wait until each chart in panel has its title in theme's text colour."""
+    for chart in panel.locator("[data-chart-figure]").all():
+        _expect_titled_in(chart, theme)
 
 
 def _layout_features(page: Page, chart_id: str) -> dict[str, object]:
@@ -95,9 +112,9 @@ def _layout_features(page: Page, chart_id: str) -> dict[str, object]:
 
 
 def test_dark_mode_simulate_home(page: Page, live_server: str) -> None:
-    """Set localStorage theme=dark, reload -> <html class='dark'>."""
-    _enable_dark_mode_and_reload(page, live_server + "/simulate/home")
-    _assert_dark_class_on_html(page, "/simulate/home")
+    """/simulate/home opened with localStorage theme=dark has <html class='dark'>."""
+    _open_in_theme(page, live_server + "/simulate/home", "dark")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /simulate/fleet ------------------------------------------
@@ -105,8 +122,8 @@ def test_dark_mode_simulate_home(page: Page, live_server: str) -> None:
 
 def test_dark_mode_simulate_fleet(page: Page, live_server: str) -> None:
     """Same check on /simulate/fleet."""
-    _enable_dark_mode_and_reload(page, live_server + "/simulate/fleet")
-    _assert_dark_class_on_html(page, "/simulate/fleet")
+    _open_in_theme(page, live_server + "/simulate/fleet", "dark")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /scenarios/builder ----------------------------------------
@@ -114,8 +131,8 @@ def test_dark_mode_simulate_fleet(page: Page, live_server: str) -> None:
 
 def test_dark_mode_scenario_builder(page: Page, live_server: str) -> None:
     """Same check on /scenarios/builder."""
-    _enable_dark_mode_and_reload(page, live_server + "/scenarios/builder")
-    _assert_dark_class_on_html(page, "/scenarios/builder")
+    _open_in_theme(page, live_server + "/scenarios/builder", "dark")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /history/runs --------------------------------------------
@@ -123,8 +140,8 @@ def test_dark_mode_scenario_builder(page: Page, live_server: str) -> None:
 
 def test_dark_mode_history_page(page: Page, live_server: str) -> None:
     """Same check on /history/runs."""
-    _enable_dark_mode_and_reload(page, live_server + "/history/runs")
-    _assert_dark_class_on_html(page, "/history/runs")
+    _open_in_theme(page, live_server + "/history/runs", "dark")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on results page charts --------------------------------------
@@ -140,9 +157,11 @@ def test_dark_mode_results_page_charts(
     chart-renderer.js defers the other tabs' charts until shown, so they are not checked.
     """
     run_id, _ = seeded_home_run
-    _enable_dark_mode_and_reload(page, live_server + f"/results/home/{run_id}")
-    _assert_dark_class_on_html(page, f"/results/home/{run_id}")
+    _open_in_theme(page, live_server + f"/results/home/{run_id}", "dark")
+    _expect_dark_class_on_html(page)
 
+    opening_panel = _chart_tab_panels(page.get_by_role("tablist", name="Chart tabs")).first
+    _expect_each_chart_titled_in(opening_panel, "dark")
     expect(page.locator(".plot-container .bg").first).to_be_attached()
 
     backgrounds = _plotly_background_colors(page)
@@ -150,8 +169,133 @@ def test_dark_mode_results_page_charts(
     # In dark mode no chart background should be pure white
     assert "rgb(255, 255, 255)" not in backgrounds, (
         f"Plotly chart background is white in dark mode: {backgrounds}. "
-        f"Charts should use a dark background color when dark mode is active."
+        "Charts leave their paper and plot area transparent, so the dark card shows through."
     )
+
+
+# -- Every line of each chart in the dark theme ----------------------------
+
+# Each grid, zero and polar axis line of each chart: the line's class, or its layer's for a line that has
+# none, such as the angular axis line, and its stroke as getComputedStyle reads it.
+_EVERY_GRID_AND_ZERO_LINE = r"""charts => charts.flatMap(chart => [...chart.querySelectorAll(
+    '.gridlayer path, .zerolinelayer path, .radial-grid path, .angular-grid path, .angular-line path'
+)].map(line => ({
+    chart: chart.id,
+    line: line.getAttribute('class') ?? line.parentElement.getAttribute('class'),
+    stroke: getComputedStyle(line).stroke,
+})))"""
+
+
+@dataclass(frozen=True)
+class _ChartPage:
+    """A chart page of the runs a seeded-run fixture saves, and selectors of the lines and bars its charts must draw, so a check of every line or bar cannot pass vacuously."""
+
+    runs_fixture: str
+    path: Callable[[Any], str]
+    drawn_lines: tuple[str, ...]
+    drawn_bars: tuple[str, ...]
+
+
+_CHART_PAGES = (
+    pytest.param(
+        _ChartPage(
+            "seeded_home_run",
+            lambda run: f"/results/home/{run[0]}",
+            drawn_lines=("#chart-financial path.y2grid", "#chart-financial path.yzl", "#chart-financial path.y2zl"),
+            drawn_bars=("#chart-daily-balance .bars .point path", "#chart-financial .bars .point path"),
+        ),
+        id="home-results",
+    ),
+    pytest.param(
+        _ChartPage(
+            "seeded_fleet_run",
+            lambda run: f"/results/fleet/{run[0]}",
+            drawn_lines=("#chart-distribution-histograms path.y2grid", "#chart-distribution-histograms path.y3grid"),
+            drawn_bars=("#chart-distribution-histograms .bars .point path",),
+        ),
+        id="fleet-results",
+    ),
+    pytest.param(
+        _ChartPage(
+            "seeded_home_runs_pair",
+            lambda runs: f"/history/compare?ids={runs[0][0]},{runs[1][0]}",
+            drawn_lines=("#chart-comparison-radar .radial-grid path", "#chart-comparison-radar .angular-grid path"),
+            drawn_bars=("#chart-comparison-bar .bars .point path",),
+        ),
+        id="compare",
+    ),
+)
+
+
+def _show_each_chart_tab(page: Page, theme: str) -> None:
+    """Show each chart tab of the page in turn, waiting until each chart in its panel has its title in theme's text colour.
+
+    Alpine shows and hides the panels an animation frame after a tab is selected, so the panel being shown, not the
+    tab being selected, says that the tab's charts are shown.
+    """
+    tablist = page.get_by_role("tablist", name="Chart tabs")
+    for tab, panel in zip(tablist.get_by_role("tab").all(), _chart_tab_panels(tablist).all(), strict=True):
+        tab.click()
+        expect(panel).to_be_visible()
+        _expect_each_chart_titled_in(panel, theme)
+
+
+@pytest.mark.parametrize("switched_to_dark", [False, True], ids=["dark-on-load", "switched-to-dark"])
+@pytest.mark.parametrize("chart_page", _CHART_PAGES)
+def test_every_grid_and_zero_line_of_each_chart_takes_the_dark_themes_grid_colour(
+    page: Page,
+    live_server: str,
+    request: pytest.FixtureRequest,
+    chart_page: _ChartPage,
+    switched_to_dark: bool,
+) -> None:
+    """Secondary axes and the radar's polar grid included (tasks 735 and 737), whether the page loads dark or is switched to dark once each chart is drawn."""
+    url = live_server + chart_page.path(request.getfixturevalue(chart_page.runs_fixture))
+    _open_in_theme(page, url, "light" if switched_to_dark else "dark")
+    if switched_to_dark:
+        _show_each_chart_tab(page, "light")
+        _toggle_theme(page)
+    _show_each_chart_tab(page, "dark")
+    for selector in chart_page.drawn_lines:
+        expect(page.locator(selector).first).to_be_attached()
+
+    lines = page.locator(".js-plotly-plot").evaluate_all(_EVERY_GRID_AND_ZERO_LINE)
+
+    off_theme = [line for line in lines if line["stroke"] != _CHROME["dark"].grid]
+    assert off_theme == [], (
+        f"These chart lines are not in the dark theme's grid colour {_CHROME['dark'].grid}: {off_theme}"
+    )
+
+
+# -- No bar of any chart is outlined ---------------------------------------
+
+# Each bar of each chart, histogram bars included: its chart's id, and its stroke and stroke width as
+# getComputedStyle reads them.
+_EVERY_BAR = r"""charts => charts.flatMap(chart => [...chart.querySelectorAll('.bars .point path')].map(bar => ({
+    chart: chart.id,
+    stroke: getComputedStyle(bar).stroke,
+    width: getComputedStyle(bar).strokeWidth,
+})))"""
+
+
+@pytest.mark.parametrize("chart_page", _CHART_PAGES)
+def test_no_bar_of_any_chart_is_outlined_on_the_dark_card(
+    page: Page,
+    live_server: str,
+    request: pytest.FixtureRequest,
+    chart_page: _ChartPage,
+) -> None:
+    """plotly.py's default template outlined every bar 0.5 px in rgb(229, 236, 246), its light plot background, a light rim on the dark card (task 1046)."""
+    url = live_server + chart_page.path(request.getfixturevalue(chart_page.runs_fixture))
+    _open_in_theme(page, url, "dark")
+    _show_each_chart_tab(page, "dark")
+    for selector in chart_page.drawn_bars:
+        expect(page.locator(selector).first).to_be_attached()
+
+    bars = page.locator(".js-plotly-plot").evaluate_all(_EVERY_BAR)
+
+    outlined = [bar for bar in bars if bar["stroke"] != "none" and bar["width"] != "0px"]
+    assert outlined == [], f"These chart bars are outlined on the dark card: {outlined}"
 
 
 # -- Toggling the theme live on a results page -----------------------------
@@ -176,18 +320,18 @@ def test_toggling_the_theme_recolours_a_chart_whose_tab_is_hidden_once_its_tab_i
     run_id, _ = seeded_home_run
     _open_in_theme(page, live_server + f"/results/home/{run_id}", starting_theme)
 
-    _show_tab(page, "Power Flow")
-    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS[starting_theme])
+    open_chart_tab(page, "Power Flow")
+    _expect_drawn_in(page, "chart-power-flow", starting_theme)
 
-    _show_tab(page, "Overview")
+    open_chart_tab(page, "Overview")
     expect(page.locator("#chart-power-flow")).to_be_hidden()
-    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS[starting_theme])
+    _expect_drawn_in(page, "chart-daily-balance", starting_theme)
 
     _toggle_theme(page)
-    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS[toggled_theme])
+    _expect_drawn_in(page, "chart-daily-balance", toggled_theme)
 
-    _show_tab(page, "Power Flow")
-    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS[toggled_theme])
+    open_chart_tab(page, "Power Flow")
+    _expect_drawn_in(page, "chart-power-flow", toggled_theme)
 
 
 def test_toggling_the_theme_leaves_the_rest_of_each_drawn_charts_layout_as_it_was(
@@ -203,22 +347,22 @@ def test_toggling_the_theme_leaves_the_rest_of_each_drawn_charts_layout_as_it_wa
     run_id, _ = seeded_home_run
     _open_in_theme(page, live_server + f"/results/home/{run_id}", "light")
 
-    _show_tab(page, "Power Flow")
-    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["light"])
+    open_chart_tab(page, "Power Flow")
+    _expect_drawn_in(page, "chart-power-flow", "light")
     power_flow_before = _layout_features(page, "chart-power-flow")
 
-    _show_tab(page, "Overview")
+    open_chart_tab(page, "Overview")
     daily_balance_before = _layout_features(page, "chart-daily-balance")
     assert daily_balance_before["axis_titles"] and power_flow_before["range_sliders"] == 1, (
         f"the charts have no titles or range slider to keep: {daily_balance_before}, {power_flow_before}"
     )
 
     _toggle_theme(page)
-    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS["dark"])
+    _expect_drawn_in(page, "chart-daily-balance", "dark")
     daily_balance_after = _layout_features(page, "chart-daily-balance")
 
-    _show_tab(page, "Power Flow")
-    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["dark"])
+    open_chart_tab(page, "Power Flow")
+    _expect_drawn_in(page, "chart-power-flow", "dark")
     power_flow_after = _layout_features(page, "chart-power-flow")
 
     assert (daily_balance_after, power_flow_after) == (daily_balance_before, power_flow_before)
@@ -247,15 +391,15 @@ def test_toggling_the_theme_while_a_chart_is_still_drawing_recolours_it_once_the
     """
     run_id, _ = seeded_home_run
     _open_in_theme(page, live_server + f"/results/home/{run_id}", "light")
-    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS["light"])
+    _expect_drawn_in(page, "chart-daily-balance", "light")
     release_drawings = page.evaluate_handle(_HOLD_EVERY_DRAWING_UNTIL_RELEASED)
 
-    _show_tab(page, "Power Flow")
-    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["light"])
+    open_chart_tab(page, "Power Flow")
+    _expect_drawn_in(page, "chart-power-flow", "light")
     _toggle_theme(page)
     release_drawings.evaluate("release => release()")
 
-    expect(_paper(page, "chart-power-flow")).to_have_css("background-color", _PAPER_COLOURS["dark"])
+    _expect_drawn_in(page, "chart-power-flow", "dark")
 
 
 _FAILED_RECOLOURING = "the recolouring failed after Plotly.relayout returned"
@@ -277,7 +421,7 @@ def test_a_chart_whose_recolouring_fails_after_plotly_relayout_returns_logs_one_
     """Plotly.relayout returns a promise, which rejects when a recolouring fails; that failure is one error naming the chart, not an uncaught rejection."""
     run_id, _ = seeded_home_run
     _open_in_theme(page, live_server + f"/results/home/{run_id}", "light")
-    expect(_paper(page, "chart-daily-balance")).to_have_css("background-color", _PAPER_COLOURS["light"])
+    _expect_drawn_in(page, "chart-daily-balance", "light")
     page.evaluate(_REJECT_THE_RECOLOURING_OF, ["chart-daily-balance", _FAILED_RECOLOURING])
 
     with page.expect_console_message(lambda message: "chart-daily-balance" in message.text, timeout=5_000):

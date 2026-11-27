@@ -8,25 +8,42 @@ injected synthetic simulate.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
-from typing import Callable
+import warnings
+from typing import TYPE_CHECKING, Callable
 
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
-from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
-from tests._finance_builders import make_fleet_results, make_home_config
+import pytest
+
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.home import RunPricing
+from solar_challenge.projection import MAX_NODES, fewest_simulated_ages, project_multi_year
+from tests._finance_builders import (
+    make_fleet_results,
+    make_home_config,
+    make_period,
+    make_scenario_and_finance,
+)
+from tests._fleet_simulate_stand_in import answering_with
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from solar_challenge.fleet import FleetConfig, FleetResults
 
 
 def _make_curved_simulate(curvature: float = 0.35) -> Callable:
     """Return a synthetic simulate with strongly non-linear (exponential) decline.
 
-    fleet_self_consumption_kwh declines as base * exp(-curvature * age).
+    fleet_billed_own_use_kwh declines as base * exp(-curvature * age).
     With only 3 seed nodes, PCHIP will have large midpoint errors for high
     curvature values (the function is far from piecewise-cubic on wide intervals).
     """
     BASE_SC = 12_000.0
     BASE_EXP = 3_000.0
 
-    def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
         homes = fleet_config.homes
         mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
         factor = math.exp(-curvature * mean_age)
@@ -52,7 +69,7 @@ def _make_adaptive_scenario(asset_life: int = 10) -> tuple:
     )
     scenario = ScenarioConfig(
         name="adaptive-test",
-        period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+        period=make_period(),
         description="Adaptive refinement test",
         homes=homes,
     )
@@ -138,10 +155,180 @@ class TestProjectMultiYearAdaptive:
         sim = _make_curved_simulate(curvature=0.4)
         curve = project_multi_year(scenario, finance, error_target_pct=1.0, simulate=sim)
         for i in range(1, len(curve.points)):
-            assert curve.points[i].fleet_self_consumption_kwh <= (
-                curve.points[i - 1].fleet_self_consumption_kwh + 1e-6
+            assert curve.points[i].fleet_billed_own_use_kwh <= (
+                curve.points[i - 1].fleet_billed_own_use_kwh + 1e-6
             ), (
-                f"fleet_self_consumption not monotone at year {i}: "
-                f"{curve.points[i].fleet_self_consumption_kwh:.3f} > "
-                f"{curve.points[i-1].fleet_self_consumption_kwh:.3f}"
+                f"fleet_billed_own_use_kwh not monotone at year {i}: "
+                f"{curve.points[i].fleet_billed_own_use_kwh:.3f} > "
+                f"{curve.points[i-1].fleet_billed_own_use_kwh:.3f}"
             )
+
+
+def _override_capped_at_demand(f: float) -> tuple[float, float, float]:
+    """Self 2200 f, export 1800 f and import 3400 - 2200 f kWh: generation 4000 f against a constant demand of 3400.
+
+    Under a 0.9 override, 0.9 x generation caps own-use at demand, so the ledger
+    import is 0 until about age 4 at 1.5 %/yr.
+    """
+    return 2200.0 * f, 1800.0 * f, 3400.0 - 2200.0 * f
+
+
+def _battery_covers_demand(f: float) -> tuple[float, float, float]:
+    """Self min(3400, 3800 f), export 4400 f less that, import 3400 less that (kWh): demand stays 3400.
+
+    The simulated import is 0 until about age 7 at 1.5 %/yr.
+    """
+    own_use = min(3400.0, 3800.0 * f)
+    return own_use, 4400.0 * f - own_use, 3400.0 - own_use
+
+
+def _declining_simulate(
+    home_year: Callable[[float], tuple[float, float, float]],
+    *,
+    kept_each_year: float = 0.985,
+) -> Callable:
+    """Return a simulate whose homes' self-consumption, export and import kWh are *home_year* of f.
+
+    f = kept_each_year ** age is the share of its new generation the aged PV
+    gives, falling 1.5 %/yr compounding by default, as _aged_homes ages the PV.
+    The flows are priced at a 30 p/kWh import tariff and a 4.1 p/kWh SEG rate.
+    """
+
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        f = kept_each_year ** fleet_config.homes[0].pv_config.system_age_years
+        self_kwh, export_kwh, import_kwh = home_year(f)
+        return make_fleet_results(
+            homes=fleet_config.homes,
+            self_kwh=self_kwh,
+            export_kwh=export_kwh,
+            import_kwh=import_kwh,
+            pricing=RunPricing(0.30, 4.1),
+        )
+
+    return _simulate
+
+
+def _finance_over_25_years(self_consumption_override: float | None) -> tuple[ScenarioConfig, FinanceConfig]:
+    """make_scenario_and_finance's one home over a 25-year asset life (seeds 0, 12, 24), at *self_consumption_override*."""
+    scenario, finance = make_scenario_and_finance(asset_life_years=25)
+    return scenario, dataclasses.replace(finance, self_consumption_override=self_consumption_override)
+
+
+class TestTheDeviationScaleSeesAZeroAtAgeZero:
+    """An export or import that is 0 at age 0 and grows with age is measured against the largest fleet generation or demand at the seed ages.
+
+    So its interpolation error stays a finite percentage.
+    """
+
+    @pytest.mark.parametrize(
+        ("home_year", "self_consumption_override"),
+        [
+            pytest.param(_override_capped_at_demand, 0.9, id="override-capped-at-demand"),
+            pytest.param(_battery_covers_demand, None, id="simulated-basis-battery-covers-demand"),
+        ],
+    )
+    def test_a_fleet_that_imports_nothing_at_age_zero_converges_below_max_nodes(
+        self,
+        home_year: Callable[[float], tuple[float, float, float]],
+        self_consumption_override: float | None,
+    ) -> None:
+        """The default 1 % target is met with fewer than MAX_NODES ages, and no MAX_NODES warning."""
+        scenario, finance = _finance_over_25_years(self_consumption_override)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            curve = project_multi_year(scenario, finance, simulate=_declining_simulate(home_year))
+        assert len(curve.sampled_ages) < MAX_NODES, curve.sampled_ages
+        assert curve.interp_error_estimate <= 1.0
+
+    def test_an_override_fleet_that_starts_importing_near_age_19_is_bisected_once_for_its_income_kink_not_its_import(
+        self,
+    ) -> None:
+        """At 0.3 %/yr the override's 0.9 × generation drops below the 3,400 kWh demand near age 19.
+
+        So import is 0 until then and grows after.  The SEG income's kink there
+        costs one bisection round, ages 6 and 18.  The import's miss at age 18
+        is measured against the demand it is part of, so it adds no age;
+        measured against its own largest seed value, about 50 kWh, it would
+        bisect on through ages 19-22.
+        """
+        scenario, finance = _finance_over_25_years(0.9)
+        curve = project_multi_year(
+            scenario,
+            finance,
+            simulate=_declining_simulate(_override_capped_at_demand, kept_each_year=0.997),
+        )
+        assert curve.sampled_ages == (0, 6, 12, 18, 24)
+        assert curve.interp_error_estimate <= 1.0
+
+
+class TestASmoothFleetSimulatesOnlyTheSeeds:
+    def test_an_override_fleet_whose_cap_binds_at_every_age_simulates_only_the_seeds(self) -> None:
+        """At 0.1 %/yr the override's cap binds to age 24, so every driven curve is smooth and no bisection age is simulated."""
+        scenario, finance = _finance_over_25_years(0.9)
+        curve = project_multi_year(
+            scenario,
+            finance,
+            simulate=_declining_simulate(_override_capped_at_demand, kept_each_year=0.999),
+        )
+        assert curve.sampled_ages == (0, 12, 24)
+        assert curve.interp_error_estimate <= 1.0
+
+
+def _simulate_income_rising_from_zero(
+    fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp
+) -> FleetResults:
+    """A home that self-consumes 2,000 kWh and imports 1,200 kWh at every age, and exports 2,000 × (1 − e^(−age/8)) kWh at 5 p.
+
+    So its SEG income is £100 × (1 − e^(−age/8)): £0 at age 0.
+    """
+    age = fleet_config.homes[0].pv_config.system_age_years
+    return make_fleet_results(
+        homes=fleet_config.homes,
+        self_kwh=2_000.0,
+        export_kwh=2_000.0 * (1.0 - math.exp(-age / 8.0)),
+        import_kwh=1_200.0,
+        pricing=RunPricing(0.30, 5.0),
+    )
+
+
+class TestTheIncomeDeviationScaleSeesAZeroAtAgeZero:
+    """An income that is 0 at age 0 and grows with age is measured against its largest value at the seed ages.
+
+    So at a 0 p own-use rate, whose revenue is that income, its interpolation
+    error stays a finite percentage and the default 1 % target is met (B9).
+    """
+
+    def test_a_fleet_that_earns_nothing_at_age_zero_converges_below_max_nodes(self) -> None:
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
+        finance = dataclasses.replace(finance, own_use_rate_pence_per_kwh=0.0)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            curve = project_multi_year(scenario, finance, simulate=_simulate_income_rising_from_zero)
+
+        assert len(curve.sampled_ages) < MAX_NODES, curve.sampled_ages
+        assert math.isfinite(curve.interp_error_estimate)
+        assert curve.interp_error_estimate <= 1.0
+
+
+class TestTheFewestAgesAProjectionSimulates:
+    @pytest.mark.parametrize("asset_life_years", [3, 10, 25])
+    def test_a_smooth_fleets_projection_simulates_the_fewest_ages(self, asset_life_years: int) -> None:
+        """A constant fleet is flat at every age, so the bisection stops after its first pass."""
+        scenario, finance = make_scenario_and_finance(n_homes=1, asset_life_years=asset_life_years)
+        answer = answering_with(make_fleet_results(n_homes=1))
+        asked: list[str] = []
+
+        def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            asked.append(fleet_config.name)
+            return answer(fleet_config, start, end)
+
+        project_multi_year(scenario, finance, simulate=simulate)
+
+        assert len(asked) == fewest_simulated_ages(asset_life_years), asked
+
+    def test_the_fewest_ages_are_the_seeds_and_the_first_passes_midpoints(self) -> None:
+        """Seeds 0, 12 and 24 with midpoints 6 and 18; seeds 0, 1 and 2 with none; seeds 0, 5 and 9 with midpoints 2 and 7."""
+        assert fewest_simulated_ages(25) == 5
+        assert fewest_simulated_ages(3) == 3
+        assert fewest_simulated_ages(10) == 5

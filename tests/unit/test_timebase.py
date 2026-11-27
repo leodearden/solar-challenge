@@ -1,35 +1,31 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A simulated series' window: the calendar days it covers and how long one of its rows lasts."""
+"""How long simulated time lasts: the minutes in an hour, the hours and minutes in a day; which durations in minutes are refused; the row counts of one calendar year; the text naming the first row where two indexes differ; and a simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock."""
 
-from datetime import date, timedelta
+import math
+import re
+import sys
+from datetime import date, datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from solar_challenge.timebase import (
+    DEFAULT_FIRST_DAY,
+    DEFAULT_LAST_DAY,
+    HOURS_PER_DAY,
     HOURS_PER_MINUTE,
+    MINUTES_PER_DAY,
+    MINUTES_PER_HOUR,
+    ONE_MINUTE,
+    SHORT_WINDOW_START,
+    LocalDay,
     SimulationWindow,
     covered_days,
-    step_hours,
+    describe_first_differing_row,
+    require_valid_duration,
+    year_row_counts,
 )
-
-_MINUTE = timedelta(minutes=1)
-
-
-def test_a_single_row_lasts_one_minute() -> None:
-    index = pd.date_range("2024-06-21 12:00", periods=1, freq="h", tz="Europe/London")
-
-    assert step_hours(index) == HOURS_PER_MINUTE == pytest.approx(1 / 60)
-
-
-@pytest.mark.parametrize(
-    ("freq", "hours"),
-    [("min", 1 / 60), ("15min", 0.25), ("h", 1.0), ("2h", 2.0)],
-)
-def test_a_row_lasts_the_gap_between_the_first_two_rows(freq: str, hours: float) -> None:
-    index = pd.date_range("2024-06-21 12:00", periods=3, freq=freq, tz="Europe/London")
-
-    assert step_hours(index) == pytest.approx(hours)
 
 
 @pytest.mark.parametrize(
@@ -56,6 +52,52 @@ def test_covered_days_refuses_a_last_day_before_the_first_naming_both() -> None:
     assert "2024-06-02" in str(refusal.value)
 
 
+def test_one_calendar_year_of_hourly_rows_is_365_to_366_days_of_24() -> None:
+    assert year_row_counts(24) == range(8760, 8785)
+
+
+def test_one_calendar_year_of_one_minute_rows_runs_from_365_to_366_days_of_1440() -> None:
+    counts = year_row_counts(1440)
+
+    assert counts.start == 525_600
+    assert counts[-1] == 527_040
+
+
+def test_a_leap_year_of_hours_is_one_calendar_year_and_one_hour_more_is_not() -> None:
+    assert 8784 in year_row_counts(24)
+    assert 8785 not in year_row_counts(24)
+
+
+_HOURS = pd.date_range("2024-06-01", periods=4, freq="h", tz="Europe/London")
+
+
+def test_no_row_differs_between_equal_indexes() -> None:
+    assert describe_first_differing_row(_HOURS, _HOURS.copy(), "the window") is None
+
+
+def test_the_first_differing_row_is_named_with_each_index_s_row_there() -> None:
+    shifted = _HOURS.insert(2, _HOURS[1] + pd.Timedelta(minutes=30))[:4]
+
+    assert describe_first_differing_row(shifted, _HOURS, "the window") == (
+        "they first differ at row 2, where it has 2024-06-01 01:30:00+01:00 "
+        "and the window has 2024-06-01 02:00:00+01:00"
+    )
+
+
+def test_an_index_ending_early_differs_at_its_length_where_it_has_no_row() -> None:
+    assert describe_first_differing_row(_HOURS[:3], _HOURS, "demand") == (
+        "they first differ at row 3, where it has no row and demand has 2024-06-01 03:00:00+01:00"
+    )
+
+
+def test_an_index_running_on_differs_at_the_expected_length_with_the_row_number_grouped() -> None:
+    two_days = pd.date_range("2024-06-01", periods=2 * MINUTES_PER_DAY, freq="min", tz="Europe/London")
+
+    assert describe_first_differing_row(two_days, two_days[:MINUTES_PER_DAY], "demand") == (
+        "they first differ at row 1,440, where it has 2024-06-02 00:00:00+01:00 and demand has no row"
+    )
+
+
 @pytest.mark.parametrize(
     ("first", "last", "days", "year_days", "scale", "extrapolated"),
     [
@@ -75,7 +117,7 @@ def test_a_window_annualises_by_its_covered_year(
     scale: float,
     extrapolated: bool,
 ) -> None:
-    window = SimulationWindow(first, last, _MINUTE)
+    window = SimulationWindow(first, last, ONE_MINUTE)
 
     assert window.days == days
     assert window.year_days == year_days
@@ -85,7 +127,7 @@ def test_a_window_annualises_by_its_covered_year(
 
 def test_a_window_refuses_a_last_day_before_its_first_naming_both() -> None:
     with pytest.raises(ValueError) as refusal:
-        SimulationWindow(date(2024, 6, 2), date(2024, 6, 1), _MINUTE)
+        SimulationWindow(date(2024, 6, 2), date(2024, 6, 1), ONE_MINUTE)
 
     assert "2024-06-01" in str(refusal.value)
     assert "2024-06-02" in str(refusal.value)
@@ -98,6 +140,39 @@ def test_a_window_refuses_a_cadence_that_is_not_positive_naming_it(cadence: time
 
     assert "cadence" in str(refusal.value)
     assert repr(cadence) in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("first_day", pd.Timestamp("2024-06-01"), id="a-pd-timestamp-first-day"),
+        pytest.param("first_day", datetime(2024, 6, 1), id="a-datetime-first-day"),
+        pytest.param("first_day", "2024-06-01", id="a-str-first-day"),
+        pytest.param("last_day", pd.Timestamp("2024-06-02"), id="a-pd-timestamp-last-day"),
+        pytest.param("last_day", datetime(2024, 6, 2), id="a-datetime-last-day"),
+        pytest.param("last_day", None, id="a-none-last-day"),
+        pytest.param("cadence", pd.Timedelta(minutes=1), id="a-pd-timedelta-cadence"),
+        pytest.param("cadence", 60, id="an-int-cadence"),
+        pytest.param("cadence", np.timedelta64(1, "m"), id="a-numpy-timedelta64-cadence"),
+        pytest.param("cadence", pd.offsets.Minute(1), id="a-pandas-tick-offset-cadence"),
+    ],
+)
+def test_a_window_refuses_a_day_that_is_not_exactly_a_date_or_a_cadence_that_is_not_exactly_a_timedelta_naming_the_field_and_value(
+    field: str, value: object
+) -> None:
+    """A datetime and pandas' Timestamp subclass date, and pandas' Timedelta subclasses timedelta, so the window checks the exact type, as test_one_minute_is_a_standard_library_minute does. Values of unrelated types are refused too, among them a NumPy timedelta64 and a pandas tick offset, which compare with a timedelta and so pass the positive-cadence check."""
+    valid: dict[str, object] = {
+        "first_day": date(2024, 6, 1),
+        "last_day": date(2024, 6, 2),
+        "cadence": ONE_MINUTE,
+        "timezone": "Europe/London",
+    }
+
+    with pytest.raises(ValueError) as refusal:
+        SimulationWindow(**{**valid, field: value})
+
+    assert field in str(refusal.value)
+    assert repr(value) in str(refusal.value)
 
 
 @pytest.mark.parametrize(
@@ -119,9 +194,69 @@ def test_step_hours_and_step_minutes_are_the_cadence_in_hours_and_minutes(
 
 
 def test_a_one_minute_cadence_lasts_exactly_hours_per_minute() -> None:
-    window = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), _MINUTE)
+    window = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), ONE_MINUTE)
 
     assert window.step_hours == HOURS_PER_MINUTE
+
+
+def test_one_minute_is_a_standard_library_minute() -> None:
+    """The standard library's timedelta, the kind a window's cadence holds; pandas' Timedelta subclasses it, so the check is on the exact type."""
+    assert ONE_MINUTE == timedelta(minutes=1)
+    assert type(ONE_MINUTE) is timedelta
+
+
+def test_hours_per_day_is_the_whole_hours_on_a_24_hour_clock() -> None:
+    """An int, since its readers build whole row counts from it, as year_row_counts(HOURS_PER_DAY) does."""
+    assert HOURS_PER_DAY == timedelta(days=1) // timedelta(hours=1)
+    assert isinstance(HOURS_PER_DAY, int)
+    assert MINUTES_PER_DAY == HOURS_PER_DAY * MINUTES_PER_HOUR
+
+
+def test_minutes_per_day_is_the_whole_minutes_in_24_hours() -> None:
+    """An int, since its readers use it as an array length, a range and slice bound, and a modulus whose remainder is formatted :02d."""
+    assert MINUTES_PER_DAY == timedelta(hours=24) // ONE_MINUTE
+    assert isinstance(MINUTES_PER_DAY, int)
+
+
+def test_minutes_per_hour_is_the_whole_minutes_in_an_hour() -> None:
+    """An int, since its readers build whole minute counts from it: range and slice bounds, an index into a minute table, and a divmod whose quotient and remainder are formatted :02d."""
+    assert MINUTES_PER_HOUR == timedelta(hours=1) // ONE_MINUTE
+    assert isinstance(MINUTES_PER_HOUR, int)
+
+
+def test_the_default_window_is_the_whole_calendar_year_2024_at_one_minute() -> None:
+    """A window built from the two days annualises unextrapolated, and constructing it proves each is exactly a date, the only kind a window's days hold."""
+    assert DEFAULT_FIRST_DAY == date(2024, 1, 1)
+    assert DEFAULT_LAST_DAY == date(2024, 12, 31)
+
+    window = SimulationWindow(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, "Europe/London")
+
+    assert window.days == 366
+    assert window.extrapolated is False
+
+
+def test_the_short_window_starts_on_1_june_2024_and_is_exactly_a_date() -> None:
+    """A one-day window built from it constructs, which proves it is exactly a date, the kind a window's days and pd.Timestamp(day, tz=zone) both take."""
+    assert SHORT_WINDOW_START == date(2024, 6, 1)
+
+    window = SimulationWindow(SHORT_WINDOW_START, SHORT_WINDOW_START, ONE_MINUTE, "Europe/London")
+
+    assert window.days == 1
+
+
+@pytest.mark.parametrize("quantity", ["Timestep", "Charge duration"])
+@pytest.mark.parametrize("minutes", [math.nan, math.inf, -math.inf, 0.0, -0.0, -60.0])
+def test_a_duration_that_is_not_positive_and_finite_is_refused_naming_its_quantity_and_value(
+    quantity: str, minutes: float
+) -> None:
+    message = f"{quantity} must be positive and finite, got {minutes} minutes"
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        require_valid_duration(minutes, quantity)
+
+
+@pytest.mark.parametrize("minutes", [math.ulp(0.0), 1.0, 60.0, sys.float_info.max])
+def test_a_positive_finite_duration_is_accepted(minutes: float) -> None:
+    require_valid_duration(minutes, "Timestep")
 
 
 def test_row_energy_kwh_is_each_rows_kw_times_the_hours_it_lasts_and_energy_kwh_their_sum() -> None:
@@ -256,3 +391,289 @@ def test_of_index_refuses_an_index_that_is_not_a_datetimeindex_naming_its_type_a
         SimulationWindow.of_index(index)
 
     assert f"{type(index).__name__} of dtype {index.dtype}" in str(refusal.value)
+
+
+def test_rows_run_over_the_window_s_local_days_at_its_cadence_on_its_clock() -> None:
+    window = SimulationWindow(date(2024, 3, 30), date(2024, 4, 1), ONE_MINUTE, "Europe/London")
+
+    rows = window.rows()
+
+    pd.testing.assert_index_equal(rows, _whole_london_days("2024-03-30", "2024-04-01"))
+    assert len(rows) == 4_260
+    assert rows[0] == pd.Timestamp("2024-03-30 00:00+00:00")
+    assert rows[-1] == pd.Timestamp("2024-04-01 23:59+01:00")
+    assert rows.freq == ONE_MINUTE
+    assert SimulationWindow.of_index(rows) == window
+
+
+@pytest.mark.parametrize(
+    ("zone", "day", "row_count", "first_row", "last_row"),
+    [
+        pytest.param(
+            "Europe/London",
+            date(2024, 3, 31),
+            1_380,
+            "2024-03-31 00:00+00:00",
+            "2024-03-31 23:59+01:00",
+            id="london-clocks-go-forward",
+        ),
+        pytest.param(
+            "Europe/London",
+            date(2024, 10, 27),
+            1_500,
+            "2024-10-27 00:00+01:00",
+            "2024-10-27 23:59+00:00",
+            id="london-clocks-go-back",
+        ),
+        pytest.param(
+            "America/Havana",
+            date(2024, 3, 10),
+            1_380,
+            "2024-03-10 01:00-04:00",
+            "2024-03-10 23:59-04:00",
+            id="havana-clocks-skip-midnight",
+        ),
+        pytest.param(
+            "America/Havana",
+            date(2024, 11, 3),
+            1_500,
+            "2024-11-03 00:00-04:00",
+            "2024-11-03 23:59-05:00",
+            id="havana-clocks-repeat-midnight",
+        ),
+    ],
+)
+def test_a_day_across_a_clock_change_runs_from_its_first_instant_to_the_next_date_s(
+    zone: str, day: date, row_count: int, first_row: str, last_row: str
+) -> None:
+    window = SimulationWindow(day, day, ONE_MINUTE, zone)
+
+    rows = window.rows()
+
+    assert len(rows) == row_count
+    assert rows[0] == pd.Timestamp(first_row)
+    assert rows[-1] == pd.Timestamp(last_row)
+    assert rows.freq == ONE_MINUTE
+    assert SimulationWindow.of_index(rows) == window
+
+
+def test_a_window_with_no_zone_has_24_hour_days() -> None:
+    window = SimulationWindow(date(2024, 3, 30), date(2024, 4, 1), ONE_MINUTE)
+
+    rows = window.rows()
+
+    pd.testing.assert_index_equal(rows, pd.date_range("2024-03-30", "2024-04-01 23:59", freq="1min"))
+    assert SimulationWindow.of_index(rows) == window
+
+
+@pytest.mark.parametrize(
+    ("cadence", "in_minutes"),
+    [
+        (timedelta(minutes=7), "7 minutes"),
+        (timedelta(minutes=32), "32 minutes"),
+        (timedelta(hours=2), "120 minutes"),
+    ],
+)
+def test_rows_refuses_a_cadence_that_does_not_divide_one_hour_naming_it(
+    cadence: timedelta, in_minutes: str
+) -> None:
+    window = SimulationWindow(date(2024, 3, 30), date(2024, 4, 1), cadence, "Europe/London")
+
+    with pytest.raises(ValueError) as refusal:
+        window.rows()
+
+    assert repr(cadence) in str(refusal.value)
+    assert in_minutes in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    ("cadence", "row_count"),
+    [
+        (timedelta(seconds=45), 1_920),
+        (timedelta(minutes=15), 96),
+        (timedelta(hours=1), 24),
+    ],
+)
+def test_rows_accepts_a_cadence_that_divides_one_hour(cadence: timedelta, row_count: int) -> None:
+    rows = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), cadence, "Europe/London").rows()
+
+    assert len(rows) == row_count
+    assert rows.freq == cadence
+
+
+@pytest.mark.parametrize(
+    ("zone", "first_day", "last_day", "cadence", "rows_per_day"),
+    [
+        pytest.param(
+            "Europe/London",
+            date(2024, 3, 30),
+            date(2024, 4, 1),
+            ONE_MINUTE,
+            [1_440, 1_380, 1_440],
+            id="london-clocks-go-forward",
+        ),
+        pytest.param(
+            "Europe/London",
+            date(2024, 10, 26),
+            date(2024, 10, 28),
+            ONE_MINUTE,
+            [1_440, 1_500, 1_440],
+            id="london-clocks-go-back",
+        ),
+        pytest.param(
+            "Europe/London",
+            date(2024, 3, 30),
+            date(2024, 4, 1),
+            timedelta(minutes=30),
+            [48, 46, 48],
+            id="london-half-hourly-clocks-go-forward",
+        ),
+        pytest.param(
+            "America/Havana",
+            date(2024, 3, 9),
+            date(2024, 3, 11),
+            ONE_MINUTE,
+            [1_440, 1_380, 1_440],
+            id="havana-clocks-skip-midnight",
+        ),
+        pytest.param(
+            "America/Havana",
+            date(2024, 11, 2),
+            date(2024, 11, 4),
+            ONE_MINUTE,
+            [1_440, 1_500, 1_440],
+            id="havana-clocks-repeat-midnight",
+        ),
+        pytest.param(
+            None,
+            date(2024, 3, 30),
+            date(2024, 4, 1),
+            ONE_MINUTE,
+            [1_440, 1_440, 1_440],
+            id="no-zone",
+        ),
+    ],
+)
+def test_local_days_split_the_rows_by_date_each_from_its_first_instant_at_the_window_s_cadence(
+    zone: str | None,
+    first_day: date,
+    last_day: date,
+    cadence: timedelta,
+    rows_per_day: list[int],
+) -> None:
+    window = SimulationWindow(first_day, last_day, cadence, zone)
+
+    days = list(window.local_days())
+
+    assert all(isinstance(day, LocalDay) for day in days)
+    assert [day.date for day in days] == [
+        first_day + timedelta(days=offset) for offset in range((last_day - first_day).days + 1)
+    ]
+    assert [len(day.rows) for day in days] == rows_per_day
+    for day in days:
+        pd.testing.assert_index_equal(
+            day.rows, SimulationWindow(day.date, day.date, cadence, zone).rows()
+        )
+        assert day.rows.freq == cadence
+    pd.testing.assert_index_equal(days[0].rows.append([day.rows for day in days[1:]]), window.rows())
+
+
+def test_local_days_refuses_a_cadence_that_does_not_divide_one_hour_when_called() -> None:
+    window = SimulationWindow(date(2024, 3, 30), date(2024, 4, 1), timedelta(minutes=7), "Europe/London")
+
+    with pytest.raises(ValueError) as refusal:
+        window.local_days()
+
+    assert repr(timedelta(minutes=7)) in str(refusal.value)
+    assert "7 minutes" in str(refusal.value)
+
+
+def _london_local_days(first: date, last: date, cadence: timedelta = ONE_MINUTE) -> dict[date, LocalDay]:
+    """A Europe/London window's local days, by date."""
+    window = SimulationWindow(first, last, cadence, "Europe/London")
+    return {day.date: day for day in window.local_days()}
+
+
+def test_minute_of_day_holds_each_minute_of_the_hour_the_clocks_go_back_over_twice() -> None:
+    day = _london_local_days(date(2024, 10, 26), date(2024, 10, 28))[date(2024, 10, 27)]
+
+    counts = np.bincount(day.minute_of_day(), minlength=MINUTES_PER_DAY)
+
+    expected = np.ones(MINUTES_PER_DAY, dtype=counts.dtype)
+    expected[60:120] = 2
+    np.testing.assert_array_equal(counts, expected)
+
+
+def test_minute_of_day_lacks_each_minute_of_the_hour_the_clocks_skip() -> None:
+    day = _london_local_days(date(2024, 3, 30), date(2024, 4, 1))[date(2024, 3, 31)]
+
+    counts = np.bincount(day.minute_of_day(), minlength=MINUTES_PER_DAY)
+
+    expected = np.ones(MINUTES_PER_DAY, dtype=counts.dtype)
+    expected[60:120] = 0
+    np.testing.assert_array_equal(counts, expected)
+
+
+def test_minute_of_day_of_a_24_hour_day_is_every_minute_once_in_order_as_integers() -> None:
+    day = _london_local_days(date(2024, 3, 30), date(2024, 4, 1))[date(2024, 3, 30)]
+
+    minutes = day.minute_of_day()
+
+    np.testing.assert_array_equal(minutes, np.arange(MINUTES_PER_DAY))
+    assert np.issubdtype(minutes.dtype, np.integer)
+
+
+def test_minute_of_day_reads_each_half_hourly_row_s_wall_clock() -> None:
+    day = _london_local_days(date(2024, 3, 30), date(2024, 4, 1), timedelta(minutes=30))[date(2024, 3, 31)]
+
+    minutes = day.minute_of_day()
+
+    assert len(minutes) == 46
+    assert list(minutes[:4]) == [0, 30, 120, 150]
+
+
+def test_instant_of_a_minute_the_clocks_skip_is_the_instant_they_jump_to() -> None:
+    day = _london_local_days(date(2024, 3, 30), date(2024, 4, 1))[date(2024, 3, 31)]
+
+    assert day.instant(90) == pd.Timestamp("2024-03-31 02:00+01:00")
+
+
+def test_instant_of_a_minute_the_clocks_repeat_is_its_first_reading() -> None:
+    day = _london_local_days(date(2024, 10, 26), date(2024, 10, 28))[date(2024, 10, 27)]
+
+    assert day.instant(90) == pd.Timestamp("2024-10-27 01:30+01:00")
+
+
+def test_instant_of_minute_zero_is_the_day_s_first_row_where_the_clocks_skip_midnight() -> None:
+    window = SimulationWindow(date(2024, 3, 10), date(2024, 3, 10), ONE_MINUTE, "America/Havana")
+    (day,) = window.local_days()
+
+    assert day.instant(0) == day.rows[0]
+    assert day.instant(0) == pd.Timestamp("2024-03-10 01:00-04:00")
+
+
+def test_instant_of_the_day_s_last_minute_is_a_one_minute_day_s_last_row() -> None:
+    day = _london_local_days(date(2024, 3, 30), date(2024, 4, 1))[date(2024, 3, 30)]
+
+    assert day.instant(MINUTES_PER_DAY - 1) == day.rows[-1]
+    assert day.instant(MINUTES_PER_DAY - 1) == pd.Timestamp("2024-03-30 23:59+00:00")
+
+
+@pytest.mark.parametrize("minute_of_day", [-1, MINUTES_PER_DAY])
+def test_instant_refuses_a_minute_outside_the_day_naming_it(minute_of_day: int) -> None:
+    day = _london_local_days(date(2024, 6, 1), date(2024, 6, 1))[date(2024, 6, 1)]
+
+    with pytest.raises(ValueError) as refusal:
+        day.instant(minute_of_day)
+
+    assert str(minute_of_day) in str(refusal.value)
+
+
+def test_instant_refuses_a_minute_no_row_of_the_date_reaches_naming_the_date() -> None:
+    day = _london_local_days(date(2024, 6, 1), date(2024, 6, 1), timedelta(minutes=30))[date(2024, 6, 1)]
+
+    with pytest.raises(ValueError) as refusal:
+        day.instant(MINUTES_PER_DAY - 1)
+
+    assert "2024-06-01" in str(refusal.value)
+    assert str(MINUTES_PER_DAY - 1) in str(refusal.value)

@@ -1,51 +1,41 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The scenario builder's form contract: the fleet scenario document a form describes, and why it is refused.
 
-The builder posts one flat form, the one scenario-builder.js's getFormData() builds.
-A field the form leaves out, or sends as null or '' (a cleared input), is left out
-of the block that carries it, so the loaders report or default it as they would
-for a hand-written scenario file.  The tariff: and seg: blocks carry nothing but
-their rate, so a form without the import or SEG rate writes that block as null:
-a scenario with no tariff, or no SEG.
+The builder posts the form scenario-builder.js's getFormData() builds: flat general
+fields, the number of homes, and the fleet page's pv, battery and load blocks, each
+component's field the grammar's own spec.  A field the form leaves out, or sends as null
+or '' (a cleared input), is left out of the block that carries it, so config.parse_scenario
+reports or defaults it as it would for a hand-written scenario file.  The tariff: and
+seg: blocks carry nothing but their rate, so a form without the import or SEG rate writes
+that block as null: a scenario with no tariff, or no SEG.
+
+A form is judged in one order: the dashboard's own limits, then the fleet blocks as
+fleet_config.read_form_fleet reads them, naming a field at the form's own path, then the
+whole document as config.parse_scenario reads it.
 """
 
-import tempfile
-from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
+from collections.abc import Callable, Mapping
 from typing import Any, Optional
 
-from solar_challenge.config import (
-    SimulationPeriod,
-    load_fleet_config,
-    parse_seg_rate,
-)
+from solar_challenge.config import ScenarioConfig, parse_scenario
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.scenario_writer import location_block, scenario_yaml
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, read_pool_counts
-from solar_challenge.web.number_fields import as_finite_float, as_whole_number
-from solar_challenge.web.shared import LOCATION_PRESETS, NotAJsonObject, require_json_object
+from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.number_fields import as_finite_float, as_whole_number
+from solar_challenge.scenario_writer import location_block
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
+    page_limits,
+    refuse_homes_outside_ranges,
+)
+from solar_challenge.web.fleet_config import read_form_fleet
+from solar_challenge.web.request_boundary import (
+    present_fields,
+    refusal_text,
+    refuse_unrecognised_keys,
+    require_json_object,
+)
 
 _BUILDER_FORM = "Builder form"
-
-#: Reads a column of distribution rows, given as (field, value sent) cells, as its numbers.
-_ColumnReader = Callable[[list[tuple[str, Any]]], Sequence[float]]
-
-
-def _prefixed(prefix: str, *keys: str) -> dict[str, str]:
-    """Each of *keys*, mapped to the form field that carries it for the component with *prefix*."""
-    return {key: f"{prefix}_{key}" for key in keys}
-
-
-_DISTRIBUTION_FIELDS = (
-    "distribution_type",
-    "mean",
-    "std",
-    "min",
-    "max",
-    "wd_values",
-    "sp_entries",
-)
 
 _CUSTOM_LOCATION_FORM_KEYS: Mapping[str, str] = {
     coordinate: coordinate for coordinate in ("latitude", "longitude", "altitude")
@@ -63,28 +53,24 @@ _RECOGNISED_KEYS = frozenset(
         "import_rate",
         "seg_rate_pence_per_kwh",
     }
-    | {component.fixed_field for component in FLEET_COMPONENTS.values()}
-    | {
-        form_key
-        for component in FLEET_COMPONENTS.values()
-        for form_key in _prefixed(component.key, *_DISTRIBUTION_FIELDS).values()
-    }
+    | set(FLEET_COMPONENTS)
 )
 
 
 def scenario_from_builder_form(form: object) -> dict[str, Any]:
     """The fleet scenario document the builder *form* describes.
 
+    Each component block is written as sent, for the fleet's readers to refuse, as
+    builder_form_errors reports.
+
     Raises:
-        ValueError: naming the form field at fault, for a form that is not an object, a
-            key the builder does not send, a value that is not the number it should be,
-            an unknown location preset or distribution type, a malformed distribution row,
-            or a shuffled pool too large for a dashboard fleet: a count outside 0 to
-            MAX_FLEET_HOMES, or counts totalling more.
+        ConfigurationError: naming the form field at fault, for a form that is not an object, a
+            key the builder does not send, a flat field that is not the number it should
+            be, or an unknown location preset.
     """
     form = require_json_object(form, _BUILDER_FORM)
-    _refuse_unrecognised_keys(form)
-    fields = _present_fields(form)
+    refuse_unrecognised_keys(form, _RECOGNISED_KEYS, _BUILDER_FORM)
+    fields = present_fields(form)
 
     document: dict[str, Any] = {
         key: str(fields[key]) for key in ("name", "description") if key in fields
@@ -105,56 +91,57 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
 
 
 def builder_form_errors(form: object) -> list[str]:
-    """Every reason the dashboard refuses the builder *form*; none for a scenario it accepts.
+    """Why the dashboard refuses the builder *form*; no reason for a scenario it accepts.
 
     A form that is not a JSON object has that one reason.  For any other, the dashboard's
     own limits come first.  Then the form becomes its scenario, and, unless its number of
-    homes is out of bounds, the scenario readers judge the YAML text the builder previews:
-    load_fleet_config, the seg: reader and the period's dates.
+    homes is out of bounds, read_form_fleet reads its fleet blocks: a refusal, naming the
+    field at the form's own path, is the one fleet reason.  So is any other ValueError it
+    raises, a probable defect, which refusal_text logs once, as _scenario_reader_errors
+    treats one from the scenario reader.  Otherwise config.parse_scenario judges the document
+    in memory.  A refused location or tariff is then the one reason.
+    Otherwise the homes' value_range reasons come first, then the reader's first refusal of
+    the period or SEG rate, the period's before the SEG's: one of the two, never both, and
+    neither hides a fleet reason.
     """
     try:
         form = require_json_object(form, _BUILDER_FORM)
-    except NotAJsonObject as refusal:
-        return [str(refusal)]
-    errors = _dashboard_limit_errors(_present_fields(form))
+    except ValueError as refusal:
+        return [refusal_text(refusal)]
+    errors = _dashboard_limit_errors(present_fields(form))
     try:
         document = scenario_from_builder_form(form)
-    except ValueError as exc:
-        return [*errors, str(exc)]
-    if _home_count_allowed(document["fleet_distribution"].get("n_homes")):
+    except ValueError as refusal:
+        return [*errors, refusal_text(refusal)]
+    fleet_distribution = document["fleet_distribution"]
+    if _home_count_allowed(fleet_distribution.get("n_homes")):
+        try:
+            read_form_fleet(fleet_distribution)
+        except ValueError as refusal:
+            return [*errors, refusal_text(refusal)]
         errors.extend(_scenario_reader_errors(document))
     return errors
 
 
-def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
-    """The fields *form* gives: each one it neither leaves out nor sends as null or ''."""
-    return {key: value for key, value in form.items() if value is not None and value != ""}
-
-
 def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
-    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and each fleet component's fixed value within its fixed_range.
+    """The dashboard's own rules: a scenario name, and 1 to MAX_FLEET_HOMES homes.
 
     A value its number reader refuses is left to scenario_from_builder_form to report.
+    Each fleet component's value_range is checked on the homes parse_scenario generates, by
+    _scenario_reader_errors, so a fixed value and a drawn one are bounded alike.
     """
     errors: list[str] = []
     if "name" not in fields:
         errors.append("Scenario name is required.")
     if not _home_count_allowed(_readable(fields, "n_homes", as_whole_number)):
-        errors.append(f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}.")
-    for component in FLEET_COMPONENTS.values():
-        fixed_value = _readable(fields, component.fixed_field, as_finite_float)
-        if fixed_value is not None and not component.admits_fixed_value(fixed_value):
-            low, high = component.fixed_range
-            errors.append(
-                f"{component.heading} must be between {low:g} and {high:g}, "
-                f"got {fields[component.fixed_field]!r}."
-            )
+        fleet_size = page_limits().fleet_size
+        errors.append(f"Number of homes must be between {fleet_size.low} and {fleet_size.high:,}.")
     return errors
 
 
 def _home_count_allowed(n_homes: Optional[float]) -> bool:
-    """Whether the dashboard allows *n_homes*: absent, or within 1 to MAX_FLEET_HOMES."""
-    return n_homes is None or 1 <= n_homes <= MAX_FLEET_HOMES
+    """Whether the dashboard allows *n_homes*: absent, or within page_limits().fleet_size, 1 to MAX_FLEET_HOMES."""
+    return n_homes is None or page_limits().fleet_size.admits(n_homes)
 
 
 def _readable(
@@ -165,70 +152,61 @@ def _readable(
         return None
     try:
         return as_number(fields[key], key)
-    except ValueError:
+    except ConfigurationError:
         return None
 
 
 def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
-    """What the scenario readers refuse in *document*, written as the YAML text the builder previews.
+    """Why config.parse_scenario refuses *document*, judged in memory, as builder_form_errors lists the reader's reasons.
 
-    load_fleet_config refuses a scenario with ConfigurationError, or with ValueError from
-    a config it builds, and a shuffled pool smaller than the fleet with IndexError.
-    Anything else it raises is a defect in the loader, not a refusal, so it propagates.
+    An accepted document has its homes' value_range reasons alone.  One the reader refuses,
+    with a ConfigurationError, has the reasons _fleet_reasons_beside gives beside the
+    refusal.  Any other ValueError is a probable defect, not a refusal of one block, so it is
+    the one reason, which refusal_text logs once, and the reader is not asked again.
+    Anything else the reader raises is a defect, not a refusal, so it propagates.
     """
-    errors: list[str] = []
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "scenario.yaml"
-        path.write_text(scenario_yaml(document), encoding="utf-8")
-        try:
-            load_fleet_config(path)
-        except (ConfigurationError, ValueError, IndexError) as exc:
-            errors.append(str(exc))
     try:
-        parse_seg_rate(document["seg"])
+        scenario = parse_scenario(document)
+    except ConfigurationError as refusal:
+        return _fleet_reasons_beside(document, str(refusal))
+    except ValueError as defect:
+        return [refusal_text(defect)]
+    return _range_errors(scenario)
+
+
+def _fleet_reasons_beside(document: Mapping[str, Any], refusal: str) -> list[str]:
+    """The reasons for *document*, which parse_scenario refused with *refusal*: its fleet's, read with the period: and seg: blocks left null, then *refusal*.
+
+    The reader reads a null period as the default window and a null seg as no rate.  A
+    refused location, tariff or fleet_distribution in that read is the one reason.  An
+    accepted read gives its homes' value_range reasons, then *refusal*, which can then only
+    be the reader's first refusal of the period or SEG rate, the blocks it reads before the
+    homes: the period's when both are refused.
+    """
+    try:
+        fleet = parse_scenario({**document, "period": None, "seg": None})
+    except ValueError as refusal:
+        return [refusal_text(refusal)]
+    return [*_range_errors(fleet), refusal]
+
+
+def _range_errors(scenario: ScenarioConfig) -> list[str]:
+    """refuse_homes_outside_ranges' refusal of *scenario*'s homes, a value outside a fleet component's value_range; none when it accepts them."""
+    try:
+        refuse_homes_outside_ranges(scenario.simulated_homes())
     except ConfigurationError as exc:
-        errors.append(str(exc))
-    errors.extend(_period_errors(document["period"]))
-    return errors
-
-
-def _period_errors(period: Mapping[str, str]) -> list[str]:
-    """What keeps the period: block from giving the simulated dates: a date it lacks or one that does not parse."""
-    missing = [key for key in ("start_date", "end_date") if key not in period]
-    if missing:
-        return [f"The period needs {' and '.join(missing)}"]
-    simulation_period = SimulationPeriod(
-        start_date=period["start_date"], end_date=period["end_date"]
-    )
-    errors: list[str] = []
-    for key, timestamp in (
-        ("start_date", simulation_period.get_start_timestamp),
-        ("end_date", simulation_period.get_end_timestamp),
-    ):
-        try:
-            timestamp()
-        except ValueError as exc:
-            errors.append(f"period.{key} is not a date: {exc}")
-    return errors
-
-
-def _refuse_unrecognised_keys(form: Mapping[str, Any]) -> None:
-    unrecognised = sorted(form.keys() - _RECOGNISED_KEYS)
-    if unrecognised:
-        raise ValueError(
-            f"Unrecognised builder form keys: {', '.join(map(repr, unrecognised))}; "
-            f"recognised keys: {', '.join(sorted(_RECOGNISED_KEYS))}"
-        )
+        return [str(exc)]
+    return []
 
 
 def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
-    """The location: block for the form's location_preset: a dashboard preset, or 'custom'.
+    """The location: block for the form's location_preset: a key of location.LOCATION_PRESETS, or 'custom'.
 
-    A custom block holds the coordinates the form gives, as numbers.  A coordinate the
-    form leaves out is left out of the block, for the loader to default.
+    A custom block holds the coordinates the form gives, as numbers, and leaves out each
+    one the form leaves out; scenario_blocks.parse_location_block reads it as any location: block.
 
     Raises:
-        ValueError: for any other preset, naming it, or for a custom coordinate that is
+        ConfigurationError: for any other preset, naming it, or for a custom coordinate that is
             not a finite number.
     """
     preset = fields["location_preset"]
@@ -236,66 +214,19 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
         return _present_numbers(fields, _CUSTOM_LOCATION_FORM_KEYS)
     if isinstance(preset, str) and preset in LOCATION_PRESETS:
         return location_block(LOCATION_PRESETS[preset])
-    raise ValueError(
+    raise ConfigurationError(
         f"location_preset must be 'custom' or one of "
         f"{', '.join(map(repr, LOCATION_PRESETS))}, got {preset!r}"
     )
 
 
 def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
-    """The fleet_distribution: block: the number of homes, then each component's block."""
+    """The fleet_distribution: block: the number of homes, then each component block the form sends, as sent."""
     block: dict[str, Any] = {}
     if "n_homes" in fields:
         block["n_homes"] = as_whole_number(fields["n_homes"], "n_homes")
-    for component in FLEET_COMPONENTS.values():
-        block[component.key] = _component_block(fields, component)
+    block.update({key: fields[key] for key in FLEET_COMPONENTS if key in fields})
     return block
-
-
-def _component_block(fields: Mapping[str, Any], component: FleetComponent) -> dict[str, Any]:
-    """*component*'s block: the distribution the form sets a type for, else the form's fixed value."""
-    form_keys = _prefixed(component.key, *_DISTRIBUTION_FIELDS)
-    if form_keys["distribution_type"] in fields:
-        return {component.grammar_key: _distribution_spec(fields, form_keys)}
-    return _present_numbers(fields, {component.grammar_key: component.fixed_field})
-
-
-def _distribution_spec(fields: Mapping[str, Any], form_keys: Mapping[str, str]) -> dict[str, Any]:
-    """The distribution the form's fields describe, as the grammar spells it.
-
-    *form_keys* maps each distribution field to the form field carrying it for one component.
-
-    Raises:
-        ValueError: naming the distribution type, when the builder offers no such distribution.
-    """
-    type_field = form_keys["distribution_type"]
-    distribution_type = fields[type_field]
-    parameters: Mapping[str, Any]
-    if distribution_type == "normal":
-        parameters = _present_numbers(
-            fields, {key: form_keys[key] for key in ("mean", "std", "min", "max")}
-        )
-    elif distribution_type == "uniform":
-        parameters = _present_numbers(fields, {key: form_keys[key] for key in ("min", "max")})
-    elif distribution_type == "weighted_discrete":
-        parameters = _row_lists(
-            fields, form_keys["wd_values"], "weight", "weights", _finite_floats
-        )
-    elif distribution_type == "shuffled_pool":
-        entries_field = form_keys["sp_entries"]
-        parameters = _row_lists(
-            fields,
-            entries_field,
-            "count",
-            "counts",
-            lambda counts: read_pool_counts(counts, entries_field),
-        )
-    else:
-        raise ValueError(
-            f"{type_field} must be one of normal, uniform, weighted_discrete or "
-            f"shuffled_pool, got {distribution_type!r}"
-        )
-    return {"type": distribution_type, **parameters}
 
 
 def _optional_number(fields: Mapping[str, Any], form_key: str) -> Optional[float]:
@@ -310,43 +241,3 @@ def _present_numbers(fields: Mapping[str, Any], form_keys: Mapping[str, str]) ->
         for grammar_key, form_key in form_keys.items()
         if form_key in fields
     }
-
-
-def _row_lists(
-    fields: Mapping[str, Any],
-    rows_field: str,
-    column: str,
-    grammar_key: str,
-    read_column: _ColumnReader,
-) -> dict[str, list[float]]:
-    """The values, and the *grammar_key* list of each row's *column*, of the form's *rows_field* rows.
-
-    Each row is an object holding a value and its *column*.  A form without the rows
-    gives neither list.  Each value is read by as_finite_float.  The column is read whole,
-    by *read_column*, from each row's cell with its field, ``rows_field[index].column``,
-    so its rule may bound each cell or the column's total.
-
-    Raises:
-        ValueError: naming *rows_field*, and the row's index, when the rows are not a list
-            of such objects or a value is not a finite number; or *read_column*'s refusal.
-    """
-    if rows_field not in fields:
-        return {}
-    rows = fields[rows_field]
-    if not isinstance(rows, list):
-        raise ValueError(f"{rows_field} must be a list of rows, got {rows!r}")
-    values: list[float] = []
-    cells: list[tuple[str, Any]] = []
-    for index, row in enumerate(rows):
-        if not isinstance(row, Mapping) or not {"value", column} <= row.keys():
-            raise ValueError(
-                f"{rows_field}[{index}] must be an object with 'value' and {column!r}, got {row!r}"
-            )
-        values.append(as_finite_float(row["value"], f"{rows_field}[{index}].value"))
-        cells.append((f"{rows_field}[{index}].{column}", row[column]))
-    return {"values": values, grammar_key: list(read_column(cells))}
-
-
-def _finite_floats(cells: list[tuple[str, Any]]) -> list[float]:
-    """Each of *cells*, a row's cell with its field, read by as_finite_float under that field."""
-    return [as_finite_float(value, field) for field, value in cells]

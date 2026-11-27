@@ -1,26 +1,28 @@
 """Tests for heat pump configuration and modelling."""
 
+import dataclasses
 import doctest
 import re
+from typing import get_args
 
 import numpy as np
 import pandas as pd
 import pytest
 import solar_challenge.heat_pump
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import (
     HeatPumpConfig,
     BASE_TEMPERATURE_C,
-    ASHP_COP_INTERCEPT,
-    ASHP_COP_SLOPE,
-    ASHP_COP_MIN,
-    ASHP_COP_MAX,
-    GSHP_COP_BASE,
-    GSHP_COP_MIN,
-    GSHP_COP_MAX,
-    calculate_heating_degree_minutes,
+    COP_CURVES,
+    CopCurve,
+    HEAT_PUMP_TYPES,
+    HeatPumpType,
     calculate_cop,
     generate_heat_pump_load,
+    heating_degree_deficit_c,
 )
+from solar_challenge.timebase import SimulationWindow
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 class TestHeatPumpConfigBasics:
@@ -81,67 +83,155 @@ class TestHeatPumpConfigDefaults:
 class TestHeatPumpConfigValidation:
     """Test parameter validation."""
 
-    def test_invalid_heat_pump_type(self):
-        """Invalid heat pump type raises error."""
-        with pytest.raises(ValueError, match="Heat pump type"):
-            HeatPumpConfig(
-                heat_pump_type="WSHP",  # Invalid type
-                thermal_capacity_kw=8.0
-            )
-
-    def test_capacity_must_be_positive(self):
+    @pytest.mark.parametrize("thermal_capacity_kw", [0, -5.0])
+    def test_capacity_must_be_positive(self, thermal_capacity_kw):
         """Thermal capacity <= 0 raises error."""
-        with pytest.raises(ValueError, match="capacity must be positive"):
-            HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=0
-            )
-        with pytest.raises(ValueError, match="capacity must be positive"):
-            HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=-5.0
-            )
+        with pytest.raises(ConfigurationError) as exc_info:
+            HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=thermal_capacity_kw)
+        assert str(exc_info.value) == (
+            f"thermal_capacity_kw must be greater than 0 and at most 50, got {thermal_capacity_kw!r}"
+        )
 
     def test_capacity_unrealistic_high_raises(self):
         """Unrealistically high capacity raises error."""
-        with pytest.raises(ValueError, match="unrealistic"):
-            HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=100.0
-            )
+        with pytest.raises(ConfigurationError) as exc_info:
+            HeatPumpConfig(heat_pump_type="ASHP", thermal_capacity_kw=100.0)
+        assert str(exc_info.value) == "thermal_capacity_kw must be greater than 0 and at most 50, got 100.0"
 
-    def test_annual_demand_must_be_positive(self):
+    @pytest.mark.parametrize("annual_heat_demand_kwh", [0, -1000.0])
+    def test_annual_demand_must_be_positive(self, annual_heat_demand_kwh):
         """Annual heat demand <= 0 raises error."""
-        with pytest.raises(ValueError, match="demand must be positive"):
+        with pytest.raises(ConfigurationError) as exc_info:
             HeatPumpConfig(
                 heat_pump_type="ASHP",
                 thermal_capacity_kw=8.0,
-                annual_heat_demand_kwh=0
+                annual_heat_demand_kwh=annual_heat_demand_kwh,
             )
-        with pytest.raises(ValueError, match="demand must be positive"):
-            HeatPumpConfig(
-                heat_pump_type="ASHP",
-                thermal_capacity_kw=8.0,
-                annual_heat_demand_kwh=-1000.0
-            )
+        assert str(exc_info.value) == (
+            f"annual_heat_demand_kwh must be greater than 0 and at most 50000, got {annual_heat_demand_kwh!r}"
+        )
 
     def test_annual_demand_unrealistic_high_raises(self):
         """Unrealistically high annual demand raises error."""
-        with pytest.raises(ValueError, match="unrealistic"):
+        with pytest.raises(ConfigurationError) as exc_info:
             HeatPumpConfig(
                 heat_pump_type="ASHP",
                 thermal_capacity_kw=8.0,
                 annual_heat_demand_kwh=100000.0
             )
+        assert str(exc_info.value) == (
+            "annual_heat_demand_kwh must be greater than 0 and at most 50000, got 100000.0"
+        )
+
+    @pytest.mark.parametrize("field", ["thermal_capacity_kw", "annual_heat_demand_kwh"])
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_number_that_is_not_finite_is_refused_naming_its_field_and_the_value(self, field, value):
+        """A NaN, an infinity, a bool or a word is refused by name, before any range is checked."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(HeatPumpConfig.default_ashp(), **{field: value})
+        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+
+    def test_whole_numbers_are_held_as_the_floats_they_equal(self):
+        config = HeatPumpConfig("ASHP", 8, 8000)
+        assert config.thermal_capacity_kw == 8.0
+        assert type(config.thermal_capacity_kw) is float
+        assert config.annual_heat_demand_kwh == 8000.0
+        assert type(config.annual_heat_demand_kwh) is float
+
+
+class TestCopCurve:
+    """A CopCurve's COP is its line in the outdoor temperature, held between its minimum and maximum."""
+
+    @pytest.mark.parametrize(
+        ("outdoor_temp_c", "cop"),
+        [
+            pytest.param(-4.0, 2.0, id="line-at-1.0-held-up-to-minimum"),
+            pytest.param(0.0, 3.0, id="intercept"),
+            pytest.param(1.0, 3.5, id="on-the-line"),
+            pytest.param(4.0, 4.0, id="line-at-5.0-held-down-to-maximum"),
+        ],
+    )
+    def test_cop_is_the_line_held_between_minimum_and_maximum(self, outdoor_temp_c, cop):
+        curve = CopCurve(intercept=3.0, slope=0.5, minimum=2.0, maximum=4.0)
+
+        assert curve.cop(outdoor_temp_c) == cop
+
+    def test_cops_is_each_rows_line_held_between_minimum_and_maximum(self):
+        curve = CopCurve(intercept=3.0, slope=0.5, minimum=2.0, maximum=4.0)
+        outdoor_temp_c = pd.Series(
+            [-4.0, 0.0, 1.0, 4.0], index=pd.date_range("2025-01-15", periods=4, freq="1min", tz="UTC")
+        )
+
+        pd.testing.assert_series_equal(
+            curve.cops(outdoor_temp_c),
+            pd.Series([2.0, 3.0, 3.5, 4.0], index=outdoor_temp_c.index),
+            check_exact=True,
+        )
+
+    def test_equal_bounds_give_a_constant_cop(self):
+        curve = CopCurve(intercept=3.0, slope=0.5, minimum=3.0, maximum=3.0)
+
+        assert curve.cop(-10.0) == 3.0
+        assert curve.cop(10.0) == 3.0
+
+    @pytest.mark.parametrize(
+        ("minimum", "maximum"),
+        [
+            pytest.param(0.0, 4.0, id="zero-minimum"),
+            pytest.param(-1.0, 4.0, id="negative-minimum"),
+            pytest.param(4.5, 4.0, id="minimum-above-maximum"),
+        ],
+    )
+    def test_bounds_must_satisfy_zero_below_minimum_at_most_maximum(self, minimum, maximum):
+        with pytest.raises(ValueError, match=re.escape(f"got minimum={minimum}, maximum={maximum}")):
+            CopCurve(intercept=3.0, slope=0.5, minimum=minimum, maximum=maximum)
+
+
+class TestHeatPumpTypes:
+    """HeatPumpType's Literal states the heat-pump types once; the runtime vocabulary and the COP curves follow it."""
+
+    def test_the_literal_the_vocabulary_and_the_cop_curves_name_the_same_types(self):
+        assert set(get_args(HeatPumpType)) == set(COP_CURVES) == set(HEAT_PUMP_TYPES)
+
+    @pytest.mark.parametrize(
+        "call_with_xshp",
+        [
+            pytest.param(lambda: HeatPumpConfig("XSHP", 8.0), id="heat-pump-config"),
+            pytest.param(lambda: calculate_cop("XSHP", 0.0), id="calculate-cop"),
+        ],
+    )
+    def test_a_type_outside_heat_pump_types_is_refused_naming_every_type(self, call_with_xshp):
+        with pytest.raises(ConfigurationError, match=re.escape("Heat pump type must be one of ('ASHP', 'GSHP'), got 'XSHP'")):
+            call_with_xshp()
 
 
 class TestCalculateCOP:
     """Test COP calculation for different heat pump types."""
 
-    def test_ashp_cop_at_zero_degrees(self):
-        """ASHP COP at 0°C matches intercept."""
-        cop = calculate_cop("ASHP", 0.0)
-        assert cop == pytest.approx(ASHP_COP_INTERCEPT, rel=0.001)
+    @pytest.mark.parametrize(
+        ("heat_pump_type", "expected"),
+        [
+            pytest.param("ASHP", [1.8, 2.0, 2.5, 3.2, 4.5, 4.5], id="ASHP"),
+            pytest.param("GSHP", [3.4, 3.7, 3.8, 3.94, 4.2, 4.6], id="GSHP"),
+        ],
+    )
+    def test_cop_at_the_prds_temperatures(self, heat_pump_type, expected):
+        """The COPs of the PRD's §3.3, written as literals rather than read from COP_CURVES, so that an edited curve fails."""
+        temperatures = (-20.0, -5.0, 0.0, 7.0, 20.0, 40.0)
+
+        assert [calculate_cop(heat_pump_type, t) for t in temperatures] == pytest.approx(expected, abs=1e-12)
+
+    @pytest.mark.parametrize(
+        ("heat_pump_type", "outdoor_temp_c", "cop"),
+        [
+            pytest.param("ASHP", -50.0, 1.8, id="ASHP-floor"),
+            pytest.param("ASHP", 50.0, 4.5, id="ASHP-ceiling"),
+            pytest.param("GSHP", -60.0, 3.2, id="GSHP-floor"),
+            pytest.param("GSHP", 60.0, 4.8, id="GSHP-ceiling"),
+        ],
+    )
+    def test_each_type_is_held_to_its_floor_and_ceiling(self, heat_pump_type, outdoor_temp_c, cop):
+        assert calculate_cop(heat_pump_type, outdoor_temp_c) == pytest.approx(cop, abs=1e-12)
 
     def test_ashp_cop_increases_with_temperature(self):
         """ASHP COP increases with outdoor temperature."""
@@ -150,28 +240,6 @@ class TestCalculateCOP:
         cop_plus_10 = calculate_cop("ASHP", 10.0)
 
         assert cop_minus_10 < cop_zero < cop_plus_10
-
-    def test_ashp_cop_linear_relationship(self):
-        """ASHP COP follows linear relationship in mid-range."""
-        # At temperatures where we're not hitting min/max bounds
-        temp = 5.0
-        expected_cop = ASHP_COP_INTERCEPT + ASHP_COP_SLOPE * temp
-        actual_cop = calculate_cop("ASHP", temp)
-        assert actual_cop == pytest.approx(expected_cop, rel=0.001)
-
-    def test_ashp_cop_min_bound(self):
-        """ASHP COP doesn't go below minimum."""
-        # Very cold temperature should hit minimum
-        cop = calculate_cop("ASHP", -20.0)
-        assert cop >= ASHP_COP_MIN
-        assert cop == pytest.approx(ASHP_COP_MIN, rel=0.001)
-
-    def test_ashp_cop_max_bound(self):
-        """ASHP COP doesn't exceed maximum."""
-        # Very warm temperature should hit maximum
-        cop = calculate_cop("ASHP", 30.0)
-        assert cop <= ASHP_COP_MAX
-        assert cop == pytest.approx(ASHP_COP_MAX, rel=0.001)
 
     def test_gshp_cop_more_stable(self):
         """GSHP COP is more stable than ASHP across temperatures."""
@@ -185,28 +253,6 @@ class TestCalculateCOP:
 
         assert gshp_variation < ashp_variation
 
-    def test_gshp_cop_at_base_temp(self):
-        """GSHP COP near base value at typical temperatures."""
-        cop = calculate_cop("GSHP", 10.0)
-        # Should be close to base, slightly influenced by temperature
-        assert cop >= GSHP_COP_MIN
-        assert cop <= GSHP_COP_MAX
-
-    def test_gshp_cop_min_bound(self):
-        """GSHP COP doesn't go below minimum."""
-        cop = calculate_cop("GSHP", -30.0)
-        assert cop >= GSHP_COP_MIN
-
-    def test_gshp_cop_max_bound(self):
-        """GSHP COP doesn't exceed maximum."""
-        cop = calculate_cop("GSHP", 40.0)
-        assert cop <= GSHP_COP_MAX
-
-    def test_invalid_heat_pump_type_raises(self):
-        """Invalid heat pump type raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid heat pump type"):
-            calculate_cop("INVALID", 10.0)
-
     def test_gshp_generally_higher_cop(self):
         """GSHP generally has higher COP than ASHP in cold weather."""
         temp = -5.0
@@ -215,66 +261,66 @@ class TestCalculateCOP:
         assert gshp_cop > ashp_cop
 
 
-class TestCalculateHeatingDegreeMinutes:
-    """Test heating degree minutes calculation."""
+class TestHeatingDegreeDeficit:
+    """Test the per-row temperature deficit below the heating base temperature."""
 
     def test_temperature_below_base(self):
-        """Temperature below base produces positive degree minutes."""
+        """Temperature below base produces a positive deficit."""
         temps = pd.Series([10.0, 12.0, 5.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # Base is 15.5°C by default
         # Deficits: 5.5, 3.5, 10.5
-        assert degree_mins.iloc[0] == pytest.approx(5.5, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(3.5, rel=0.001)
-        assert degree_mins.iloc[2] == pytest.approx(10.5, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(5.5, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(3.5, rel=0.001)
+        assert deficit_c.iloc[2] == pytest.approx(10.5, rel=0.001)
 
     def test_temperature_above_base_gives_zero(self):
-        """Temperature above base gives zero degree minutes."""
+        """Temperature above base gives a zero deficit."""
         temps = pd.Series([20.0, 18.0, 16.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # All temperatures above base (15.5°C)
-        assert (degree_mins >= 0).all()
-        assert degree_mins.iloc[0] == 0.0
-        assert degree_mins.iloc[1] == 0.0
-        assert degree_mins.iloc[2] == 0.0
+        assert (deficit_c >= 0).all()
+        assert deficit_c.iloc[0] == 0.0
+        assert deficit_c.iloc[1] == 0.0
+        assert deficit_c.iloc[2] == 0.0
 
     def test_temperature_at_base_gives_zero(self):
-        """Temperature exactly at base gives zero degree minutes."""
+        """Temperature exactly at base gives a zero deficit."""
         temps = pd.Series([BASE_TEMPERATURE_C])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert degree_mins.iloc[0] == 0.0
+        deficit_c = heating_degree_deficit_c(temps)
+        assert deficit_c.iloc[0] == 0.0
 
     def test_custom_base_temperature(self):
         """Can use custom base temperature."""
         temps = pd.Series([18.0, 15.0])
-        degree_mins = calculate_heating_degree_minutes(temps, base_temp_c=20.0)
+        deficit_c = heating_degree_deficit_c(temps, base_temp_c=20.0)
 
         # Deficits from 20°C: 2.0, 5.0
-        assert degree_mins.iloc[0] == pytest.approx(2.0, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(5.0, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(2.0, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(5.0, rel=0.001)
 
     def test_negative_temperatures(self):
         """Handles negative temperatures correctly."""
         temps = pd.Series([-5.0, -10.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
+        deficit_c = heating_degree_deficit_c(temps)
 
         # Deficits from 15.5°C: 20.5, 25.5
-        assert degree_mins.iloc[0] == pytest.approx(20.5, rel=0.001)
-        assert degree_mins.iloc[1] == pytest.approx(25.5, rel=0.001)
+        assert deficit_c.iloc[0] == pytest.approx(20.5, rel=0.001)
+        assert deficit_c.iloc[1] == pytest.approx(25.5, rel=0.001)
 
     def test_returns_series_same_length(self):
         """Output series has same length as input."""
         temps = pd.Series([10.0, 12.0, 14.0, 16.0, 18.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert len(degree_mins) == len(temps)
+        deficit_c = heating_degree_deficit_c(temps)
+        assert len(deficit_c) == len(temps)
 
     def test_no_negative_values(self):
         """Output never contains negative values."""
         temps = pd.Series([5.0, 10.0, 15.0, 20.0, 25.0])
-        degree_mins = calculate_heating_degree_minutes(temps)
-        assert (degree_mins >= 0).all()
+        deficit_c = heating_degree_deficit_c(temps)
+        assert (deficit_c >= 0).all()
 
 
 def _utc_1990_minute_index() -> pd.DatetimeIndex:
@@ -302,7 +348,7 @@ def seasonal_year() -> pd.Series:
     when only the small hours fall below the 15.5 °C base temperature.
     """
     index = _utc_1990_minute_index()
-    day_of_year_angle = 2 * np.pi * (index.dayofyear.to_numpy() - 15) / 365
+    day_of_year_angle = 2 * np.pi * (index.day_of_year.to_numpy() - 15) / 365
     minute_of_day_angle = 2 * np.pi * (index.hour.to_numpy() * 60 + index.minute.to_numpy() - 180) / 1440
     return pd.Series(10.0 - 7.0 * np.cos(day_of_year_angle) - 3.0 * np.cos(minute_of_day_angle), index=index)
 
@@ -518,33 +564,76 @@ class TestGenerateHeatPumpLoadSharesTheAnnualHeatDemand:
         pd.testing.assert_series_equal(load, pd.Series(0.0, index=day_at_0c.index, name="heat_pump_load_kw"))
 
 
+_MINUTE_YEAR_DESCRIPTION = "rows 0:01:00 apart (525,600 to 527,040)"
+
+
 class TestGenerateHeatPumpLoadRejectsAReferenceThatIsNotAYear:
-    """annual_temperature_c must be one year of minutes, 365 to 366 days; any other length raises ValueError."""
+    """annual_temperature_c must be one year of its own rows, and any other reference raises ValueError naming what it got.
+
+    One year is 365 to 366 days of rows at the spacing its index's window reads, and that spacing must divide one day.
+    """
 
     @pytest.mark.parametrize(
-        ("rows", "freq"),
+        ("rows", "freq", "one_year"),
         [
-            pytest.param(1440, "1min", id="one-day-of-minutes"),
-            pytest.param(8760, "1h", id="an-hourly-year"),
-            pytest.param(365 * 1440 - 1, "1min", id="one-minute-short-of-a-year"),
-            pytest.param(366 * 1440 + 1, "1min", id="one-minute-past-a-leap-year"),
-            pytest.param(2 * 525_600, "1min", id="two-years-of-minutes"),
+            pytest.param(1440, "1min", _MINUTE_YEAR_DESCRIPTION, id="one-day-of-minutes"),
+            pytest.param(365 * 1440 - 1, "1min", _MINUTE_YEAR_DESCRIPTION, id="one-minute-short-of-a-year"),
+            pytest.param(366 * 1440 + 1, "1min", _MINUTE_YEAR_DESCRIPTION, id="one-minute-past-a-leap-year"),
+            pytest.param(2 * 525_600, "1min", _MINUTE_YEAR_DESCRIPTION, id="two-years-of-minutes"),
+            pytest.param(
+                525_600, "30min", "rows 0:30:00 apart (17,520 to 17,568)", id="a-minute-years-count-of-half-hours"
+            ),
+            pytest.param(24, "1h", "rows 1:00:00 apart (8,760 to 8,784)", id="one-day-of-hours"),
         ],
     )
-    def test_a_reference_that_is_not_a_year_of_minutes_raises_with_its_length(self, rows, freq):
+    def test_a_reference_that_is_not_one_year_of_its_rows_raises_naming_its_length_and_spacing(
+        self, rows, freq, one_year
+    ):
         reference = pd.Series(10.0, index=pd.date_range("1990-01-01", periods=rows, freq=freq, tz="UTC"))
 
         with pytest.raises(
             ValueError,
-            match=re.escape(f"annual_temperature_c has {rows:,} rows, not one year of minutes (525,600 to 527,040)"),
+            match=re.escape(f"annual_temperature_c has {rows:,} rows, not one year of {one_year}"),
         ):
             generate_heat_pump_load(
                 HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
             )
 
-    @pytest.mark.parametrize("days", [365, 366])
-    def test_a_reference_of_a_whole_year_of_minutes_shares_the_demand_over_its_days(self, days):
-        reference = pd.Series(10.0, index=pd.date_range("1992-01-01", periods=days * 1440, freq="1min", tz="UTC"))
+    @pytest.mark.parametrize(
+        ("rows", "freq", "spacing"),
+        [
+            pytest.param(525_600, "7min", "0:07:00", id="a-minute-years-count-of-7-minute-rows"),
+            pytest.param(183, "48h", "2 days, 0:00:00", id="a-years-span-of-2-day-rows"),
+        ],
+    )
+    def test_a_reference_whose_spacing_does_not_divide_a_day_is_refused_naming_it(self, rows, freq, spacing):
+        reference = pd.Series(10.0, index=pd.date_range("1990-01-01", periods=rows, freq=freq, tz="UTC"))
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape(f"annual_temperature_c's rows are {spacing} apart, which does not divide one day"),
+        ):
+            generate_heat_pump_load(
+                HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
+            )
+
+    @pytest.mark.parametrize(
+        ("days", "freq", "rows_per_day"),
+        [
+            pytest.param(365, "1min", 1440, id="365-days-of-minutes"),
+            pytest.param(366, "1min", 1440, id="366-days-of-minutes"),
+            pytest.param(365, "30min", 48, id="365-days-of-half-hours"),
+            pytest.param(366, "30min", 48, id="366-days-of-half-hours"),
+            pytest.param(365, "1h", 24, id="365-days-of-hours"),
+            pytest.param(366, "1h", 24, id="366-days-of-hours"),
+        ],
+    )
+    def test_a_whole_year_of_rows_at_a_spacing_that_divides_a_day_shares_the_demand_over_its_days(
+        self, days, freq, rows_per_day
+    ):
+        reference = pd.Series(
+            10.0, index=pd.date_range("1992-01-01", periods=days * rows_per_day, freq=freq, tz="UTC")
+        )
 
         load = generate_heat_pump_load(
             HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
@@ -552,6 +641,54 @@ class TestGenerateHeatPumpLoadRejectsAReferenceThatIsNotAYear:
 
         heat_delivered_kwh = (load * calculate_cop("ASHP", 10.0)).sum() / 60
         assert heat_delivered_kwh == pytest.approx(8000.0 / days)
+
+
+class TestGenerateHeatPumpLoadIntegratesTheReferenceYearOverItsCadence:
+    """The reference year's heating degrees are integrated over the cadence its index's window reads, so a window at any cadence gets its share, and a reference whose index no window describes is refused."""
+
+    @pytest.mark.parametrize(
+        ("build_reference", "match"),
+        [
+            pytest.param(
+                lambda: pd.Series(10.0, index=pd.RangeIndex(525_600)),
+                "RangeIndex",
+                id="values-only-heating-year",
+            ),
+            pytest.param(
+                lambda: pd.Series(20.0, index=pd.RangeIndex(525_600)),
+                "RangeIndex",
+                id="values-only-year-without-heating",
+            ),
+            pytest.param(
+                lambda: pd.Series(10.0, index=pd.RangeIndex(1440)),
+                "RangeIndex",
+                id="values-only-day",
+            ),
+            pytest.param(
+                lambda: pd.Series(
+                    10.0,
+                    index=pd.date_range("1992-01-01", periods=527_040, freq="1min", tz="UTC").delete(100_000),
+                ),
+                "position 100000",
+                id="leap-year-missing-a-minute",
+            ),
+        ],
+    )
+    def test_a_reference_no_window_describes_is_refused(self, build_reference, match):
+        reference = build_reference()
+
+        with pytest.raises(ValueError, match=match):
+            generate_heat_pump_load(
+                HeatPumpConfig.default_ashp(), _days_at(10.0, "2025-01-15"), annual_temperature_c=reference
+            )
+
+    def test_a_half_hourly_window_gets_its_days_share_of_a_minute_years_heat(self, year_at_10c):
+        window = pd.Series(10.0, index=pd.date_range("2025-01-15", periods=48, freq="30min", tz="Europe/London"))
+
+        load = generate_heat_pump_load(HeatPumpConfig.default_ashp(), window, annual_temperature_c=year_at_10c)
+
+        heat_delivered_kwh = SimulationWindow.of_index(load.index).energy_kwh(load) * calculate_cop("ASHP", 10.0)
+        assert heat_delivered_kwh == pytest.approx(8000.0 / 365)
 
 
 class TestGenerateHeatPumpLoadNamesItsLoad:

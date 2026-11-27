@@ -6,33 +6,64 @@ dark-factory-orchestrator.yaml's git.offline_lane_commands, and each job runs a
 suite the per-task verify never runs. These tests pin the git settings that
 start the lane, and the contracts every job keeps, with one row per job in
 LANE_JOBS, so a new lane job adds one row. A test only one job needs stays in
-that job's module, as in test_pvgis_lane.py and test_interpreter_matrix_lane.py.
+that job's module, as in tests/unit/test_pvgis_lane.py and tests/unit/test_interpreter_matrix_lane.py.
+One test checks that every slow test runs in some LANE_JOBS job, unless
+SLOW_TESTS_NO_LANE_JOB_RUNS lists it with the live service it needs.
 """
 
+import os
+from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum, auto
-from pathlib import Path
+from enum import Enum, StrEnum, auto
+from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._collect_only import requires_uv
-from tests._lane_collection import collect_lane_job, default_collection_node_ids_under, suite_node_ids_matching
-from tests._orchestrator_config import git_config, lane_job_enabled, offline_lane_jobs, sole_offline_lane_job
+from tests._collect_only import Collection, requires_uv
+from tests._command_runner import describe_outcome, run_command
+from tests._lane_collection import (
+    default_collection_node_ids_under,
+    every_test_matching,
+    suite_node_ids_matching,
+)
+from tests._network_guard import send_child_processes_to_a_dead_proxy
+from tests._orchestrator_config import (
+    git_config,
+    lane_command,
+    lane_job_steps,
+    lane_jobs_declaring_an_outage_probe,
+    lane_outage_probe,
+    offline_lane_jobs,
+    pytest_arguments,
+)
+from tests._uv_env import SharedUvEnvironments
 
 
 class LaneContract(Enum):
     """A contract a LANE_JOBS row may list for its job.
 
-    Every job also keeps the one contract no row lists: the lane runs exactly
-    one enabled job of its name.
+    Every job also keeps three contracts no row lists: the lane runs exactly one
+    enabled job of its name, the job runs its suite serially, and no node id the
+    job collects holds whitespace.
+    A job whose suite lies directly under tests/ keeps another, which its
+    suite's path states: a default collection of tests/ with addopts cleared
+    never reaches the suite.
     """
 
     # Run as the lane runs it, the job collects at least one test, every one in its suite.
     COLLECTS_ONLY_ITS_SUITE = auto()
-    # A default collection of tests/ with addopts cleared never reaches the suite.
-    NEVER_IN_A_DEFAULT_COLLECTION = auto()
     # `-m 'not slow'` selects none of the suite's tests.
     EVERY_TEST_SLOW = auto()
+
+
+class LiveService(StrEnum):
+    """A live service a slow test needs, valued by its name."""
+
+    PVGIS = "PVGIS"
+    PYPI = "PyPI"
+    NPM_REGISTRY = "npm registry"
+    ANTHROPIC_API = "Anthropic API"
 
 
 @dataclass(frozen=True)
@@ -42,52 +73,122 @@ class LaneJob:
     name is the job's git.offline_lane_commands name, and the id of each test
     run for it. suite is relative to the root, as node ids are. if_unrun is a
     clause stating what goes unseen while the lane does not run the suite.
+    service is the live service the suite needs, whose value the job's outage
+    probe prints at the start of an outage line, or None for a suite that needs
+    none.
     """
 
     name: str
     suite: str
     if_unrun: str
     checked: frozenset[LaneContract]
+    service: LiveService | None
 
 
 LANE_JOBS: tuple[LaneJob, ...] = (
-    # test_interpreter_matrix_lane.py checks its COLLECTS_ONLY_ITS_SUITE more strictly: one case per off-pin minor.
+    # tests/unit/test_interpreter_matrix_lane.py checks its COLLECTS_ONLY_ITS_SUITE more strictly: one case per off-pin minor.
     LaneJob(
         "interpreter-matrix",
         "tests/interpreter_matrix",
         if_unrun="the interpreters other than the .python-version pin are never re-verified",
-        checked=frozenset({LaneContract.NEVER_IN_A_DEFAULT_COLLECTION, LaneContract.EVERY_TEST_SLOW}),
+        checked=frozenset({LaneContract.EVERY_TEST_SLOW}),
+        service=LiveService.PYPI,
     ),
     LaneJob(
         "e2e",
         "tests/e2e",
         if_unrun="e2e regressions go unseen",
         checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
+        service=None,
     ),
     LaneJob(
         "pvgis",
         "tests/integration/test_pvgis.py",
         if_unrun="a change in PVGIS's or pvlib's response goes unseen",
         checked=frozenset({LaneContract.COLLECTS_ONLY_ITS_SUITE}),
+        service=LiveService.PVGIS,
     ),
     LaneJob(
         "css-build",
         "tests/css_build",
         if_unrun="a stylesheet its sources no longer build to, or a stale Tailwind license text, goes unseen",
         checked=frozenset(LaneContract),
+        service=LiveService.NPM_REGISTRY,
     ),
     LaneJob(
         "newest-releases",
         "tests/newest_releases",
         if_unrun="an upstream release that breaks this code goes unseen until a consumer re-locks",
         checked=frozenset(LaneContract),
+        service=LiveService.PYPI,
     ),
 )
+
+
+@dataclass(frozen=True)
+class SlowTestsNoLaneJobRuns:
+    """Slow tests no LANE_JOBS job runs, and the live service they need.
+
+    node_ids are exact node ids, compared by equality, never by prefix: a new
+    test in a listed class is listed only once its own id is. No id is in two
+    entries.
+    """
+
+    service: LiveService
+    node_ids: frozenset[str]
+
+
+SLOW_TESTS_NO_LANE_JOB_RUNS: tuple[SlowTestsNoLaneJobRuns, ...] = (
+    SlowTestsNoLaneJobRuns(
+        service=LiveService.ANTHROPIC_API,
+        node_ids=frozenset(
+            {
+                "tests/unit/web_assistant/test_chat.py::TestChatLiveSmoke::test_single_turn_returns_nonempty_reply",
+                "tests/unit/web_assistant/test_chat.py::TestChatLiveSmoke::test_second_turn_shows_cache_hit",
+            }
+        ),
+    ),
+)
+
+# tests/e2e's modules import the e2e extra, so only every extra imports every test module.
+_EVERY_EXTRA_PYTEST = ("uv", "run", "--locked", "--all-extras", "pytest")
 
 
 def _checked_for(contract: LaneContract) -> tuple[LaneJob, ...]:
     """Return the LANE_JOBS rows that list *contract*, in table order."""
     return tuple(job for job in LANE_JOBS if contract in job.checked)
+
+
+def _needing_a_live_service() -> tuple[LaneJob, ...]:
+    """Return the LANE_JOBS rows that name a service, in table order."""
+    return tuple(job for job in LANE_JOBS if job.service is not None)
+
+
+def _whose_suite_lies_directly_under_tests() -> tuple[LaneJob, ...]:
+    """Return the LANE_JOBS rows whose suite lies directly under tests/, in table order."""
+    return tuple(job for job in LANE_JOBS if PurePosixPath(job.suite).parent == PurePosixPath("tests"))
+
+
+def _service_of_each_listed_node_id() -> dict[str, LiveService]:
+    """Return each node id SLOW_TESTS_NO_LANE_JOB_RUNS lists, with its entry's service.
+
+    It asserts that no id is in two entries, naming each id that is with its entries' services.
+    """
+    services_of: defaultdict[str, list[LiveService]] = defaultdict(list)
+    for entry in SLOW_TESTS_NO_LANE_JOB_RUNS:
+        for node_id in entry.node_ids:
+            services_of[node_id].append(entry.service)
+    listed_more_than_once = {
+        node_id: [service.value for service in services]
+        for node_id, services in sorted(services_of.items())
+        if len(services) > 1
+    }
+    assert not listed_more_than_once, (
+        f"SLOW_TESTS_NO_LANE_JOB_RUNS lists {listed_more_than_once} in more than one entry, each id with its "
+        "entries' services; list each id in one entry only, the one naming the live service no lane job runs it "
+        "against"
+    )
+    return {node_id: services[0] for node_id, services in services_of.items()}
 
 
 def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: Path) -> None:
@@ -114,10 +215,28 @@ def test_offline_lane_starts_and_skips_the_seams_this_repo_lacks(project_root: P
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: Path) -> None:
-    """The offline lane runs exactly one job of the row's name, and it is enabled."""
-    lane_job = sole_offline_lane_job(project_root, job.name)
+    """The offline lane runs exactly one job of the row's name, and it is enabled, as lane_command asserts."""
+    try:
+        lane_command(project_root, job.name)
+    except AssertionError as failure:
+        pytest.fail(f"{failure}; while the lane does not run the {job.name!r} job, {job.if_unrun}")
 
-    assert lane_job_enabled(lane_job), f"the {job.name!r} lane job is disabled, so {job.if_unrun}"
+
+@pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
+def test_the_job_runs_its_suite_serially(job: LaneJob, project_root: Path) -> None:
+    """The job's suite step passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts or PYTEST_ADDOPTS ask for."""
+    suite = lane_job_steps(project_root, job.name).suite
+    arguments = pytest_arguments(suite)
+
+    assert ("-n", "0") in zip(arguments, arguments[1:]), (
+        f"the {job.name!r} lane job {suite.command!r} does not pass pytest `-n 0`, so its suite may run on pytest-xdist "
+        "workers (the count the command names, or one per core should addopts or PYTEST_ADDOPTS pass `-n auto`, unless a "
+        "conftest resolves that otherwise): each worker repeats the module-scoped work its suite does once, which "
+        "asks a live service or builds (pvgis' TMY, css-build's npm ci); the interpreter-matrix cases run at once, "
+        "each a verify over every core; and each e2e worker starts its own live server and Chromium, whose pages, on a "
+        "loaded host, starve one another past their Page.goto and expect waits "
+        "(docs/orchestrator-config.md §8); pass `-n 0` right after `pytest`"
+    )
 
 
 def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> None:
@@ -137,20 +256,22 @@ def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> No
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 @pytest.mark.parametrize("job", _checked_for(LaneContract.COLLECTS_ONLY_ITS_SUITE), ids=lambda job: job.name)
 def test_the_job_collects_its_suite_and_nothing_else(
-    job: LaneJob, project_root: Path, uv_probe_environment: dict[str, str]
+    job: LaneJob, project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
 ) -> None:
     """Run as the lane runs it, the job collects at least one test, every one in its suite.
 
-    The repo's pytest addopts stay in force, as they do in the lane, so a job
-    whose suite they --ignore, as they do tests/e2e, collects it only by naming
-    it explicitly. The job's uv environment is fresh, as the lane's is, so it
-    holds only the extras the job names.
+    The repo's pytest addopts stay in force, as they do in the lane. A suite
+    that tests/conftest.py's collect_ignore names, as it names tests/e2e, is
+    collected only because the job names it explicitly. The job's uv
+    environment is fresh, as the lane's is, and shared only with probes whose
+    uv run options are the same, so it holds only the extras the job names.
     """
-    collection = collect_lane_job(project_root, job.name, env=uv_probe_environment)
+    collection = lane_job_collection(project_root, job.name)
 
-    assert collection.node_ids, (
+    node_ids = collection.node_ids()
+    assert node_ids, (
         f"the {job.name!r} lane job {collection.command!r} collected no tests, so the lane stays green while "
-        f"{job.if_unrun}\n{collection.outcome}"
+        f"{job.if_unrun}\n{collection.describe()}"
     )
     outside = collection.node_ids_outside(job.suite)
     assert not outside, (
@@ -159,9 +280,67 @@ def test_the_job_collects_its_suite_and_nothing_else(
     )
 
 
-@pytest.mark.parametrize("job", _checked_for(LaneContract.NEVER_IN_A_DEFAULT_COLLECTION), ids=lambda job: job.name)
+@requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
+@pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
+def test_no_node_id_the_job_collects_holds_whitespace(
+    job: LaneJob, project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
+) -> None:
+    """Run as the lane runs it, the job collects no node id holding whitespace, so the lane can name each failing test."""
+    collection = lane_job_collection(project_root, job.name)
+
+    spaced = [node_id for node_id in collection.node_ids() if any(char.isspace() for char in node_id)]
+    assert not spaced, (
+        f"the {job.name!r} lane job {collection.command!r} collected node ids holding whitespace: {spaced}; the lane "
+        "reads a failing test's node id from pytest's FAILED or ERROR line only up to the first whitespace, so it gets "
+        "such an id cut short and files the red as unconfirmable instead of naming the test; give each one a "
+        "parametrize id without whitespace"
+    )
+
+
+@requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
+def test_every_slow_test_runs_in_a_lane_job_or_is_listed_as_one_no_lane_job_runs(
+    project_root: Path,
+    shared_uv_probe_environments: SharedUvEnvironments,
+    lane_job_collection: Callable[[Path, str], Collection],
+) -> None:
+    """Every slow test runs in some LANE_JOBS job, as the lane runs it, unless SLOW_TESTS_NO_LANE_JOB_RUNS lists it.
+
+    The slow tests are collected across all of tests/ with every extra, the
+    lane-only suites included. Each listed id must be in one entry and still be
+    a slow test no lane job runs.
+    """
+    listed = _service_of_each_listed_node_id()
+    slow = every_test_matching(
+        project_root, "slow", pytest_invocation=_EVERY_EXTRA_PYTEST, env_for=shared_uv_probe_environments.for_command
+    )
+    laned = {node_id for job in LANE_JOBS for node_id in lane_job_collection(project_root, job.name).node_ids()}
+    unlaned = [test.node_id for test in slow if test.node_id not in laned]
+
+    unlisted = [node_id for node_id in unlaned if node_id not in listed]
+    assert not unlisted, (
+        f"no lane job runs the slow tests {unlisted}, and the per-task verify deselects every slow test, so nothing "
+        "runs them; seed what such a test fetches and drop its slow mark if it needs no live service (CLAUDE.md, "
+        "\"Offline fast tests\"), bring it into a lane job's suite, or list it in SLOW_TESTS_NO_LANE_JOB_RUNS, naming "
+        "the live service no lane job runs it against"
+    )
+    stale = {node_id: listed[node_id].value for node_id in sorted(listed.keys() - set(unlaned))}
+    assert not stale, (
+        f"SLOW_TESTS_NO_LANE_JOB_RUNS lists {stale}, each id with its entry's service, though none is a slow test no "
+        "lane job runs: `-m slow` no longer selects it, or a lane job now runs it; remove each from its entry"
+    )
+
+
+@pytest.mark.parametrize("job", _whose_suite_lies_directly_under_tests(), ids=lambda job: job.name)
 def test_a_default_collection_never_reaches_the_suite(job: LaneJob, project_root: Path) -> None:
-    """Collecting tests/ never reaches the job's suite, even with addopts cleared."""
+    """Collecting tests/ never reaches the job's suite, even with addopts cleared.
+
+    Every job whose suite lies directly under tests/ keeps this contract, since
+    tests/conftest.py's collect_ignore is what keeps such a suite lane-only.
+    pvgis's suite is a file under tests/integration and stays out of the
+    per-task verify through its tests' slow mark.
+    """
     reached = default_collection_node_ids_under(project_root, job.suite)
 
     assert not reached, (
@@ -184,4 +363,43 @@ def test_every_test_in_the_suite_is_slow(job: LaneJob, project_root: Path) -> No
         f"`-m 'not slow'` collected the {job.suite} tests {fast_tests}; a test there not marked slow runs under "
         "tests/conftest.py's offline guard, which refuses the live service the suite needs, so the "
         f"{job.name!r} lane job goes red whenever such a test needs that service; mark it slow"
+    )
+
+
+@requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
+@pytest.mark.parametrize("job", _needing_a_live_service(), ids=lambda job: job.name)
+def test_with_its_service_out_of_reach_the_jobs_outage_probe_reports_its_outage(
+    job: LaneJob,
+    monkeypatch: pytest.MonkeyPatch,
+    project_root: Path,
+    shared_uv_probe_environments: SharedUvEnvironments,
+) -> None:
+    """Run as the lane runs it after a red run, with everything off this machine out of reach, the job's outage probe reports an outage of the row's service.
+
+    It runs in the uv environment of the job's suite step, as the lane runs it. Here that environment may not be synced
+    yet, so the run is given longer than the job's outage_probe_timeout_secs.
+    """
+    send_child_processes_to_a_dead_proxy(monkeypatch)
+    probe = lane_outage_probe(project_root, job.name)
+    environment = shared_uv_probe_environments.for_command(lane_job_steps(project_root, job.name).suite.command)
+
+    result = run_command(probe, environment, timeout_secs=300)
+
+    assert result.returncode == os.EX_TEMPFAIL and result.stdout.startswith(f"{job.service}: "), (
+        f"with everything off this machine behind a dead proxy, the {probe.label}, {probe.command!r}, reported no "
+        f"{job.service} outage, so every {job.service} outage that outlasts a run and its confirm re-run files a fix "
+        f"task instead of one escalation the lane closes itself\n{describe_outcome(result)}"
+    )
+
+
+def test_every_lane_job_declaring_an_outage_probe_has_a_row_naming_its_service(project_root: Path) -> None:
+    """Every job that declares an outage probe has a LANE_JOBS row naming its service, so no declared probe goes unrun here."""
+    services = {job.name: job.service for job in LANE_JOBS}
+    unchecked = [name for name in lane_jobs_declaring_an_outage_probe(project_root) if services.get(name) is None]
+
+    assert not unchecked, (
+        f"git.offline_lane_commands declares an outage_probe for {unchecked}, whose LANE_JOBS rows are missing or "
+        "name no service, so nothing checks that each probe reports its service out of reach as an outage; name in "
+        "each job's row the service its probe names at the start of an outage line"
     )

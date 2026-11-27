@@ -20,9 +20,8 @@ def test_version_format():
     assert all(part.isdigit() for part in parts)
 
 
-def test_pyproject_version_matches_dunder():
+def test_pyproject_version_matches_dunder(project_root: Path):
     """pyproject.toml [project] version must equal solar_challenge.__version__."""
-    project_root = Path(__file__).parent.parent.parent
     pyproject_version = load_project_table(project_root)["version"]
     assert pyproject_version == solar_challenge.__version__, (
         f"pyproject.toml [project] version {pyproject_version!r} != "

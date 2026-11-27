@@ -3,10 +3,14 @@
 Verifies page loading, metrics table, delta columns, color coding,
 the comparison charts, and the empty state shown when no IDs are given.
 The charts are the Energy Totals bar chart and the Efficiency Ratios
-radar chart, each in a tab of its own: the radar chart's tab is hidden
-on load, so its chart is drawn only once the tab is shown, and then
-fills its container; both charts draw without errors, with titles and
-legends legible in light and dark mode.
+radar chart, each in a tab of its own. The bar chart's tab is shown on
+load, so the bar chart is drawn by the page's load event, and is as
+wide as its container; the radar chart's tab is hidden on load, so its
+chart is drawn only once the tab is shown, and then fills its
+container; both charts draw without errors, with titles and legends
+legible in light and dark mode, and the radar chart's tick labels
+legible on its disc. A drawn chart in a shown tab is recoloured as a
+theme change is announced.
 Uses seeded run pair fixtures.
 """
 
@@ -16,10 +20,13 @@ from collections.abc import Sequence
 import pytest
 from playwright.sync_api import Page, expect
 
-pytestmark = pytest.mark.e2e
+from tests.e2e._chart_tabs import show_chart_tab
+from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
 
-_BAR_CHART = "#chart-comparison-bar"
-_RADAR_CHART = "#chart-comparison-radar"
+_BAR_CHART_ID = "chart-comparison-bar"
+_BAR_CHART = f"#{_BAR_CHART_ID}"
+_RADAR_CHART_ID = "chart-comparison-radar"
+_RADAR_CHART = f"#{_RADAR_CHART_ID}"
 
 
 # -- Compare page loads with valid IDs --------------------------------------
@@ -116,12 +123,27 @@ _TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS = r"""charts => charts.flatMap(chart =>
         backdrop,
     }));
 })"""
-
-
-def _show_tab(page: Page, tab_name: str, chart: str) -> None:
-    """Click tab_name's tab and wait until Plotly has drawn its chart, the element the selector chart selects, visible."""
-    page.get_by_role("button", name=tab_name, exact=True).click()
-    expect(page.locator(f"{chart}.js-plotly-plot")).to_be_visible()
+# The radar's radial tick labels, each with its fill and the disc it sits on as the disc shows: its fill at
+# its fill-opacity over the first opaque background behind the chart. Plotly paints a transparent disc as
+# fill rgb(0, 0, 0) with fill-opacity 0.
+_RADIAL_TICK_LABELS_ON_THE_DISC = r"""chart => {
+    const channels = colour => colour.match(/[\d.]+/g).map(Number);
+    let backdrop = null;
+    for (let el = chart.querySelector('.main-svg'); el && !backdrop; el = el.parentElement) {
+        const rgba = channels(getComputedStyle(el).backgroundColor);
+        if (rgba.length === 3 || rgba[3] === 1) backdrop = rgba.slice(0, 3);
+    }
+    if (!backdrop) throw new Error(`No opaque background lies behind #${chart.id}`);
+    const discStyle = getComputedStyle(chart.querySelector('.plotbg path'));
+    const [red, green, blue, alpha = 1] = channels(discStyle.fill);
+    const opacity = alpha * Number(discStyle.fillOpacity);
+    const disc = [red, green, blue].map((channel, i) => channel * opacity + backdrop[i] * (1 - opacity));
+    return [...chart.querySelectorAll('.radial-axis text')].map(label => ({
+        text: label.textContent,
+        fill: channels(getComputedStyle(label).fill).slice(0, 3),
+        disc,
+    }));
+}"""
 
 
 def _relative_luminance(rgb: Sequence[float]) -> float:
@@ -136,33 +158,85 @@ def _contrast_ratio(foreground: Sequence[float], background: Sequence[float]) ->
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def test_the_energy_totals_chart_drawn_on_load_is_as_wide_as_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+) -> None:
+    """The bar chart, drawn on load in Energy Totals, the tab shown on load, is as wide as its container."""
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
+
+    assert charts_not_as_wide_as_their_containers(page, [_BAR_CHART_ID]) == []
+
+
+_RECORD_THE_CHARTS_DRAWN_BY_LOAD = """window.addEventListener('load', () => {
+    window.__chartsDrawnByLoad = [...document.querySelectorAll('[data-chart-figure]')]
+        .filter(container => container.classList.contains('js-plotly-plot'))
+        .map(container => container.id);
+});"""
+
+
+def test_the_energy_totals_chart_in_the_tab_shown_on_load_is_drawn_by_the_pages_load_event(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+) -> None:
+    """By the window's load event, which page.goto waits for, the bar chart in the tab shown on load is drawn, and the radar chart in the hidden tab is not."""
+    page.add_init_script(_RECORD_THE_CHARTS_DRAWN_BY_LOAD)
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+
+    assert page.evaluate("() => window.__chartsDrawnByLoad") == [_BAR_CHART_ID]
+
+
+# Returns the title fill of the chart container it is called on, and records on window, from a theme-changed listener
+# registered after chart-renderer.js's own, the title's fill and the container's colour as the change is announced.
+_RECORD_THE_TITLE_AS_THE_THEME_CHANGE_IS_ANNOUNCED = """(container) => {
+    const titleFill = () => getComputedStyle(container.querySelector('.gtitle')).fill;
+    document.addEventListener('theme-changed', () => {
+        window.__titleAsTheThemeChangeIsAnnounced = {fill: titleFill(), containerColour: getComputedStyle(container).color};
+    });
+    return titleFill();
+}"""
+
+
+def test_a_drawn_chart_in_a_shown_tab_is_recoloured_as_the_theme_change_is_announced(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+) -> None:
+    """As the theme toggle announces theme-changed, the bar chart's title already takes its container's new colour."""
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
+    light_fill = page.locator(_BAR_CHART).evaluate(_RECORD_THE_TITLE_AS_THE_THEME_CHANGE_IS_ANNOUNCED)
+
+    page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
+
+    announced = page.evaluate("() => window.__titleAsTheThemeChangeIsAnnounced")
+    assert announced is not None, "the theme-changed listener registered after chart-renderer.js's own never ran"
+    assert announced["fill"] == announced["containerColour"] != light_fill, (
+        f"expected the title's fill, as theme-changed was announced, to be its container's colour then, "
+        f"which differs from the light fill {light_fill!r}; read {announced}"
+    )
+
+
 def test_compare_radar_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown_and_fills_its_container(
     page: Page,
     live_server: str,
     seeded_home_runs_pair: list[tuple[str, str]],
 ) -> None:
-    """The radar chart, in the Efficiency Ratios tab hidden on load, is not drawn until its tab is shown, and is then as wide as its container.
-
-    The tab is shown only once no CSS transition runs: base.html slides the main column in
-    as Alpine starts, and a chart drawn before that settles is sized for the wider column,
-    which task 736 fixes in chart-renderer.js.
-    """
+    """The radar chart, in the Efficiency Ratios tab hidden on load, is not drawn until its tab is shown, and is then as wide as its container."""
     (id1, _), (id2, _) = seeded_home_runs_pair
-    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}", wait_until="domcontentloaded")
     expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
     expect(page.locator(f"{_RADAR_CHART}.js-plotly-plot")).to_have_count(0)
 
-    page.wait_for_function(
-        "() => document.getAnimations().every(animation => !(animation instanceof CSSTransition))"
-    )
-    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
+    show_chart_tab(page, "Efficiency Ratios", (_RADAR_CHART_ID,))
 
-    drawn_width, container_width = page.locator(_RADAR_CHART).evaluate(
-        "chart => [Number(chart.querySelector('.main-svg').getAttribute('width')), chart.clientWidth]"
-    )
-    assert abs(drawn_width - container_width) <= 1, (
-        f"The radar chart is drawn {drawn_width} px wide in its {container_width} px wide container"
-    )
+    assert charts_not_as_wide_as_their_containers(page, [_RADAR_CHART_ID]) == []
 
 
 def test_compare_page_shows_both_chart_tabs_without_errors(
@@ -179,13 +253,47 @@ def test_compare_page_shows_both_chart_tabs_without_errors(
     url = f"/history/compare?ids={id1},{id2}"
     page.goto(live_server + url)
     expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
-    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
-    _show_tab(page, "Energy Totals", _BAR_CHART)
+    show_chart_tab(page, "Efficiency Ratios", (_RADAR_CHART_ID,))
+    show_chart_tab(page, "Energy Totals", (_BAR_CHART_ID,))
 
     assert page_errors == [], f"Errors on {url}: {page_errors}"
 
 
-@pytest.mark.parametrize(
+# The chart each tab shows, the tab selected on load last.
+_CHART_IDS_BY_TAB = {
+    "Efficiency Ratios": (_RADAR_CHART_ID,),
+    "Energy Totals": (_BAR_CHART_ID,),
+}
+
+
+def test_compare_tabs_each_show_only_their_own_charts(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+) -> None:
+    """Clicking each chart tab selects it alone and shows only its own chart, drawn by Plotly.
+
+    Energy Totals is selected on load, so it is clicked last: only then does its click have to move
+    the selection.
+    """
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    selected_tab = page.get_by_role("tab", selected=True)
+    last_listed_tab = list(_CHART_IDS_BY_TAB)[-1]
+    expect(
+        selected_tab,
+        f"expected the tab selected on load to be {last_listed_tab!r}, the last in _CHART_IDS_BY_TAB",
+    ).to_have_accessible_name(last_listed_tab)
+
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
+        expect(selected_tab).to_have_accessible_name(tab_name)
+        expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
+
+
+# The themes a legibility check reads the charts in: dark mode on load, switched to dark mode once the
+# first chart is drawn, or light throughout.
+_IN_EACH_THEME = pytest.mark.parametrize(
     ("dark_on_load", "switched_to_dark"),
     [
         pytest.param(False, False, id="light"),
@@ -193,6 +301,27 @@ def test_compare_page_shows_both_chart_tabs_without_errors(
         pytest.param(False, True, id="switched-to-dark"),
     ],
 )
+
+
+def _show_both_charts(
+    page: Page, live_server: str, runs: list[tuple[str, str]], dark_on_load: bool, switched_to_dark: bool
+) -> None:
+    """Open the compare page of runs and show the radar chart's tab, so both charts are drawn.
+
+    The page is in dark mode when it loads if dark_on_load, and is switched to dark mode once the bar chart is drawn if switched_to_dark.
+    """
+    (id1, _), (id2, _) = runs
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    if dark_on_load:
+        page.evaluate("() => localStorage.setItem('theme', 'dark')")
+        page.reload()
+    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
+    if switched_to_dark:
+        page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
+    show_chart_tab(page, "Efficiency Ratios", (_RADAR_CHART_ID,))
+
+
+@_IN_EACH_THEME
 def test_compare_chart_titles_and_legends_are_legible(
     page: Page,
     live_server: str,
@@ -204,15 +333,7 @@ def test_compare_chart_titles_and_legends_are_legible(
 
     The page is in dark mode when it loads, or is switched to dark mode once its first chart is drawn, or stays light.
     """
-    (id1, _), (id2, _) = seeded_home_runs_pair
-    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
-    if dark_on_load:
-        page.evaluate("() => localStorage.setItem('theme', 'dark')")
-        page.reload()
-    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
-    if switched_to_dark:
-        page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
-    _show_tab(page, "Efficiency Ratios", _RADAR_CHART)
+    _show_both_charts(page, live_server, seeded_home_runs_pair, dark_on_load, switched_to_dark)
 
     texts = page.locator(".js-plotly-plot").evaluate_all(_TITLES_AND_LEGENDS_WITH_THEIR_BACKDROPS)
 
@@ -232,6 +353,33 @@ def test_compare_chart_titles_and_legends_are_legible(
     assert illegible == [], (
         f"These chart texts, as (chart, text, fill, backdrop, contrast), fall short of WCAG AA's "
         f"{_WCAG_AA_CONTRAST}:1 contrast with the background behind their chart: {illegible}"
+    )
+
+
+@_IN_EACH_THEME
+def test_compare_radar_tick_labels_are_legible_on_its_disc(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+    dark_on_load: bool,
+    switched_to_dark: bool,
+) -> None:
+    """Each radial tick label reaches WCAG AA's 4.5:1 contrast with the disc it sits on, as the disc shows: its fill over the first opaque background behind the chart (task 737)."""
+    _show_both_charts(page, live_server, seeded_home_runs_pair, dark_on_load, switched_to_dark)
+
+    labels = page.locator(_RADAR_CHART).evaluate(_RADIAL_TICK_LABELS_ON_THE_DISC)
+
+    assert [label["text"] for label in labels] == ["0", "20", "40", "60", "80", "100"], (
+        f"Expected the radar's radial tick labels 0 to 100; read {labels}"
+    )
+    illegible = [
+        (label["text"], label["fill"], [round(channel) for channel in label["disc"]], round(ratio, 2))
+        for label in labels
+        if (ratio := _contrast_ratio(label["fill"], label["disc"])) < _WCAG_AA_CONTRAST
+    ]
+    assert illegible == [], (
+        f"These radial tick labels, as (text, fill, disc, contrast), fall short of WCAG AA's "
+        f"{_WCAG_AA_CONTRAST}:1 contrast with the radar's disc: {illegible}"
     )
 
 

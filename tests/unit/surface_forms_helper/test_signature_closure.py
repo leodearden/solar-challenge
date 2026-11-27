@@ -6,11 +6,18 @@ each other resolve in this module's namespace.
 """
 
 import pathlib
+import re
 from dataclasses import dataclass
-from typing import NewType, TypeVar
+
+import pytest
 
 from tests._surface_forms import signature_closure
-from tests.unit.surface_forms_helper._fixtures import Preset
+from tests.unit.surface_forms_helper._fixtures import (
+    REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
+    RELABELLED_REFUSAL,
+    Preset,
+    Relabelled,
+)
 
 
 @dataclass(frozen=True)
@@ -50,10 +57,17 @@ def test_a_signature_closure_holds_only_classes_the_package_defines() -> None:
     assert signature_closure([supply], "solar_challenge") == set()
 
 
-def test_a_signature_closure_follows_the_classes_a_type_variable_or_a_new_type_carries() -> None:
-    Supplied = TypeVar("Supplied", bound=Feeder)
-    PresetId = NewType("PresetId", Preset)
+@pytest.mark.parametrize(("routine", "kind"), REFUSED_ROUTINE_AND_PARTIAL_MEMBERS)
+def test_a_class_with_a_member_member_forms_refuses_raises_the_type_error_member_forms_raises_for_it(
+    routine: object, kind: str
+) -> None:
+    class Meter:
+        half = routine
 
-    def supply(feeder: Supplied, preset: PresetId) -> Supplied: ...
+    with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
+        signature_closure([Meter], "tests")
 
-    assert signature_closure([supply], "tests") == {Feeder, Tap, Tally, Preset}
+
+def test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_type_error_member_forms_raises_for_it() -> None:
+    with pytest.raises(TypeError, match=RELABELLED_REFUSAL):
+        signature_closure([Relabelled], "tests")

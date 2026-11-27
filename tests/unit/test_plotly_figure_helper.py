@@ -16,6 +16,7 @@ from tests._plotly_figure import (
     annotation_texts,
     annotations_by_text,
     colour_literals,
+    drawn_colours,
     opaque,
     sankey_link_colours,
     sankey_link_values,
@@ -91,7 +92,7 @@ def test_traces_lists_each_of_two_traces_sharing_a_name() -> None:
 
 
 def test_a_figure_with_no_data_has_no_traces() -> None:
-    """sankey_diagram returns "{}" when it draws no flow."""
+    """The case is a figure's JSON with no data or layout."""
     assert traces("{}") == []
 
 
@@ -175,7 +176,7 @@ def test_annotation_texts_lists_a_shared_text_once_for_each_annotation() -> None
 def test_a_figure_with_no_annotations_reads_as_empty(
     reader: Callable[[str], object], nothing: object, figure: str
 ) -> None:
-    """Figure.to_json writes no annotations key for a figure without any, and sankey_diagram returns "{}" when it draws no flow.
+    """Figure.to_json writes no annotations key for a figure without any, and the last case is a figure's JSON with no data or layout.
 
     The first figure's title has a text, which is not an annotation's.
     """
@@ -268,7 +269,7 @@ def test_sankey_node_colours_keys_each_nodes_colour_as_written_by_its_label() ->
 def test_a_figure_that_is_not_one_sankey_trace_raises_rather_than_reading_a_trace(
     reader: Callable[[str], object], figure: str, types: list[str]
 ) -> None:
-    """sankey_diagram returns "{}" when it draws no flow."""
+    """The case is a figure's JSON with no data or layout."""
     with pytest.raises(ValueError, match=re.escape(f"one trace, a Sankey; got traces of the types {types}") + "$"):
         reader(figure)
 
@@ -387,3 +388,67 @@ def test_colour_literals_reads_an_eight_digit_rrggbbaa_through_its_rrggbb_prefix
 
 def test_colour_literals_yields_nothing_for_a_text_that_writes_no_colour() -> None:
     assert list(colour_literals("system-ui, sans-serif; black; 0.4")) == []
+
+
+def test_drawn_colours_keys_each_colour_the_traces_and_layout_draw_by_how_it_is_written_with_its_red_green_and_blue() -> (
+    None
+):
+    """The Sankey's colours are entries of the node and link colour lists nested in its trace."""
+    figure = json.dumps(
+        {
+            "data": [
+                {"type": "scatter", "name": "Battery", "fill": "tozeroy", "fillcolor": "rgba(80, 227, 194, 0.4)"},
+                _sankey(["PV Generation", "Demand"], ["#F5A623", "#4a90e2"], [(0, 1, 42.0, "#4a90e2")]),
+            ],
+            "layout": {"title": {"text": "Energy Flow", "font": {"color": "rgb(1,2,3)"}}},
+        }
+    )
+
+    assert drawn_colours(figure) == {
+        "rgba(80, 227, 194, 0.4)": (80, 227, 194),
+        "#F5A623": (245, 166, 35),
+        "#4a90e2": (74, 144, 226),
+        "rgb(1,2,3)": (1, 2, 3),
+    }
+
+
+def test_drawn_colours_does_not_read_plotlys_default_template() -> None:
+    """Figure.to_json writes Plotly's default template into the layout, though no builder chooses it."""
+    figure = json.dumps(
+        {
+            "data": [{"type": "bar", "name": "Generation", "marker": {"color": "#f5a623"}}],
+            "layout": {
+                "template": {
+                    "data": {"bar": [{"marker": {"line": {"color": "#E5ECF6"}}}]},
+                    "layout": {"colorway": ["#636efa", "#EF553B"], "font": {"color": "#2a3f5f"}},
+                },
+            },
+        }
+    )
+
+    assert drawn_colours(figure) == {"#f5a623": (245, 166, 35)}
+
+
+@pytest.mark.parametrize(
+    "transparent",
+    [
+        pytest.param("rgba(0,0,0,0)", id="alpha-0"),
+        pytest.param("rgba( 0 , 0 , 0 , 0.0 )", id="alpha-0.0-spaced"),
+    ],
+)
+def test_drawn_colours_does_not_read_a_colour_written_rgba_with_an_alpha_of_0(transparent: str) -> None:
+    """Such a colour draws nothing; charts.py writes its transparent backgrounds so. Black drawn translucent or opaque is still read."""
+    figure = json.dumps(
+        {
+            "data": [
+                {
+                    "type": "sankey",
+                    "node": {"label": ["Grid"], "line": {"color": "rgb(0,0,0)"}},
+                    "link": {"color": ["rgba(0,0,0,0.5)"]},
+                }
+            ],
+            "layout": {"paper_bgcolor": transparent, "plot_bgcolor": transparent},
+        }
+    )
+
+    assert drawn_colours(figure) == {"rgb(0,0,0)": (0, 0, 0), "rgba(0,0,0,0.5)": (0, 0, 0)}

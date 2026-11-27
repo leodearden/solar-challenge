@@ -3,7 +3,7 @@
 **Source:** Consulting model `2026-06-16-flexibility-value-buildability-model.md` §1.1/§1.3/§1.4/§2/§5; 2026-06-15 deployment-readiness survey §9
 **Task:** #56 — W1 ε: flexibility buildability/risk note
 **PRD:** [docs/prds/flexibility-value-finance-integration.md](prds/flexibility-value-finance-integration.md) §1/§6/§7/§10
-**Value-model code:** [`src/solar_challenge/flex.py`](../src/solar_challenge/flex.py) (`FLEX_VALUE_BANDS`, `resolve_grid_services_band`)
+**Value-model code:** [`src/solar_challenge/flex.py`](../src/solar_challenge/flex.py) (`FLEX_VALUE_BANDS`) and [`src/solar_challenge/gridservices.py`](../src/solar_challenge/gridservices.py) (`GRID_SERVICES_RATE_BANDS`, whose flat column `FLEX_VALUE_BANDS`' per-kW figures read)
 
 ---
 
@@ -11,8 +11,9 @@
 
 The canonical Low/Central/High decomposition below is transcribed verbatim from
 `src/solar_challenge/flex.py` `FLEX_VALUE_BANDS` — the code is the single source of
-truth.  Numbers derive from consulting §1.1/§1.4 (time-shift + per-home grid-services)
-and PRD §6 (per-kW grid-services rate).
+truth, and its per-kW column reads the flat rates of `src/solar_challenge/gridservices.py`
+`GRID_SERVICES_RATE_BANDS`.  Numbers derive from consulting §1.1/§1.4 (time-shift +
+per-home grid-services) and PRD §6 (per-kW grid-services rate).
 
 | Band | Time-shift (£/home/yr) | Grid-services (£/home/yr) | Grid-services (£/kW/yr) | **Total (£/home/yr)** |
 |------|------------------------|---------------------------|-------------------------|----------------------|
@@ -25,6 +26,16 @@ and PRD §6 (per-kW grid-services rate).
 **Low-band note:** The Low total (£120) is not the arithmetic sum of its streams (100 + 4 = 104 ≠ 120).  Consulting §1.1 warns against simple column-maxima addition: arbitrage and self-consumption contend for the same battery capacity, so the documented headline figure is used directly.  Central (250 + 30 = 280) and High (330 + 120 = 450) sum exactly.
 
 **Central is the Friday board headline case.** Low/High are selectable for sensitivity (PRD §6 decision 5).
+
+**In the finance report.** `solar-challenge finance run --flex-band <band>` renders
+these figures as its flexibility-value block, which cites this document.  Under a
+scenario whose grid-services pricing books an income, flat or at events, the block's
+grid-services row is that booked income per battery home and per kW of battery
+discharge, priced on the window's simulated fleet, and its headline is the band's
+time-shift plus it; the same income renders beside the economics in the report's
+Grid Services Income section (docs/cost-recovery-finance-model.md §8.1).  With no
+grid-services pricing the row is the band's consulting figure in the table above,
+labelled not booked, under the band's documented total.
 
 ---
 
@@ -109,12 +120,14 @@ The in-repo provenance chain is complete without it:
 
 - **Banded figures** (§1) → transcribed verbatim into
   `src/solar_challenge/flex.py` `FLEX_VALUE_BANDS`, which is the canonical
-  in-repo single source of truth.  Clone the repo and read `flex.py` — no
-  external file is required to verify or reproduce the numbers.
+  in-repo single source of truth; its per-kW column reads the flat rates of
+  `src/solar_challenge/gridservices.py` `GRID_SERVICES_RATE_BANDS`.  Clone the
+  repo and read `flex.py` and `gridservices.py` — no external file is required
+  to verify or reproduce the numbers.
 - **Prerequisites and risk rating** (§2–§3) → distilled into this note from
   consulting §1.3/§2/§5 and the deployment-readiness survey §9 (2026-06-15);
   both are summarised in full here, so no external document is needed to
   understand or audit the assessments.
 
 The consulting document is cited by filename (matching the convention used in
-`flex.py:5` and `flex.py:98`) for audit-trail completeness only.
+`flex.py`'s module docstring and `_PROVENANCE`) for audit-trail completeness only.

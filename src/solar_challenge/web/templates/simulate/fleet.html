@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
-{% from "components/macros.html" import toggle_switch, range_input %}
+{% from "components/macros.html" import card, day_choice_buttons, toggle_switch, range_input %}
 {% from "components/distribution-editor.html" import distribution_editor %}
 
 {% block title %}Fleet Simulation{% endblock %}
@@ -12,6 +12,7 @@
 {% endblock %}
 
 {% block content %}
+{% set slider_low, slider_high, slider_step = page_limits.fleet_size_slider %}
 
 {{ page_header(
     "Fleet Simulation",
@@ -20,34 +21,34 @@
 ) }}
 
 <div
-    x-data="fleetSimulator()"
+    x-data='fleetSimulator({{ tariff_preset_rates|tojson }})'
 >
     <!-- Fleet size selector -->
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 mb-6">
+    {% call card(classes='p-6 mb-6') %}
         <div class="flex flex-col sm:flex-row items-start sm:items-center gap-6">
             <div class="flex-1 w-full">
                 <label for="n_homes" class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Number of Homes</label>
                 <div class="flex items-center gap-4">
-                    {{ range_input(id='n_homes_range', model='n_homes', min=10, max=500, step=10, width_class='flex-1') }}
+                    {{ range_input(id='n_homes_range', model='n_homes', min=slider_low, max=slider_high, step=slider_step, width_class='flex-1') }}
                     <input
                         type="number"
                         id="n_homes"
                         name="n_homes"
-                        min="10" max="500" step="1"
+                        min="{{ page_limits.fleet_size.low }}" max="{{ page_limits.fleet_size.high }}" step="1"
                         x-model.number="n_homes"
                         class="w-24 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm text-center"
                     >
                 </div>
                 <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500 mt-1">
-                    <span>10</span>
-                    <span>500</span>
+                    <span>{{ slider_low }}</span>
+                    <span>{{ slider_high }}</span>
                 </div>
             </div>
         </div>
-    </div>
+    {% endcall %}
 
     <!-- Period selector -->
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 mb-6">
+    {% call card(classes='p-6 mb-6') %}
         <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4">Simulation Period</h3>
         <div class="flex gap-4 mb-4">
             <label class="flex items-center gap-2 cursor-pointer">
@@ -62,16 +63,7 @@
             </label>
         </div>
         <div x-show="periodMode === 'preset'" x-transition>
-            <div class="flex flex-wrap gap-2">
-                <template x-for="d in [7, 14, 30, 90, 365]" :key="d">
-                    <button type="button" @click="periodDays = d"
-                        class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors"
-                        :class="periodDays == d
-                            ? 'bg-primary-500 text-white border-primary-500'
-                            : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-primary-400 dark:hover:border-primary-500'"
-                        x-text="d === 365 ? '1 year' : d + ' days'"></button>
-                </template>
-            </div>
+            {{ day_choice_buttons('periodDays', page_limits) }}
         </div>
         <div x-show="periodMode === 'custom'" x-cloak x-transition class="grid grid-cols-2 gap-4">
             <div class="space-y-1.5">
@@ -85,79 +77,75 @@
                     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
             </div>
         </div>
-    </div>
+    {% endcall %}
 
     <!-- Distribution cards grid -->
     <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 mb-6">
 
-        {% with component = fleet_components.pv %}
-        <!-- PV Distribution Card (amber accent) -->
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-            <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-amber-50 dark:bg-amber-900/20">
-                <div class="flex items-center gap-2">
-                    <div class="w-3 h-3 rounded-full bg-amber-500"></div>
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ component.subject }}</h3>
-                </div>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of PV system sizes (kW)</p>
-            </div>
-            <div class="p-6">
-                {{ distribution_editor('pvDist', component, subject=component.subject) }}
-            </div>
-        </div>
+        {% with component = page_limits.components.pv %}
+        <!-- PV Distribution Card -->
+        {% call card(
+            title=component.subject,
+            subtitle='Distribution of PV system sizes (kW)',
+            classes='overflow-hidden',
+            header_classes='bg-component-pv-50 dark:bg-component-pv-900/20',
+            dot_classes='bg-component-pv-500',
+            body_classes='p-6'
+        ) %}
+            {{ distribution_editor('pvDist', component, subject=component.subject) }}
+        {% endcall %}
         {% endwith %}
 
-        {% with component = fleet_components.battery %}
-        <!-- Battery Distribution Card (teal accent) -->
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-            <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-teal-50 dark:bg-teal-900/20">
-                <div class="flex items-center gap-2">
-                    <div class="w-3 h-3 rounded-full bg-teal-500"></div>
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ component.subject }}</h3>
-                    <label class="ml-auto flex items-center gap-2 cursor-pointer">
-                        <span class="text-xs text-slate-500 dark:text-slate-400">Enable Battery</span>
-                        <input type="checkbox" x-model="batteryEnabled"
-                            class="rounded text-teal-500 focus:ring-teal-500 w-4 h-4">
-                    </label>
-                </div>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of battery sizes (kWh); use 0 for no battery</p>
-            </div>
+        {% with component = page_limits.components.battery %}
+        <!-- Battery Distribution Card -->
+        {% set enable_battery %}
+        <label class="ml-auto flex items-center gap-2 cursor-pointer">
+            <span class="text-xs text-slate-500 dark:text-slate-400">Enable Battery</span>
+            <input type="checkbox" x-model="batteryEnabled"
+                class="rounded text-component-battery-500 focus:ring-component-battery-500 w-4 h-4">
+        </label>
+        {% endset %}
+        {% call card(
+            title=component.subject,
+            subtitle='Distribution of battery sizes (kWh); use 0 for no battery',
+            classes='overflow-hidden',
+            header_classes='bg-component-battery-50 dark:bg-component-battery-900/20',
+            dot_classes='bg-component-battery-500',
+            header_aside=enable_battery
+        ) %}
             <div class="p-6" x-show="batteryEnabled" x-transition>
                 {{ distribution_editor('batteryDist', component, subject=component.subject) }}
             </div>
             <div class="p-6 text-sm text-slate-500 dark:text-slate-400" x-show="!batteryEnabled" x-cloak>
                 Battery storage is disabled for this fleet.
             </div>
-        </div>
+        {% endcall %}
         {% endwith %}
 
-        {% with component = fleet_components.load %}
-        <!-- Load Distribution Card (red accent) -->
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-            <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700 bg-red-50 dark:bg-red-900/20">
-                <div class="flex items-center gap-2">
-                    <div class="w-3 h-3 rounded-full bg-red-500"></div>
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ component.subject }}</h3>
-                </div>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Distribution of annual consumption (kWh/year)</p>
-            </div>
-            <div class="p-6">
-                {{ distribution_editor('loadDist', component, subject=component.subject) }}
-            </div>
-        </div>
+        {% with component = page_limits.components.load %}
+        <!-- Load Distribution Card -->
+        {% call card(
+            title=component.subject,
+            subtitle='Distribution of annual consumption (kWh/year)',
+            classes='overflow-hidden',
+            header_classes='bg-component-load-50 dark:bg-component-load-900/20',
+            dot_classes='bg-component-load-500',
+            body_classes='p-6'
+        ) %}
+            {{ distribution_editor('loadDist', component, subject=component.subject) }}
+        {% endcall %}
         {% endwith %}
 
     </div>
 
     <!-- Fleet-wide Tariff, Dispatch & Export (SEG) card -->
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm mb-6 overflow-hidden">
-        <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700">
-            <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-full bg-emerald-500"></div>
-                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Fleet-wide Tariff, Dispatch &amp; Export (SEG)</h3>
-            </div>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Applied uniformly to every generated home. Dispatch strategy only affects homes that have a battery.</p>
-        </div>
-        <div class="p-6 space-y-8">
+    {% call card(
+        title='Fleet-wide Tariff, Dispatch & Export (SEG)',
+        subtitle='Applied uniformly to every generated home. Dispatch strategy only affects homes that have a battery.',
+        classes='mb-6 overflow-hidden',
+        dot_classes='bg-emerald-500',
+        body_classes='p-6 space-y-8'
+    ) %}
 
             {# ── Import Tariff ──────────────────────────────────────────────────── #}
             <div class="space-y-4">
@@ -322,11 +310,10 @@
                 </div>
             </div>
 
-        </div>
-    </div>
+    {% endcall %}
 
     <!-- Action buttons -->
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 mb-6">
+    {% call card(classes='p-6 mb-6') %}
         <div class="flex flex-col sm:flex-row items-center gap-4">
             <!-- Simulation Name -->
             <div class="flex-1 w-full sm:w-auto space-y-1.5">
@@ -335,7 +322,7 @@
                     type="text"
                     id="fleet_sim_name"
                     x-model="simName"
-                    placeholder="Fleet Simulation"
+                    placeholder="{{ default_run_name }}"
                     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                 >
             </div>
@@ -396,7 +383,7 @@
                 </button>
             </div>
         </div>
-    </div>
+    {% endcall %}
 
     <!-- Error display -->
     <template x-if="errorMsg">
@@ -414,7 +401,7 @@
 
     <!-- Results section: progress tracker appears after submission -->
     <div id="results-section" class="mt-6">
-        {{ progress_tracker('fleet', 'Fleet Simulation Progress') }}
+        {{ progress_tracker('Fleet Simulation Progress') }}
     </div>
 </div>
 

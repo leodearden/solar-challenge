@@ -106,11 +106,15 @@ default name, its summary decoding and its listing each have one implementation.
 
 | Module | Owns | Imports (web) |
 |---|---|---|
-| `web/database.py` | `Database` (the connection policy), `TableSchema` + `rebuild_table`, the `chat_messages` table and its store, `ChatRole` | none |
-| `web/stored_runs.py` (new) | the stored-run **format**: `RunType`, strict field-tree read/write, `StoredHomeRun`/`StoredFleetRun`, `RUN_KINDS`, `RUN_DOCUMENT_STEPS` + `RUN_FORMAT_VERSION`, `StoredRunUnreadable` | none after ι (no SQL, no Flask); between ε and ι it imports `RunType` from `database`, where the runs DDL still lives |
-| `web/storage.py` | the `runs` table: `RunStatus`, `RunRecord` (+ `.kind`), `RUNS_TABLE` derived from `RunRecord`, `RunStorage` (all `runs` SQL), `RunHeadline`/`run_headline`, `RunQuery`/`RunPage`/`RunTotals`, the runs-table migration functions | database, stored_runs |
-| `web/presets.py` | the `config_presets` table, `PresetType`, home presets and saved fleet (scenario) presets | database |
-| `web/schema.py` (new) | `SCHEMA_VERSION` (derived), the ordered `MIGRATIONS`, `open_database`, `migrate_store`, `SchemaVersionMismatch`, `MigrationReport` | database, stored_runs, storage, presets |
+| `web/database.py` | `Database` (the connection policy), `TableSchema` + `rebuild_table` | none |
+| `web/field_tree.py` | the field-tree codec: `field_tree`, `read_field_tree`, `without_unknown_keys`, `FieldTreeRefused`, `UnknownKey` | none |
+| `web/stored_json.py` | `decoded_json`, the value of a store's JSON text, and `UndecodableJson`, its one refusal of text `json.loads` cannot decode: not JSON, or nested too deeply; `decoded_json_object`, the JSON object a store's JSON text holds, and `JsonObjectRefused`, its one refusal: that text, with `decoded_json`'s reason, or JSON that is not an object | none |
+| `web/stored_runs.py` (new) | the stored-run **format**: `RunType`, its documents' field trees, read and written through `field_tree`, `StoredHomeRun`/`StoredFleetRun`, `RUN_KINDS`, `RUN_DOCUMENT_STEPS` + `RUN_FORMAT_VERSION`, `StoredRunUnreadable` | none after ι but `field_tree` and `stored_json`, below it (no SQL, no Flask); between ε and ι it imports `RunType` from `database`, where the runs DDL still lives |
+| `web/run_headline.py` | the cross-type headline, `RunHeadline`/`run_headline`, the one mapping of `FleetSummary` names (D-S19-8) | none |
+| `web/storage.py` | the `runs` table: `RunStatus`, `RunRecord` (+ `.kind`, `.summary_tree()`), `RUNS_TABLE` derived from `RunRecord`, `RunStorage` (all `runs` SQL), `RunQuery`/`RunPage`/`RunTotals`, the runs-table migration functions | database, field_tree, run_headline, stored_runs |
+| `web/presets.py` | the `config_presets` table, `PresetType`, home presets and saved fleet (scenario) presets | database, stored_json |
+| `web/chat_messages.py` | the `chat_messages` table and its store: `ChatRole`, `CHAT_MESSAGES_TABLE` and its migration functions, `save_chat_message`/`get_chat_history` | database, stored_json |
+| `web/schema.py` (new) | `SCHEMA_VERSION` (derived), the ordered `MIGRATIONS`, `open_database`, `migrate_store`, `SchemaVersionMismatch`, `MigrationReport` | database, stored_runs, storage, presets, chat_messages |
 | `web/store_lock.py` (new) | `acquire_store_lock`, `StoreLock`, `StoreLocked` | none |
 | `web/jobs.py` | `JobStatus`, `JobManager(storage, …)` (no SQL), cancellation | storage |
 | `web/app.py` | the composition root: lock → `open_database` → `RunStorage` → `JobManager` → `fail_interrupted_runs` | all of the above |
@@ -124,11 +128,12 @@ This also keeps invariant 4 true as written: all `runs` SQL, migrations included
 
 ### 3.2 Connection policy (α)
 
-`Database(path)` is a frozen value. `connect()` applies `journal_mode=WAL`, `row_factory=sqlite3.Row`
-and `foreign_keys=ON`. `transaction()` is today's `get_db` (commit, rollback, close). `create_app`
-builds one `Database` and stores it on `app.extensions` under `'database'`, read through a typed
-`shared.get_database()`. `RunStorage(database, data_dir)`, the preset functions and the chat
-functions take the `Database` in place of a path. `get_db` is deleted.
+`Database(path)` is a frozen value. `connect()` applies `row_factory=sqlite3.Row`, `foreign_keys=ON`
+and `temp_store=MEMORY` (D-S19-13); `journal_mode=WAL` is a property of the file, which
+`open_database` sets when it creates a store. `transaction()` is today's `get_db` (commit, rollback,
+close). `create_app` builds one `Database` and stores it on `app.extensions` under `'database'`,
+read through a typed `shared.get_database()`. `RunStorage(database, data_dir)`, the preset
+functions and the chat functions take the `Database` in place of a path. `get_db` is deleted.
 
 ### 3.3 One writer of `runs`; the `jobs` table retired (β)
 
@@ -176,23 +181,29 @@ asserts its keys equal `get_args(RunType)`. `storage.RunRecord.kind` returns the
 which places the table "on `storage.RunRecord`" (D20). A `RunKind` names:
 - `summary_type`;
 - `read(run_dir, run_id) -> StoredRun` (the loader);
-- `results_template`;
 - `home_configs(config_document)`;
+- `scenario_document(home_configs, name)` (the YAML export's scenario);
 - (ζ) `default_name(home_configs)`.
 
-`StoredHomeRun`/`StoredFleetRun` (frozen) carry the loaded objects and implement `export_frame()`
-(CSV) and `scenario_document(name)` (YAML). `RunStorage.load_run(run_id)` reads the record and
-dispatches through `record.kind`. `main.run_results` (`/results/<run_id>`) renders
-`kind.results_template` with charts built in `routes` by a `match` on the `StoredRun` variant with
-`assert_never`. The page layer stays above storage, and mypy flags a new kind left unhandled.
+A `RunKind` names no template: the page layer picks it (below).
+
+`StoredHomeRun`/`StoredFleetRun` (frozen) carry the loaded objects. Each writes its run's files
+(`write`) and answers the CSV export with `export_frame()`. The History YAML export reads none of
+the run's files: it builds its scenario from `runs.config_json` through `run.kind.home_configs`
+and `run.kind.scenario_document`, and never calls `load_run`, which reads every parquet time
+series. `RunStorage.load_run(run_id)` reads the record and dispatches through `record.kind`.
+`main.run_results` (`/results/<run_id>`) picks the template, the unnamed title and the page values,
+and builds the charts, in one `match` on the `StoredRun` variant in `routes` with `assert_never`.
+The page layer stays above storage, and mypy flags a new kind left unhandled.
 `/results/home/<run_id>` and `/results/fleet/<run_id>` answer 301 to `/results/<run_id>`.
 
 Every link uses the one route:
 - `dashboard.html` through `url_for('main.run_results', ...)`;
 - `runs.html` through the JSON row's `results_url`;
 - the progress tracker through a server-provided URL (§13 Q4), its `result_type` parameter deleted;
-- the assistant's trigger tools through `url_for`, which works there because `chat` streams under
-  `stream_with_context`.
+- the assistant's trigger tools through `ToolContext.results_url`, the one route's path builder
+  that `assistant._run_results_url_builder` makes in the request from the request's URL adapter,
+  because `chat` streams its frames with no request context, where `url_for` cannot build the URL.
 
 ### 3.6 Default run name (ζ)
 
@@ -299,6 +310,44 @@ the database file" policy is replaced by this one. `cli/web.py` gains `migrate`:
   `os.replace`, then writes the marker.
 - A run whose documents fail validation (unloadable today too) is left untouched and reported, and
   migration continues. Afterwards that run's page names its field.
+- **Amendment (2026-11-06, task 1341):** a run's files are brought forward from the format their
+  `format.json` names, format 1 when there is none (`stored_runs.stored_format_version`), by
+  every run-document step after it; files already at the target format are left as they are. A
+  `runs` row records no format of its own: it is brought forward from the format its store's
+  schema version implies, and a row that cannot be is brought forward from the first format
+  instead. That fallback is exact only because each run-document step changes nothing in
+  documents a later step has brought forward (`RunDocumentStep`, checked over every fixture by
+  `tests/unit/test_web_run_document_steps.py`). A step that cannot keep to that must first add a
+  format column to `runs`, with its schema step. After its steps, and also on a store already at
+  `SCHEMA_VERSION`, `migrate_store` catches up: it brings forward each run's files whose
+  `format.json` names an older format or is missing, and each `runs` row that reads only from the
+  first format, such as a run an earlier migration left, once its documents are fixed. It names
+  each run whose files or row it so brings forward (`MigrationReport.caught_up_runs`), and
+  reports again each it still cannot migrate. A run in the current format is caught up the same
+  way when its save did not finish, leaving no `format.json`, or its row holds a shape only the
+  first format admits, such as an unknown key, which v2 then drops. A write it cannot make then
+  is refused with `LaggingRunsRefused`: the store stays at `SCHEMA_VERSION`, as it was or as the
+  migration's steps left it, and the message says which.
+- **Amendment (2026-11-06, task 1359):** both refusals that can follow a step the migration
+  applied, `MigrationRefused` and `LaggingRunsRefused`, carry the report of the steps it applied
+  (`migrated`, a `MigrationReport`, of no step when the refusal comes before any), and `web
+  migrate` prints that report, when it names a step, before the refusal. Those steps stay applied.
+- **Amendment (2026-11-06, task 1369):** both refusals also carry what the refused part's run-file
+  part did before its fault (`files_brought_forward`, a `RunFilesBroughtForward`): each run whose
+  files it brought forward, which stay so, and each value it dropped or rewrote in them. That
+  holds whether the part's transaction failed after its run-file part, or an `OSError` stopped
+  the run-file part itself: `migrate_stored_run_files` stopped part way raises
+  `RunFilesMigrationStopped`, carrying the runs it brought forward before the fault. `web
+  migrate` prints that report after the steps' report and before the refusal, as a migration run
+  again leaves those files as they are and reports none of their values.
+- **Amendment (2026-11-07, task 1373):** `write_run_documents` stopped by an `OSError` raises
+  `RunDocumentsWriteStopped`, naming the documents it wrote, each whole, before the fault. That
+  run's files are then brought forward only in part, as its `format.json` still names its older
+  format, and a migration run again re-reads those documents already in the new format, so it
+  reports none of their values. So `RunFilesMigrationStopped`'s `brought_forward`, and hence
+  `files_brought_forward` (`RunFilesBroughtForward.partly_brought_forward_runs`, each a
+  `PartlyBroughtForwardRun`), carries that run with those documents and each value dropped or
+  rewritten in them. `web migrate` prints them with the rest.
 
 Every handler catches one type:
 - the results route flashes the message and redirects;
@@ -335,7 +384,7 @@ implementer if every reference moves with them.
 @dataclass(frozen=True)
 class Database:
     path: Path
-    def connect(self) -> sqlite3.Connection: ...          # WAL, Row factory, foreign_keys=ON — the only sqlite3.connect in src
+    def connect(self) -> sqlite3.Connection: ...          # Row factory, foreign_keys=ON, temp_store=MEMORY — the only sqlite3.connect in src
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]: ...   # commit / rollback / close
 @dataclass(frozen=True)
@@ -354,13 +403,13 @@ class StoredRunUnreadable(Exception):     # deliberately NOT a ValueError: S17's
 class StoredHomeRun:  run_id: str; config: HomeConfig; results: SimulationResults; summary: SummaryStatistics
 @dataclass(frozen=True)
 class StoredFleetRun: run_id: str; fleet_results: FleetResults; summary: FleetSummary; home_summaries: tuple[SummaryStatistics, ...]
-StoredRun = StoredHomeRun | StoredFleetRun          # each: export_frame() -> pd.DataFrame; scenario_document(name) -> dict
+StoredRun = StoredHomeRun | StoredFleetRun          # each: write(run_dir, ...) -> None; export_frame() -> pd.DataFrame
 @dataclass(frozen=True)
 class RunKind:
     summary_type: type[SummaryStatistics] | type[FleetSummary]
-    results_template: str
     read: Callable[[Path, str], StoredRun]
     home_configs: Callable[[Mapping[str, Any]], tuple[HomeConfig, ...]]
+    scenario_document: Callable[[Sequence[HomeConfig], str], dict[str, Any]]
     default_name: Callable[[Sequence[HomeConfig]], str]          # ζ
 RUN_KINDS: Mapping[RunType, RunKind]                              # keys == get_args(RunType)
 @dataclass(frozen=True)
@@ -369,6 +418,12 @@ class RunDocumentStep:
     apply: Callable[[RunType, StoredRunDocuments], StepResult]  # pure; apply(apply(d)) == apply(d)
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...]                   # ascending versions
 RUN_FORMAT_VERSION: int = RUN_DOCUMENT_STEPS[-1].version
+
+# web/run_headline.py — the cross-type headline; a leaf below storage, which storage and charts import (task 1413)
+@dataclass(frozen=True)
+class RunHeadline: ...                             # its fields: chart-panels-and-theme-tokens.md §Contract, where S21 ζ
+                                                   # widened γ's generation_kwh and self_consumption_ratio to nine (D-S19-8)
+def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline: ...
 
 # web/storage.py — the runs table
 RunStatus = Literal["running", "completed", "failed"]
@@ -380,9 +435,6 @@ class RunRecord:                                   # one field per runs column; 
     def summary(self) -> SummaryStatistics | FleetSummary | None: ...      # raises StoredRunUnreadable
     def home_configs(self) -> tuple[HomeConfig, ...] | None: ...          # raises StoredRunUnreadable
 RUNS_TABLE: TableSchema                            # derived from fields(RunRecord)
-@dataclass(frozen=True)
-class RunHeadline: generation_kwh: float; self_consumption_ratio: float
-def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline: ...
 @dataclass(frozen=True)
 class RunQuery: run_type: RunType | None = None; text: str | None = None; created_from: date | None = None
                 created_to: date | None = None; sort: RunSort = "created_at"; descending: bool = True
@@ -467,10 +519,11 @@ class JobManager:
   reading as failed. Mid-simulation interruption is out of scope.
 - **D-S19-7 One `Database` value, not ambient config.** Every table owner takes the app's
   `Database`. The remedy's "`database.connect(db_path)`" is `Database(path).connect()`.
-- **D-S19-8 The cross-type summary headline is S19's.** `run_headline` in `storage` is the one place
-  the web maps fleet names to listing names. S21's comparison consumes it (and may widen
-  `RunHeadline`). If S25 needs the mapping in core, S25 re-homes it and `run_headline` delegates;
-  there is still one home (§8).
+- **D-S19-8 The cross-type summary headline is S19's.** `run_headline` in `web/run_headline.py`, a
+  leaf below `storage` that `storage` and `charts` import (task 1413), is the one place the web
+  maps fleet names to listing names. S21's comparison consumes it (and may widen `RunHeadline`).
+  If S25 needs the mapping in core, S25 re-homes it and `run_headline` delegates; there is still
+  one home (§8).
 - **D-S19-9 Unreadable-run answers.** Pages flash and redirect, as "Run not found" does today. JSON
   answers 409 with structured fields (heuristic 12). The dashboard totals skip the run with a logged
   warning, and the History list makes it visible (G7 note, §15).
@@ -479,6 +532,19 @@ class JobManager:
   makes the lock testable without subprocesses.
 - **D-S19-11 Old results URLs answer 301** to `/results/<run_id>`, so existing bookmarks and the
   e2e suite's literal hrefs keep resolving. The e2e tests that assert hrefs are updated in ε.
+- **D-S19-12 Durability: `synchronous` stays FULL (ruled by Leo, 2026-10-19, esc-859-3 option C).**
+  A write through today's per-operation connection costs 5 syncs, about 7 ms, against 2-5 ms with
+  a held connection (measured at `ede1d99`); `synchronous=NORMAL` alone gains nothing measurable.
+  Nothing board-facing reads the store, so the gain does not justify giving up durability or
+  adding app-lifetime connection state. α's `Database` keeps today's policy. Task 859 is cancelled.
+- **D-S19-13 Temporary storage: `connect()` applies `temp_store=MEMORY` (task 1199).** Otherwise
+  SQLite writes a temporary B-tree that outgrows its page cache (2,000 KiB by default), such as the
+  run list's whole-row sort, to the first of `SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp` and
+  `/tmp` that `access()` admits. Where that directory refuses new files, as `/var/tmp` does in a
+  sandboxed agent session (Landlock leaves `access()` unrestricted), the statement fails with
+  "unable to open database file". The cost is memory in place of a temp file, bounded by the rows
+  a statement holds: about +84 MiB for the last name-sorted page of 1,000 runs of 77 KB (measured
+  2026-10-29, SQLite 3.45.1).
 
 ## 6. Pre-conditions and the tasks this stream subsumes
 
@@ -522,11 +588,11 @@ No novel syntax or service is assumed. Every new mechanism is produced by a leaf
 
 | Other stream | Direction | Seam mechanism | Owner | Status / ask |
 |---|---|---|---|---|
-| S2 Dispatch config | S2 consumes | Moving `DispatchStrategyConfig`/`GridChargeConfig` changes the stored `config.json` tree, and `HomeConfig.dispatch_strategy` retires at S29. Each needs a `RunDocumentStep` + schema step (C10). S2's deletion of `_field_types`' config-namespace merge applies wherever the reader lives after κ (`stored_runs`) | S19 owns the mechanism; S2 owns its step | S2's stored-shape leaf **depends on κ** (ask the lead to add the edge) |
+| S2 Dispatch config | S2 consumes | Moving `DispatchStrategyConfig`/`GridChargeConfig` changes the stored `config.json` tree, and `HomeConfig.dispatch_strategy` retires at S29. Each needs a `RunDocumentStep` + schema step (C10). S2's deletion of `_field_types`' config-namespace merge applies wherever the reader lives after κ (`stored_runs`, and `web/field_tree.py` since task 1141) | S19 owns the mechanism; S2 owns its step | S2's stored-shape leaf **depends on κ** (ask the lead to add the edge) |
 | S12 Load composition | S12 consumes | Heat-pump summary fields → named-load mapping; SimulationResults parquet columns change. S12 adds a schema step and **extends `RunDocumentStep` with a frame transform** (first consumer of frames) | S19 mechanism; S12 step + frame hook | already S12 → S19 in the program |
 | S25 Board reports | S25 consumes | Retires `SummaryStatistics.seg_revenue_gbp` (stored): a `RunDocumentStep`. Its "five shared energy totals" helper: if it lands in core, `run_headline` delegates to it (D-S19-8) | S19 headline; S25 may re-home the mapping | ask: S25 → κ dependency |
 | S28 Battery facts | S28 consumes | Retiring `BatteryConfig.efficiency` changes stored configs: a `RunDocumentStep` | S19 mechanism | ask: S28's held S29 leaf → κ |
-| S10 Window and cadence | S10 consumes | S10 β adds `SummaryStatistics.window` (defaulted None: no step needed, old runs read None) and `date`/`timedelta` codec branches (they land in `web/storage.py` or, after κ, `stored_runs.py`). S10's held η makes `window` **required** and `simulation_days` a property. Under C10 that needs a `RunDocumentStep`: drop `simulation_days`, derive `window` from the run's stored index. η extends the step input with a read-only stored-index accessor (S12 later adds frame transforms). **Conflict:** S10's PRD instead lets every pre-η run become unreadable by name. That contradicts C10 and D-S19-5 and would blank every user's History results; returned to the lead | S19 mechanism; S10 η its step | ask: S10 η → κ, plus the step |
+| S10 Window and cadence | S10 consumes | S10 β adds `SummaryStatistics.window` (defaulted None: no step needed, old runs read None) and `date`/`timedelta` codec branches (they land in `web/field_tree.py`, in its writer and its leaf reader, where task 1141 moved the codec out of `stored_runs.py`). S10's held η makes `window` **required** and `simulation_days` a property. Under C10 that needs a `RunDocumentStep`: drop `simulation_days`, derive `window` from the run's stored index. η extends the step input with a read-only stored-index accessor (S12 later adds frame transforms). **Conflict:** S10's PRD instead lets every pre-η run become unreadable by name. That contradicts C10 and D-S19-5 and would blank every user's History results; returned to the lead | S19 mechanism; S10 η its step | ask: S10 η → κ, plus the step |
 | S11 Tariff | S11 consumes | A stored run whose tariff no longer passes `TariffConfig.__post_init__` is refused by κ's reader as `StoredRunUnreadable` (the web only stores tiling presets, so none is expected) | S19 refusal | consistent with S11's PRD |
 | S1 Errors leaf | shares | `StoredRunUnreadable` stays in `stored_runs` (S1 D2 lists it as a web-local type). κ wraps a domain `__post_init__` refusal (ConfigurationError, a ValueError after S1) into it | S1 base class; S19 the wrapper | consistent with S1's PRD; 355's stale premise is superseded by κ |
 | S29 Surface bump | S29 consumes | Every retired or renamed field of a stored dataclass (`HomeConfig` tree, `SummaryStatistics`, `FleetSummary`) ships with its step in the bump (C10) | S29 | cross-reference line |

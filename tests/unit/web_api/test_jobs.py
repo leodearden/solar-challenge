@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the job endpoints: GET /api/jobs/<id>, GET /api/jobs/<id>/progress (an SSE stream) and GET /api/jobs/<id>/results."""
 
-import json
 from dataclasses import asdict, replace
 from unittest.mock import NonCallableMagicMock
 
@@ -11,9 +10,16 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.database import get_db
-from solar_challenge.web.jobs import JobEvent, JobState
+from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.home import calculate_summary
+from solar_challenge.web.field_tree import field_tree
+from solar_challenge.web.jobs import JobSnapshot, JobState
+from solar_challenge.web.sse import JobStreamPolicy
+from solar_challenge.web.storage import RunStorage
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._run_summaries import JUNE_WEEK_WINDOW, home_summary
 from tests._sse import SseFrame, parse_sse_events
+from tests._web_runs import store_fleet_run, store_home_run
 
 _A_RUNNING_JOB = JobState(
     job_id="job-running",
@@ -24,36 +30,10 @@ _A_RUNNING_JOB = JobState(
     message="Running home simulation...",
     created_at="2024-06-01T12:00:00+00:00",
 )
-_A_COMPLETED_JOB = replace(
-    _A_RUNNING_JOB,
-    status="completed",
-    progress_pct=100.0,
-    current_step="Done",
-    message="Simulation completed successfully",
-)
-_A_FAILED_JOB = replace(_A_RUNNING_JOB, status="failed", message="Something went wrong")
+_A_CANCELLED_JOB = replace(_A_RUNNING_JOB, status="cancelled", message="Cancelled: its run was deleted")
 
-_FINAL_EVENTS_AND_THEIR_FRAMES = [
-    pytest.param(
-        JobEvent("complete", _A_COMPLETED_JOB),
-        SseFrame(
-            "complete",
-            {
-                "status": "completed",
-                "progress_pct": 100.0,
-                "current_step": "Done",
-                "message": "Simulation completed successfully",
-                "run_id": "run-running",
-            },
-        ),
-        id="completed",
-    ),
-    pytest.param(
-        JobEvent("error", _A_FAILED_JOB),
-        SseFrame("error", {"status": "failed", "message": "Something went wrong"}),
-        id="failed",
-    ),
-]
+_SERVED_RETRY_MS = JobStreamPolicy().retry_ms
+"""The retry every frame of a progress stream carries: the retry of the policy create_app serves the streams under, the default JobStreamPolicy."""
 
 
 class TestGetJobStatus:
@@ -75,106 +55,77 @@ class TestGetJobStatus:
         mock_job_manager.job_state.return_value = None
         resp = client.get("/api/jobs/nonexistent-id")
         assert resp.status_code == 404
-        assert "error" in resp.get_json()
-
-    def test_completed_job_status(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
-    ) -> None:
-        """Completed job returns status='completed'."""
-        mock_job_manager.job_state.return_value = replace(
-            _A_RUNNING_JOB,
-            job_id="job-done",
-            run_id="run-done",
-            status="completed",
-            progress_pct=100.0,
-            current_step="Done",
-            message="Simulation completed successfully",
-        )
-        resp = client.get("/api/jobs/job-done")
-        assert resp.status_code == 200
-        assert resp.get_json()["status"] == "completed"
-
-    def test_failed_job_status(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
-    ) -> None:
-        """Failed job returns status='failed' with message."""
-        mock_job_manager.job_state.return_value = replace(
-            _A_RUNNING_JOB,
-            job_id="job-fail",
-            run_id="run-fail",
-            status="failed",
-            progress_pct=20.0,
-            message="Something went wrong",
-        )
-        resp = client.get("/api/jobs/job-fail")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["status"] == "failed"
-        assert "wrong" in data["message"]
+        assert resp.get_json() == {"error": "Job not found"}
 
 
 class TestGetJobProgress:
     """Tests for GET /api/jobs/<id>/progress (SSE endpoint)."""
 
-    def test_returns_event_stream_content_type(
+    def test_is_served_with_the_event_stream_response_policy(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """SSE endpoint returns text/event-stream Content-Type."""
-        resp = client.get("/api/jobs/job-home-001/progress")
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.content_type
+        """The stream is closed unread, so none of its frames is needed."""
+        response = client.get("/api/jobs/job-home-001/progress", buffered=False)
+        try:
+            assert response.status_code == 200
+            assert response.mimetype == "text/event-stream"
+            assert response.headers["Cache-Control"] == "no-cache"
+            assert response.headers["X-Accel-Buffering"] == "no"
+        finally:
+            response.close()
 
-    def test_no_cache_header(
+    def test_a_last_event_id_of_more_digits_than_python_converts_names_no_version_so_a_running_jobs_state_is_sent_at_once(
+        self, app: Flask, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """5000 digits, past Python's int-string limit, are read as no header, not a 500: had the stream resumed after so high a version, its first frame would be a heartbeat."""
+        app.config["PROPAGATE_EXCEPTIONS"] = False
+        mock_job_manager.job_snapshot.return_value = JobSnapshot(4, _A_RUNNING_JOB)
+
+        response = client.get("/api/jobs/job-running/progress", headers={"Last-Event-ID": "9" * 5000}, buffered=False)
+        try:
+            assert response.status_code == 200
+            chunks = iter(response.response)
+            assert parse_sse_events(next(chunks).decode()) == [
+                SseFrame("progress", asdict(_A_RUNNING_JOB), id=4, retry=_SERVED_RETRY_MS)
+            ]
+        finally:
+            response.close()
+
+    def test_a_job_the_manager_does_not_track_gets_one_untracked_frame_naming_it_and_the_stream_ends(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """SSE response includes Cache-Control: no-cache header."""
-        resp = client.get("/api/jobs/job-home-001/progress")
-        assert resp.headers.get("Cache-Control") == "no-cache"
+        """The frame carries the served retry and no id, so a browser's last id stands."""
+        mock_job_manager.job_snapshot.return_value = None
 
-    def test_unknown_job_sends_error_event(
+        response = client.get("/api/jobs/unknown-id/progress", buffered=False)
+        try:
+            assert response.status_code == 200
+            assert "text/event-stream" in response.content_type
+            chunks = iter(response.response)
+            assert parse_sse_events(next(chunks).decode()) == [
+                SseFrame("untracked", {"job_id": "unknown-id"}, retry=_SERVED_RETRY_MS)
+            ]
+            assert next(chunks, None) is None
+        finally:
+            response.close()
+        mock_job_manager.job_snapshot.assert_called_with("unknown-id")
+
+    def test_a_finished_jobs_snapshot_is_its_one_frame_named_by_its_status_carrying_its_state_with_its_version_as_id_and_the_retry(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Unknown job sends an SSE error event."""
-        mock_job_manager.job_state.return_value = None
-        resp = client.get("/api/jobs/unknown-id/progress")
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.content_type
-        body = resp.get_data(as_text=True)
-        assert "event: error" in body
-        assert "Job not found" in body
+        """A cancelled job's frame is its own event, cancelled."""
+        mock_job_manager.job_snapshot.return_value = JobSnapshot(4, _A_CANCELLED_JOB)
 
-    @pytest.mark.parametrize(("final_event", "final_frame"), _FINAL_EVENTS_AND_THEIR_FRAMES)
-    def test_each_queued_event_is_sent_named_by_its_type_with_the_fields_of_its_state_the_browser_reads(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, final_event: JobEvent, final_frame: SseFrame
-    ) -> None:
-        mock_job_manager.job_state.return_value = final_event.state
-        mock_job_manager.get_events.return_value = iter([JobEvent("progress", _A_RUNNING_JOB), final_event])
-
-        frames = parse_sse_events(client.get("/api/jobs/job-running/progress").get_data(as_text=True))
-
-        assert frames == [
-            SseFrame(
-                "progress",
-                {
-                    "progress_pct": 50.0,
-                    "current_step": "Simulating",
-                    "message": "Running home simulation...",
-                    "status": "running",
-                },
-            ),
-            final_frame,
-        ]
-
-    @pytest.mark.parametrize(("final_event", "final_frame"), _FINAL_EVENTS_AND_THEIR_FRAMES)
-    def test_a_finished_job_whose_events_another_stream_drained_is_sent_the_frame_of_its_final_event(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, final_event: JobEvent, final_frame: SseFrame
-    ) -> None:
-        mock_job_manager.job_state.return_value = final_event.state
-        mock_job_manager.get_events.return_value = iter([])
-
-        frames = parse_sse_events(client.get("/api/jobs/job-running/progress").get_data(as_text=True))
-
-        assert frames == [final_frame]
+        response = client.get("/api/jobs/job-running/progress", buffered=False)
+        try:
+            chunks = iter(response.response)
+            assert parse_sse_events(next(chunks).decode()) == [
+                SseFrame("cancelled", asdict(_A_CANCELLED_JOB), id=4, retry=_SERVED_RETRY_MS)
+            ]
+            assert next(chunks, None) is None
+        finally:
+            response.close()
+        mock_job_manager.job_snapshot.assert_called_with("job-running")
 
 
 class TestGetJobResults:
@@ -187,36 +138,27 @@ class TestGetJobResults:
         mock_job_manager.job_state.return_value = None
         resp = client.get("/api/jobs/nonexistent/results")
         assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Job not found"}
 
     def test_running_job_returns_409(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Running job returns 409 (conflict)."""
+        """A job not yet completed answers 409 with the error, its status and its progress."""
         mock_job_manager.job_state.return_value = _A_RUNNING_JOB
         resp = client.get("/api/jobs/job-running/results")
         assert resp.status_code == 409
-        data = resp.get_json()
-        assert "not yet completed" in data["error"]
-        assert data["status"] == "running"
+        assert resp.get_json() == {"error": "Job not yet completed", "status": "running", "progress_pct": 50.0}
 
     def test_completed_job_answers_its_run_s_id_name_type_creation_time_and_summary(
-        self, app: Flask, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+        self, storage: RunStorage, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A completed job whose run has a row answers the run's id, name, type, creation time and decoded summary."""
+        """A completed job whose run has a row answers the run's id, name, type, creation time and its summary's field tree."""
         run_id = "run-complete-001"
         mock_job_manager.job_state.return_value = replace(
             _A_RUNNING_JOB, job_id="job-complete", run_id=run_id, status="completed", progress_pct=100.0
         )
-        # Insert a run row into the test database so the results endpoint
-        # can retrieve it.
-        db_path = app.config["DATABASE"]
-        summary = {"total_generation_kwh": 1234.5, "self_consumption_pct": 45.0}
-        with get_db(db_path) as conn:
-            conn.execute(
-                "INSERT INTO runs (id, name, type, summary_json, status, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, "Test Run", "home", json.dumps(summary), "completed", "2024-01-01T00:00:00"),
-            )
+        results = make_sim_results(days=1)
+        store_home_run(storage, run_id, make_home_config(), results, name="Test Run", created_at="2024-01-01T00:00:00")
 
         resp = client.get("/api/jobs/job-complete/results")
         assert resp.status_code == 200
@@ -225,7 +167,57 @@ class TestGetJobResults:
             "name": "Test Run",
             "type": "home",
             "created_at": "2024-01-01T00:00:00",
-            "summary": summary,
+            "summary": field_tree(calculate_summary(results)),
+        }
+
+    def test_completed_job_answers_its_run_s_summary_window_as_its_field_tree(
+        self, storage: RunStorage, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A summary's window is answered as it is stored: its days as ISO 8601 dates, its cadence as an ISO 8601 duration."""
+        run_id = "run-windowed-001"
+        mock_job_manager.job_state.return_value = replace(
+            _A_RUNNING_JOB, job_id="job-complete", run_id=run_id, status="completed", progress_pct=100.0
+        )
+        summary = home_summary(window=JUNE_WEEK_WINDOW)
+        storage.save_home_run(
+            run_id=run_id,
+            config=make_home_config(),
+            results=make_sim_results(days=1),
+            summary=summary,
+            name="Windowed Run",
+        )
+
+        resp = client.get("/api/jobs/job-complete/results")
+
+        assert resp.status_code == 200
+        answered = resp.get_json()["summary"]
+        assert answered == field_tree(summary)
+        assert answered["window"] == {
+            "first_day": "2025-06-01",
+            "last_day": "2025-06-07",
+            "cadence": "P0DT0H1M0S",
+            "timezone": "Europe/London",
+        }
+
+    def test_completed_fleet_job_answers_its_run_s_fleet_summary(
+        self, storage: RunStorage, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A completed fleet job's run answers its FleetSummary's field tree as its summary."""
+        run_id = "fleet-complete-001"
+        mock_job_manager.job_state.return_value = replace(
+            _A_RUNNING_JOB, job_id="job-complete", run_id=run_id, status="completed", progress_pct=100.0
+        )
+        fleet = make_fleet_results(n_homes=2, days=1)
+        store_fleet_run(storage, run_id, fleet, name="Fleet Run", created_at="2024-01-02T00:00:00")
+
+        resp = client.get("/api/jobs/job-complete/results")
+        assert resp.status_code == 200
+        assert resp.get_json() == {
+            "run_id": run_id,
+            "name": "Fleet Run",
+            "type": "fleet",
+            "created_at": "2024-01-02T00:00:00",
+            "summary": field_tree(calculate_fleet_summary(fleet)),
         }
 
     def test_completed_job_missing_run_returns_404(
@@ -237,3 +229,4 @@ class TestGetJobResults:
         )
         resp = client.get("/api/jobs/job-complete/results")
         assert resp.status_code == 404
+        assert resp.get_json() == {"error": "Run not found"}

@@ -1,0 +1,24 @@
+{"fleet": "tests/fixtures/fleet_generation/probe-conditional-battery-draws.yaml", "points": [
+{"sweep_value": null, "homes": [
+{"pv": {"capacity_kw": 4.0, "azimuth": 159.05095043547013, "tilt": 33.19123068173516}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.8424657888344074, "max_discharge_kw": 2.548533375368878}, "load": {"annual_consumption_kwh": 4289.533904789057, "household_occupants": 1}},
+{"pv": {"capacity_kw": 4.0, "azimuth": 154.19132541447715, "tilt": 38.39317347300749}, "battery": null, "load": {"annual_consumption_kwh": 2067.1499797504457, "household_occupants": 1}},
+{"pv": {"capacity_kw": 3.0, "azimuth": 187.64599334433535, "tilt": 41.8420077501179}, "battery": {"capacity_kwh": 10.0, "max_charge_kw": 2.555192327596535, "max_discharge_kw": 3.46438265838938}, "load": {"annual_consumption_kwh": 3025.4485794134125, "household_occupants": 1}},
+{"pv": {"capacity_kw": 5.0, "azimuth": 167.37655717990057, "tilt": 37.46962519368705}, "battery": null, "load": {"annual_consumption_kwh": 3715.323581487368, "household_occupants": 4}},
+{"pv": {"capacity_kw": 3.0, "azimuth": 184.89600981974797, "tilt": 30.03733668413725}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.6302420518876133, "max_discharge_kw": 2.0941834624599847}, "load": {"annual_consumption_kwh": 3905.662996025719, "household_occupants": 4}},
+{"pv": {"capacity_kw": 4.0, "azimuth": 168.8488302226075, "tilt": 36.987418028557535}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.596026785846082, "max_discharge_kw": 3.1915692222837366}, "load": {"annual_consumption_kwh": 3595.80699785286, "household_occupants": 4}},
+{"pv": {"capacity_kw": 3.0, "azimuth": 184.46542261552025, "tilt": 18.885089402317895}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.839203074467165, "max_discharge_kw": 2.4319066473352797}, "load": {"annual_consumption_kwh": 3797.9120089594035, "household_occupants": 3}},
+{"pv": {"capacity_kw": 5.0, "azimuth": 159.11907207963029, "tilt": 34.501760840536356}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 3.7202987065963016, "max_discharge_kw": 3.1468562993192197}, "load": {"annual_consumption_kwh": 3689.7949362786735, "household_occupants": 3}},
+{"pv": {"capacity_kw": 5.0, "azimuth": 168.8248507708858, "tilt": 31.3783848030493}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.367606112849338, "max_discharge_kw": 2.6843079969521195}, "load": {"annual_consumption_kwh": 4431.070034460789, "household_occupants": 3}},
+{"pv": {"capacity_kw": 4.0, "azimuth": 153.6401656558332, "tilt": 18.745663620410596}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.0500283615340242, "max_discharge_kw": 3.2328871799145724}, "load": {"annual_consumption_kwh": 2000.0, "household_occupants": 2}},
+{"pv": {"capacity_kw": 4.0, "azimuth": 190.11916295305127, "tilt": 43.81428963344323}, "battery": null, "load": {"annual_consumption_kwh": 3525.801504350789, "household_occupants": 1}},
+{"pv": {"capacity_kw": 3.0, "azimuth": 196.09397930835124, "tilt": 39.149196311806165}, "battery": null, "load": {"annual_consumption_kwh": 3838.1900589049847, "household_occupants": 4}},
+{"pv": {"capacity_kw": 3.0, "azimuth": 176.95124405695987, "tilt": 19.20899651570696}, "battery": {"capacity_kwh": 10.0, "max_charge_kw": 2.6831599872068317, "max_discharge_kw": 3.2959767045477726}, "load": {"annual_consumption_kwh": 3252.7822165391676, "household_occupants": 2}},
+{"pv": {"capacity_kw": 5.0, "azimuth": 207.46387223783947, "tilt": 43.156221374818344}, "battery": null, "load": {"annual_consumption_kwh": 3659.893456803775, "household_occupants": 2}},
+{"pv": {"capacity_kw": 4.0, "azimuth": 185.34741022393536, "tilt": 40.19864793156122}, "battery": null, "load": {"annual_consumption_kwh": 4233.347642458875, "household_occupants": 2}},
+{"pv": {"capacity_kw": 4.0, "azimuth": 207.1858755315057, "tilt": 35.214391532378215}, "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.3100034064197525, "max_discharge_kw": 3.014300123674252}, "load": {"annual_consumption_kwh": 3292.2014386455094, "household_occupants": 1}},
+{"pv": {"capacity_kw": 5.0, "azimuth": 196.79816944236438, "tilt": 45.08469315870659}, "battery": null, "load": {"annual_consumption_kwh": 2385.3424167411044, "household_occupants": 3}},
+{"pv": {"capacity_kw": 3.0, "azimuth": 188.05737394114254, "tilt": 37.76179796953624}, "battery": null, "load": {"annual_consumption_kwh": 3513.8850703622047, "household_occupants": 2}},
+{"pv": {"capacity_kw": 4.0, "azimuth": 153.15453623341602, "tilt": 39.58181226906382}, "battery": null, "load": {"annual_consumption_kwh": 3400.6715811789923, "household_occupants": 2}},
+{"pv": {"capacity_kw": 3.0, "azimuth": 202.45994264242918, "tilt": 31.57925638445413}, "battery": null, "load": {"annual_consumption_kwh": 3101.9590272697037, "household_occupants": 2}}
+]}
+]}

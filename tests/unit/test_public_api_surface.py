@@ -1,52 +1,49 @@
-"""Authoritative surface-lock / freeze guard for the solar_challenge public-API seam.
+"""The contract of solar_challenge's public surface: what `import solar_challenge` serves, and the frozen forms a consumer builds against.
 
-This is the T4 contract file (PRD docs/prds/domain-library-extraction.md §3.5,
-§9 H2/H3/H4, decomposition §10 T4).  It is the single canonical executable
-specification that future maintainers must update when the public surface changes.
+Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a part of one:
 
-Concerns:
-  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the exact 69 public
-                     names (test_all_equals_frozen_set)
-  H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
-                     routine's signature, a dataclass's following its kind, e.g.
-                     'dataclass[eq, frozen] (...)'; an Enum's members; a constant's type
-                     (test_every_exported_signature_matches_frozen_surface)
-  H2 closure       — FROZEN_CLOSURE pins the surface form of each class outside __all__
-                     that the frozen surface names, directly or through another such class
-                     (test_every_class_the_frozen_surface_names_matches_frozen_closure)
-  H2 members       — FROZEN_MEMBERS pins each pinned class's public members, exported
-                     or in FROZEN_CLOSURE: its methods, properties, class constants
-                     and declared attributes
-                     (test_every_pinned_class_member_matches_frozen_members,
-                      test_pinned_classes_inherit_only_from_pinned_classes,
-                      test_pinned_classes_declare_the_public_attributes_they_set_on_self)
-  H2 kind          — EXPECTED_KIND pins the introspected kind of each name
-                     (test_expected_kind_keys_match_frozen_set,
-                      test_every_name_resolves_to_expected_kind)
-  H3 laziness      — pvlib is absent after bare import; present after touching PVConfig
-                     (test_import_is_pvlib_free, test_touching_pvconfig_imports_pvlib)
-  H4 collision     — DispatchTariffPeriod / TariffPeriod are distinct objects pointing
-                     to different origin classes (test_tariffperiod_collision_resolved)
-
-Relationship to T3 (tests/unit/test_init_lazy_surface.py):
-  T3 owns structural checks (no-dup / no-CLI / lazy resolution / __dir__ /
-  TYPE_CHECKING sync).  T3 defers exact-name pinning to T4.  Bounded overlap in H3 / H4
-  is deliberate — this file must stand alone as the complete executable contract.
+- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE, FROZEN_MEMBERS and FROZEN_CALLS,
+  the locks holding the package to them, the member guards, which accept the writes to
+  self that REVIEWED_COMPUTED_NAME_WRITES lists, and the guard that every pinned
+  dataclass is frozen, but those UNFROZEN_PINNED_DATACLASSES lists with the task that
+  freezes each.
+  A surface change edits the frozen tables' rows, and adds its release note,
+  docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
+- The drift report: how a failing lock names each drifted path with its frozen and
+  current forms, labels each additive or breaking, and says what each kind needs.
+- Name resolution: every exported name resolves to its typed import, the object the
+  package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
+  names, and an unknown name raises AttributeError; and each EXPECTED_KIND name resolves
+  to the kind it pins.
+- The runtime tables, __all__, _SYMBOL_MODULE and _SOURCE_NAME, agree at import.
+- The package imports without pvlib, and the first access of a name loads pvlib exactly
+  when the submodule its typed import comes from is in PVLIB_IMPORTING_SUBMODULES.
 """
 
 import abc
+import ast
+import dataclasses
 import enum
 import functools
 import inspect
+import json
 import subprocess
 import sys
 import types
-from collections.abc import Mapping
+import typing
+from collections.abc import Callable, Mapping
+from importlib import import_module
+from pathlib import Path
+
+import pytest
 
 import solar_challenge
 import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
 from tests._surface_forms import (
+    is_additive_change,
+    is_additive_member_change,
+    is_frozen_dataclass,
     member_forms,
     signature_closure,
     surface_form,
@@ -55,113 +52,127 @@ from tests._surface_forms import (
 )
 
 
+# ===========================================================================
+# The frozen forms, and the locks holding the package to them
+# ===========================================================================
+
+
 # ---------------------------------------------------------------------------
-# H2 surface-lock: the exact 69 public names, each with its frozen surface form
+# The public names, each with its frozen surface form
 #
-# The keys mirror PRD §3.1, grouped by origin module.  Each value is the name's
+# The keys are grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
-# dataclass's following its kind, e.g. 'dataclass[eq, frozen] (...)'; an Enum's
-# members; or a constant's type.  Any add/remove to __all__ must be reflected in
-# the keys, and any change to a name's form in its value; the tests below fail
-# naming the drifted symbol(s).  Each value stays on one line, so the current
-# form a failure prints pastes in verbatim.
+# class's following its kind where it has one, e.g.
+# 'dataclass[eq, frozen, match_args] (...)'; an Enum's
+# members, aliases included; or a constant's type, then a mapping's entries or a
+# list's or tuple's items, e.g. 'dict {1: float}'.  Any add/remove to __all__
+# must be reflected in the keys, and any change to a name's form in its value;
+# the tests below fail naming the drifted symbol(s).  Each value stays on one
+# line, so the current form a failure prints pastes in verbatim.
 # ---------------------------------------------------------------------------
 FROZEN_SURFACE: dict[str, str] = {
     # --- finance / bill engine (finance.py) ---
-    "bill": "(*, period_days: float, generation_kwh: float, demand_kwh: float, self_consumption_kwh: float, import_kwh: float, import_cost_gbp: float, baseline_import_cost_gbp: float, finance: 'FinanceConfig') -> BillBreakdown",
-    "householder_bill": "(summary: 'SummaryStatistics', annual_self_consumption_kwh: float, finance: 'FinanceConfig', simulation_days: int) -> BillBreakdown",
-    "solve_cost_recovery_rate": "(scenario: 'ScenarioConfig', finance: 'FinanceConfig', *, simulate: Optional[Callable[['FleetConfig', pd.Timestamp, pd.Timestamp], 'FleetResults']] = None) -> 'CostRecoverySolution'",
-    "bill_distribution": "(summaries: Sequence['SummaryStatistics'], finance: 'FinanceConfig', simulation_days: int) -> BillDistribution",
-    "BillBreakdown": "dataclass[eq, frozen] (standing_charge_gbp: float, import_cost_gbp: float, own_use_payment_gbp: float, vat_gbp: float, total_outlay_gbp: float, own_use_vat_gbp: float, cbs_amount_due_gbp: float, self_consumption_saving_gbp: float, baseline_bill_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, self_consumption_fraction: float) -> None",
-    "BillDistribution": "dataclass[eq, frozen] (representative: BillBreakdown, per_home_net_bill_gbp: tuple[float, ...], min_gbp: float, mean_gbp: float, median_gbp: float, max_gbp: float) -> None",
-    "CostRecoverySolution": "dataclass[eq, frozen] (own_use_rate_pence_per_kwh: float, outlay: 'BillDistribution', representative_outlay_gbp: float, net_surplus_per_home_per_year_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, feasible: bool, binding: str) -> None",
-    "FinanceConfig": "dataclass[eq, frozen] (standing_charge_pence_per_day: float, vat_rate: float = 0.05, retail_baseline_rate_pence_per_kwh: float = 23.0, self_consumption_override: Optional[float] = None, pv_cost_per_kwp_gbp: float = 1000.0, roof_fit_cost_gbp: float = 1000.0, battery_cost_per_kwh_gbp: float = 250.0, inverter_cost_per_kw_gbp: float = 0.0, grant_gbp: float = 250000.0, equity_fraction: float = 0.75, loan_term_years: int = 15, loan_rate: float = 0.07, opex_per_home_per_year_gbp: float = 131.0, asset_life_years: int = 25, own_use_rate_pence_per_kwh: float = 15.0, retained_cash_floor_per_home_per_year_gbp: float = 27.0, grid_services_income_per_kw_per_year_gbp: float = 0.0, grid_services_model: str = 'flat', grid_services_events: Optional['GridServicesEventsConfig'] = None) -> None",
+    "bill": "(*, period_days: float, generation_kwh: float, demand_kwh: float, self_consumption_kwh: float, import_kwh: float, import_cost_gbp: float, baseline_import_cost_gbp: float, finance: FinanceConfig) -> BillBreakdown",
+    "householder_bill": "(summary: SummaryStatistics, window_self_consumption_kwh: float, finance: FinanceConfig) -> BillBreakdown",
+    "bill_distribution": "(summaries: Sequence[SummaryStatistics], finance: FinanceConfig) -> BillDistribution",
+    "BillBreakdown": "dataclass[eq, frozen, match_args] (standing_charge_gbp: float, import_cost_gbp: float, own_use_payment_gbp: float, vat_gbp: float, total_outlay_gbp: float, own_use_vat_gbp: float, cbs_amount_due_gbp: float, self_consumption_saving_gbp: float, baseline_bill_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, self_consumption_fraction: float) -> None",
+    "BillDistribution": "dataclass[eq, frozen, match_args] (representative: BillBreakdown, per_home_total_outlay_gbp: tuple[float, ...], min_gbp: float, mean_gbp: float, median_gbp: float, max_gbp: float, annualised_from: SimulationWindow, grid_charge_forecasts: tuple[Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'], ...] = ()) -> None",
+    "CostRecoverySolution": "dataclass[eq, frozen, match_args] (own_use_rate_pence_per_kwh: float, outlay: BillDistribution, representative_outlay_gbp: float, net_surplus_per_home_per_year_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, feasible: bool, binding: str) -> None",
+    "FinanceConfig": "dataclass[eq, frozen, match_args] (standing_charge_pence_per_day: float, vat_rate: float = 0.05, retail_baseline_rate_pence_per_kwh: float = 23.0, self_consumption_override: float | None = None, pv_cost_per_kwp_gbp: float = 1000.0, roof_fit_cost_gbp: float = 1000.0, battery_cost_per_kwh_gbp: float = 250.0, inverter_cost_per_kw_gbp: float = 0.0, grant_gbp: float = 250000.0, equity_fraction: float = 0.75, loan_term_years: int = 15, loan_rate: float = 0.07, opex_per_home_per_year_gbp: float = 131.0, asset_life_years: int = 25, own_use_rate_pence_per_kwh: float = 15.0, retained_cash_floor_per_home_per_year_gbp: float = 27.0, grid_services_model: NoGridServices | FlatGridServices | GridServicesEventsConfig = NoGridServices()) -> None",
+    # --- cost-recovery solve (projection.py) ---
+    "solve_cost_recovery_rate": "(scenario: ScenarioConfig, finance: FinanceConfig, *, simulate: Callable[[FleetConfig, Timestamp, Timestamp], FleetResults]) -> CostRecoverySolution",
     # --- signature-closure types ---
-    "SummaryStatistics": "dataclass[eq] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, simulation_days: int, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', seg_revenue_gbp: float | None = None, total_heat_pump_load_kwh: float | None = None, peak_heat_pump_load_kw: float | None = None, heat_pump_load_ratio: float | None = None, total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0) -> None",
-    "ScenarioConfig": "dataclass[eq] (name: str, period: SimulationPeriod, description: str = '', location: Location | None = None, homes: list[HomeConfig] = <factory>, home: HomeConfig | None = None, output: OutputConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, tariff_config: TariffConfig | None = None, finance: FinanceConfig | None = None) -> None",
-    "FleetConfig": "dataclass[eq] (homes: list[HomeConfig] = <factory>, name: str = '') -> None",
-    "FleetResults": "dataclass[eq] (per_home_results: list[SimulationResults], home_configs: list[HomeConfig]) -> None",
+    "SummaryStatistics": "dataclass[eq, frozen, match_args] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, window: SimulationWindow, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None, *, load_energy_kwh: Mapping[LoadKind, float], total_battery_export_kwh: float = 0.0) -> None",
+    "ScenarioConfig": "dataclass[eq, frozen, match_args] (name: str, period: SimulationWindow, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, finance: FinanceConfig | None = None, flex_band: GridServicesBand | None = None) -> None",
+    "FleetConfig": "dataclass[eq, frozen, match_args] (homes: tuple[HomeConfig, ...] = (), name: str = '') -> None",
+    "FleetResults": "dataclass[eq, frozen, match_args] (per_home_results: tuple[SimulationResults, ...], home_configs: tuple[HomeConfig, ...]) -> None",
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner": "dataclass[eq, frozen, match_args] (weather: WeatherProvider, home_simulator: HomeSimulator, parallel: bool = True, max_workers: int | None = None) -> None",
+    "FleetSimulator": "(*args, **kwargs)",
+    "HomeSimulator": "(*args, **kwargs)",
+    "FleetSimulate": "_CallableGenericAlias",
+    "HomesDone": "_CallableGenericAlias",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": "()",
-    "DispatchDecision": "dataclass[eq, frozen] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0) -> None",
-    "GridChargeContext": "dataclass[eq, frozen] (current_rate: float, peak_rate: float, is_cheap_period: bool, target_soc_fraction: float, max_charge_kw: float, round_trip_efficiency: float, charge_efficiency: float) -> None",
-    "compute_grid_charge_power_kw": "(ctx: GridChargeContext, *, battery_soc_kwh: float, capacity_kwh: float, pv_charge_power_kw: float, timestep_minutes: float) -> float",
+    "DispatchDecision": "dataclass[eq, frozen, match_args] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0, export_kw: float = 0.0) -> None",
+    "GridChargeContext": "dataclass[eq, frozen, match_args] (current_rate: float, peak_rate: float, is_cheap_period: bool, target_soc_kwh: float, max_charge_kw: float, round_trip_efficiency: float, charge_efficiency: float, useful_charge_ceiling_kwh: float | None = None) -> None",
+    "compute_grid_charge_power_kw": "(ctx: GridChargeContext, *, battery_soc_kwh: float, pv_charge_power_kw: float, timestep_minutes: float) -> float",
     "SelfConsumptionStrategy": "()",
-    "TOUOptimizedStrategy": "(peak_hours: list[tuple[int, int]]) -> None",
+    "TOUOptimizedStrategy": "(peak_hours: list[tuple[int, int]] | None = None, *, tariff: TariffConfig | None = None) -> None",
     "PeakShavingStrategy": "(import_limit_kw: float) -> None",
     "DispatchTariffPeriod": "PEAK='peak', OFF_PEAK='off_peak'",
     # --- battery (battery.py) ---
     "Battery": "(config: BatteryConfig, initial_soc_kwh: float | None = None, min_soc_fraction: float | None = None, max_soc_fraction: float | None = None, charge_efficiency: float | None = None, discharge_efficiency: float | None = None) -> None",
-    "BatteryConfig": "dataclass[eq, frozen] (capacity_kwh: float, max_charge_kw: float = 2.5, max_discharge_kw: float = 2.5, name: str = '', dispatch_strategy: DispatchStrategyConfig | None = None, grid_charging: GridChargeConfig | None = None, min_soc_fraction: float = 0.1, max_soc_fraction: float = 0.9, charge_efficiency: float = 0.975, discharge_efficiency: float = 0.975, efficiency: float | None = None, system_age_years: float = 0.0, calendar_fade_rate_per_year: float = 0.02, cycle_fade_per_equivalent_full_cycle: float = 5e-05, soh_floor: float = 0.5, soh: float | None = None) -> None",
+    "BatteryConfig": "dataclass[eq, frozen, match_args] (capacity_kwh: float, max_charge_kw: float = 2.5, max_discharge_kw: float = 2.5, name: str = '', dispatch_strategy: SelfConsumptionStrategyConfig | TOUOptimizedStrategyConfig | PeakShavingStrategyConfig = SelfConsumptionStrategyConfig(strategy_type='self_consumption'), grid_charging: GridChargeConfig | None = None, min_soc_fraction: float = 0.1, max_soc_fraction: float = 0.9, charge_efficiency: float = 0.975, discharge_efficiency: float = 0.975, system_age_years: float = 0.0, calendar_fade_rate_per_year: float = 0.02, cycle_fade_per_equivalent_full_cycle: float = 5e-05, soh_floor: float = 0.5, soh: float | None = None) -> None",
     "compute_soh": "(system_age_years: float, cumulative_throughput_kwh: float, usable_capacity_kwh: float, params: BatteryConfig) -> float",
     # --- flow (flow.py) ---
-    "EnergyFlowResult": "dataclass[eq] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
-    "simulate_timestep": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestep_minutes: float = 1.0, timestamp: datetime | None = None, strategy: DispatchStrategy | None = None, *, tariff: TariffConfig | None = None) -> EnergyFlowResult",
-    "simulate_timestep_tou": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestamp: Timestamp, tariff: TariffConfig, timestep_minutes: float = 1.0) -> EnergyFlowResult",
+    "EnergyFlowResult": "dataclass[eq, frozen, match_args] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0, battery_export: float = 0.0) -> None",
+    "simulate_timestep": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestep_minutes: float, timestamp: datetime | None = None, strategy: DispatchStrategy | None = None, *, tariff: TariffConfig | None = None, useful_charge_ceiling_kwh: float | None = None) -> EnergyFlowResult",
     "validate_energy_balance": "(result: EnergyFlowResult, tolerance: float = 0.001) -> bool",
     "calculate_self_consumption": "(generation: Series, demand: Series) -> Series",
     "calculate_excess_pv": "(generation: Series, demand: Series) -> Series",
     "calculate_shortfall": "(generation: Series, demand: Series) -> Series",
     # --- tariff (tariff.py) ---
-    "TariffConfig": "dataclass[eq, frozen] (periods: tuple[TariffPeriod, ...], name: str = '') -> None",
-    "TariffPeriod": "dataclass[eq, frozen] (start_time: str, end_time: str, rate_per_kwh: float, name: str = '') -> None",
+    "TariffConfig": "dataclass[eq, frozen, match_args] (periods: tuple[TariffPeriod, ...], name: str = '') -> None",
+    "TariffPeriod": "dataclass[eq, frozen, match_args] (start_time: str, end_time: str, rate_per_kwh: float, name: str = '') -> None",
     "calculate_bill": "(energy_kwh: Series, tariff: TariffConfig) -> float",
     "FlatRateTariff": "(rate_per_kwh: float, name: str = '') -> TariffConfig",
     # --- seg (seg.py) ---
-    "SEGTariff": "dataclass[eq, frozen] (name: str, rate_pence_per_kwh: float) -> None",
+    "SEGTariff": "dataclass[eq, frozen, match_args] (name: str, rate_pence_per_kwh: float) -> None",
     "resolve_seg_tariff": "(name: str) -> SEGTariff",
     "calculate_seg_revenue": "(export_kwh: float, tariff: SEGTariff) -> float",
-    "SEG_PRESETS": "dict",
+    "SEG_PRESETS": "dict {'Octopus': SEGTariff, 'British Gas': SEGTariff, 'EDF': SEGTariff, 'E.ON': SEGTariff, 'Scottish Power': SEGTariff, 'OVO': SEGTariff}",
     # --- gridservices (gridservices.py) ---
-    "GridServicesRateBand": "dataclass[eq, frozen] (availability_gbp_per_kw_per_event: float, utilisation_gbp_per_mwh: float, provenance: str = '') -> None",
-    "GridServicesRateBands": "dataclass[eq, frozen] (low: GridServicesRateBand, central: GridServicesRateBand, high: GridServicesRateBand) -> None",
-    "resolve_grid_services_rate_band": "(band: str) -> GridServicesRateBand",
-    "EventWindow": "dataclass[eq, frozen] (months: tuple[int, ...], weekdays: tuple[int, ...], hours: tuple[int, ...], events_per_year: int, event_hours: float) -> None",
-    "GridServicesEventsConfig": "dataclass[eq, frozen] (band: str = 'central', event_windows: tuple[EventWindow, ...] = (EventWindow(months=(11, 12, 1, 2), weekdays=(0, 1, 2, 3, 4), hours=(16, 17, 18), events_per_year=12, event_hours=3.0),), aggregator_share: float = 0.25, utilisation_factor: float = 0.6, availability_gbp_per_kw_per_event: float | None = None, utilisation_gbp_per_mwh: float | None = None) -> None",
-    "GridServicesAtEvents": "dataclass[eq, frozen] (annual_income_gbp: float, per_window_avail_kw: tuple[float, ...], per_window_income_gbp: tuple[float, ...]) -> None",
-    "compute_fleet_spare_capacity_kw": "(fleet_results: FleetResults, windows: tuple[EventWindow, ...]) -> tuple[float, ...]",
+    "GridServicesRateBand": "dataclass[eq, frozen, match_args] (availability_gbp_per_kw_per_event: float, utilisation_gbp_per_mwh: float, provenance: str = '', flat_gbp_per_kw_per_year: float = 0.0) -> None",
+    "GridServicesRateBands": "dataclass[eq, frozen, match_args] (low: GridServicesRateBand, central: GridServicesRateBand, high: GridServicesRateBand) -> None",
+    "resolve_grid_services_rate_band": "(band: GridServicesBand) -> GridServicesRateBand",
+    "EventWindow": "dataclass[eq, frozen, match_args] (months: tuple[int, ...], weekdays: tuple[int, ...], hours: tuple[int, ...], events_per_year: int, event_hours: float) -> None",
+    "GridServicesEventsConfig": "dataclass[eq, frozen, match_args] (band: GridServicesBand = <GridServicesBand.CENTRAL: 'central'>, event_windows: tuple[EventWindow, ...] = (EventWindow(months=(11, 12, 1, 2), weekdays=(0, 1, 2, 3, 4), hours=(16, 17, 18), events_per_year=12, event_hours=3.0),), aggregator_share: float = 0.25, utilisation_factor: float = 0.6, availability_gbp_per_kw_per_event: float | None = None, utilisation_gbp_per_mwh: float | None = None, delivery_baseline: str = 'operational') -> None",
+    "GridServicesAtEvents": "dataclass[eq, frozen, match_args] (annual_income_gbp: float, per_window_avail_kw: tuple[float, ...], per_window_income_gbp: tuple[float, ...], per_window_avail_p50_kw: tuple[float, ...], per_window_avail_p90_kw: tuple[float, ...], per_window_displaced_self_use_kwh_per_event: tuple[float, ...], per_window_displaced_import_gbp_per_year: tuple[float, ...]) -> None",
+    "compute_fleet_spare_capacity_kw": "(fleet_results: FleetResults, windows: tuple[EventWindow, ...], delivery_baseline: str = 'operational') -> tuple[float, ...]",
     "compute_grid_services_at_events": "(fleet_results: FleetResults, cfg: GridServicesEventsConfig) -> GridServicesAtEvents",
     "GRID_SERVICES_RATE_BANDS": "GridServicesRateBands",
-    "DEFAULT_EVENT_WINDOWS": "tuple",
+    "GridServicesBand": "LOW='low', CENTRAL='central', HIGH='high'",
+    "NoGridServices": "dataclass[eq, frozen] () -> None",
+    "FlatGridServices": "dataclass[eq, frozen, match_args] (income_per_kw_per_year_gbp: float) -> None",
+    "DEFAULT_EVENT_WINDOWS": "tuple [EventWindow]",
     # --- community (community.py) ---
-    "CommunityConfig": "dataclass[eq, frozen] (sharing_mode: Literal['p2p', 'community_battery'], community_battery: Optional[BatteryConfig] = None, billing: Optional[CommunityBillingConfig] = None) -> None",
-    "CommunityBillingConfig": "dataclass[eq, frozen] (tariff: Optional[TariffConfig] = None, seg_rate_pence_per_kwh: Optional[float] = None) -> None",
-    "CommunityResults": "dataclass[eq] (grid_import: pd.Series, grid_export: pd.Series, battery_charge: pd.Series, battery_discharge: pd.Series, battery_soc: pd.Series, fleet_results: 'FleetResults', sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: Optional[float] = None, community_net_cost_gbp: Optional[float] = None, community_savings_gbp: Optional[float] = None) -> None",
-    "simulate_community": "(fleet_results: 'FleetResults', config: CommunityConfig, *, validate_balance: bool = True) -> CommunityResults",
-    "validate_community_balance": "(fleet_results: 'FleetResults', community_results: CommunityResults, tolerance: float = 0.001) -> bool",
+    "CommunityConfig": "dataclass[eq, frozen] (*, community_battery: BatteryConfig | None = None, billing: CommunityBillingConfig | None = None) -> None",
+    "CommunityBillingConfig": "dataclass[eq, frozen, match_args] (tariff: TariffConfig | None = None, seg_rate_pence_per_kwh: float | None = None) -> None",
+    "CommunityResults": "dataclass[eq, frozen, match_args] (grid_import: Series, grid_export: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, fleet_results: FleetResults, sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: float | None = None, community_net_cost_gbp: float | None = None, community_savings_gbp: float | None = None) -> None",
+    "simulate_community": "(fleet_results: FleetResults, config: CommunityConfig, *, validate_balance: bool = True) -> CommunityResults",
+    "validate_community_balance": "(fleet_results: FleetResults, community_results: CommunityResults, tolerance: float = 0.001) -> bool",
     # --- pv (pv.py) ---
-    "PVConfig": "dataclass[eq, frozen] (capacity_kw: float, azimuth: float = 180.0, tilt: float = 35.0, name: str = '', module_efficiency: float = 0.2, temperature_coefficient: float = -0.004, custom_module_params: dict[str, float] | None = None, inverter_efficiency: float = 0.96, inverter_capacity_kw: float | None = None, custom_inverter_params: dict[str, float] | None = None, system_age_years: float = 0.0, degradation_rate_per_year: float = 0.005, system_losses: float = 0.14075660688264469) -> None",
+    "PVConfig": "dataclass[eq, frozen, match_args] (capacity_kw: float, azimuth: float = 180.0, tilt: float = 35.0, name: str = '', module_efficiency: float | None = None, temperature_coefficient: float | None = None, custom_module_params: dict[str, float] | None = None, inverter_efficiency: float = 0.96, inverter_capacity_kw: float | None = None, custom_inverter_params: dict[str, float] | None = None, system_age_years: float = 0.0, degradation_rate_per_year: float = 0.005, system_losses: float = 0.14075660688264469) -> None",
     "simulate_pv_output": "(config: PVConfig, location: Location, weather_data: DataFrame) -> Series",
     "create_model_chain": "(config: PVConfig, location: Location) -> ModelChain",
     "create_pv_system": "(config: PVConfig) -> PVSystem",
-    "apply_degradation": "(generation: Series, system_age_years: float, degradation_rate_per_year: float = 0.005) -> Series",
     "calculate_degradation_factor": "(system_age_years: float, degradation_rate_per_year: float = 0.005) -> float",
     "interpolate_to_minute_resolution": "(hourly_power: Series) -> Series",
     # --- weather (weather.py) ---
-    "get_tmy_data": "(location: Location, use_cache: bool = True) -> DataFrame",
     "WeatherCache": "(cache_dir: Path | None = None) -> None",
-    "get_weather_cache": "() -> WeatherCache",
-    "set_weather_cache": "(cache: WeatherCache | None) -> None",
+    "WeatherProvider": "(*args, **kwargs)",
+    "PvgisTmy": "dataclass[eq, frozen, match_args] (cache: WeatherCache | None) -> None",
+    "PrefetchedWeather": "dataclass[frozen, match_args] (frames: Mapping[Location, DataFrame]) -> None",
     # --- load (load.py) ---
-    "LoadConfig": "dataclass[eq, frozen] (annual_consumption_kwh: float | None = None, household_occupants: int = 3, name: str = '', use_stochastic: bool = True, seed: int | None = None) -> None",
-    "OFGEM_TDCV_BY_OCCUPANTS": "dict",
-    "ELEXON_PROFILE_CLASS_1": "list",
-    "SEASONAL_FACTORS": "dict",
+    "LoadConfig": "dataclass[eq, frozen, match_args] (annual_consumption_kwh: float | None = None, household_occupants: int = 3, name: str = '', use_stochastic: bool = True, seed: int | None = None) -> None",
+    "OFGEM_TDCV_BY_OCCUPANTS": "dict {1: float, 2: float, 3: float, 4: float, 5: float}",
+    "ELEXON_PROFILE_CLASS_1": "list [float × 48]",
+    "SEASONAL_FACTORS": "dict {1: float, 2: float, 3: float, 4: float, 5: float, 6: float, 7: float, 8: float, 9: float, 10: float, 11: float, 12: float}",
     # --- location (location.py) ---
-    "Location": "dataclass[eq, frozen] (latitude: float, longitude: float, timezone: str = 'Europe/London', altitude: float = 0.0, name: str = '') -> None",
+    "Location": "dataclass[eq, frozen, match_args] (latitude: float, longitude: float, timezone: str = 'Europe/London', altitude: float = 0.0, name: str = '') -> None",
+    # --- errors (errors.py) ---
+    "ConfigurationError": "(*args: object) -> None",
 }
 
 FROZEN_SET: frozenset[str] = frozenset(FROZEN_SURFACE)
 
 
 def test_all_equals_frozen_set() -> None:
-    """H2 surface-lock: solar_challenge.__all__ must equal FROZEN_SET exactly.
+    """__all__ lists exactly FROZEN_SURFACE's names; the message names each name only one of them lists.
 
-    Fails on any add/remove to __all__ without updating FROZEN_SET.
-    The symmetric-difference message names the exact drifted symbol(s).
-
-    Also asserts len==69 explicitly — a bare set-compare would silently pass
-    if __all__ contained a duplicate entry (set collapses duplicates).
+    A set comparison needs no count, because importing the package refuses a name
+    __all__ lists twice (test_importing_the_package_refuses_tables_that_disagree).
     """
     actual = set(solar_challenge.__all__)
     diff = actual.symmetric_difference(FROZEN_SET)
@@ -169,84 +180,52 @@ def test_all_equals_frozen_set() -> None:
         f"__all__ has drifted from FROZEN_SET.  "
         f"Symmetric difference: {sorted(diff)}"
     )
-    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 69, (
-        f"Length mismatch: __all__ has {len(solar_challenge.__all__)} names, "
-        f"FROZEN_SET has {len(FROZEN_SET)} (expected 69 each)"
-    )
-    # Document the CLI-excluded invariant explicitly
-    assert "get_cli_app" not in solar_challenge.__all__, (
-        "get_cli_app must remain excluded from __all__ (shipped but unfrozen CLI)"
+
+
+def test_all_has_no_cli_names() -> None:
+    """No name of __all__ is get_cli_app or starts with cli or web: the CLI and the web app ship unfrozen."""
+    cli_names = [
+        name
+        for name in solar_challenge.__all__
+        if name == "get_cli_app" or name.startswith(("cli", "web"))
+    ]
+    assert not cli_names, (
+        f"__all__ lists names of the CLI or the web app, which ship unfrozen: {cli_names}"
     )
 
 
 # ---------------------------------------------------------------------------
-# H2 signature: every exported name keeps the surface form FROZEN_SURFACE pins.
+# Every exported name keeps the surface form FROZEN_SURFACE pins
 # ---------------------------------------------------------------------------
-
-
-def _drift_message(
-    table: str, frozen: Mapping[str, str], drifted: Mapping[str, str]
-) -> str:
-    """Name each path of *drifted*, a map of path to current form, with its frozen and current forms.
-
-    *frozen* holds the forms of the table named *table*, keyed by the same paths.
-    """
-    symbols = "".join(
-        f"\n  solar_challenge.{path}"
-        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
-        f"\n    current: {current}"
-        for path, current in drifted.items()
-    )
-    return (
-        f"Surface forms differ from {table}:{symbols}\n"
-        "Every change to the frozen public API (review/briefing.yaml), an addition "
-        "included, needs an 'Unreleased on main' release note in the 'Tag / release "
-        "convention' section of docs/domain-library-consumption.md, landed in the same "
-        f"commit as the {table} edit."
-    )
-
-
-def _drifted(
-    frozen: Mapping[str, str], current: Mapping[str, str], *, absent: str
-) -> dict[str, str]:
-    """Map each path whose current form is not its frozen one to its current form.
-
-    *current*'s paths come first, in its order, then each frozen path *current* lacks,
-    whose current form reads *absent*.
-    """
-    missing = [path for path in frozen if path not in current]
-    return {
-        path: current.get(path, absent)
-        for path in [*current, *missing]
-        if current.get(path) != frozen.get(path)
-    }
 
 
 def test_every_exported_signature_matches_frozen_surface() -> None:
-    """H2 signature-lock: every name in __all__ has the surface form FROZEN_SURFACE pins.
+    """Every name in __all__ has the surface form FROZEN_SURFACE pins.
 
-    Fails once, naming each drifted symbol with its frozen and current forms.  A name
-    absent from FROZEN_SURFACE counts as drifted, so its current form is printed ready to
-    paste; a name missing from __all__ is test_all_equals_frozen_set's to report.
+    Fails once, naming each drifted symbol with its frozen and current forms, labelled
+    additive or breaking.  A name absent from FROZEN_SURFACE counts as drifted, additive,
+    so its current form is printed ready to paste; a pinned name __all__ lacks is listed
+    last, breaking, its current form reading (not in __all__).
     """
     current_forms = {
         name: surface_form(getattr(solar_challenge, name))
         for name in solar_challenge.__all__
     }
-    drifted = {
-        name: form
-        for name, form in current_forms.items()
-        if form != FROZEN_SURFACE.get(name)
-    }
+    drifted = _drifted(
+        FROZEN_SURFACE,
+        current_forms,
+        absent="(not in __all__)",
+        is_additive=lambda name, row: is_additive_change(row, getattr(solar_challenge, name)),
+    )
     assert not drifted, _drift_message("FROZEN_SURFACE", FROZEN_SURFACE, drifted)
 
 
 # ---------------------------------------------------------------------------
-# H2 closure: the classes outside __all__ that the frozen surface names, directly
-# or through another such class, each with its frozen surface form
+# The classes outside __all__ that the frozen surface names, directly or
+# through another such class, each with its frozen surface form
 #
 # A consumer needs them to use exported names: a ScenarioConfig is built from a
-# SimulationPeriod and HomeConfigs, and FleetResults.per_home_results holds
+# SimulationWindow and HomeConfigs, and FleetResults.per_home_results holds
 # SimulationResults.  Each key is the path below solar_challenge of the module
 # that defines the class, then its qualified name, e.g. 'home.HomeConfig', in
 # path order; each value is the class's surface_form, on one line.
@@ -254,15 +233,21 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 # __all__.
 # ---------------------------------------------------------------------------
 FROZEN_CLOSURE: dict[str, str] = {
-    "config.DispatchStrategyConfig": "dataclass[eq] (strategy_type: str, peak_hours: list[tuple[int, int]] | None = None, import_limit_kw: float | None = None) -> None",
-    "config.GridChargeConfig": "dataclass[eq, frozen] (target_soc_fraction: float = 0.9) -> None",
-    "config.OutputConfig": "dataclass[eq] (csv_path: str | None = None, include_minute_data: bool = True, include_summary: bool = True, aggregation: str = 'minute') -> None",
-    "config.SimulationPeriod": "dataclass[eq] (start_date: str | Timestamp, end_date: str | Timestamp) -> None",
-    "ev.EVConfig": "dataclass[eq, frozen] (charger_type: str, arrival_hour: int, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: str = 'none', name: str = '') -> None",
-    "heat_pump.HeatPumpConfig": "dataclass[eq, frozen] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
-    "home.HomeConfig": "dataclass[eq, frozen] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, dispatch_strategy: str = 'greedy', seg_tariff: SEGTariff | None = None) -> None",
-    "home.SimulationResults": "dataclass[eq, frozen] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', heat_pump_load: Series | None = None, grid_charge_cost: Series | None = None, grid_charge: Series | None = None) -> None",
-    "timebase.SimulationWindow": "dataclass[eq, frozen] (first_day: date, last_day: date, cadence: timedelta, timezone: str | None = None) -> None",
+    "battery.SocEnvelope": "dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float) -> None",
+    "demand.LoadKind": "HOUSEHOLD='household', HEAT_PUMP='heat_pump', EV='ev'",
+    "dispatch.GridChargeConfig": "dataclass[eq, frozen, match_args] (target_soc_fraction: float = 0.9, forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] = 'pv_blind') -> None",
+    "dispatch.PeakShavingStrategyConfig": "dataclass[eq, frozen, match_args] (import_limit_kw: float) -> None",
+    "dispatch.SelfConsumptionStrategyConfig": "dataclass[eq, frozen] () -> None",
+    "dispatch.TOUOptimizedStrategyConfig": "dataclass[eq, frozen, match_args] (peak_hours: tuple[tuple[int, int], ...] | None = None) -> None",
+    "ev.EVChargerType": "SLOW='3.6kW', FAST='7kW', RAPID='22kW'",
+    "ev.EVConfig": "dataclass[eq, frozen, match_args] (charger_type: EVChargerType, arrival_hour: int = 18, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: SmartChargingMode = <SmartChargingMode.NONE: 'none'>, name: str = '') -> None",
+    "ev.SmartChargingMode": "NONE='none', SOLAR='solar', OFF_PEAK='off_peak'",
+    "heat_pump.HeatPumpConfig": "dataclass[eq, frozen, match_args] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
+    "home.HomeConfig": "dataclass[eq, frozen, match_args] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, seg_tariff: SEGTariff | None = None) -> None",
+    "home.RunPricing": "dataclass[eq, frozen, match_args] (import_tariff_mean_rate_gbp_per_kwh: float | None, seg_rate_pence_per_kwh: float | None) -> None",
+    "home.SimulationResults": "dataclass[eq, frozen, match_args] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', grid_charge_cost: Series | None = None, grid_charge: Series | None = None, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None, additional_loads: Mapping[LoadKind, Series] = <factory>, battery_export: Series | None = None) -> None",
+    "timebase.LocalDay": "dataclass[frozen, match_args] (date: date, rows: DatetimeIndex) -> None",
+    "timebase.SimulationWindow": "dataclass[eq, frozen, match_args] (first_day: date, last_day: date, cadence: timedelta, timezone: str | None = None) -> None",
 }
 
 _SUBMODULE_PREFIX = f"{solar_challenge.__name__}."
@@ -274,7 +259,8 @@ def _closure_classes() -> Mapping[str, type]:
 
     They are the signature_closure, within solar_challenge, of every object in __all__.
     The modules it reads are fixed for the run, so it is computed once and handed out
-    read-only.
+    read-only; the drift report's tests make their scratch edits through scratch_edit,
+    which computes it first.
     """
     exported = [getattr(solar_challenge, name) for name in solar_challenge.__all__]
     by_path = {
@@ -285,22 +271,26 @@ def _closure_classes() -> Mapping[str, type]:
 
 
 def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
-    """H2 closure-lock: each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
+    """Each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
 
-    Fails once, naming each drifted class with its frozen and current forms, in path
-    order.  A class a pinned form newly names counts as drifted, so its current form is
-    printed ready to paste; a pinned class no form names any longer is listed last, its
-    current form reading (not named by the frozen surface).
+    Fails once, naming each drifted class with its frozen and current forms, labelled
+    additive or breaking, in path order.  A class a pinned form newly names counts as
+    drifted, additive, so its current form is printed ready to paste; a pinned class no
+    form names any longer is listed last, breaking, its current form reading (not named
+    by the frozen surface).
     """
     current = {path: surface_form(cls) for path, cls in _closure_classes().items()}
     drifted = _drifted(
-        FROZEN_CLOSURE, current, absent="(not named by the frozen surface)"
+        FROZEN_CLOSURE,
+        current,
+        absent="(not named by the frozen surface)",
+        is_additive=lambda path, row: is_additive_change(row, _closure_classes()[path]),
     )
     assert not drifted, _drift_message("FROZEN_CLOSURE", FROZEN_CLOSURE, drifted)
 
 
 # ---------------------------------------------------------------------------
-# H2 members: each pinned class's public members, with their frozen forms
+# Each pinned class's public members, with their frozen forms
 #
 # A pinned class is an exported class or a FROZEN_CLOSURE class.  Keys are the
 # pinned classes' paths below solar_challenge, then member names: exported
@@ -313,13 +303,25 @@ def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
 # ---------------------------------------------------------------------------
 FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     # --- signature-closure types ---
+    "SummaryStatistics": {
+        "simulation_days": "property (self) -> int",
+        "total_pv_charge_kwh": "property (self) -> float",
+        "total_direct_self_consumption_kwh": "property (self) -> float",
+        "total_grid_to_demand_kwh": "property (self) -> float",
+        "load_share": "(self, kind: LoadKind) -> float",
+    },
     "ScenarioConfig": {
         "is_fleet": "property (self) -> bool",
         "get_location": "(self) -> Location",
+        "simulated_homes": "(self) -> tuple[HomeConfig, ...]",
+        "map_homes": "(self, transform: Callable[[HomeConfig], HomeConfig]) -> ScenarioConfig",
+        "window": "(self) -> SimulationWindow",
+        "with_window": "(self, *, first_day: date | None = None, last_day: date | None = None) -> ScenarioConfig",
+        "simulation_bounds": "(self) -> tuple[Timestamp, Timestamp]",
     },
     "FleetConfig": {
-        "create_uniform": "classmethod (cls, n_homes: int, pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '') -> FleetConfig",
-        "create_heterogeneous": "classmethod (cls, pv_capacities_kw: list[float], battery_capacities_kwh: list[float | None], annual_consumptions_kwh: list[float], location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '') -> FleetConfig",
+        "create_uniform": "classmethod (cls, n_homes: int, pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', *, seed: int | None = None) -> FleetConfig",
+        "create_heterogeneous": "classmethod (cls, pv_capacities_kw: list[float], battery_capacities_kwh: list[float | None], annual_consumptions_kwh: list[float], location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', *, seed: int | None = None) -> FleetConfig",
     },
     "FleetResults": {
         "get_aggregate_series": "(self, series_name: str) -> Series",
@@ -330,66 +332,106 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "total_self_consumption": "property (self) -> Series",
         "to_aggregate_dataframe": "(self) -> DataFrame",
     },
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner": {
+        "simulate": "(self, fleet: FleetConfig, start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> FleetResults",
+        "simulate_each": "(self, fleets: Sequence[FleetConfig], start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> Iterator[tuple[int, FleetResults]]",
+        "simulate_home": "(self, home: HomeConfig, start_date: Timestamp, end_date: Timestamp) -> SimulationResults",
+    },
+    "FleetSimulator": {
+        "simulate": "(self, fleet: FleetConfig, start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> FleetResults",
+        "simulate_each": "(self, fleets: Sequence[FleetConfig], start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> Iterator[tuple[int, FleetResults]]",
+        "simulate_home": "(self, home: HomeConfig, start_date: Timestamp, end_date: Timestamp) -> SimulationResults",
+    },
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": {
         "name": "abstract property (self) -> str",
-        "decide_action": "abstract (self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "charges_from_the_grid": "property (self) -> bool",
+        "decide_action": "abstract (self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "SelfConsumptionStrategy": {
         "name": "property (self) -> str",
-        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "charges_from_the_grid": "property (self) -> bool",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "TOUOptimizedStrategy": {
         "name": "property (self) -> str",
-        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "charges_from_the_grid": "property (self) -> bool",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "PeakShavingStrategy": {
         "name": "property (self) -> str",
-        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "charges_from_the_grid": "property (self) -> bool",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     # --- battery (battery.py) ---
     "Battery": {
-        "config": "attribute BatteryConfig",
+        "config": "property[settable] (self) -> BatteryConfig",
         "min_soc_fraction": "property[settable] (self) -> float",
         "max_soc_fraction": "property[settable] (self) -> float",
         "charge_efficiency": "property[settable] (self) -> float",
         "discharge_efficiency": "property[settable] (self) -> float",
         "soh": "property (self) -> float",
+        "soc_envelope": "property (self) -> SocEnvelope",
         "effective_capacity_kwh": "property (self) -> float",
         "soc_kwh": "property (self) -> float",
         "soc_fraction": "property (self) -> float",
         "min_soc_kwh": "property (self) -> float",
         "max_soc_kwh": "property (self) -> float",
+        "grid_charge_target_kwh": "property (self) -> float | None",
         "usable_capacity_kwh": "property (self) -> float",
         "available_charge_capacity_kwh": "property (self) -> float",
         "available_discharge_capacity_kwh": "property (self) -> float",
+        "max_charge_kw": "property (self) -> float",
+        "max_discharge_kw": "property (self) -> float",
         "charge": "(self, power_kw: float, duration_minutes: float) -> float",
         "discharge": "(self, power_kw: float, duration_minutes: float) -> float",
     },
     "BatteryConfig": {
         "nominal_usable_capacity_kwh": "property (self) -> float",
+        "resolved_soh": "property (self) -> float",
+        "soc_envelope": "(self) -> SocEnvelope",
+        "with_round_trip": "(self, round_trip_efficiency: float) -> BatteryConfig",
         "default_5kwh": "classmethod (cls) -> BatteryConfig",
     },
     # --- tariff (tariff.py) ---
     "TariffConfig": {
         "peak_rate": "cached_property (self) -> float",
-        "mean_period_rate": "cached_property (self) -> float",
-        "get_rate": "(self, timestamp: Timestamp) -> float",
+        "cheap_minutes_of_day": "cached_property (self) -> frozenset[int]",
+        "get_rate": "(self, timestamp: datetime) -> float",
+        "rates_for": "(self, index: DatetimeIndex) -> ndarray",
+        "is_cheap_at": "(self, timestamp: datetime) -> bool",
         "flat_rate": "classmethod (cls, rate_per_kwh: float, name: str = '') -> TariffConfig",
-        "economy_7": "classmethod (cls, off_peak_rate: float = 0.09, peak_rate: float = 0.25, off_peak_start: str = '00:30', off_peak_end: str = '07:30') -> TariffConfig",
-        "economy_10": "classmethod (cls, off_peak_rate: float = 0.08, peak_rate: float = 0.27, night_start: str = '00:00', night_end: str = '05:00', afternoon_start: str = '13:00', afternoon_end: str = '16:00', evening_start: str = '20:00', evening_end: str = '22:00') -> TariffConfig",
+        "economy_7": "classmethod (cls, off_peak_rate: float = 0.13, peak_rate: float = 0.35, off_peak_start: str = '00:30', off_peak_end: str = '07:30') -> TariffConfig",
+        "economy_10": "classmethod (cls, off_peak_rate: float = 0.13, peak_rate: float = 0.35, night_start: str = '00:00', night_end: str = '05:00', afternoon_start: str = '13:00', afternoon_end: str = '16:00', evening_start: str = '20:00', evening_end: str = '22:00') -> TariffConfig",
     },
     "TariffPeriod": {
         "get_start_time": "(self) -> time",
         "get_end_time": "(self) -> time",
-        "matches_time": "(self, timestamp: Timestamp) -> bool",
+        "matches_time": "(self, timestamp: datetime) -> bool",
     },
     # --- gridservices (gridservices.py) ---
     "GridServicesRateBands": {
-        "resolve": "(self, band: str) -> GridServicesRateBand",
+        "resolve": "(self, band: GridServicesBand) -> GridServicesRateBand",
     },
     "EventWindow": {
         "mask": "(self, index: DatetimeIndex) -> Series",
+    },
+    "GridServicesEventsConfig": {
+        "annual_income_gbp": "(self, fleet_results: FleetResults) -> float",
+    },
+    "GridServicesBand": {
+        "parse": "classmethod (cls, value: object, *, what: str) -> GridServicesBand",
+    },
+    "NoGridServices": {
+        "annual_income_gbp": "(self, fleet_results: FleetResults) -> float",
+    },
+    "FlatGridServices": {
+        "annual_income_gbp": "(self, fleet_results: FleetResults) -> float",
+    },
+    # --- community (community.py) ---
+    "CommunityConfig": {
+        "sharing_mode": "property (self) -> Literal['p2p', 'community_battery']",
     },
     # --- pv (pv.py) ---
     "PVConfig": {
@@ -404,6 +446,16 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "clear": "(self) -> int",
         "invalidate": "(self, prefix: str, location: Location, start_date: Timestamp | None = None, end_date: Timestamp | None = None) -> bool",
     },
+    "WeatherProvider": {
+        "get": "(self, location: Location) -> DataFrame",
+    },
+    "PvgisTmy": {
+        "get": "(self, location: Location) -> DataFrame",
+    },
+    "PrefetchedWeather": {
+        "get": "(self, location: Location) -> DataFrame",
+        "fetch": "classmethod (cls, weather: WeatherProvider, locations: Iterable[Location]) -> PrefetchedWeather",
+    },
     # --- load (load.py) ---
     "LoadConfig": {
         "get_annual_consumption": "(self) -> float",
@@ -415,25 +467,55 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "BRISTOL_ALT": "float",
         "bristol": "classmethod (cls) -> Location",
     },
+    # --- errors (errors.py) ---
+    "ConfigurationError": {
+        "must_be": "classmethod (cls, field: str, requirement: str, *, got: object) -> typing.Self",
+    },
     # --- classes outside __all__ (FROZEN_CLOSURE) ---
-    "config.SimulationPeriod": {
-        "get_start_timestamp": "(self, timezone: str = 'Europe/London') -> Timestamp",
-        "get_end_timestamp": "(self, timezone: str = 'Europe/London') -> Timestamp",
+    "battery.SocEnvelope": {
+        "target_kwh": "(self, fraction: float) -> float",
+    },
+    "dispatch.PeakShavingStrategyConfig": {
+        "strategy_type": "attribute Literal['peak_shaving']",
+    },
+    "dispatch.SelfConsumptionStrategyConfig": {
+        "strategy_type": "attribute Literal['self_consumption']",
+    },
+    "dispatch.TOUOptimizedStrategyConfig": {
+        "strategy_type": "attribute Literal['tou_optimized']",
+    },
+    "demand.LoadKind": {
+        "column": "property (self) -> str",
+        "energy_column": "property (self) -> str",
+        "label": "property (self) -> str",
+        "parse": "classmethod (cls, value: object) -> LoadKind",
+    },
+    "ev.EVChargerType": {
+        "parse": "classmethod (cls, value: object, *, field: str) -> EVChargerType",
+        "power_kw": "property (self) -> float",
     },
     "ev.EVConfig": {
         "get_charger_power_kw": "(self) -> float",
         "get_available_charging_hours": "(self) -> float",
+    },
+    "ev.SmartChargingMode": {
+        "parse": "classmethod (cls, value: object, *, field: str) -> SmartChargingMode",
     },
     "heat_pump.HeatPumpConfig": {
         "default_ashp": "classmethod (cls) -> HeatPumpConfig",
         "default_gshp": "classmethod (cls) -> HeatPumpConfig",
     },
     "home.SimulationResults": {
+        "loads": "property (self) -> Mapping[LoadKind, Series]",
         "window": "property (self) -> SimulationWindow",
-        "per_minute_amounts": "(self) -> DataFrame",
+        "per_step_amounts": "(self) -> DataFrame",
         "total_amounts": "(self) -> dict[str, float]",
         "to_dataframe": "(self) -> DataFrame",
-        "from_dataframe": "classmethod (cls, frame: DataFrame, *, strategy_name: str) -> SimulationResults",
+        "from_dataframe": "classmethod (cls, frame: DataFrame, *, strategy_name: str, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> SimulationResults",
+    },
+    "timebase.LocalDay": {
+        "minute_of_day": "(self) -> ndarray",
+        "instant": "(self, minute_of_day: int) -> Timestamp",
     },
     "timebase.SimulationWindow": {
         "of_index": "classmethod (cls, index: Index) -> SimulationWindow",
@@ -445,6 +527,8 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "step_minutes": "property (self) -> float",
         "row_energy_kwh": "(self, power_kw: Series) -> Series",
         "energy_kwh": "(self, power_kw: Series) -> float",
+        "rows": "(self) -> DatetimeIndex",
+        "local_days": "(self) -> Iterator[LocalDay]",
     },
 }
 
@@ -460,38 +544,80 @@ def _pinned_classes() -> dict[str, type]:
     return {**_exported_classes(), **_closure_classes()}
 
 
-def _forms_by_member_path(
-    forms_by_class: Mapping[str, Mapping[str, str]],
-) -> dict[str, str]:
-    """Flatten *forms_by_class*, keyed by class path, to {"path.member": form}, a path built for display and comparison, never split."""
+_Held = typing.TypeVar("_Held")
+
+
+def _by_member_path(by_class: Mapping[str, Mapping[str, _Held]]) -> dict[str, _Held]:
+    """Flatten *by_class*, keyed by class path then member name, to {"path.member": held}, a path built for display and comparison, never split."""
     return {
-        f"{class_path}.{member}": form
-        for class_path, forms in forms_by_class.items()
-        for member, form in forms.items()
+        f"{class_path}.{member}": held
+        for class_path, by_member in by_class.items()
+        for member, held in by_member.items()
     }
 
 
 def test_every_pinned_class_member_matches_frozen_members() -> None:
-    """H2 member-lock: every pinned class's public members have the forms FROZEN_MEMBERS pins.
+    """Every pinned class's public members have the forms FROZEN_MEMBERS pins.
 
     Fails once, naming each added, changed or removed member with its frozen and current
-    forms, in pinned-class order and, within a class, the order member_forms lists its
-    members, removed members last.  An added member's current form is printed ready to
-    paste; a removed member's current form reads (removed).
+    forms, labelled additive or breaking, in pinned-class order and, within a class, the
+    order member_forms lists its members, removed members last.  An added member is
+    additive, its current form printed ready to paste; a removed member is breaking, its
+    current form reading (removed).
     """
-    frozen = _forms_by_member_path(FROZEN_MEMBERS)
-    current = _forms_by_member_path(
-        {path: member_forms(cls) for path, cls in _pinned_classes().items()}
+    pinned = _pinned_classes()
+    forms_by_class = {path: member_forms(cls) for path, cls in pinned.items()}
+    members = _by_member_path(
+        {path: {name: (pinned[path], name) for name in forms} for path, forms in forms_by_class.items()}
     )
-    drifted = _drifted(frozen, current, absent="(removed)")
+    frozen = _by_member_path(FROZEN_MEMBERS)
+    drifted = _drifted(
+        frozen,
+        _by_member_path(forms_by_class),
+        absent="(removed)",
+        is_additive=lambda path, row: is_additive_member_change(row, *members[path]),
+    )
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
 
 
-_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum)
+# ---------------------------------------------------------------------------
+# The __call__ each pinned class's own body defines, with its frozen form
+#
+# A consumer implements a callable Protocol such as HomeSimulator by its
+# __call__, which neither lock above spells: surface_form spells the Protocol
+# '(*args, **kwargs)', and member_forms skips dunders.  Keys are pinned-class
+# paths, in _pinned_classes order; each value is the __call__'s surface_form,
+# on one line.
+# ---------------------------------------------------------------------------
+FROZEN_CALLS: dict[str, str] = {
+    "HomeSimulator": "(self, config: HomeConfig, start_date: Timestamp, end_date: Timestamp, *, weather: WeatherProvider) -> SimulationResults",
+}
+
+
+def test_every_pinned_class_call_matches_frozen_calls() -> None:
+    """Every pinned class whose own body defines __call__ has the form FROZEN_CALLS pins for it.
+
+    Fails once, naming each drifted class path with its frozen and current __call__
+    forms, labelled additive or breaking; a pinned path whose class no longer defines a
+    __call__ of its own is listed last, breaking.
+    """
+    calls = {path: vars(cls)["__call__"] for path, cls in _pinned_classes().items() if "__call__" in vars(cls)}
+    drifted = _drifted(
+        FROZEN_CALLS,
+        {path: surface_form(call) for path, call in calls.items()},
+        absent="(no __call__ of its own)",
+        is_additive=lambda path, row: is_additive_change(row, calls[path]),
+    )
+    assert not drifted, _drift_message("FROZEN_CALLS", FROZEN_CALLS, drifted)
+
+
+_STDLIB_BASES: tuple[type, ...] = (
+    object, abc.ABC, enum.Enum, enum.ReprEnum, enum.StrEnum, str, typing.Protocol, typing.Generic, BaseException, Exception, ValueError
+)
 
 
 def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
-    """H2 member-lock guard: a pinned class's bases are pinned classes or _STDLIB_BASES.
+    """A pinned class's bases are pinned classes or _STDLIB_BASES.
 
     FROZEN_MEMBERS pins a member under the pinned class whose own body defines it.
     """
@@ -512,57 +638,508 @@ def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# The writes to self under a computed name that a reviewer has checked
+#
+# undeclared_attributes and unset_attributes cannot tell which names a write to
+# self under a computed name sets, so they refuse one unless it is reviewed
+# here.  Keys are pinned-class paths, then each write's text exactly as their
+# TypeError prints it, ready to paste; each value is the reviewed reason that
+# every name the write sets is declared.  A new such write, in a new pinned
+# class or an old one, trips the lock until someone reviews it.  An entry its
+# class no longer makes raises ValueError, so drop the entry then.
+# ---------------------------------------------------------------------------
+REVIEWED_COMPUTED_NAME_WRITES: dict[str, dict[str, str]] = {
+    "home.SimulationResults": {
+        "object.__setattr__(self, name, series.rename(column))": "__post_init__ draws name from _series_columns(), which reads dataclasses.fields, so each name is a declared field by construction",
+    },
+}
+
+
 def test_pinned_classes_declare_the_public_attributes_they_set_on_self() -> None:
-    """H2 member-lock guard: a pinned class declares in a class body each public attribute it sets on self, and sets each one its body only declares.
+    """A pinned class declares in a class body each public attribute its __init__ or __post_init__ sets on self, and sets there each one its body only declares.
 
     member_forms reads class bodies, so FROZEN_MEMBERS pins an instance attribute only
-    once its class body declares it, e.g. `cache_dir: Path`; and a declaration that
-    nothing sets would pin a name that instances lack.
+    once its class body declares it, e.g. `cache_dir: Path`; and a declaration that no
+    __init__ or __post_init__ sets would pin a name that instances lack.
+
+    A known gap: undeclared_attributes reads only __init__ and __post_init__, so an
+    undeclared public attribute that only another method sets on self, such as a cache
+    filled on first use, passes this guard though FROZEN_MEMBERS cannot pin it.
     """
     classes = _pinned_classes()
     undeclared = [
         f"{path}.{attribute}"
         for path, cls in classes.items()
-        for attribute in sorted(undeclared_attributes(cls))
+        for attribute in sorted(
+            undeclared_attributes(cls, reviewed=REVIEWED_COMPUTED_NAME_WRITES.get(path, {}))
+        )
     ]
     unset = [
         f"{path}.{attribute}"
         for path, cls in classes.items()
-        for attribute in sorted(unset_attributes(cls))
+        for attribute in sorted(
+            unset_attributes(cls, reviewed=REVIEWED_COMPUTED_NAME_WRITES.get(path, {}))
+        )
     ]
     assert not undeclared and not unset, (
         f"Public attributes set on self that no class body declares: {undeclared}. "
-        f"Attributes a class body declares that nothing sets on self: {unset}. "
+        "Attributes a class body declares that no __init__ or __post_init__ sets on "
+        f"self: {unset}. "
         "member_forms reads class bodies, so FROZEN_MEMBERS cannot pin an attribute "
         "that is only set on self. Declare each such attribute in its class body, e.g. "
-        "`cache_dir: Path`, then add its FROZEN_MEMBERS entry and its 'Unreleased on "
-        "main' line in docs/domain-library-consumption.md, or make it private; and drop "
-        "each declaration that nothing sets."
+        "`cache_dir: Path`, then add its FROZEN_MEMBERS entry and its release note, "
+        "docs/unreleased/domain-library-consumption/<task id>.md, or make it private; and set "
+        "each declared attribute in __init__ or __post_init__, or drop its declaration."
+    )
+
+
+def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
+    """Sync guard: every key of REVIEWED_COMPUTED_NAME_WRITES is a pinned class's path.
+
+    The lock test passes each pinned class only its own entry, so an entry under any
+    other path, stale or misspelled, would be read by nothing.
+    """
+    stale = REVIEWED_COMPUTED_NAME_WRITES.keys() - _pinned_classes().keys()
+    assert not stale, (
+        "REVIEWED_COMPUTED_NAME_WRITES names paths that are no pinned class's "
+        f"(stale/misspelled?): {sorted(stale)}"
     )
 
 
 # ---------------------------------------------------------------------------
-# H2 kind: targeted gotcha-guard for names whose kind would be WRONG if
-# inferred from naming convention alone.
+# The pinned dataclasses not frozen yet, each with the task that freezes it
 #
-# The full surface is pinned by FROZEN_SURFACE above.  This table supplements
-# it with explicit kind checks only for the non-obvious entries:
-#   • FlatRateTariff  — CamelCase looks like a class; it is a factory function
-#   • GRID_SERVICES_RATE_BANDS — UPPER_CASE looks like a plain constant; it is
-#     a frozen-dataclass instance (still "constant" in our taxonomy, but the
-#     distinction is worth pinning)
-#   • DispatchTariffPeriod — Enum alias; verifies it resolves to a class, not
-#     to a string/sentinel from a botched re-export
-#
-# taxonomy (for reference):
-#   class    → inspect.isclass  (covers dataclasses, Enums, ABCs)
-#   function → inspect.isroutine (covers all def functions / factory callables)
-#   constant → neither           (dicts, tuples, lists, frozen-dataclass instances)
+# Keys are pinned-class paths, as _pinned_classes() spells them; each value is
+# the task that freezes the class.  An entry whose class is frozen, is no
+# pinned dataclass, or is misspelled fails the guard, so drop the entry then.
+# ---------------------------------------------------------------------------
+UNFROZEN_PINNED_DATACLASSES: dict[str, str] = {}
+
+
+def test_every_pinned_dataclass_is_frozen() -> None:
+    """Every pinned dataclass is frozen but those UNFROZEN_PINNED_DATACLASSES names, each with the later task that freezes it: review/briefing.yaml's frozen-dataclass convention rests on this test."""
+    unfrozen = {
+        path
+        for path, cls in _pinned_classes().items()
+        if dataclasses.is_dataclass(cls) and not is_frozen_dataclass(cls)
+    }
+    unlisted = sorted(unfrozen - UNFROZEN_PINNED_DATACLASSES.keys())
+    stale = sorted(UNFROZEN_PINNED_DATACLASSES.keys() - unfrozen)
+    assert not unlisted and not stale, (
+        f"Pinned dataclasses that are not frozen: {unlisted}. Freeze each with "
+        "@dataclass(frozen=True), add frozen to its kind in FROZEN_SURFACE or "
+        "FROZEN_CLOSURE, e.g. 'dataclass[eq, frozen, match_args]', and add its release note, "
+        "docs/unreleased/domain-library-consumption/<task id>.md, in the same commit; "
+        "or list it in UNFROZEN_PINNED_DATACLASSES with the task that freezes it. "
+        "UNFROZEN_PINNED_DATACLASSES entries that name no unfrozen pinned dataclass "
+        f"(frozen, no pinned dataclass, or misspelled): {stale}. Drop each."
+    )
+
+
+# ===========================================================================
+# The drift report: each path whose current form differs from its frozen one,
+# printed with both forms, the current one ready to paste, and labelled
+# additive or breaking
+# ===========================================================================
+
+
+@dataclasses.dataclass(frozen=True)
+class _Drift:
+    """A drifted path's current form, and whether its change from the frozen form is additive."""
+
+    current: str
+    additive: bool
+
+
+def _drift_message(
+    table: str, frozen: Mapping[str, str], drifted: Mapping[str, _Drift]
+) -> str:
+    """Name each path of *drifted* with its frozen and current forms and its change, additive or breaking, then say what each kind of change needs.
+
+    *frozen* holds the forms of the table named *table*, keyed by the same paths.
+    """
+    symbols = "".join(
+        f"\n  solar_challenge.{path}"
+        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
+        f"\n    current: {drift.current}"
+        f"\n    change:  {'additive' if drift.additive else 'breaking'}"
+        for path, drift in drifted.items()
+    )
+    return (
+        f"Surface forms differ from {table}:{symbols}\n"
+        "Each change to the frozen public API (review/briefing.yaml) is labelled above. An "
+        "additive change needs its release note, docs/unreleased/domain-library-consumption/"
+        "<task id>.md ('Changes merged since the last tag', in the 'Tag / release convention' "
+        "section of docs/domain-library-consumption.md), landed in the same commit as the "
+        f"{table} edit. A breaking one lands only with a version bump under that section "
+        "(review/briefing.yaml's frozen-API convention)."
+    )
+
+
+def _drifted(
+    frozen: Mapping[str, str],
+    current: Mapping[str, str],
+    *,
+    absent: str,
+    is_additive: Callable[[str, str], bool],
+) -> dict[str, _Drift]:
+    """Map each path whose current form is not its frozen one to its _Drift.
+
+    *current*'s paths come first, in its order, then each frozen path *current* lacks,
+    whose current form reads *absent*.  A path only *current* holds is additive and one
+    only *frozen* holds breaking; a changed path is additive only if
+    is_additive(path, its frozen form) holds.
+    """
+
+    def additive(path: str) -> bool:
+        if path not in frozen:
+            return True
+        return path in current and is_additive(path, frozen[path])
+
+    missing = [path for path in frozen if path not in current]
+    return {
+        path: _Drift(current.get(path, absent), additive(path))
+        for path in [*current, *missing]
+        if current.get(path) != frozen.get(path)
+    }
+
+
+@pytest.fixture
+def scratch_edit(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """pytest's monkeypatch, for a test's scratch edits to the package, handed over once _closure_classes() has read the unedited package, whose closure its cache keeps for the rest of the run."""
+    _closure_classes()
+    return monkeypatch
+
+
+def _lock_failure(lock: Callable[[], None]) -> str:
+    """The message the lock test *lock* fails with."""
+    with pytest.raises(AssertionError) as failure:
+        lock()
+    return str(failure.value)
+
+
+def _printed_entry(message: str, path: str) -> list[str]:
+    """The lines *message* prints for *path*: its path line, then its frozen, current and change lines, each stripped of its indentation, which pytest's assertion rewriting deepens; none if no line names the path."""
+    lines = [line.strip() for line in message.splitlines()]
+    heading = f"solar_challenge.{path}"
+    return lines[lines.index(heading) :][:4] if heading in lines else []
+
+
+_NOTE_FILE_TRAILER = (
+    "docs/unreleased/domain-library-consumption/<task id>.md ('Changes merged since the last "
+    "tag', in the 'Tag / release convention' section of docs/domain-library-consumption.md)"
+)
+
+
+def test_a_pinned_signature_that_gains_a_trailing_defaulted_parameter_prints_additive_and_the_note_to_write(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def calculate_degradation_factor(
+        system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0
+    ) -> float: ...
+
+    scratch_edit.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "calculate_degradation_factor") == [
+        "solar_challenge.calculate_degradation_factor",
+        f"frozen:  {FROZEN_SURFACE['calculate_degradation_factor']}",
+        "current: (system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0) -> float",
+        "change:  additive",
+    ]
+    assert _NOTE_FILE_TRAILER in message
+
+
+def test_a_pinned_signature_that_loses_a_parameter_prints_breaking_and_that_it_lands_only_with_a_version_bump(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def calculate_degradation_factor(system_age_years: float) -> float: ...
+
+    scratch_edit.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "calculate_degradation_factor") == [
+        "solar_challenge.calculate_degradation_factor",
+        f"frozen:  {FROZEN_SURFACE['calculate_degradation_factor']}",
+        "current: (system_age_years: float) -> float",
+        "change:  breaking",
+    ]
+    assert "A breaking one lands only with a version bump under that section" in message
+
+
+def test_a_name_new_to_all_prints_additive(scratch_edit: pytest.MonkeyPatch) -> None:
+    def scratch_name(a: int) -> int: ...
+
+    scratch_edit.setattr(solar_challenge, "__all__", [*solar_challenge.__all__, "scratch_name"])
+    scratch_edit.setattr(solar_challenge, "scratch_name", scratch_name, raising=False)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "scratch_name") == [
+        "solar_challenge.scratch_name",
+        "frozen:  (absent from FROZEN_SURFACE)",
+        "current: (a: int) -> int",
+        "change:  additive",
+    ]
+
+
+def test_a_name_removed_from_all_prints_breaking(scratch_edit: pytest.MonkeyPatch) -> None:
+    scratch_edit.setattr(
+        solar_challenge,
+        "__all__",
+        [name for name in solar_challenge.__all__ if name != "calculate_degradation_factor"],
+    )
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "calculate_degradation_factor") == [
+        "solar_challenge.calculate_degradation_factor",
+        f"frozen:  {FROZEN_SURFACE['calculate_degradation_factor']}",
+        "current: (not in __all__)",
+        "change:  breaking",
+    ]
+
+
+def test_a_removed_member_prints_breaking(scratch_edit: pytest.MonkeyPatch) -> None:
+    scratch_edit.delattr(solar_challenge.Battery, "soh")
+
+    message = _lock_failure(test_every_pinned_class_member_matches_frozen_members)
+
+    assert _printed_entry(message, "Battery.soh") == [
+        "solar_challenge.Battery.soh",
+        "frozen:  property (self) -> float",
+        "current: (removed)",
+        "change:  breaking",
+    ]
+
+
+def test_a_member_that_gains_a_keyword_only_parameter_with_a_default_prints_additive(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def charge(self, power_kw: float, duration_minutes: float, *, cap: float = 1.0) -> float: ...
+
+    scratch_edit.setattr(solar_challenge.Battery, "charge", charge)
+
+    message = _lock_failure(test_every_pinned_class_member_matches_frozen_members)
+
+    assert _printed_entry(message, "Battery.charge") == [
+        "solar_challenge.Battery.charge",
+        f"frozen:  {FROZEN_MEMBERS['Battery']['charge']}",
+        "current: (self, power_kw: float, duration_minutes: float, *, cap: float = 1.0) -> float",
+        "change:  additive",
+    ]
+
+
+def test_a_member_with_a_retyped_parameter_prints_breaking(scratch_edit: pytest.MonkeyPatch) -> None:
+    def charge(self, power_kw: int, duration_minutes: float) -> float: ...
+
+    scratch_edit.setattr(solar_challenge.Battery, "charge", charge)
+
+    message = _lock_failure(test_every_pinned_class_member_matches_frozen_members)
+
+    assert _printed_entry(message, "Battery.charge") == [
+        "solar_challenge.Battery.charge",
+        f"frozen:  {FROZEN_MEMBERS['Battery']['charge']}",
+        "current: (self, power_kw: int, duration_minutes: float) -> float",
+        "change:  breaking",
+    ]
+
+
+def test_a_closure_class_whose_constructor_gains_a_keyword_only_parameter_with_a_default_prints_additive(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def __init__(
+        self, effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float, *, floor_kwh: float = 0.0
+    ) -> None: ...
+
+    scratch_edit.setattr(_closure_classes()["battery.SocEnvelope"], "__init__", __init__)
+
+    message = _lock_failure(test_every_class_the_frozen_surface_names_matches_frozen_closure)
+
+    assert _printed_entry(message, "battery.SocEnvelope") == [
+        "solar_challenge.battery.SocEnvelope",
+        f"frozen:  {FROZEN_CLOSURE['battery.SocEnvelope']}",
+        "current: dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float, *, floor_kwh: float = 0.0) -> None",
+        "change:  additive",
+    ]
+
+
+def test_a_closure_class_whose_constructor_retypes_a_parameter_prints_breaking(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def __init__(self, effective_capacity_kwh: float, min_soc_kwh: int, max_soc_kwh: float) -> None: ...
+
+    scratch_edit.setattr(_closure_classes()["battery.SocEnvelope"], "__init__", __init__)
+
+    message = _lock_failure(test_every_class_the_frozen_surface_names_matches_frozen_closure)
+
+    assert _printed_entry(message, "battery.SocEnvelope") == [
+        "solar_challenge.battery.SocEnvelope",
+        f"frozen:  {FROZEN_CLOSURE['battery.SocEnvelope']}",
+        "current: dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: int, max_soc_kwh: float) -> None",
+        "change:  breaking",
+    ]
+
+
+def test_a_pinned_class_that_gains_match_args_prints_additive(scratch_edit: pytest.MonkeyPatch) -> None:
+    positional = tuple(
+        name
+        for name, parameter in inspect.signature(solar_challenge.Battery).parameters.items()
+        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    )
+    scratch_edit.setattr(solar_challenge.Battery, "__match_args__", positional, raising=False)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "Battery") == [
+        "solar_challenge.Battery",
+        f"frozen:  {FROZEN_SURFACE['Battery']}",
+        f"current: class[match_args] {FROZEN_SURFACE['Battery']}",
+        "change:  additive",
+    ]
+
+
+def test_a_pinned_dataclass_whose_instances_lose_their_dict_prints_breaking(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    @dataclasses.dataclass(frozen=True, slots=True)
+    class SEGTariff:
+        name: str
+        rate_pence_per_kwh: float
+
+    scratch_edit.setattr(solar_challenge, "SEGTariff", SEGTariff)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "SEGTariff") == [
+        "solar_challenge.SEGTariff",
+        f"frozen:  {FROZEN_SURFACE['SEGTariff']}",
+        f"current: {FROZEN_SURFACE['SEGTariff'].replace('match_args]', 'match_args, slots]')}",
+        "change:  breaking",
+    ]
+
+
+# ===========================================================================
+# Name resolution: what the package resolves each name to, and what dir() lists
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Every exported name resolves to its typed import: the object the package's
+# `if TYPE_CHECKING:` block, which type checkers read, imports under that name
+# ---------------------------------------------------------------------------
+
+
+def _type_checking_imports() -> dict[str, tuple[str, str]]:
+    """Each name the package's top-level `if TYPE_CHECKING:` block binds, mapped to
+    the module it imports from and the name it imports there."""
+    source = Path(solar_challenge.__file__).read_text(encoding="utf-8")
+    blocks = [
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+    ]
+    return {
+        alias.asname or alias.name: (statement.module, alias.name)
+        for block in blocks
+        for statement in block.body
+        if isinstance(statement, ast.ImportFrom) and statement.module is not None
+        for alias in statement.names
+    }
+
+
+def test_type_checking_block_names_match_all() -> None:
+    """Names bound in the TYPE_CHECKING block must equal set(__all__) plus 'Typer'.
+
+    Reads the names the block binds through _type_checking_imports() and verifies
+    they stay in sync with __all__. Adding a name to __all__ and to the lazy
+    loader's map but forgetting its TYPE_CHECKING re-export would otherwise
+    silently break mypy --strict for consumers without failing this package's own checks.
+    """
+    tc_names = set(_type_checking_imports())
+
+    # TYPE_CHECKING block includes "Typer" for get_cli_app()'s return annotation;
+    # Typer is NOT in __all__ — CLI is shipped but unfrozen.
+    expected = set(solar_challenge.__all__) | {"Typer"}
+    assert tc_names == expected, (
+        f"TYPE_CHECKING block out of sync with __all__.\n"
+        f"Extra (not in __all__ + Typer): {tc_names - expected}\n"
+        f"Missing (in __all__ but not TYPE_CHECKING): {expected - tc_names}"
+    )
+
+
+def test_every_name_resolves_to_its_type_checking_import() -> None:
+    """Each __all__ name resolves to the object the package's `if TYPE_CHECKING:`
+    block imports under that name, and stays that object across accesses.
+
+    Type checkers read that block, so the runtime and typed surfaces must agree.
+    A name the block does not import is test_type_checking_block_names_match_all's
+    to report.
+    """
+    imports = _type_checking_imports()
+    misresolved: list[str] = []
+    for name in solar_challenge.__all__:
+        if name not in imports:
+            continue
+        module, source = imports[name]
+        imported = getattr(import_module(module), source)
+        resolved, resolved_again = getattr(solar_challenge, name), getattr(solar_challenge, name)
+        if resolved is not imported or resolved_again is not imported:
+            misresolved.append(f"solar_challenge.{name} is not {module}.{source}")
+    assert not misresolved, (
+        "Names that resolve to an object other than their TYPE_CHECKING import:\n"
+        + "\n".join(misresolved)
+    )
+
+
+def test_tariffperiod_collision_resolved() -> None:
+    """DispatchTariffPeriod and TariffPeriod are distinct objects (collision-renamed correctly).
+
+    dispatch.TariffPeriod (Enum) is exposed as DispatchTariffPeriod.
+    tariff.TariffPeriod (dataclass) is exposed as TariffPeriod.
+    They must be distinct — otherwise one silently shadows the other.
+    """
+    assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod, (
+        "solar_challenge.DispatchTariffPeriod must be dispatch.TariffPeriod"
+    )
+    assert solar_challenge.TariffPeriod is _tariff.TariffPeriod, (
+        "solar_challenge.TariffPeriod must be tariff.TariffPeriod"
+    )
+    assert solar_challenge.DispatchTariffPeriod is not solar_challenge.TariffPeriod, (
+        "DispatchTariffPeriod and TariffPeriod must be distinct objects"
+    )
+
+
+# ---------------------------------------------------------------------------
+# dir() lists the exported names, and an unknown name raises AttributeError
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_attribute_raises() -> None:
+    """Accessing an undefined attribute raises AttributeError."""
+    with pytest.raises(AttributeError):
+        _ = solar_challenge.does_not_exist
+
+
+def test_dir_returns_sorted_all() -> None:
+    """`dir(solar_challenge)` returns exactly sorted(__all__)."""
+    assert dir(solar_challenge) == sorted(solar_challenge.__all__)
+
+
+# ---------------------------------------------------------------------------
+# The kind each name below is expected to resolve to: 'class', 'function' or
+# 'constant', as _kind classifies it
 # ---------------------------------------------------------------------------
 EXPECTED_KIND: dict[str, str] = {
     "FlatRateTariff": "function",           # GOTCHA: CamelCase factory, NOT a class
     "GRID_SERVICES_RATE_BANDS": "constant", # GOTCHA: frozen-dataclass instance, NOT a class
     "DispatchTariffPeriod": "class",        # Enum alias — verifies clean class re-export
+    "GridServicesBand": "class",            # StrEnum — verifies clean class re-export
+    "FleetSimulate": "constant",            # GOTCHA: Callable type alias, NOT a class
+    "HomesDone": "constant",                # GOTCHA: Callable type alias, NOT a class
 }
 
 
@@ -589,88 +1166,195 @@ def test_expected_kind_keys_match_frozen_set() -> None:
     )
 
 
-def test_every_name_resolves_to_expected_kind() -> None:
-    """H2: all public names resolve via the PEP-562 lazy loader; gotcha kinds are correct.
+def test_every_expected_kind_name_resolves_to_its_kind() -> None:
+    """Each EXPECTED_KIND name resolves to an object of the kind EXPECTED_KIND pins for it.
 
-    Iterates every name in FROZEN_SET — exercises solar_challenge.__getattr__
-    and must not raise AttributeError for any name.
-
-    For the small subset named in EXPECTED_KIND (the gotcha entries where naming
-    convention would mislead), additionally asserts the introspected kind is correct.
+    On a failure, pytest's diff of the two dicts names each name whose kind has drifted.
     """
-    for name in sorted(FROZEN_SET):
-        obj = getattr(solar_challenge, name)  # triggers lazy loader; must not raise
-        if name in EXPECTED_KIND:
-            actual_kind = _kind(obj)
-            assert actual_kind == EXPECTED_KIND[name], (
-                f"solar_challenge.{name}: expected kind={EXPECTED_KIND[name]!r}, "
-                f"got kind={actual_kind!r} (type={type(obj).__name__})"
-            )
+    assert {name: _kind(getattr(solar_challenge, name)) for name in EXPECTED_KIND} == EXPECTED_KIND
 
 
-# ---------------------------------------------------------------------------
-# H3 laziness: pvlib must NOT be imported by a bare `import solar_challenge`;
-# it MUST be present after touching a pv-module symbol.
-#
-# Both sub-tests use a CLEAN interpreter via subprocess to avoid contamination
-# from pvlib being already loaded by the test process.
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# The runtime tables agree at import: importing the package refuses __all__,
+# _SYMBOL_MODULE and _SOURCE_NAME when they disagree, naming each offender
+# ===========================================================================
+
+_IMPORT_PROBE = """\
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+package = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location(
+    "solar_challenge", package / "__init__.py", submodule_search_locations=[str(package)]
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules["solar_challenge"] = module
+try:
+    spec.loader.exec_module(module)
+except RuntimeError as refusal:
+    print(json.dumps(str(refusal)))
+else:
+    print(json.dumps(None))
+"""
+
+
+def _source_with_entry(source: str, table: str, entry: str) -> str:
+    """Return *source* with *entry* written first inside the literal its module-level annotated assignment to *table* holds."""
+    literals = [
+        statement.value
+        for statement in ast.parse(source).body
+        if isinstance(statement, ast.AnnAssign)
+        and isinstance(statement.target, ast.Name)
+        and statement.target.id == table
+        and statement.value is not None
+    ]
+    assert len(literals) == 1, (
+        f"the source holds {len(literals)} module-level annotated assignments to {table}, not one"
+    )
+    (literal,) = literals
+    lines = source.encode("utf-8").split(b"\n")
+    row, column = literal.lineno - 1, literal.col_offset + 1
+    lines[row] = lines[row][:column] + entry.encode("utf-8") + lines[row][column:]
+    return b"\n".join(lines).decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("table", "entry", "offender"),
+    [
+        pytest.param("__all__", '"Battery", ', "Battery", id="a-name-listed-twice"),
+        pytest.param(
+            "_SOURCE_NAME", '"Ghost": "TariffPeriod", ', "Ghost", id="an-alias-of-no-exported-name"
+        ),
+        pytest.param("__all__", '"Ghost", ', "Ghost", id="an-exported-name-with-no-origin-module"),
+        pytest.param(
+            "_SYMBOL_MODULE", '"Ghost": "battery", ', "Ghost", id="an-origin-module-for-no-exported-name"
+        ),
+    ],
+)
+def test_importing_the_package_refuses_tables_that_disagree(
+    tmp_path: Path, table: str, entry: str, offender: str
+) -> None:
+    """Importing a copy of the package whose *table* starts with *entry* raises RuntimeError naming *offender*.
+
+    The copy runs under -O, so an assert could not stand in for the check.  The probe
+    loads the copy by its path, not by a search of sys.path, so no installed
+    solar_challenge can be imported in its place.  A copy of __init__.py alone suffices,
+    because the package imports only importlib and typing at runtime.
+    """
+    package = tmp_path / "solar_challenge"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        _source_with_entry(Path(solar_challenge.__file__).read_text(encoding="utf-8"), table, entry),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-O", "-c", _IMPORT_PROBE, str(package)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, f"the import probe failed:\n{result.stderr}"
+    refusal = json.loads(result.stdout)
+    assert refusal is not None and repr(offender) in refusal, (
+        f"With {entry!r} written first in {table}, importing the package should raise "
+        f"RuntimeError naming {offender!r}; it "
+        + ("imported" if refusal is None else f"raised RuntimeError: {refusal}")
+    )
+
+
+# ===========================================================================
+# The package imports without pvlib, and the first access of a name loads pvlib
+# exactly when the submodule its typed import comes from is in
+# PVLIB_IMPORTING_SUBMODULES
+# ===========================================================================
+
+
+_PVLIB_LOADED_PROBE = """\
+import json
+import sys
+
+import solar_challenge
+
+for public_name in sys.argv[1:]:
+    getattr(solar_challenge, public_name)
+print(json.dumps("pvlib" in sys.modules))
+"""
+
+
+def _pvlib_loaded_after_accessing(*public_names: str) -> bool:
+    """Return whether pvlib is loaded once a fresh interpreter has imported solar_challenge and accessed each of *public_names*.
+
+    The interpreter is fresh because the test process has already imported pvlib.
+    """
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", _PVLIB_LOADED_PROBE, *public_names],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    probed = "; ".join(["import solar_challenge", *(f"solar_challenge.{name}" for name in public_names)])
+    assert result.returncode == 0, f"the probe of `{probed}` failed:\n{result.stderr}"
+    loaded: bool = json.loads(result.stdout)
+    return loaded
 
 
 def test_import_is_pvlib_free() -> None:
-    """`import solar_challenge` alone must NOT pull pvlib into sys.modules (H3 clean direction)."""
-    code = (
-        "import sys, solar_challenge; "
-        "sys.exit(0 if 'pvlib' not in sys.modules else 1)"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, (
-        f"pvlib was imported by 'import solar_challenge'.\nstderr: {result.stderr}"
-    )
-
-
-def test_touching_pvconfig_imports_pvlib() -> None:
-    """`solar_challenge.PVConfig` DOES pull pvlib — lazy proven in both directions (H3 load direction)."""
-    code = (
-        "import sys, solar_challenge; "
-        "solar_challenge.PVConfig; "
-        "sys.exit(0 if 'pvlib' in sys.modules else 1)"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, (
-        f"pvlib was NOT imported after touching solar_challenge.PVConfig.\nstderr: {result.stderr}"
-    )
+    """`import solar_challenge` alone leaves pvlib out of sys.modules."""
+    assert not _pvlib_loaded_after_accessing(), "`import solar_challenge` alone loaded pvlib"
 
 
 # ---------------------------------------------------------------------------
-# H4 collision: DispatchTariffPeriod (dispatch Enum) and TariffPeriod
-# (tariff dataclass) are distinct objects with distinct origin classes.
+# The submodules whose names load pvlib on first access, as the 'Lazy pvlib
+# dependency' caveat in docs/domain-library-consumption.md tells consumers
 # ---------------------------------------------------------------------------
+PVLIB_IMPORTING_SUBMODULES: frozenset[str] = frozenset({"config", "fleet", "home", "projection", "pv", "weather"})
 
 
-def test_tariffperiod_collision_resolved() -> None:
-    """H4: DispatchTariffPeriod and TariffPeriod are distinct objects (collision-renamed correctly).
+def _first_exported_name_per_submodule() -> dict[str, str]:
+    """Each submodule an exported name's typed import comes from, mapped to the first such name in __all__ order.
 
-    dispatch.TariffPeriod (Enum) is exposed as DispatchTariffPeriod.
-    tariff.TariffPeriod (dataclass) is exposed as TariffPeriod.
-    They must be distinct — otherwise one silently shadows the other.
+    A name the `if TYPE_CHECKING:` block does not import is test_type_checking_block_names_match_all's to report.
     """
-    assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod, (
-        "solar_challenge.DispatchTariffPeriod must be dispatch.TariffPeriod"
+    imports = _type_checking_imports()
+    first_names: dict[str, str] = {}
+    for name in solar_challenge.__all__:
+        if name in imports:
+            module, _ = imports[name]
+            first_names.setdefault(module.removeprefix(_SUBMODULE_PREFIX), name)
+    return first_names
+
+
+@pytest.mark.parametrize(
+    ("submodule", "public_name"),
+    [
+        pytest.param(submodule, public_name, id=submodule)
+        for submodule, public_name in sorted(_first_exported_name_per_submodule().items())
+    ],
+)
+def test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules(
+    submodule: str, public_name: str
+) -> None:
+    """The first access of *public_name*, whose typed import comes from *submodule*, loads pvlib exactly when PVLIB_IMPORTING_SUBMODULES lists *submodule*."""
+    loads_pvlib = _pvlib_loaded_after_accessing(public_name)
+
+    assert loads_pvlib == (submodule in PVLIB_IMPORTING_SUBMODULES), (
+        f"the first access of solar_challenge.{public_name} {'loads' if loads_pvlib else 'leaves unloaded'} pvlib, "
+        f"and PVLIB_IMPORTING_SUBMODULES in tests/unit/test_public_api_surface.py "
+        f"{'omits' if loads_pvlib else 'lists'} {submodule}. Change that set and the 'Lazy pvlib dependency' "
+        "caveat in docs/domain-library-consumption.md together, so consumers learn what the name now costs"
     )
-    assert solar_challenge.TariffPeriod is _tariff.TariffPeriod, (
-        "solar_challenge.TariffPeriod must be tariff.TariffPeriod"
-    )
-    assert solar_challenge.DispatchTariffPeriod is not solar_challenge.TariffPeriod, (
-        "DispatchTariffPeriod and TariffPeriod must be distinct objects"
+
+
+def test_every_listed_submodule_still_has_public_names() -> None:
+    """Sync guard: each submodule PVLIB_IMPORTING_SUBMODULES lists is one some exported name's typed import comes from."""
+    stale = PVLIB_IMPORTING_SUBMODULES - set(_first_exported_name_per_submodule())
+
+    assert not stale, (
+        f"no exported name's typed import comes from {sorted(stale)} any more, so they go from "
+        "PVLIB_IMPORTING_SUBMODULES in tests/unit/test_public_api_surface.py and from the "
+        "'Lazy pvlib dependency' caveat in docs/domain-library-consumption.md"
     )

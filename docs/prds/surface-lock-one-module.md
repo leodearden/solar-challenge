@@ -22,6 +22,13 @@
 
   `src/solar_challenge/__init__.py` is unchanged since the pin. Task 700 is in review on `task/700`.
 
+## Amendment (2026-11-06): release notes are files
+
+[release-note-fragments.md](release-note-fragments.md) (Leo's ruling on sitting item 506) moves every "Unreleased on main" paragraph out of `docs/domain-library-consumption.md`, into one file per task, `docs/unreleased/domain-library-consumption/<task id>.md`. Where this PRD says a change's "Unreleased line", read "note file". The clauses it changes:
+
+- **Decision 7, ζ.** `_drift_message`'s trailer says that an additive change needs its note file, `docs/unreleased/domain-library-consumption/<task id>.md`, in the same commit. α (the fragments PRD) already rewords the trailer that way; ζ adds the additive/breaking labels around it.
+- **Decision 9, η.** η's test checks that each id in `UNRELEASED` has a note file, `docs/unreleased/domain-library-consumption/<id>.md`. It is a file-existence check, so it parses no doc. The snapshot step that η adds to the release convention says the release also deletes the notes it folds.
+
 ## 1. Goal
 
 The surface lock is the test machinery that freezes `solar_challenge.__all__` and what each name's callers rely on. Every stream of this program edits it in-leaf, and S29 uses it to cut the one release. It becomes one contract organised by behaviour, with one reading of each annotation and a lock failure that says what kind of change it saw.

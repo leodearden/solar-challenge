@@ -32,11 +32,13 @@ This manifest mechanizes G3 (the substrate exists) and G6 (the premise is valid)
 
 ## γ — Lane-only stated once; the e2e mark comes from its directory
 
+*Amended 2026-10-22, task 875: the row below citing `NEVER_IN_A_DEFAULT_COLLECTION` is authoring-time evidence, kept as history. That flag no longer exists; the default-collection contract is derived from each row's suite path (see the PRD's header amendment).*
+
 | Capability asserted by signal | Evidence binding | Status |
 |---|---|---|
 | A mark added in a subdirectory conftest's `pytest_collection_modifyitems` is seen by `-m` and by `get_closest_marker` | probe: a hook-added `e2e` mark selected by `-m e2e` and deselected by `-m 'not e2e'`; tests/conftest.py's exemption reads `item.get_closest_marker` at run time | PASS |
 | The existing hook walks every item under tests/e2e | grep: `tests/e2e/conftest.py::pytest_collection_modifyitems` adds `flaky` when `item.path.is_relative_to(Path(__file__).parent)` | PASS |
-| An explicit path overrides `collect_ignore` (the lane job still collects tests/e2e) | grep: the css-build and newest-releases rows list both `COLLECTS_ONLY_ITS_SUITE` and `NEVER_IN_A_DEFAULT_COLLECTION` and pass on main | PASS |
+| An explicit path overrides `collect_ignore` (the lane job still collects tests/e2e) | *(historical, task 875 — see the γ amendment)* grep: the css-build and newest-releases rows list both `COLLECTS_ONLY_ITS_SUITE` and `NEVER_IN_A_DEFAULT_COLLECTION` and pass on main | PASS |
 | B7 is a real RED: a collection with addopts cleared reaches tests/e2e | grep: `collect_ignore` lacks `e2e`; `default_collection_node_ids_under` clears addopts; fix 3d7474f recorded the playwright ImportError | PASS (RED by construction) |
 | 23 pytestmarks exist to delete | grep: `pytestmark = pytest.mark.e2e` in 23 tests/e2e/test_*.py | PASS |
 | The pytester copy pattern for the e2e conftest exists (B9) | grep: `tests/unit/test_e2e_network_change_reruns.py` runs copies of tests/e2e/conftest.py; that conftest imports nothing from playwright | PASS |

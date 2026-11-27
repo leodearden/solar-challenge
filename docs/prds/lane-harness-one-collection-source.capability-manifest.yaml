@@ -241,7 +241,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "test_every_declared_floor_is_the_locked_release"
-          paths: ["tests/newest_releases/"]
+          paths: ["tests/newest_releases/", "tests/_newest_releases_deselections.py"]
           expect: present
       - name: "claude-md-states-the-floor-rule"
         binding: "CLAUDE.md Key Patterns has no floor rule on main"

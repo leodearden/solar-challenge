@@ -3,6 +3,7 @@
 import contextlib
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -10,43 +11,73 @@ import sys
 import time
 import urllib.request
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 pytest.importorskip("flask")
 
-SERVER_WITH_BLOCKING_SIMULATIONS = """
+import tests._fleet_runner as marked_homes
+from solar_challenge.web.database import Database
+from solar_challenge.web.storage import RunRecord
+from tests._repository_paths import REPOSITORY_ROOT
+from tests._run_stores import run_storage_over
+
+SERVER_WITH_A_BLOCKING_RUNNER = """
+import signal
 import sys
-import threading
+import time
 from pathlib import Path
 
-from flask import request_started
+from solar_challenge.cli import app
+from solar_challenge.cli.utils import CliInvocation
+
+started_dir, port, release_file = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+
+
+class BlockingRunner:
+    def simulate(self, fleet, start_date, end_date, *, progress=None):
+        raise NotImplementedError("the server's jobs here are home jobs")
+
+    def simulate_each(self, fleets, start_date, end_date, *, progress=None):
+        raise NotImplementedError("the server's jobs here are home jobs")
+
+    def simulate_home(self, home, start_date, end_date):
+        (started_dir / str(home.pv_config.capacity_kw)).touch()
+        while not release_file.exists():
+            time.sleep(0.05)
+        raise RuntimeError("stub simulation")
+
+
+signal.signal(signal.SIGINT, signal.default_int_handler)
+app(["web", "start", "--port", port], obj=CliInvocation(runner=BlockingRunner()))
+"""
+
+SERVER_WITH_A_PARALLEL_FLEET_RUNNER = """
+import signal
+import sys
+from pathlib import Path
+
+repo_root, marker_dir, port, release_file = sys.argv[1], Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])
+sys.path.insert(0, repo_root)
 
 from solar_challenge.cli import app
-from solar_challenge.web.jobs import JobManager
-
-started_dir, port = Path(sys.argv[1]), sys.argv[2]
-command_returned = threading.Event()
-
-
-def blocking_simulation(config, start_date, end_date):
-    (started_dir / str(config.pv_config.capacity_kw)).touch()
-    command_returned.wait()
-    raise RuntimeError("stub simulation")
+from solar_challenge.cli.utils import CliInvocation
+from solar_challenge.fleet import FleetRunner
+from tests._fleet_runner import MarkingHomeSimulator
+from tests._synthetic_weather import synthetic_june_weather
 
 
-blocking_jobs = JobManager(max_workers=2, simulate_home=blocking_simulation)
+class JuneWeather:
+    def get(self, location):
+        return synthetic_june_weather("2024-06-21")
 
 
-def submit_to_blocking_jobs(dashboard, **extra):
-    dashboard.extensions["job_manager"] = blocking_jobs
-
-
-request_started.connect(submit_to_blocking_jobs)
-try:
-    app(["web", "start", "--port", port])
-finally:
-    command_returned.set()
+held = MarkingHomeSimulator(marker_dir, held_until=(("A", release_file), ("B", release_file)))
+runner = FleetRunner(weather=JuneWeather(), home_simulator=held, parallel=True, max_workers=2)
+signal.signal(signal.SIGINT, signal.default_int_handler)
+app(["web", "start", "--port", port], obj=CliInvocation(runner=runner))
 """
 
 WEB_START = """
@@ -54,99 +85,391 @@ import sys
 
 from solar_challenge.cli import app
 
-app(["web", "start", "--port", sys.argv[1]])
+app(["web", "start", *sys.argv[1:]])
+"""
+
+WEB_START_IMPORTING_SOURCE_FILE = """
+import sys
+
+import source_file
+
+from solar_challenge.cli import app
+
+app(["web", "start", *sys.argv[1:]])
+"""
+
+PRINTS_ON_STDOUT_AND_STDERR = """
+import sys
+import time
+
+print("a line on stdout", flush=True)
+print("a line on stderr", file=sys.stderr, flush=True)
+time.sleep(600)
+"""
+
+RUNS_A_SCRIPT_WITH_SIGINT_IGNORED = """
+import os
+import signal
+import sys
+
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+os.execv(sys.executable, [sys.executable, "-c", *sys.argv[1:]])
 """
 
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+_PATIENCE_SECS = 60
 
-def _free_port() -> int:
+# Ends in \n, not $, which would also match a last line werkzeug is still writing, whose port may be cut short.
+_WERKZEUG_STARTUP_LINE = re.compile(r"^ \* Running on http://127\.0\.0\.1:(\d+)\n", re.MULTILINE)
+
+
+def _port_free_when_asked() -> int:
+    """A port that was free when asked for; another process can take it before a server binds it, so it is only for a test that never connects to it."""
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port: int = sock.getsockname()[1]
         return port
 
 
+@dataclass(frozen=True)
+class _ChildServer:
+    """A server running in a child process, with the two files that its stdout and its stderr are written to."""
+
+    process: subprocess.Popen[bytes]
+    stdout_log: Path
+    stderr_log: Path
+
+    def stdout(self) -> str:
+        """What the server has printed on its stdout so far."""
+        return self.stdout_log.read_text(errors="replace")
+
+    def stderr(self) -> str:
+        """What the server has printed on its stderr so far."""
+        return self.stderr_log.read_text(errors="replace")
+
+    def logs(self) -> str:
+        """Both logs in full, each headed by its file's name; a log that holds nothing reads as (empty)."""
+        return "\n".join(
+            f"the server's {log.name}:\n{text.rstrip() or '(empty)'}"
+            for log, text in ((self.stdout_log, self.stdout()), (self.stderr_log, self.stderr()))
+        )
+
+
 @contextlib.contextmanager
-def _server(tmp_path: Path, script: str, *args: str) -> Iterator[subprocess.Popen[bytes]]:
-    """Run script with args in a child process working in tmp_path, also its HOME, that writes its stdout to stdout.log and its stderr to stderr.log there; kill it on exit."""
+def _server(tmp_path: Path, script: str, *args: str) -> Iterator[_ChildServer]:
+    """Run script with args in a child process working in tmp_path, also its HOME, and yield it with its stdout in stdout.log and its stderr in stderr.log there; on exit kill its whole process group.
+
+    The whole group: under --debug werkzeug's reloader serves from a second process, which
+    a kill of the first alone would orphan, still holding the port and the store.
+
+    An exception that leaves the block gets both logs as a note, added once the process is
+    dead and the logs are complete, so the report of a red run says what the server printed.
+    """
     stdout_log, stderr_log = tmp_path / "stdout.log", tmp_path / "stderr.log"
     with stdout_log.open("wb") as stdout, stderr_log.open("wb") as stderr:
-        server = subprocess.Popen(
+        process = subprocess.Popen(
             [sys.executable, "-c", script, *args],
             cwd=tmp_path,
             env={**os.environ, "HOME": str(tmp_path)},
             stdout=stdout,
             stderr=stderr,
+            start_new_session=True,
         )
+        server = _ChildServer(process, stdout_log, stderr_log)
         try:
-            yield server
-        finally:
-            server.kill()
-            server.wait()
-            print(stdout_log.read_text())
-            print(stderr_log.read_text(), file=sys.stderr)
+            try:
+                yield server
+            finally:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+        except BaseException as failure:
+            failure.add_note(server.logs())
+            raise
 
 
-def _wait_until(server: subprocess.Popen[bytes], condition: Callable[[], bool], what: str) -> None:
-    deadline = time.monotonic() + 60
-    while not condition():
-        if server.poll() is not None:
-            pytest.fail(f"the server exited with code {server.returncode} before {what}")
+_Found = TypeVar("_Found")
+
+
+def _wait_until(server: _ChildServer, condition: Callable[[], _Found | None], what: str) -> _Found:
+    """Wait until condition returns something true, and return that; fail if the server has exited by then or _PATIENCE_SECS pass.
+
+    Whether the server has exited is read before condition is, so a condition checked after an
+    exit sees all that the server wrote: one that prints what the test waits for and exits at
+    once is not reported as having exited before it.
+    """
+    deadline = time.monotonic() + _PATIENCE_SECS
+    while True:
+        exited = server.process.poll() is not None
+        found = condition()
+        if found:
+            return found
+        if exited:
+            pytest.fail(f"the server exited with code {server.process.returncode} before {what}")
         if time.monotonic() > deadline:
             pytest.fail(f"timed out waiting until {what}")
         time.sleep(0.05)
 
 
-def _accepts_connections(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            return True
-    except OSError:
-        return False
+def _serving_port(server: _ChildServer) -> int:
+    """The port that server listens on, which werkzeug names on its stderr once its socket listens: under --debug the reloader's watcher does so at once, and the serving process it starts serves on the same socket.
+
+    The CLI's own status line names only the port it was asked for.
+    """
+    startup_line = _wait_until(
+        server, lambda: _WERKZEUG_STARTUP_LINE.search(server.stderr()), "it reports the port it listens on"
+    )
+    return int(startup_line.group(1))
 
 
-def _submit_home_job(port: int, pv_kw: float) -> None:
+def _submit_home_job(port: int, pv_kw: float) -> str:
+    """Submit a home job of pv_kw to the server on port, and return its run's id."""
+    return _submit_job(port, "/api/simulate/home", {"pv_kw": pv_kw, "days": 1})
+
+
+def _submit_fleet_job(port: int, home_names: list[str]) -> str:
+    """Submit a fleet job of one-day homes named home_names to the server on port, and return its run's id."""
+    return _submit_job(port, "/api/simulate/fleet", {"homes": [{"name": name, "days": 1} for name in home_names]})
+
+
+def _submit_job(port: int, path: str, body: dict[str, object]) -> str:
+    """POST body to the job endpoint path of the server on port, and return the submitted job's run's id."""
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/simulate/home",
-        data=json.dumps({"pv_kw": pv_kw, "days": 1}).encode(),
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with _LOCALHOST.open(request, timeout=30) as response:
+    with _LOCALHOST.open(request, timeout=_PATIENCE_SECS) as response:
         assert response.status == 201
+        run_id: str = json.load(response)["run_id"]
+        return run_id
 
 
-def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None:
-    """Ctrl+C drops the jobs still waiting for a worker, so they never run."""
+def _run_status(port: int, run_id: str) -> str:
+    """The status of run run_id, as the server on port reports it."""
+    with _LOCALHOST.open(f"http://127.0.0.1:{port}/api/history/runs/{run_id}", timeout=_PATIENCE_SECS) as response:
+        status: str = json.load(response)["status"]
+        return status
+
+
+def _dashboard_status(port: int) -> int:
+    """The status with which the server on port answers GET /."""
+    with _LOCALHOST.open(f"http://127.0.0.1:{port}/", timeout=_PATIENCE_SECS) as response:
+        status: int = response.status
+        return status
+
+
+def _store_dir(home: Path) -> Path:
+    """The directory of the dashboard store of a server whose HOME is home."""
+    return home / ".solar-challenge"
+
+
+def _store_lock_file(home: Path) -> Path:
+    """The lock file of the dashboard store of a server whose HOME is home."""
+    return _store_dir(home) / "dashboard.lock"
+
+
+def _stored_run(home: Path, run_id: str) -> RunRecord:
+    """The record of run run_id in the dashboard store of a server whose HOME is home, read as a reader beside the server, which keeps the store's lock."""
+    record = run_storage_over(Database(_store_dir(home) / "solar-challenge.db")).run_record(run_id)
+    assert record is not None, f"the store under {home} records no run {run_id}"
+    return record
+
+
+def _web_start_beside(home: Path) -> subprocess.CompletedProcess[str]:
+    """Run a second `web start` with HOME home, beside a server whose HOME it is too, and return how it ended.
+
+    COLUMNS keeps Rich from folding the long lock path at 80 columns on its stderr, which is not a terminal.
+    """
+    return subprocess.run(
+        [sys.executable, "-c", WEB_START, "--port", "0"],
+        cwd=home,
+        env={**os.environ, "HOME": str(home), "COLUMNS": "1000"},
+        capture_output=True,
+        text=True,
+        timeout=_PATIENCE_SECS,
+    )
+
+
+def _store_holder_pid(home: Path) -> int | None:
+    """The pid that the lock file of the dashboard store under home records, or None while it records none."""
+    try:
+        return int(_store_lock_file(home).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def test_a_check_that_fails_while_a_server_runs_reports_what_the_server_printed_on_stdout_and_stderr(
+    tmp_path: Path,
+) -> None:
+    """The failure's own text carries both logs, so a red verify keeps what the server said."""
+    with pytest.raises(pytest.fail.Exception) as failed:
+        with _server(tmp_path, PRINTS_ON_STDOUT_AND_STDERR) as server:
+            _wait_until(
+                server,
+                lambda: "a line on stderr" in server.stderr(),
+                "the server has printed on both streams",
+            )
+            pytest.fail("a check failed")
+
+    assert "a line on stdout" in failed.exconly()
+    assert "a line on stderr" in failed.exconly()
+
+
+def test_stopping_the_server_drops_the_jobs_still_queued_and_holds_the_store_until_the_running_ones_finish(
+    tmp_path: Path,
+) -> None:
+    """B14: Ctrl+C drops the jobs still waiting for a worker, so they never run, even when the server's launcher left SIGINT ignored; the jobs already running finish, and the store stays locked until they have.
+
+    The test releases the running simulations itself, once the dropped job's run reads failed,
+    which shutdown has done by then: the server's close waits for them, so they cannot wait for
+    the command to return.
+    """
     started_dir = tmp_path / "started"
     started_dir.mkdir()
-    port = _free_port()
+    release_file = tmp_path / "release"
 
     def started() -> list[str]:
         return sorted(path.name for path in started_dir.iterdir())
 
-    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), str(port)) as server:
-        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
-        for pv_kw in (1.0, 2.0, 3.0):
-            _submit_home_job(port, pv_kw)
+    with _server(
+        tmp_path,
+        RUNS_A_SCRIPT_WITH_SIGINT_IGNORED,
+        SERVER_WITH_A_BLOCKING_RUNNER,
+        str(started_dir),
+        "0",
+        str(release_file),
+    ) as server:
+        port = _serving_port(server)
+        *running, queued = [_submit_home_job(port, pv_kw) for pv_kw in (1.0, 2.0, 3.0)]
         _wait_until(server, lambda: started() == ["1.0", "2.0"], "two jobs run and the third waits for a worker")
 
-        server.send_signal(signal.SIGINT)
-        server.wait(timeout=60)
+        server.process.send_signal(signal.SIGINT)
+        _wait_until(server, lambda: _stored_run(tmp_path, queued).status == "failed", "the queued job's run is dropped")
 
-    assert started() == ["1.0", "2.0"]
+        assert _stored_run(tmp_path, queued).error_message == "Dropped: the server shut down before the job ran"
+        second = _web_start_beside(tmp_path)
+        assert second.returncode == 1, f"the store was released while jobs still ran: {second.stderr}"
+        assert str(_store_lock_file(tmp_path)) in second.stderr
+        assert [_stored_run(tmp_path, run_id).status for run_id in running] == ["running", "running"]
+
+        release_file.touch()
+        returncode = server.process.wait(timeout=_PATIENCE_SECS)
+
+        assert returncode >= 0, f"SIGINT killed the server (return code {returncode}) instead of raising KeyboardInterrupt in it"
+        assert started() == ["1.0", "2.0"]
+        assert [
+            (record.status, record.error_message) for record in (_stored_run(tmp_path, run_id) for run_id in running)
+        ] == [("failed", "stub simulation")] * 2
+
+
+def _refuses_connections(port: int) -> bool:
+    """Whether the server on port has closed its listening socket, which it does once SIGINT has stopped its serving loop."""
+    try:
+        _dashboard_status(port)
+    except OSError:
+        return True
+    return False
+
+
+def test_ctrl_c_in_a_terminal_lets_the_homes_of_a_running_parallel_fleet_job_finish(tmp_path: Path) -> None:
+    """B14 for the dashboard's default fleet path: a terminal's Ctrl+C signals the server's whole process group, its fleet pool's workers included, and the running fleet job's homes still finish, so its run reads completed, even when the server's launcher left SIGINT ignored."""
+    marker_dir = tmp_path / "markers"
+    marker_dir.mkdir()
+    release_file = tmp_path / "release"
+
+    with _server(
+        tmp_path,
+        RUNS_A_SCRIPT_WITH_SIGINT_IGNORED,
+        SERVER_WITH_A_PARALLEL_FLEET_RUNNER,
+        str(REPOSITORY_ROOT),
+        str(marker_dir),
+        "0",
+        str(release_file),
+    ) as server:
+        port = _serving_port(server)
+        run_id = _submit_fleet_job(port, ["A", "B"])
+        _wait_until(server, lambda: len(marked_homes.started(marker_dir)) == 2, "both homes run in the pool")
+
+        os.killpg(server.process.pid, signal.SIGINT)
+        _wait_until(server, lambda: _refuses_connections(port), "SIGINT stops the server's serving loop")
+        release_file.touch()
+        returncode = server.process.wait(timeout=_PATIENCE_SECS)
+
+        assert returncode == 0
+        assert marked_homes.finished(marker_dir) == {"A", "B"}
+        assert _stored_run(tmp_path, run_id).status == "completed"
 
 
 def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
     """The hint follows the status line naming the dashboard's address on stderr, and is not printed on stdout, which carries Flask's own banner."""
-    port = _free_port()
+    port = _port_free_when_asked()
 
-    with _server(tmp_path, WEB_START, str(port)) as server:
-        _wait_until(server, lambda: _accepts_connections(port), "the server accepts connections")
+    with _server(tmp_path, WEB_START, "--port", str(port)) as server:
+        _wait_until(server, lambda: "Press Ctrl+C to stop the server." in server.stderr(), "it prints its Ctrl+C hint")
 
-    status = (tmp_path / "stderr.log").read_text().splitlines()
+    status = server.stderr().splitlines()
     status_line = f"Starting web dashboard at http://127.0.0.1:{port}"
     assert status_line in status
     start = status.index(status_line)
     assert status[start + 1 : start + 2] == ["  Press Ctrl+C to stop the server."]
-    assert "Press Ctrl+C to stop the server." not in (tmp_path / "stdout.log").read_text()
+    assert "Press Ctrl+C to stop the server." not in server.stdout()
+
+
+def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_holder_and_the_first_servers_run_stays_running(
+    tmp_path: Path,
+) -> None:
+    """The first server's simulation is never released, so its job is still running when the second start is refused."""
+    started_dir = tmp_path / "started"
+    started_dir.mkdir()
+    lock_path = str(_store_lock_file(tmp_path))
+
+    with _server(
+        tmp_path, SERVER_WITH_A_BLOCKING_RUNNER, str(started_dir), "0", str(tmp_path / "never-released")
+    ) as server:
+        port = _serving_port(server)
+        run_id = _submit_home_job(port, 1.0)
+        _wait_until(server, lambda: (started_dir / "1.0").exists(), "its job's simulation starts")
+
+        second = _web_start_beside(tmp_path)
+
+        assert second.returncode == 1, second.stderr
+        assert lock_path in second.stderr
+        assert re.search(rf"(?<!\d){server.process.pid}(?!\d)", second.stderr.replace(lock_path, "")), second.stderr
+        assert "Traceback" not in second.stderr
+        assert _run_status(port, run_id) == "running"
+
+
+def test_web_start_debug_serves_the_dashboard(tmp_path: Path) -> None:
+    """B13: werkzeug's reloader binds the port at once, and the process it serves from accepts the queued request once it serves."""
+    with _server(tmp_path, WEB_START, "--debug", "--port", "0") as server:
+        port = _serving_port(server)
+
+        assert _dashboard_status(port) == 200
+
+
+def test_web_start_debug_serves_again_after_a_source_file_changes_from_a_restarted_process_that_retakes_the_store(
+    tmp_path: Path,
+) -> None:
+    """The reloader restarts the serving process when a module it imported changes, and the restarted process can take the store only once the one before it has exited.
+
+    source_file.py starts dated to the epoch, so its change is newer than the time the reloader recorded at any clock resolution.
+    """
+    source_file = tmp_path / "source_file.py"
+    source_file.write_text("")
+    os.utime(source_file, (0, 0))
+
+    with _server(tmp_path, WEB_START_IMPORTING_SOURCE_FILE, "--debug", "--port", "0") as server:
+        port = _serving_port(server)
+        assert _dashboard_status(port) == 200
+        first_holder = _store_holder_pid(tmp_path)
+        assert first_holder not in (None, server.process.pid)
+
+        source_file.write_text("CHANGED = True\n")
+        _wait_until(
+            server,
+            lambda: _store_holder_pid(tmp_path) not in (None, first_holder),
+            "a restarted serving process takes the store",
+        )
+        assert _dashboard_status(port) == 200

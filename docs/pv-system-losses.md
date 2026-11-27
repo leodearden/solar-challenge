@@ -1,6 +1,6 @@
 # PV System Losses: PVWatts v5's Default Budget on Each Array's DC Power
 
-**Task:** #252
+**Task:** #252; ageing #284, ported by #810
 **Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig.system_losses`, `create_model_chain_picking_from`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py) (§5); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
@@ -13,9 +13,23 @@
   as pvlib's losses model, which runs between the DC and AC models: each array's
   maximum-power-point power and current are scaled by `1 - system_losses`, and its
   voltage stays as the module model computed it.
+- The same step applies the modules' ageing. It scales each array's DC power and current
+  by one kept fraction,
+  `(1 - system_losses) * calculate_degradation_factor(system_age_years, degradation_rate_per_year)`,
+  the two combined as PVWatts combines its categories (§2), and the chain's
+  `results.losses` records that fraction, as pvlib's own losses models record theirs.
 - The default is `pvlib.pvsystem.pvwatts_losses() / 100`, 14.08% (0.14075660688264469 in
   pvlib 0.15.1). A value outside [0, 1) raises `ValueError`, so 14.0, the percent that
   PVGIS and PVWatts take, is refused.
+- A scenario file's home `pv:` block sets it as `system_losses`, a fraction:
+  `system_losses: 0.05` is 5%. `scenario_writer` writes it back, so an exported home
+  loads back with its own losses.
+- The dashboard's home form sets it on its PV tab as System Losses, a fraction sent as
+  the request body's `system_losses`. Left blank, the form sends none and the run takes
+  the default, which the field shows as its placeholder (`pv.PVWATTS_DEFAULT_SYSTEM_LOSSES`).
+  `home run --system-losses` overrides a scenario file's value. Both refuse a value
+  outside [0, 1) with `PVConfig`'s own error. `home run` gives it under the option's name,
+  `--system-losses:`, as a scenario file's refusal is under its `pv:` block.
 - **Performance ratio**, as this note and its measurements use it: a year's AC energy
   divided by the in-plane irradiation (kWh/m², before angle-of-incidence losses) times
   the wired DC capacity (`pv.wired_dc_capacity_kw`, the denominator of validation's
@@ -42,8 +56,9 @@ model's annual performance ratio lands on the two UK references (§5):
 ## 3. What It Excludes, and Why
 
 - Inverter, temperature and angle-of-incidence losses: the model computes them.
-- Ageing: `system_age_years × degradation_rate_per_year` applies it, and PVWatts' age
-  category is 0.
+- Ageing: it is not in the budget, whose Age category is 0. The same DC step applies it
+  as its own factor,
+  `calculate_degradation_factor(system_age_years, degradation_rate_per_year)` (§1, §4).
 - PVGIS's 14%: per the PVGIS user manual it covers cable, inverter, dirt and
   lifetime-ageing losses, for a model with no inverter of its own, so here its inverter
   and ageing shares would count twice. Its total happens to be close to PVWatts' (14 and
@@ -60,6 +75,13 @@ model's annual performance ratio lands on the two UK references (§5):
   inverter peaks at 3.000 kW with or without the losses and keeps 0.9546 of its energy;
   8 kW of CEC modules on 3.68 kW peaks at 3.680 kW and keeps 0.9636. A derate of the AC
   would cap both peaks at 0.859 of the rating and keep 0.859 of the energy.
+  **[Amended 2026-10-20, task 823: every array's cells now run at NOCT-SAM's temperature,
+  from the module's own NOCT and efficiency, not SAPM's generic open-rack glass/glass set
+  ([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured by
+  `simulate_pv_output`'s sum and maximum over a copy of `clear_june_daytime`, on task
+  823's commit 2be9d1b: the 6 kW of `create_simple_module_params()` modules on 3 kW still
+  peaks at 3.000 kW with or without the losses, and keeps 0.9563; the 8 kW of the default
+  CEC module on 3.68 kW still peaks at 3.680 kW, and keeps 0.9634.]**
 - At unchanged voltage. The Sandia and ADR inverters read `v_mp`, and `create_pv_system`
   matches the strings' voltage to the inverter's MPPT window
   ([pv-inverter-string-matching.md](pv-inverter-string-matching.md)). pvlib's built-in
@@ -67,14 +89,32 @@ model's annual performance ratio lands on the two UK references (§5):
   it would move that voltage by 14%; it also reads its categories from the `PVSystem`,
   not one fraction.
 
+Ageing applies on the DC side for the same reason, so an aged inverter-limited array
+still clips at its rating. This is a dated record: 2026-11-26, task 810's step-2 commit
+("age each array's DC power before the inverter, in the model chain's losses step") on
+its branch from main 565664b0, CPython 3.12.3, pvlib 0.15.1, pandas 3.1.1, numpy 2.4.6,
+Bristol's scaled TMY (weather cache entry `tmy_f8a4df0259c4`, GHI 1069.46 kWh/m²,
+[tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)), with every array's cells at
+NOCT-SAM's temperature ([pv-cell-temperature.md](pv-cell-temperature.md)). As a fraction
+of the same system's annual AC when new, at age 20 (factor 0.90), 6 kW on a 3.68 kW
+inverter keeps 0.9186 and still peaks at 3.680 kW, where a derate of the AC keeps 0.9000
+and peaks at 3.312 kW; 8 kW on 3.68 kW keeps 0.9352. The default sizes (3, 3.68, 4, 5
+and 6 kW, with the inverter at the DC capacity) keep 0.8984, 0.8979, 0.8990, 0.8991 and
+0.8976, a little under the factor, because the inverter's efficiency falls at part load.
+Task 284 read 0.9165 for 6 kW on 3.68 kW under SAPM's cell temperature, before task 823.
+To re-measure, compare `simulate_pv_output`'s annual sum and peak for a config at
+`system_age_years` 20.0 and 0.0 on that TMY, read offline with
+`PvgisTmy(WeatherCache(<the main checkout's .cache/weather>)).get(Location.bristol())`.
+
 ## 5. Measurements
 
 This is a dated record. Re-measure with the script before relying on it.
 
 - **Provenance.** 2026-10-09, on task 252's branch from main cf6af55, and again from
   main 5325093 with identical output: CPython 3.12.3, pvlib 0.15.1, pandas 3.0.3, numpy
-  2.4.6. TMYs through `get_tmy_data`, scaled to PVGIS v5_3's 2005–2020 mean GHI
-  ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)). PVGIS-14% is pvlib's
+  2.4.6. TMYs through `get_tmy_data` (task 827 retired it;
+  `PvgisTmy(WeatherCache()).get` serves the same year), scaled to PVGIS v5_3's 2005–2020
+  mean GHI ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)). PVGIS-14% is pvlib's
   `get_pvgis_hourly(pvcalculation=True, peakpower=1, loss=14)` from the same release
   and years (PVGIS-SARAH3), at 35° facing south, free-standing, with the horizon.
 - **Bristol, default 4 kW** (4.00428 wired kWp; GHI 1069.46 and in-plane 1236.12
@@ -89,6 +129,15 @@ This is a dated record. Re-measure with the script before relying on it.
   kWh/kWp, ratio 0.9359; with them 3976.80 kWh, 993.14 kWh/kWp, ratio 0.8034, which the
   slow guard reads too. The site table below and §6's Bristol figures predate the
   change.]**
+  **[Amended 2026-10-20, task 823: every array's cells now run at NOCT-SAM's temperature,
+  from the module's own NOCT and efficiency, not SAPM's generic open-rack glass/glass set
+  ([pv-cell-temperature.md](pv-cell-temperature.md)). Re-measured by the script's
+  `measure` on task 823's commit 2be9d1b (same interpreter and libraries, the same TMY;
+  in-plane 1236.12 kWh/m²): without the losses 4716.89 kWh, 1177.96 kWh/kWp, ratio
+  0.9529; with them 4052.83 kWh, 1012.12 kWh/kWp, ratio 0.8188, which the slow guard
+  reads too, inside its 0.76–0.84. The site table below and §6's Bristol figures predate
+  NOCT-SAM as well: the table needs each site's TMY and PVGIS's estimate, which the
+  weather cache does not hold offline.]**
 - **Earlier reading** (2026-10-03, main f3e05fb, by task 252's first plan): PVGIS v5_3's
   PVcalc at 14% over SARAH3 2005–2023 gave Bristol 1022.83 kWh/kWp, ratio 0.8124, and
   0.808–0.825 across the fourteen sites.
@@ -132,14 +181,15 @@ PVGIS-14% 0.793–0.815.
 
 ## 7. Open Items
 
-- **Task 283:** exposure in YAML, fleet distributions, sweeps and `scenario_writer`.
-  Until then every YAML, web and CLI run gets the default, only Python callers set the
-  field, and `config.py` refuses a YAML `system_losses` key.
-- **Task 284:** ageing is applied to the AC after clipping, not to the DC.
+- **Exposure:** task 914 makes `system_losses` a home `pv:` key that the reader reads and
+  `scenario_writer` writes, and task 610 makes it a web home-form input and
+  `home run --system-losses` (§1). A fleet's `pv:` distribution draws it after task 919
+  (S7 δ). The fleet page has no input for it, and `home quick` takes no PV setting but
+  capacity.
 
 ## 8. When to Revisit
 
-- pvlib changes `pvwatts_losses`' defaults. `FROZEN_SURFACE` pins the default's repr, so
+- pvlib changes `pvwatts_losses`' defaults. `FROZEN_SURFACE` pins the default's spelling, so
   the frozen-surface test fails, and the newest-releases lane with it.
 - MCS or PVGIS changes its methodology.
 - The model gains an explicit soiling, shading or availability term: take that category

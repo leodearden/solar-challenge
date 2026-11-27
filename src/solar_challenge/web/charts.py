@@ -1,62 +1,57 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Centralized chart module for the Solar Challenge web dashboard.
 
-Each chart builder returns Plotly figure JSON, made by fig.to_json(); heat_pump_analysis returns
-its two figures as one HeatPumpCharts.
-Charts share layout defaults. Every series colour is a COLOUR_PALETTE entry, or a translucent
-form of one made by _with_alpha, so a palette edit reaches it; a chart that writes a palette
-colour out by hand fails tests/unit/test_web_chart_colours.py. Every COLOUR_PALETTE role is one
-some chart draws, and a role none draws fails the same test module. Neutral chrome (backgrounds,
-annotation text, outlines) and the heatmap's named colour scale mark no series and have no
-palette role. Each of the five energy flows has its label, colour role and place in the charts'
-order once, in _EnergyFlow; tests/unit/test_web_chart_energy_flows.py checks that the charts agree.
+Each chart builder returns a frozen ChartPanel: the chart's element id, the title and height its
+card and its figure share, and its Plotly figure JSON, or a ChartAbsence whose reason names the
+rule the run does not meet and the run's value. _panel, each builder's one exit, writes the title
+and height into the figure's layout, so each lives once. load_panels returns the demand-by-load
+panel and a profile panel per additional load, and sweep_panels one per SweepMetric, each marking
+its best point by the metric's direction.
+Each page's assembler, home_results_tabs, fleet_results_tabs or comparison_tabs, groups the panels
+of the charts that apply to its run into ChartTabs; a chart whose subject the run lacks, a battery
+or an additional load, is not listed. The comparison charts draw each ComparedRun from its
+RunHeadline, the figures web/run_headline.py's run_headline reads from a run's summary of either
+kind. ChartPanel, ChartAbsence, ChartTab and ComparedRun each refuse at construction, naming the
+field and the value, what no page can draw.
+Charts share layout defaults. COLOUR_PALETTE maps each chart role to its colour, loaded when
+this module is imported from the chart section of the theme token file, static/src/theme-tokens.json.
+Every colour a chart draws is a COLOUR_PALETTE entry, or a translucent form of one made by
+_with_alpha, so a token edit reaches it; a chart that writes a chart colour out by hand fails
+tests/unit/test_web_chart_colours.py. Every COLOUR_PALETTE role is one some chart draws, and a
+role none draws fails the same test module. The unpriced-import note's text and the Sankey's node
+outline are roles too; only the transparent backgrounds and the heatmap's named colour scale are
+not palette colours. Each of the five energy flows has its label, colour role and place in the
+charts' order once, in _EnergyFlow; tests/unit/test_web_chart_energy_flows.py checks that the
+charts agree.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, NamedTuple, TypeVar
+from typing import Any, Final, NamedTuple, NoReturn, TypeVar
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import SimulationResults, SummaryStatistics
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.output import SeasonSummary, aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
+from solar_challenge.web.run_headline import RunHeadline
+from solar_challenge.web.theme_tokens import chart_colour_palette, is_rrggbb
 
-_AMBER = "#f5a623"
-_RED = "#d0021b"
-_GREEN = "#7ed321"
-_BLUE = "#4a90e2"
-_PURPLE = "#9013fe"
+_THEME_TOKENS_FILE = Path(__file__).parent / "static" / "src" / "theme-tokens.json"
 
-COLOUR_PALETTE = {
-    "pv_generation": _AMBER,
-    "demand": _RED,
-    "self_consumption": _GREEN,
-    "grid_import": "#9b9b9b",
-    "grid_export": _BLUE,
-    "battery_charge": "#50e3c2",
-    "heat_pump": _PURPLE,
-    "cost": _RED,
-    "revenue": _GREEN,
-    "soc_low_threshold": _RED,
-    "soc_high_threshold": _GREEN,
-    "net_cost": _BLUE,
-    "winter": _BLUE,
-    "summer": _AMBER,
-    "comparison_run_1": _AMBER,
-    "comparison_run_2": _BLUE,
-    "comparison_run_3": _GREEN,
-    "comparison_run_4": _PURPLE,
-}
+COLOUR_PALETTE: Mapping[str, str] = chart_colour_palette(_THEME_TOKENS_FILE)
 
 _SHARED_LAYOUT = dict(
     font=dict(family="system-ui, sans-serif"),
@@ -66,7 +61,81 @@ _SHARED_LAYOUT = dict(
     legend=dict(orientation="h", y=-0.15),
 )
 
-_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
+_CHART_DOM_ID = re.compile(r"chart-[a-z0-9-]+")
+_CHART_TAB_KEY = re.compile(r"[a-z_]+")
+
+
+def _refuse(field: str, value: object, rule: str) -> NoReturn:
+    """Raise the ValueError that refuses *value* for *field*, naming both and the *rule* the value breaks."""
+    raise ValueError(f"{field} must be {rule}; got {value!r}")
+
+
+@dataclass(frozen=True)
+class ChartAbsence:
+    """Why a chart that applies to a run has nothing to draw, in one sentence naming the rule and the run's value."""
+
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reason.strip():
+            _refuse("ChartAbsence.reason", self.reason, "a sentence, not blank")
+
+
+@dataclass(frozen=True)
+class ChartPanel:
+    """One chart of a page: its element id, the title and height its card and its figure share, and its figure's JSON or the absence that says why it has none."""
+
+    dom_id: str
+    title: str
+    height_px: int
+    content: str | ChartAbsence
+
+    def __post_init__(self) -> None:
+        if not _CHART_DOM_ID.fullmatch(self.dom_id):
+            _refuse("ChartPanel.dom_id", self.dom_id, "'chart-' followed by lower-case letters, digits and hyphens")
+        if not self.title.strip():
+            _refuse("ChartPanel.title", self.title, "a title, not blank")
+        if self.height_px <= 0:
+            _refuse("ChartPanel.height_px", self.height_px, "a height above 0 px")
+        if not isinstance(self.content, (str, ChartAbsence)):
+            _refuse("ChartPanel.content", self.content, "a figure's JSON or a ChartAbsence")
+        if isinstance(self.content, str) and self.content.strip() in ("", "{}"):
+            _refuse("ChartPanel.content", self.content, "a figure's JSON, neither blank nor an empty object")
+
+    @property
+    def figure_json(self) -> str | None:
+        """The panel's figure JSON, or None when the panel is an absence."""
+        return self.content if isinstance(self.content, str) else None
+
+    @property
+    def absence_reason(self) -> str | None:
+        """Why the panel has no figure, or None when it has one."""
+        return self.content.reason if isinstance(self.content, ChartAbsence) else None
+
+
+@dataclass(frozen=True)
+class ChartTab:
+    """One tab of a page's charts: the key that selects it, its label, and its panels in the order they are drawn."""
+
+    key: str
+    label: str
+    panels: tuple[ChartPanel, ...]
+
+    def __post_init__(self) -> None:
+        if not _CHART_TAB_KEY.fullmatch(self.key):
+            _refuse("ChartTab.key", self.key, "lower-case letters and underscores")
+        if not self.label.strip():
+            _refuse("ChartTab.label", self.label, "a label, not blank")
+        if not self.panels:
+            _refuse("ChartTab.panels", self.panels, "at least one panel")
+
+
+def _panel(dom_id: str, title: str, height_px: int, content: go.Figure | ChartAbsence) -> ChartPanel:
+    """The panel of *content*: a figure, its layout titled *title* and *height_px* high, or the absence that says why there is none."""
+    if isinstance(content, ChartAbsence):
+        return ChartPanel(dom_id, title, height_px, content)
+    content.update_layout(title=title, height=height_px)
+    return ChartPanel(dom_id, title, height_px, str(content.to_json()))
 
 
 def _with_alpha(colour: str, alpha: float) -> str:
@@ -75,10 +144,19 @@ def _with_alpha(colour: str, alpha: float) -> str:
     Raises:
         ValueError: If *colour* is not written #rrggbb; the message names it.
     """
-    if not _HEX_COLOUR.fullmatch(colour):
+    if not is_rrggbb(colour):
         raise ValueError(f"a translucent chart colour derives from a #rrggbb colour, not {colour!r}")
     red, green, blue = bytes.fromhex(colour[1:])
     return f"rgba({red},{green},{blue},{alpha})"
+
+
+def _bar(name: str, *, x: Sequence[str], y: Sequence[float], colour: str) -> Any:
+    """A bar trace named *name* of the values *y* at *x*, filled in *colour* with no outline.
+
+    Plotly's default template outlines a bar in its own plot background colour, which no figure draws, so the
+    outline would show on the card in either theme.
+    """
+    return go.Bar(name=name, x=x, y=y, marker=dict(color=colour, line=dict(width=0)))
 
 
 class _ChartElement(Enum):
@@ -135,15 +213,14 @@ def _adaptive_downsample(data: _TimeIndexed, max_points: int = 2000) -> _TimeInd
 
 
 def _stacked_power_flow_timeline(
-    title: str,
     *,
     generation: pd.Series,
     demand: pd.Series,
     self_consumption: pd.Series,
     grid_import: pd.Series,
     grid_export: pd.Series,
-) -> str:
-    """Plotly JSON of a stacked area chart, titled *title*, of the five power flows over time, with a range slider."""
+) -> go.Figure:
+    """An untitled stacked area chart of the five power flows over time, with a range slider."""
     flows = _in_flow_order({
         _EnergyFlow.GENERATION: generation,
         _EnergyFlow.DEMAND: demand,
@@ -168,34 +245,36 @@ def _stacked_power_flow_timeline(
     fig = go.Figure(data=traces)
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title=title,
         xaxis=dict(
             title="Time",
             rangeslider=dict(visible=True),
         ),
         yaxis=dict(title="Power (kW)"),
-        height=500,
     )
-    return str(fig.to_json())
+    return fig
 
 
-def power_flow_timeline(results: SimulationResults) -> str:
-    """Plotly JSON of the home's power flows in *results*, stacked over time with a range slider."""
-    return _stacked_power_flow_timeline(
+def power_flow_timeline(results: SimulationResults) -> ChartPanel:
+    """The panel of the home's power flows in *results*, stacked over time with a range slider."""
+    return _panel(
+        "chart-power-flow",
         "Power Flow Timeline",
-        generation=results.generation,
-        demand=results.demand,
-        self_consumption=results.self_consumption,
-        grid_import=results.grid_import,
-        grid_export=results.grid_export,
+        500,
+        _stacked_power_flow_timeline(
+            generation=results.generation,
+            demand=results.demand,
+            self_consumption=results.self_consumption,
+            grid_import=results.grid_import,
+            grid_export=results.grid_export,
+        ),
     )
 
 
-def battery_soc_chart(results: SimulationResults, battery_config: BatteryConfig) -> str:
-    """Plotly JSON of the battery state of charge in *results*, filled to zero, with a dashed line at each SOC limit of the battery *battery_config* describes.
+def battery_soc_chart(results: SimulationResults, battery_config: BatteryConfig) -> ChartPanel:
+    """The panel of the battery state of charge in *results*, filled to zero, with a dashed line at each SOC limit of the battery *battery_config* describes.
 
-    The limits are Battery's min_soc_kwh and max_soc_kwh, its SOC fractions of its
-    SoH-derated capacity, which bound the SOC simulate_home tracks.
+    The limits are battery_config.soc_envelope()'s min_soc_kwh and max_soc_kwh, its
+    SOC fractions of its SoH-derated capacity, which bound the SOC simulate_home tracks.
     """
     soc = _adaptive_downsample(results.battery_soc)
     dates = [d.isoformat() for d in soc.index]
@@ -213,16 +292,16 @@ def battery_soc_chart(results: SimulationResults, battery_config: BatteryConfig)
 
     fig = go.Figure(data=[trace])
 
-    battery = Battery(battery_config)
+    envelope = battery_config.soc_envelope()
     fig.add_hline(
-        y=battery.min_soc_kwh,
+        y=envelope.min_soc_kwh,
         line_dash="dash",
         line_color=COLOUR_PALETTE["soc_low_threshold"],
         annotation_text="Min SOC",
         annotation_position="bottom right",
     )
     fig.add_hline(
-        y=battery.max_soc_kwh,
+        y=envelope.max_soc_kwh,
         line_dash="dash",
         line_color=COLOUR_PALETTE["soc_high_threshold"],
         annotation_text="Max SOC",
@@ -231,12 +310,10 @@ def battery_soc_chart(results: SimulationResults, battery_config: BatteryConfig)
 
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Battery State of Charge",
         xaxis=dict(title="Time"),
         yaxis=dict(title="State of Charge (kWh)"),
-        height=400,
     )
-    return str(fig.to_json())
+    return _panel("chart-battery-soc", "Battery State of Charge", 400, fig)
 
 
 class _SankeyNode(_ChartElement):
@@ -262,44 +339,56 @@ class _SankeyLink(NamedTuple):
     coloured_as: _ChartElement
 
 
-def sankey_diagram(summary: SummaryStatistics) -> str:
+_SANKEY_MIN_FLOW_KWH = 0.01
+
+
+def sankey_diagram(summary: SummaryStatistics) -> ChartPanel:
     """Sankey diagram of the run's energy flows from PV, the grid and the battery to their uses.
 
     PV feeds demand, the battery and export; the grid feeds demand and, on
     grid-charging days, the battery; the battery feeds demand. A flow of
-    0.01 kWh or less is not drawn.
+    _SANKEY_MIN_FLOW_KWH or less is not drawn, and a run with no other flow
+    has an absence instead of a figure.
 
     Args:
         summary: The run's summary statistics, whose energy totals the links draw.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if there is no energy flow
-        to draw.
+        The chart's panel.
     """
-    grid_charge = summary.total_grid_charge_kwh
-    # Self-consumption counts the battery's discharge to demand as well as the PV used directly
-    pv_to_demand = summary.total_self_consumption_kwh - summary.total_battery_discharge_kwh
-    pv_to_battery = summary.total_battery_charge_kwh - grid_charge
-    grid_to_demand = summary.total_grid_import_kwh - grid_charge
     flows = [
-        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.DEMAND, pv_to_demand, _EnergyFlow.SELF_CONSUMPTION),
-        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.BATTERY, pv_to_battery, _SankeyNode.BATTERY),
+        _SankeyLink(
+            _SankeyNode.PV_GENERATION,
+            _SankeyNode.DEMAND,
+            summary.total_direct_self_consumption_kwh,
+            _EnergyFlow.SELF_CONSUMPTION,
+        ),
+        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.BATTERY, summary.total_pv_charge_kwh, _SankeyNode.BATTERY),
         _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.EXPORT, summary.total_grid_export_kwh, _EnergyFlow.GRID_EXPORT),
-        _SankeyLink(_SankeyNode.GRID, _SankeyNode.DEMAND, grid_to_demand, _EnergyFlow.GRID_IMPORT),
-        _SankeyLink(_SankeyNode.GRID, _SankeyNode.BATTERY, grid_charge, _SankeyNode.BATTERY),
+        _SankeyLink(_SankeyNode.GRID, _SankeyNode.DEMAND, summary.total_grid_to_demand_kwh, _EnergyFlow.GRID_IMPORT),
+        _SankeyLink(_SankeyNode.GRID, _SankeyNode.BATTERY, summary.total_grid_charge_kwh, _SankeyNode.BATTERY),
         _SankeyLink(_SankeyNode.BATTERY, _SankeyNode.DEMAND, summary.total_battery_discharge_kwh, _SankeyNode.BATTERY),
     ]
-    drawn = [flow for flow in flows if flow.kwh > 0.01]
-    if not drawn:
-        return "{}"
+    drawn = [flow for flow in flows if flow.kwh > _SANKEY_MIN_FLOW_KWH]
+    return _panel(
+        "chart-sankey",
+        "Energy Flow",
+        450,
+        _sankey_figure(drawn)
+        if drawn
+        else ChartAbsence(f"No energy flowed in this run: every flow is {_SANKEY_MIN_FLOW_KWH} kWh or less."),
+    )
 
+
+def _sankey_figure(drawn: Sequence[_SankeyLink]) -> go.Figure:
+    """A Sankey of the _SankeyNode nodes joined by the links *drawn*."""
     nodes = list(_SankeyNode)
     link_opacity = 0.4
     fig = go.Figure(data=[go.Sankey(
         node=dict(
             pad=20,
             thickness=20,
-            line=dict(color="black", width=0.5),
+            line=dict(color=COLOUR_PALETTE["sankey_node_outline"], width=0.5),
             label=[node.label for node in nodes],
             color=[node.colour for node in nodes],
         ),
@@ -311,12 +400,8 @@ def sankey_diagram(summary: SummaryStatistics) -> str:
         ),
     )])
 
-    fig.update_layout(
-        **_SHARED_LAYOUT,
-        title="Energy Flow",
-        height=450,
-    )
-    return str(fig.to_json())
+    fig.update_layout(**_SHARED_LAYOUT)
+    return fig
 
 
 _AGGREGATE_KWH_COLUMNS: Mapping[_EnergyFlow, str] = MappingProxyType({
@@ -328,55 +413,67 @@ _AGGREGATE_KWH_COLUMNS: Mapping[_EnergyFlow, str] = MappingProxyType({
 })
 
 
-def daily_energy_balance(results: SimulationResults) -> str:
+def daily_energy_balance(results: SimulationResults) -> ChartPanel:
     """Grouped bar chart of daily generation, demand and related metrics.
 
     Args:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string.
+        The chart's panel.
     """
     daily = aggregate_daily(results)
     dates = [d.strftime("%Y-%m-%d") for d in daily.index]
 
     traces: list[Any] = [
-        go.Bar(name=flow.label, x=dates, y=daily[column].round(3).tolist(), marker_color=flow.colour)
+        _bar(flow.label, x=dates, y=daily[column].round(3).tolist(), colour=flow.colour)
         for flow, column in _in_flow_order(_AGGREGATE_KWH_COLUMNS)
     ]
 
     fig = go.Figure(data=traces)
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Daily Energy Balance",
         barmode="group",
         xaxis=dict(title="Date", type="category"),
         yaxis=dict(title="Energy (kWh)"),
-        height=420,
     )
-    return str(fig.to_json())
+    return _panel("chart-daily-balance", "Daily Energy Balance", 420, fig)
 
 
-def monthly_summary(results: SimulationResults) -> str | None:
+_MONTHLY_SUMMARY_MIN_DAYS = 90
+
+
+def monthly_summary(results: SimulationResults) -> ChartPanel:
     """Stacked bar chart of monthly energy breakdown.
 
     Args:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, or ``None`` if the simulation spans
-        fewer than 90 days.
+        The chart's panel, an absence naming the rule and the run's days if
+        the run's window covers fewer than _MONTHLY_SUMMARY_MIN_DAYS calendar days.
     """
-    sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
-    if sim_days < 90:
-        return None
+    days = results.window.days
+    return _panel(
+        "chart-monthly",
+        "Monthly Energy Summary",
+        420,
+        _monthly_summary_figure(results)
+        if days >= _MONTHLY_SUMMARY_MIN_DAYS
+        else ChartAbsence(
+            f"The monthly summary needs at least {_MONTHLY_SUMMARY_MIN_DAYS} days; this run covers {days}."
+        ),
+    )
 
+
+def _monthly_summary_figure(results: SimulationResults) -> go.Figure:
+    """The stacked monthly bars of *results*'s self-consumption, grid import and grid export."""
     monthly = aggregate_monthly(results)
     months = [d.strftime("%Y-%m") for d in monthly.index]
 
     stacked = frozenset({_EnergyFlow.SELF_CONSUMPTION, _EnergyFlow.GRID_IMPORT, _EnergyFlow.GRID_EXPORT})
     traces: list[Any] = [
-        go.Bar(name=flow.label, x=months, y=monthly[column].round(2).tolist(), marker_color=flow.colour)
+        _bar(flow.label, x=months, y=monthly[column].round(2).tolist(), colour=flow.colour)
         for flow, column in _in_flow_order(_AGGREGATE_KWH_COLUMNS)
         if flow in stacked
     ]
@@ -384,30 +481,27 @@ def monthly_summary(results: SimulationResults) -> str | None:
     fig = go.Figure(data=traces)
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Monthly Energy Summary",
         barmode="stack",
         xaxis=dict(title="Month", type="category"),
         yaxis=dict(title="Energy (kWh)"),
-        height=420,
     )
-    return str(fig.to_json())
+    return fig
 
 
-def _unpriced_import_note(results: SimulationResults) -> str | None:
-    """The note *results*'s financial chart carries that its import is not priced, else None.
+def _unpriced_import_note(config: HomeConfig) -> str | None:
+    """The note the financial chart of a run of *config* carries when its import is not priced, else None.
 
-    A run's import is priced when its tariff rate is above zero at some minute:
-    simulate_home writes a zero rate throughout a run without a tariff. The note
-    names revenue tracking too only when the run earns no export revenue.
+    simulate_home prices a run's import only under config.tariff_config, and its
+    export only under config.seg_tariff.
     """
-    if results.tariff_rate.gt(0).any():
+    if config.tariff_config is not None:
         return None
-    if results.export_revenue.gt(0).any():
+    if config.seg_tariff is not None:
         return "No import tariff configured — cost tracking unavailable"
     return "No tariff configured — cost and revenue tracking unavailable"
 
 
-def financial_breakdown(results: SimulationResults) -> str:
+def financial_breakdown(results: SimulationResults, config: HomeConfig) -> ChartPanel:
     """Dual-axis chart of the run's daily cost and revenue bars and its cumulative net cost line.
 
     Daily cost and revenue are :func:`~solar_challenge.output.aggregate_daily`'s
@@ -418,27 +512,25 @@ def financial_breakdown(results: SimulationResults) -> str:
     The line is the run's net cost to date: the running total of each day's
     import cost less its export revenue.
 
-    The chart carries a note exactly when the run's import is not priced: its
-    tariff rate is zero throughout, as for a run simulated without a tariff.
-    Its £0 cost bars would otherwise read as free import, and its Cumulative
-    Net Cost would count revenue only. The note does not depend on the bars
-    totalling £0, so a priced run that imports nothing carries none.
+    The chart carries a note exactly when *config*, the home the run simulated,
+    sets no import tariff. Its £0 cost bars would otherwise read as free
+    import, and its Cumulative Net Cost would count revenue only.
 
-    - "No import tariff configured — cost tracking unavailable" when the run
-      earns export revenue, which only an SEG rate pays.
+    - "No import tariff configured — cost tracking unavailable" when it sets an
+      SEG, which prices its export.
     - "No tariff configured — cost and revenue tracking unavailable" when it
-      earns none. That includes a run with an SEG rate that exports nothing in
-      its window: SimulationResults records the import tariff's rate but no
-      export rate, so the chart cannot tell it from a run with neither.
+      sets neither.
 
-    A tariff with no SEG rate carries no note: its £0 revenue is the
-    economically correct value, and simulate_home warns about it.
+    A tariff with no SEG carries no note: its £0 revenue is the economically
+    correct value, and simulate_home warns about it.
 
     Args:
         results: SimulationResults instance.
+        config: The HomeConfig the run simulated; its tariff_config and
+            seg_tariff say which of the run's flows are priced.
 
     Returns:
-        Plotly figure JSON string.
+        The chart's panel.
     """
     daily = aggregate_daily(results)
     daily_cost = daily["import_cost_gbp"].round(2)
@@ -450,21 +542,11 @@ def financial_breakdown(results: SimulationResults) -> str:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     fig.add_trace(
-        go.Bar(
-            name="Daily Cost",
-            x=dates,
-            y=daily_cost.tolist(),
-            marker_color=COLOUR_PALETTE["cost"],
-        ),
+        _bar("Daily Cost", x=dates, y=daily_cost.tolist(), colour=COLOUR_PALETTE["cost"]),
         secondary_y=False,
     )
     fig.add_trace(
-        go.Bar(
-            name="Daily Revenue",
-            x=dates,
-            y=daily_revenue.tolist(),
-            marker_color=COLOUR_PALETTE["revenue"],
-        ),
+        _bar("Daily Revenue", x=dates, y=daily_revenue.tolist(), colour=COLOUR_PALETTE["revenue"]),
         secondary_y=False,
     )
     fig.add_trace(
@@ -480,15 +562,13 @@ def financial_breakdown(results: SimulationResults) -> str:
 
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Financial Breakdown",
         barmode="group",
         xaxis=dict(title="Date", type="category"),
-        height=420,
     )
     fig.update_yaxes(title_text="Daily (GBP)", secondary_y=False)
     fig.update_yaxes(title_text=f"{net_cost_label} (GBP)", secondary_y=True)
 
-    note = _unpriced_import_note(results)
+    note = _unpriced_import_note(config)
     if note is not None:
         fig.add_annotation(
             text=note,
@@ -497,10 +577,10 @@ def financial_breakdown(results: SimulationResults) -> str:
             x=0.5,
             y=0.5,
             showarrow=False,
-            font=dict(size=14, color="#888888"),
+            font=dict(size=14, color=COLOUR_PALETTE["unpriced_note"]),
         )
 
-    return str(fig.to_json())
+    return _panel("chart-financial", "Financial Breakdown", 420, fig)
 
 
 def _season_bar(name: str, colour_role: str, season: SeasonSummary) -> Any:
@@ -510,15 +590,18 @@ def _season_bar(name: str, colour_role: str, season: SeasonSummary) -> Any:
         _EnergyFlow.DEMAND: season.demand_kwh,
         _EnergyFlow.SELF_CONSUMPTION: season.self_consumption_kwh,
     })
-    return go.Bar(
-        name=name,
+    return _bar(
+        name,
         x=[f"{flow.label} (kWh)" for flow, _ in flows],
         y=[round(total, 1) for _, total in flows],
-        marker_color=COLOUR_PALETTE[colour_role],
+        colour=COLOUR_PALETTE[colour_role],
     )
 
 
-def seasonal_comparison(results: SimulationResults) -> str | None:
+_SEASONAL_COMPARISON_MIN_DAYS = 180
+
+
+def seasonal_comparison(results: SimulationResults) -> ChartPanel:
     """Winter vs Summer grouped bar chart.
 
     Winter is defined as Dec-Feb and Summer as Jun-Aug.
@@ -527,13 +610,24 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
         results: SimulationResults instance.
 
     Returns:
-        Plotly figure JSON string, or ``None`` if the simulation spans
-        fewer than 180 days.
+        The chart's panel, an absence naming the rule and the run's days if
+        the run's window covers fewer than _SEASONAL_COMPARISON_MIN_DAYS calendar days.
     """
-    sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
-    if sim_days < 180:
-        return None
+    days = results.window.days
+    return _panel(
+        "chart-seasonal",
+        "Seasonal Comparison",
+        420,
+        _seasonal_comparison_figure(results)
+        if days >= _SEASONAL_COMPARISON_MIN_DAYS
+        else ChartAbsence(
+            f"The seasonal comparison needs at least {_SEASONAL_COMPARISON_MIN_DAYS} days; this run covers {days}."
+        ),
+    )
 
+
+def _seasonal_comparison_figure(results: SimulationResults) -> go.Figure:
+    """The winter and summer bars of *results*'s generation, demand and self-consumption."""
     seasons = calculate_seasonal_metrics(results)
 
     fig = go.Figure(data=[
@@ -543,71 +637,56 @@ def seasonal_comparison(results: SimulationResults) -> str | None:
 
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Seasonal Comparison",
         barmode="group",
         xaxis=dict(title="Metric"),
         yaxis=dict(title="Energy (kWh)"),
-        height=420,
     )
-    return str(fig.to_json())
+    return fig
 
 
-@dataclass(frozen=True, kw_only=True)
-class HeatPumpCharts:
-    """A home run's two heat-pump figures, each Plotly figure JSON: the heat pump's share of the run's demand, and its load over time."""
+def load_panels(results: SimulationResults) -> tuple[ChartPanel, ...]:
+    """The panels of *results*'s loads: none for a run whose demand is the household's alone; otherwise the demand-by-load panel, then each additional load's profile panel, in LoadKind order."""
+    if not results.additional_loads:
+        return ()
+    return (
+        _demand_by_load_panel(results),
+        *(_load_profile_panel(kind, load) for kind, load in results.additional_loads.items()),
+    )
 
-    load_share_chart: str
-    load_profile_chart: str
 
-
-def heat_pump_analysis(results: SimulationResults) -> HeatPumpCharts | None:
-    """The heat-pump charts of *results*, or None if it carries no heat-pump load."""
-    if results.heat_pump_load is None:
-        return None
-
-    # --- Load share pie chart ---
-    totals = results.total_amounts()
-    hp_total = totals["heat_pump_load_kwh"]
-    total_demand = totals["demand_kwh"]
-    other_demand = max(0, total_demand - hp_total)
-
-    pie_fig = go.Figure(data=[go.Pie(
-        labels=["Heat Pump", "Other Demand"],
-        values=[round(hp_total, 1), round(other_demand, 1)],
-        marker=dict(colors=[COLOUR_PALETTE["heat_pump"], COLOUR_PALETTE["demand"]]),
+def _demand_by_load_panel(results: SimulationResults) -> ChartPanel:
+    """The panel of each load's share of *results*'s demand, each in its kind's colour."""
+    loads = results.loads
+    window = results.window
+    fig = go.Figure(data=[go.Pie(
+        labels=[kind.label for kind in loads],
+        values=[round(window.energy_kwh(load), 1) for load in loads.values()],
+        marker=dict(colors=[COLOUR_PALETTE[kind.value] for kind in loads]),
         hole=0.4,
     )])
-    pie_fig.update_layout(
-        **_SHARED_LAYOUT,
-        title="Heat Pump Share of Demand",
-        height=400,
-    )
+    fig.update_layout(**_SHARED_LAYOUT)
+    return _panel("chart-demand-by-load", "Demand by Load", 400, fig)
 
-    # --- Heat pump load profile over time ---
-    hp_series = _adaptive_downsample(results.heat_pump_load)
-    dates = [d.isoformat() for d in hp_series.index]
 
-    load_fig = go.Figure(data=[go.Scatter(
-        name="Heat Pump Load",
-        x=dates,
-        y=hp_series.round(4).tolist(),
+def _load_profile_panel(kind: LoadKind, load: pd.Series) -> ChartPanel:
+    """The panel of *kind*'s *load* in kW over time, in its kind's colour."""
+    colour = COLOUR_PALETTE[kind.value]
+    drawn = _adaptive_downsample(load)
+    fig = go.Figure(data=[go.Scatter(
+        name=kind.label,
+        x=[instant.isoformat() for instant in drawn.index],
+        y=drawn.round(4).tolist(),
         mode="lines",
         fill="tozeroy",
-        line=dict(color=COLOUR_PALETTE["heat_pump"], width=1),
-        fillcolor=_with_alpha(COLOUR_PALETTE["heat_pump"], 0.15),
+        line=dict(color=colour, width=1),
+        fillcolor=_with_alpha(colour, 0.15),
     )])
-    load_fig.update_layout(
+    fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Heat Pump Load Profile",
         xaxis=dict(title="Time"),
         yaxis=dict(title="Power (kW)"),
-        height=400,
     )
-
-    return HeatPumpCharts(
-        load_share_chart=str(pie_fig.to_json()),
-        load_profile_chart=str(load_fig.to_json()),
-    )
+    return _panel(f"chart-load-profile-{kind.value.replace('_', '-')}", f"Load Profile: {kind.label}", 400, fig)
 
 
 # ---------------------------------------------------------------------------
@@ -622,146 +701,116 @@ def _comparison_run_colour(run_index: int) -> str:
     return COLOUR_PALETTE[_COMPARISON_RUN_ROLES[run_index % len(_COMPARISON_RUN_ROLES)]]
 
 
-def overlaid_power_flows(results_list: list[SimulationResults], labels: list[str]) -> str:
-    """Overlaid line chart of power flows from multiple runs.
+@dataclass(frozen=True)
+class ComparedRun:
+    """One run of the comparison page: the label its charts draw it under, and its headline, whose figures they draw."""
 
-    Each run gets a different colour from the comparison palette.
-    Shows generation and demand lines for each run, downsampled
-    for performance.
+    label: str
+    headline: RunHeadline
 
-    Args:
-        results_list: List of SimulationResults from different runs.
-        labels: Display labels for each run.
-
-    Returns:
-        Plotly figure JSON string.
-    """
-    traces: list[Any] = []
-    for i, (results, label) in enumerate(zip(results_list, labels)):
-        colour = _comparison_run_colour(i)
-
-        gen = _adaptive_downsample(results.generation)
-        dem = _adaptive_downsample(results.demand)
-
-        gen_dates = [d.isoformat() for d in gen.index]
-        dem_dates = [d.isoformat() for d in dem.index]
-
-        traces.append(go.Scatter(
-            name=f"{label} - {_EnergyFlow.GENERATION.label}",
-            x=gen_dates,
-            y=gen.round(4).tolist(),
-            mode="lines",
-            line=dict(color=colour, width=1.5),
-            legendgroup=label,
-        ))
-        traces.append(go.Scatter(
-            name=f"{label} - {_EnergyFlow.DEMAND.label}",
-            x=dem_dates,
-            y=dem.round(4).tolist(),
-            mode="lines",
-            line=dict(color=colour, width=1.5, dash="dash"),
-            legendgroup=label,
-        ))
-
-    fig = go.Figure(data=traces)
-    fig.update_layout(
-        **_SHARED_LAYOUT,
-        title="Overlaid Power Flows",
-        xaxis=dict(title="Time"),
-        yaxis=dict(title="Power (kW)"),
-        height=500,
-    )
-    return str(fig.to_json())
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            _refuse("ComparedRun.label", self.label, "a label, not blank")
 
 
-def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> str:
-    """Grouped bar chart comparing energy totals across runs.
+_HEADLINE_KWH: Mapping[_EnergyFlow, Callable[[RunHeadline], float]] = MappingProxyType({
+    _EnergyFlow.GENERATION: lambda headline: headline.generation_kwh,
+    _EnergyFlow.DEMAND: lambda headline: headline.demand_kwh,
+    _EnergyFlow.SELF_CONSUMPTION: lambda headline: headline.self_consumption_kwh,
+    _EnergyFlow.GRID_IMPORT: lambda headline: headline.grid_import_kwh,
+    _EnergyFlow.GRID_EXPORT: lambda headline: headline.grid_export_kwh,
+})
 
-    One category per energy flow; one group per run, labelled.
 
-    Args:
-        summaries: List of summary dictionaries from different runs.
-        labels: Display labels for each run.
-
-    Returns:
-        Plotly figure JSON string.
-    """
-    summary_keys = _in_flow_order({
-        _EnergyFlow.GENERATION: "total_generation_kwh",
-        _EnergyFlow.DEMAND: "total_demand_kwh",
-        _EnergyFlow.SELF_CONSUMPTION: "total_self_consumption_kwh",
-        _EnergyFlow.GRID_IMPORT: "total_grid_import_kwh",
-        _EnergyFlow.GRID_EXPORT: "total_grid_export_kwh",
-    })
-    categories = [flow.label for flow, _ in summary_keys]
-
-    traces: list[Any] = []
-    for i, (summary, label) in enumerate(zip(summaries, labels)):
-        colour = _comparison_run_colour(i)
-        values = [round(summary.get(key, 0), 2) for _, key in summary_keys]
-        traces.append(go.Bar(
-            name=label,
+def comparison_bar_chart(runs: Sequence[ComparedRun]) -> ChartPanel:
+    """The panel of *runs*' energy totals as grouped bars: a category per energy flow, in flow order, and a bar per run, under its label, in its run colour."""
+    flows = _in_flow_order(_HEADLINE_KWH)
+    categories = [flow.label for flow, _ in flows]
+    traces = [
+        _bar(
+            run.label,
             x=categories,
-            y=values,
-            marker_color=colour,
-        ))
+            y=[round(kwh(run.headline), 2) for _, kwh in flows],
+            colour=_comparison_run_colour(index),
+        )
+        for index, run in enumerate(runs)
+    ]
 
     fig = go.Figure(data=traces)
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Energy Totals Comparison",
         barmode="group",
         xaxis=dict(title="Metric"),
         yaxis=dict(title="Energy (kWh)"),
-        height=450,
     )
-    return str(fig.to_json())
+    return _panel("chart-comparison-bar", "Energy Totals Comparison", 450, fig)
 
 
-def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
-    """Radar chart comparing efficiency ratios across runs.
+class _RadarAxis(NamedTuple):
+    """An axis of the comparison radar: its label, and the share of a run's headline it draws, None for a run with no figure for it."""
 
-    Axes: Self-Consumption %, Grid Dependency %, Export %,
-    Battery Utilization %.
+    label: str
+    share: Callable[[RunHeadline], float | None]
 
-    Args:
-        summaries: List of summary dictionaries from different runs.
-        labels: Display labels for each run.
 
-    Returns:
-        Plotly figure JSON string.
+_RADAR_AXES = (
+    _RadarAxis("Self-Consumption %", lambda headline: headline.self_consumption_ratio),
+    _RadarAxis("Grid Dependency %", lambda headline: headline.grid_dependency_ratio),
+    _RadarAxis("Export %", lambda headline: headline.export_ratio),
+    _RadarAxis("PV stored in battery %", lambda headline: headline.pv_stored_share),
+)
+
+
+def _shares_on_the_drawn_axes(runs: Sequence[ComparedRun]) -> dict[_RadarAxis, list[float]]:
+    """Each radar axis that every one of *runs* has a figure for, in axis order, with each run's share on it, in run order."""
+    drawn: dict[_RadarAxis, list[float]] = {}
+    for axis in _RADAR_AXES:
+        shares = [share for run in runs if (share := axis.share(run.headline)) is not None]
+        if len(shares) == len(runs):
+            drawn[axis] = shares
+    return drawn
+
+
+def _left_out_axis_note(axis: _RadarAxis, runs: Sequence[ComparedRun]) -> dict[str, Any]:
+    """The radar's annotation saying that it leaves out *axis*, naming each of *runs* with no figure for it.
+
+    It sits in the plot's lower right corner, which no axis label reaches while an axis is left
+    out. Its font sets a size and no colour, so it is drawn in the figure's font colour, which
+    chart-renderer.js sets to the page's text colour in either theme.
     """
-    theta = [
-        "Self-Consumption %",
-        "Grid Dependency %",
-        "Export %",
-        "Battery Utilization %",
-    ]
+    lacking = ", ".join(run.label for run in runs if axis.share(run.headline) is None)
+    return dict(
+        text=f"{axis.label} is left out: no figure for {lacking}",
+        xref="paper",
+        yref="paper",
+        x=1,
+        y=0,
+        xanchor="right",
+        yanchor="bottom",
+        showarrow=False,
+        font=dict(size=12),
+    )
+
+
+def comparison_radar(runs: Sequence[ComparedRun]) -> ChartPanel:
+    """The panel of *runs*' efficiency ratios on a radar: a closed polygon per run, under its label, in its run colour.
+
+    Its axes, each in %, are the self-consumption, grid dependency and export ratios and the PV
+    stored in battery, the share of the generation the battery stored from PV, its grid charge
+    not counted. It draws only the axes every run has a figure for: each axis it leaves out, such
+    as the PV stored in battery when a fleet run is compared, is noted, naming the runs without it.
+    """
+    drawn = _shares_on_the_drawn_axes(runs)
+    theta = [axis.label for axis in drawn]
 
     traces: list[Any] = []
-    for i, (summary, label) in enumerate(zip(summaries, labels)):
-        colour = _comparison_run_colour(i)
-
-        sc_ratio = summary.get("self_consumption_ratio", 0) * 100
-        grid_dep = summary.get("grid_dependency_ratio", 0) * 100
-        export_ratio = summary.get("export_ratio", 0) * 100
-
-        # Battery utilization: charge / generation (if available)
-        total_charge = summary.get("total_battery_charge_kwh", 0)
-        total_gen = summary.get("total_generation_kwh", 0)
-        battery_util = (total_charge / total_gen * 100) if total_gen > 0 else 0
-
-        r_values = [
-            round(sc_ratio, 1),
-            round(grid_dep, 1),
-            round(export_ratio, 1),
-            round(battery_util, 1),
-        ]
-
+    for index, run in enumerate(runs):
+        colour = _comparison_run_colour(index)
+        r = [round(shares[index] * 100, 1) for shares in drawn.values()]
         traces.append(go.Scatterpolar(
-            name=label,
-            r=r_values + [r_values[0]],  # close the polygon
-            theta=theta + [theta[0]],
+            name=run.label,
+            r=[*r, r[0]],
+            theta=[*theta, theta[0]],
             fill="toself",
             fillcolor=_with_alpha(colour, 0.1),
             line=dict(color=colour, width=2),
@@ -770,13 +819,12 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
     fig = go.Figure(data=traces)
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Efficiency Ratios",
         polar=dict(
             radialaxis=dict(visible=True, range=[0, 100]),
         ),
-        height=450,
+        annotations=[_left_out_axis_note(axis, runs) for axis in _RADAR_AXES if axis not in drawn],
     )
-    return str(fig.to_json())
+    return _panel("chart-comparison-radar", "Efficiency Ratios", 450, fig)
 
 
 # ---------------------------------------------------------------------------
@@ -784,19 +832,23 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def fleet_aggregate_timeline(fleet: FleetResults) -> str:
-    """Plotly JSON of *fleet*'s power flows, each summed across its homes, stacked over time with a range slider."""
-    return _stacked_power_flow_timeline(
+def fleet_aggregate_timeline(fleet: FleetResults) -> ChartPanel:
+    """The panel of *fleet*'s power flows, each summed across its homes, stacked over time with a range slider."""
+    return _panel(
+        "chart-aggregate-timeline",
         "Fleet Aggregate Power Flow",
-        generation=fleet.total_generation,
-        demand=fleet.total_demand,
-        self_consumption=fleet.total_self_consumption,
-        grid_import=fleet.total_grid_import,
-        grid_export=fleet.total_grid_export,
+        500,
+        _stacked_power_flow_timeline(
+            generation=fleet.total_generation,
+            demand=fleet.total_demand,
+            self_consumption=fleet.total_self_consumption,
+            grid_import=fleet.total_grid_import,
+            grid_export=fleet.total_grid_export,
+        ),
     )
 
 
-def fleet_grid_impact(fleet: FleetResults) -> str:
+def fleet_grid_impact(fleet: FleetResults) -> ChartPanel:
     """Area chart of the fleet's net grid impact: its total grid import less its total grid export.
 
     At each timestep the net fills above zero (import region) or below
@@ -806,7 +858,7 @@ def fleet_grid_impact(fleet: FleetResults) -> str:
         fleet: The fleet whose totals are drawn.
 
     Returns:
-        Plotly figure JSON string.
+        The chart's panel.
     """
     net = fleet.total_grid_import - fleet.total_grid_export
     net = _adaptive_downsample(net)
@@ -833,12 +885,10 @@ def fleet_grid_impact(fleet: FleetResults) -> str:
     fig = go.Figure(data=traces)
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Net Grid Impact",
         xaxis=dict(title="Time"),
         yaxis=dict(title="Power (kW) — Import (+) / Export (-)"),
-        height=450,
     )
-    return str(fig.to_json())
+    return _panel("chart-grid-impact", "Net Grid Impact", 450, fig)
 
 
 _SUMMARY_KWH: Mapping[_EnergyFlow, Callable[[SummaryStatistics], float]] = MappingProxyType({
@@ -850,7 +900,7 @@ _SUMMARY_KWH: Mapping[_EnergyFlow, Callable[[SummaryStatistics], float]] = Mappi
 })
 
 
-def fleet_heatmap(home_summaries: Sequence[SummaryStatistics]) -> str:
+def fleet_heatmap(home_summaries: Sequence[SummaryStatistics]) -> ChartPanel:
     """Homes x metrics heatmap matrix.
 
     Rows represent individual homes and columns the five energy flows'
@@ -860,7 +910,7 @@ def fleet_heatmap(home_summaries: Sequence[SummaryStatistics]) -> str:
         home_summaries: Each home's summary statistics, in the fleet's order.
 
     Returns:
-        Plotly figure JSON string.
+        The chart's panel.
     """
     summaries = home_summaries[:50]
 
@@ -879,15 +929,13 @@ def fleet_heatmap(home_summaries: Sequence[SummaryStatistics]) -> str:
 
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Per-Home Energy Metrics",
         xaxis=dict(title="Metric"),
         yaxis=dict(title="Home", autorange="reversed"),
-        height=max(350, len(summaries) * 25 + 100),
     )
-    return str(fig.to_json())
+    return _panel("chart-heatmap", "Per-Home Energy Metrics", max(350, len(summaries) * 25 + 100), fig)
 
 
-def fleet_box_plots(home_summaries: Sequence[SummaryStatistics]) -> str:
+def fleet_box_plots(home_summaries: Sequence[SummaryStatistics]) -> ChartPanel:
     """Box plots of energy metrics across all homes.
 
     One box per metric showing the distribution of values across
@@ -897,7 +945,7 @@ def fleet_box_plots(home_summaries: Sequence[SummaryStatistics]) -> str:
         home_summaries: Each home's summary statistics, in the fleet's order.
 
     Returns:
-        Plotly figure JSON string.
+        The chart's panel.
     """
     traces: list[Any] = [
         go.Box(
@@ -912,14 +960,12 @@ def fleet_box_plots(home_summaries: Sequence[SummaryStatistics]) -> str:
     fig = go.Figure(data=traces)
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Energy Metrics Distribution Across Homes",
         yaxis=dict(title="Energy (kWh)"),
-        height=450,
     )
-    return str(fig.to_json())
+    return _panel("chart-box-plots", "Energy Metrics Distribution Across Homes", 450, fig)
 
 
-def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -> str:
+def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -> ChartPanel:
     """Histograms showing distribution of key metrics across homes.
 
     Three subplots: generation (kWh), self-consumption ratio, and
@@ -929,7 +975,7 @@ def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -
         home_summaries: Each home's summary statistics, in the fleet's order.
 
     Returns:
-        Plotly figure JSON string.
+        The chart's panel.
     """
     generation = _EnergyFlow.GENERATION
     fig = make_subplots(
@@ -968,11 +1014,9 @@ def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -
 
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title="Fleet Distribution Histograms",
         showlegend=False,
-        height=400,
     )
-    return str(fig.to_json())
+    return _panel("chart-distribution-histograms", "Fleet Distribution Histograms", 400, fig)
 
 
 # ---------------------------------------------------------------------------
@@ -980,80 +1024,166 @@ def fleet_distribution_histograms(home_summaries: Sequence[SummaryStatistics]) -
 # ---------------------------------------------------------------------------
 
 
-def sweep_parameter_chart(
-    param_values: list[float],
-    metric_values: list[float],
-    param_name: str,
-    metric_name: str,
-) -> str:
-    """Line chart showing parameter vs metric for sweep results.
+_SWEEP_MIN_POINTS = 2
 
-    Plots the swept parameter values on the X-axis and the resulting
-    metric values on the Y-axis.  Highlights the optimal point (maximum
-    metric value) with an annotation and adds a linear trend line.
+
+@dataclass(frozen=True)
+class SweepPoint:
+    """One finished point of a sweep, the value its run swept to and that run's summary."""
+
+    value: float
+    summary: SummaryStatistics
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.value):
+            _refuse("SweepPoint.value", self.value, "a finite number")
+
+
+class _Better(Enum):
+    """The direction in which a sweep metric's best point lies: at its highest value or at its lowest."""
+
+    HIGHER = "higher"
+    LOWER = "lower"
+
+    def best_index(self, values: Sequence[float]) -> int:
+        """The index of the best of *values* in this direction, the first of equals."""
+        return (max if self is _Better.HIGHER else min)(range(len(values)), key=values.__getitem__)
+
+
+class SweepMetric(Enum):
+    """The metrics a sweep's charts draw: each one's label, its reader of a run's summary and the direction of its best point."""
+
+    def __init__(self, label: str, read: Callable[[SummaryStatistics], float], better: _Better) -> None:
+        self.label: Final = label
+        self.read: Final = read
+        self.better: Final = better
+
+    GENERATION = (f"{_EnergyFlow.GENERATION.label} (kWh)", _SUMMARY_KWH[_EnergyFlow.GENERATION], _Better.HIGHER)
+    SELF_CONSUMPTION = (
+        f"{_EnergyFlow.SELF_CONSUMPTION.label} (%)",
+        lambda summary: summary.self_consumption_ratio * 100,
+        _Better.HIGHER,
+    )
+    GRID_IMPORT = (f"{_EnergyFlow.GRID_IMPORT.label} (kWh)", _SUMMARY_KWH[_EnergyFlow.GRID_IMPORT], _Better.LOWER)
+
+    @property
+    def dom_id(self) -> str:
+        """The element id of the metric's sweep panel."""
+        return "chart-sweep-" + self.name.lower().replace("_", "-")
+
+
+def sweep_parameter_chart(parameter_label: str, points: Sequence[SweepPoint], metric: SweepMetric) -> ChartPanel:
+    """The panel of *metric* over the swept values of a sweep's finished *points*, its best point marked by the metric's direction, with a linear trend line.
 
     Args:
-        param_values: List of parameter values tested.
-        metric_values: Corresponding metric values for each parameter point.
-        param_name: Display name for the X-axis (e.g. "PV Capacity (kW)").
-        metric_name: Display name for the Y-axis (e.g. "Self-Consumption (%)").
+        parameter_label: The swept parameter's label, which titles the x-axis (e.g. "PV Capacity (kW)").
+        points: The sweep's finished points, in the order they are drawn.
+        metric: The metric drawn on the y-axis.
 
     Returns:
-        Plotly figure JSON string, or ``"{}"`` if either input list is empty.
-    """
-    if not param_values or not metric_values:
-        return "{}"
+        The chart's panel, an absence naming the rule and the sweep's finished points if
+        it has fewer than _SWEEP_MIN_POINTS.
 
-    # Main data trace
-    traces: list[Any] = [
+    Raises:
+        ValueError: If *parameter_label* is blank; the message names it.
+    """
+    if not parameter_label.strip():
+        _refuse("parameter_label", parameter_label, "a label, not blank")
+    return _panel(
+        metric.dom_id,
+        f"{metric.label} vs {parameter_label}",
+        450,
+        _sweep_figure(parameter_label, points, metric)
+        if len(points) >= _SWEEP_MIN_POINTS
+        else ChartAbsence(
+            f"The sweep chart needs at least {_SWEEP_MIN_POINTS} finished points; this sweep has {len(points)}."
+        ),
+    )
+
+
+def _sweep_figure(parameter_label: str, points: Sequence[SweepPoint], metric: SweepMetric) -> go.Figure:
+    """The line of *metric* over the values of *points*, at least two, its best point by the metric's direction and its trend line."""
+    values = [point.value for point in points]
+    readings = [metric.read(point.summary) for point in points]
+    best = metric.better.best_index(readings)
+    trend = np.polyval(np.polyfit(np.array(values, dtype=float), np.array(readings, dtype=float), 1), values)
+
+    fig = go.Figure(data=[
         go.Scatter(
-            name=metric_name,
-            x=param_values,
-            y=metric_values,
+            name=metric.label,
+            x=values,
+            y=readings,
             mode="lines+markers",
             line=dict(color=COLOUR_PALETTE["pv_generation"], width=2.5),
             marker=dict(size=8),
         ),
-    ]
-
-    # Highlight optimal point (max metric value)
-    if metric_values:
-        best_idx = max(range(len(metric_values)), key=lambda i: metric_values[i])
-        traces.append(
-            go.Scatter(
-                name="Optimal",
-                x=[param_values[best_idx]],
-                y=[metric_values[best_idx]],
-                mode="markers+text",
-                marker=dict(size=14, color=COLOUR_PALETTE["self_consumption"], symbol="star"),
-                text=[f"{metric_values[best_idx]:.1f}"],
-                textposition="top center",
-                showlegend=True,
-            ),
-        )
-
-    # Simple linear trend line
-    if len(param_values) >= 2:
-        x_arr = np.array(param_values, dtype=float)
-        y_arr = np.array(metric_values, dtype=float)
-        coeffs = np.polyfit(x_arr, y_arr, 1)
-        trend_y = np.polyval(coeffs, x_arr)
-        traces.append(
-            go.Scatter(
-                name="Trend",
-                x=param_values,
-                y=trend_y.round(2).tolist(),
-                mode="lines",
-                line=dict(color=COLOUR_PALETTE["grid_import"], width=1.5, dash="dash"),
-            ),
-        )
-
-    fig = go.Figure(data=traces)
+        go.Scatter(
+            name="Optimal",
+            x=[values[best]],
+            y=[readings[best]],
+            mode="markers+text",
+            marker=dict(size=14, color=COLOUR_PALETTE["self_consumption"], symbol="star"),
+            text=[f"{readings[best]:.1f}"],
+            textposition="top center",
+            showlegend=True,
+        ),
+        go.Scatter(
+            name="Trend",
+            x=values,
+            y=trend.round(2).tolist(),
+            mode="lines",
+            line=dict(color=COLOUR_PALETTE["grid_import"], width=1.5, dash="dash"),
+        ),
+    ])
     fig.update_layout(
         **_SHARED_LAYOUT,
-        title=f"{metric_name} vs {param_name}",
-        xaxis=dict(title=param_name),
-        yaxis=dict(title=metric_name),
-        height=450,
+        xaxis=dict(title=parameter_label),
+        yaxis=dict(title=metric.label),
     )
-    return str(fig.to_json())
+    return fig
+
+
+def sweep_panels(parameter_label: str, points: Sequence[SweepPoint]) -> tuple[ChartPanel, ...]:
+    """The sweep page's panels, one per SweepMetric in member order, each drawing that metric over a sweep's finished *points*."""
+    return tuple(sweep_parameter_chart(parameter_label, points, metric) for metric in SweepMetric)
+
+
+# ---------------------------------------------------------------------------
+# Page tabs: the charts that apply to a page's run, grouped as its tabs
+# ---------------------------------------------------------------------------
+
+
+def home_results_tabs(
+    config: HomeConfig, results: SimulationResults, summary: SummaryStatistics
+) -> tuple[ChartTab, ...]:
+    """The chart tabs of a home run's results page: the battery's chart only for a home with a battery, and the load charts only for a run with an additional load."""
+    battery_panels: tuple[ChartPanel, ...] = (
+        () if config.battery_config is None else (battery_soc_chart(results, config.battery_config),)
+    )
+    return (
+        ChartTab("overview", "Overview", (sankey_diagram(summary), daily_energy_balance(results))),
+        ChartTab("power_flow", "Power Flow", (power_flow_timeline(results),)),
+        ChartTab(
+            "battery_finance",
+            "Battery & Finance",
+            (*battery_panels, financial_breakdown(results, config), monthly_summary(results)),
+        ),
+        ChartTab("analysis", "Analysis", (seasonal_comparison(results), *load_panels(results))),
+    )
+
+
+def fleet_results_tabs(fleet: FleetResults, home_summaries: Sequence[SummaryStatistics]) -> tuple[ChartTab, ...]:
+    """The chart tabs of a fleet run's results page, from the fleet's totals and each home's summary, in the fleet's order."""
+    return (
+        ChartTab("aggregate", "Aggregate", (fleet_aggregate_timeline(fleet), fleet_grid_impact(fleet))),
+        ChartTab("per_home", "Per-Home", (fleet_heatmap(home_summaries), fleet_box_plots(home_summaries))),
+        ChartTab("distributions", "Distributions", (fleet_distribution_histograms(home_summaries),)),
+    )
+
+
+def comparison_tabs(runs: Sequence[ComparedRun]) -> tuple[ChartTab, ...]:
+    """The chart tabs of the run comparison page, drawing each of *runs* from its headline, under its label."""
+    return (
+        ChartTab("bar", "Energy Totals", (comparison_bar_chart(runs),)),
+        ChartTab("radar", "Efficiency Ratios", (comparison_radar(runs),)),
+    )

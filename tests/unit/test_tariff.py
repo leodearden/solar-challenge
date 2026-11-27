@@ -1,29 +1,38 @@
 """Tests for tariff configuration and rate matching."""
 
 import dataclasses
+import math
 import pickle
+from collections.abc import Iterable
+from datetime import datetime, time
 
+import numpy as np
 import pandas as pd
 import pytest
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.tariff import (
+    PRESET_RATES,
+    PresetRates,
     TariffConfig,
     TariffPeriod,
     calculate_bill,
+    describe_minutes_of_day,
 )
-
-REPEATED_OFF_PEAK_TARIFF = TariffConfig(
-    periods=(
-        TariffPeriod("00:00", "07:00", 0.10, "Night"),
-        TariffPeriod("07:00", "16:00", 0.40, "Day"),
-        TariffPeriod("16:00", "00:00", 0.10, "Evening"),
-    ),
-    name="Two cheap windows",
+from solar_challenge.timebase import MINUTES_PER_DAY
+from tests._names_as_a_word import names_as_a_word
+from tests._same_schedule_tariffs import (
+    NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
+    NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
 )
+from tests._unusable_numbers import UNUSABLE_NUMBERS
+
+_E7 = PRESET_RATES["economy_7"]
+_E10 = PRESET_RATES["economy_10"]
 
 
-def _derived_rates(tariff: TariffConfig) -> tuple[float, float]:
-    return tariff.peak_rate, tariff.mean_period_rate
+def _derived_values(tariff: TariffConfig) -> tuple[float, frozenset[int]]:
+    return tariff.peak_rate, tariff.cheap_minutes_of_day
 
 
 class TestTariffPeriodBasics:
@@ -65,18 +74,36 @@ class TestTariffPeriodBasics:
 class TestTariffPeriodValidation:
     """Test TariffPeriod parameter validation."""
 
-    def test_negative_rate_raises(self):
-        """Negative rate raises ValueError."""
-        with pytest.raises(ValueError, match="Rate cannot be negative"):
-            TariffPeriod(
-                start_time="09:00",
-                end_time="17:00",
-                rate_per_kwh=-0.10
-            )
+    @pytest.mark.parametrize("rate", [-0.10, float("nan"), float("inf"), float("-inf")])
+    def test_a_rate_that_is_negative_or_not_finite_is_refused_naming_it(self, rate: float) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TariffPeriod(start_time="09:00", end_time="17:00", rate_per_kwh=rate)
+
+        message = str(refusal.value)
+        assert "rate_per_kwh" in message
+        assert names_as_a_word(message, rate)
+
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_rate_that_is_not_a_finite_number_is_refused_with_the_leafs_wording(
+        self, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TariffPeriod("09:00", "17:00", value)
+        assert str(refusal.value) == f"rate_per_kwh must be a finite number, got {value!r}"
+
+    def test_a_negative_rate_is_refused_naming_its_bound(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TariffPeriod("09:00", "17:00", -0.1)
+        assert str(refusal.value) == "rate_per_kwh must be at least 0, got -0.1"
+
+    def test_a_whole_rate_is_held_as_the_float_it_reads(self) -> None:
+        rate = TariffPeriod("00:00", "00:00", 1).rate_per_kwh
+        assert rate == 1.0
+        assert type(rate) is float
 
     def test_invalid_start_time_format(self):
-        """Invalid start time format raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Invalid start time format raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="9",  # Missing minutes
                 end_time="17:00",
@@ -84,8 +111,8 @@ class TestTariffPeriodValidation:
             )
 
     def test_invalid_end_time_format(self):
-        """Invalid end time format raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Invalid end time format raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="09:00",
                 end_time="25:00",  # Hour out of range
@@ -93,8 +120,8 @@ class TestTariffPeriodValidation:
             )
 
     def test_invalid_hour_raises(self):
-        """Hour outside 0-23 range raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Hour outside 0-23 range raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="24:00",
                 end_time="23:59",
@@ -102,8 +129,8 @@ class TestTariffPeriodValidation:
             )
 
     def test_invalid_minute_raises(self):
-        """Minute outside 0-59 range raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Minute outside 0-59 range raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="09:00",
                 end_time="17:60",
@@ -111,13 +138,18 @@ class TestTariffPeriodValidation:
             )
 
     def test_malformed_time_string(self):
-        """Malformed time string raises ValueError."""
-        with pytest.raises(ValueError, match="Invalid time format"):
+        """Malformed time string raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffPeriod(
                 start_time="09-00",  # Wrong separator
                 end_time="17:00",
                 rate_per_kwh=0.25
             )
+
+    def test_a_time_object_is_refused_as_a_time_that_is_not_hh_mm_text(self):
+        """start_time and end_time are HH:MM strings only."""
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
+            TariffPeriod(start_time=time(9, 0), end_time="17:00", rate_per_kwh=0.25)
 
 
 class TestTariffPeriodTimeParsing:
@@ -214,6 +246,12 @@ class TestTariffPeriodTimeMatching:
         timestamp = pd.Timestamp("2024-01-15 17:01:00")
         assert period.matches_time(timestamp) is False
 
+    def test_matches_time_reads_a_plain_datetimes_wall_clock_minute(self) -> None:
+        period = TariffPeriod("09:00", "17:00", 0.25, "Day")
+
+        assert period.matches_time(datetime(2024, 1, 15, 12, 30)) is True
+        assert period.matches_time(datetime(2024, 1, 15, 17, 0)) is False
+
 
 class TestTariffPeriodMidnightCrossing:
     """Test periods that cross midnight."""
@@ -278,15 +316,7 @@ class TestTariffPeriodMidnightCrossing:
         assert period.matches_time(pd.Timestamp("2024-01-15 07:29:00")) is True
 
     def test_full_day_00_00_matches_all_times(self):
-        """TariffPeriod("00:00","00:00") is a full-24h period covering every minute.
-
-        Characterisation test: when start==end=="00:00", matches_time routes to
-        the midnight-crossing else-branch (`t >= start or t < end`), which is
-        `t >= 00:00 or t < 00:00` == True for all t.  This is the mechanism
-        flat_rate() relies on after the fix (end_time changed from "23:59" to
-        "00:00").  The test passes before and after the fix — it documents an
-        already-correct invariant of matches_time.
-        """
+        """TariffPeriod("00:00","00:00") is a full-24h period covering every minute: an end equal to the start is the whole day, as flat_rate() relies on."""
         period = TariffPeriod(start_time="00:00", end_time="00:00", rate_per_kwh=0.20)
         assert period.matches_time(pd.Timestamp("2024-01-15 00:00:00")) is True
         assert period.matches_time(pd.Timestamp("2024-01-15 12:00:00")) is True
@@ -300,7 +330,7 @@ class TestTariffConfigBasics:
         """TariffConfig can be created with single period."""
         period = TariffPeriod(
             start_time="00:00",
-            end_time="23:59",
+            end_time="00:00",
             rate_per_kwh=0.20
         )
         tariff = TariffConfig(periods=(period,), name="Flat")
@@ -319,7 +349,7 @@ class TestTariffConfigBasics:
 
     def test_frozen_dataclass(self):
         """TariffConfig is immutable (frozen)."""
-        period = TariffPeriod("00:00", "23:59", 0.20)
+        period = TariffPeriod("00:00", "00:00", 0.20)
         tariff = TariffConfig(periods=(period,))
         with pytest.raises(Exception):  # FrozenInstanceError
             tariff.name = "New name"
@@ -329,8 +359,8 @@ class TestTariffConfigValidation:
     """Test TariffConfig validation."""
 
     def test_empty_periods_raises(self):
-        """Empty periods tuple raises ValueError."""
-        with pytest.raises(ValueError, match="must have at least one period"):
+        """Empty periods tuple raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="must have at least one period"):
             TariffConfig(periods=())
 
     def test_invalid_period_time_raises(self):
@@ -341,8 +371,17 @@ class TestTariffConfigValidation:
         object.__setattr__(period, "rate_per_kwh", 0.25)
         object.__setattr__(period, "name", "")
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ConfigurationError, match="Invalid time format"):
             TariffConfig(periods=(period,))
+
+
+NIGHT_DAY_EVENING_TARIFF = TariffConfig(
+    periods=(
+        TariffPeriod("00:00", "07:00", 0.09, "Night"),
+        TariffPeriod("07:00", "23:00", 0.25, "Day"),
+        TariffPeriod("23:00", "00:00", 0.15, "Evening"),
+    )
+)
 
 
 class TestTariffConfigGetRate:
@@ -350,7 +389,7 @@ class TestTariffConfigGetRate:
 
     def test_get_rate_single_period(self):
         """get_rate returns correct rate for single-period tariff."""
-        period = TariffPeriod("00:00", "23:59", 0.20, "All day")
+        period = TariffPeriod("00:00", "00:00", 0.20, "All day")
         tariff = TariffConfig(periods=(period,))
 
         timestamp = pd.Timestamp("2024-01-15 12:00:00")
@@ -359,12 +398,7 @@ class TestTariffConfigGetRate:
 
     def test_get_rate_multiple_periods(self):
         """get_rate returns correct rate from multiple periods."""
-        periods = (
-            TariffPeriod("00:00", "07:00", 0.09, "Night"),
-            TariffPeriod("07:00", "23:00", 0.25, "Day"),
-            TariffPeriod("23:00", "00:00", 0.15, "Evening"),
-        )
-        tariff = TariffConfig(periods=periods)
+        tariff = NIGHT_DAY_EVENING_TARIFF
 
         # Night rate
         assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == 0.09
@@ -373,15 +407,81 @@ class TestTariffConfigGetRate:
         # Evening rate
         assert tariff.get_rate(pd.Timestamp("2024-01-15 23:30:00")) == 0.15
 
-    def test_get_rate_no_match_raises(self):
-        """get_rate raises ValueError when no period matches."""
-        # Create tariff with a gap (09:00-17:00 only)
-        period = TariffPeriod("09:00", "17:00", 0.25)
-        tariff = TariffConfig(periods=(period,))
+    @pytest.mark.parametrize(
+        ("timestamp", "rate"),
+        [
+            pytest.param(pd.Timestamp("2024-01-15 03:00"), 0.09, id="naive-pd-timestamp"),
+            pytest.param(datetime(2024, 1, 15, 3, 0), 0.09, id="naive-datetime"),
+            # 07:30 BST on 2024-06-21 is 06:30 UTC, a Night minute.
+            pytest.param(
+                pd.Timestamp("2024-06-21 07:30", tz="Europe/London"), 0.25, id="london-bst-07:30"
+            ),
+        ],
+    )
+    def test_get_rate_reads_any_datetimes_wall_clock_minute(
+        self, timestamp: datetime, rate: float
+    ) -> None:
+        assert NIGHT_DAY_EVENING_TARIFF.get_rate(timestamp) == rate
 
-        # Time outside period should raise
-        with pytest.raises(ValueError, match="No tariff period matches"):
-            tariff.get_rate(pd.Timestamp("2024-01-15 08:00:00"))
+    def test_a_tariff_with_a_gap_is_refused_at_construction(self):
+        """No constructed tariff has a minute without a rate: a 09:00-17:00 period alone is refused."""
+        with pytest.raises(ConfigurationError, match="17:00-09:00"):
+            TariffConfig(periods=(TariffPeriod("09:00", "17:00", 0.25),))
+
+
+class TestTariffConfigRatesFor:
+    """rates_for reads each timestamp's rate as get_rate reads one, at its wall-clock minute."""
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(TariffConfig.economy_7(), id="economy-7"),
+            pytest.param(TariffConfig.economy_10(), id="economy-10"),
+            pytest.param(TariffConfig.flat_rate(0.20), id="flat"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "index",
+        [
+            pytest.param(
+                pd.date_range(
+                    "2024-03-31", "2024-04-01", freq="min", tz="Europe/London", inclusive="left"
+                ),
+                id="europe-london-clocks-go-forward",
+            ),
+            pytest.param(
+                pd.date_range(
+                    "2024-10-27", "2024-10-28", freq="min", tz="Europe/London", inclusive="left"
+                ),
+                id="europe-london-clocks-go-back",
+            ),
+            pytest.param(
+                pd.date_range("2024-01-15", periods=2 * MINUTES_PER_DAY, freq="min"),
+                id="naive-two-days",
+            ),
+            pytest.param(
+                pd.date_range("2024-06-20 23:00", periods=240, freq="30s", tz="UTC"),
+                id="utc-30-second-steps",
+            ),
+        ],
+    )
+    def test_rates_for_is_get_rate_at_each_timestamp_of_the_index(
+        self, tariff: TariffConfig, index: pd.DatetimeIndex
+    ) -> None:
+        assert tariff.rates_for(index).tolist() == [tariff.get_rate(timestamp) for timestamp in index]
+
+    @pytest.mark.parametrize(
+        "index",
+        [
+            pytest.param(pd.DatetimeIndex([]), id="naive"),
+            pytest.param(pd.DatetimeIndex([], tz="Europe/London"), id="europe-london"),
+        ],
+    )
+    def test_an_empty_index_has_no_rates_as_float64(self, index: pd.DatetimeIndex) -> None:
+        rates = TariffConfig.economy_7().rates_for(index)
+
+        assert rates.shape == (0,)
+        assert rates.dtype == np.float64
 
 
 class TestTariffConfigFlatRate:
@@ -412,6 +512,21 @@ class TestTariffConfigFlatRate:
         assert "0.20" in tariff.name
         assert "Flat rate" in tariff.name
 
+    @pytest.mark.parametrize("value", [pytest.param("x", id="word"), pytest.param(True, id="boolean")])
+    def test_flat_rate_refuses_a_rate_that_is_not_a_finite_number_naming_it(
+        self, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TariffConfig.flat_rate(value)
+        assert str(refusal.value) == f"rate_per_kwh must be a finite number, got {value!r}"
+
+    def test_flat_rate_names_itself_after_the_float_it_read(self) -> None:
+        tariff = TariffConfig.flat_rate(1)
+        assert tariff.name == "Flat rate 1.00 £/kWh"
+        rate = tariff.periods[0].rate_per_kwh
+        assert rate == 1.0
+        assert type(rate) is float
+
     def test_flat_rate_covers_2359_boundary(self):
         """flat_rate tariff covers 23:59:00 (last minute of the day).
 
@@ -440,6 +555,52 @@ class TestTariffConfigFlatRate:
         assert result == pytest.approx(1440 * 0.20)
 
 
+class TestPresetRates:
+    """PRESET_RATES states each economy preset's default rates, the rates a preset built without rates charges."""
+
+    def test_both_economy_presets_charge_d34s_rates(self) -> None:
+        assert PRESET_RATES == {
+            "economy_7": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
+            "economy_10": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
+        }
+
+    def test_the_table_and_its_rates_are_read_only(self) -> None:
+        with pytest.raises(TypeError):
+            PRESET_RATES["economy_7"] = PresetRates(off_peak_rate=0.1, peak_rate=0.2)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            PRESET_RATES["economy_7"].peak_rate = 1.0
+
+    @pytest.mark.parametrize("field", ["off_peak_rate", "peak_rate"])
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_preset_rate_that_is_not_a_finite_number_is_refused_with_the_leafs_wording(
+        self, field: str, value: object
+    ) -> None:
+        rates = {"off_peak_rate": 0.13, "peak_rate": 0.35, field: value}
+
+        with pytest.raises(ConfigurationError) as refusal:
+            PresetRates(**rates)
+
+        assert str(refusal.value) == f"{field} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("field", ["off_peak_rate", "peak_rate"])
+    def test_a_negative_preset_rate_is_refused_naming_its_bound(self, field: str) -> None:
+        rates = {"off_peak_rate": 0.13, "peak_rate": 0.35, field: -0.1}
+
+        with pytest.raises(ConfigurationError) as refusal:
+            PresetRates(**rates)
+
+        assert str(refusal.value) == f"{field} must be at least 0, got -0.1"
+
+    def test_presets_built_without_rates_charge_their_table_rates(self) -> None:
+        economy_7 = TariffConfig.economy_7()
+        economy_10 = TariffConfig.economy_10()
+
+        assert economy_7.get_rate(pd.Timestamp("2024-01-15 03:00")) == _E7.off_peak_rate
+        assert economy_7.get_rate(pd.Timestamp("2024-01-15 12:00")) == _E7.peak_rate
+        assert economy_10.get_rate(pd.Timestamp("2024-01-15 03:00")) == _E10.off_peak_rate
+        assert economy_10.get_rate(pd.Timestamp("2024-01-15 09:00")) == _E10.peak_rate
+
+
 class TestTariffConfigEconomy7:
     """Test Economy 7 tariff factory method."""
 
@@ -453,9 +614,9 @@ class TestTariffConfigEconomy7:
         """Economy 7 uses correct default rates."""
         tariff = TariffConfig.economy_7()
         # Off-peak time (00:30-07:30)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == 0.09
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == _E7.off_peak_rate
         # Peak time (07:30-00:30)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == 0.25
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == _E7.peak_rate
 
     def test_economy_7_custom_rates(self):
         """Economy 7 accepts custom rates."""
@@ -473,9 +634,9 @@ class TestTariffConfigEconomy7:
             off_peak_end="08:00"
         )
         # Within custom off-peak
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 04:00:00")) == 0.09
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 04:00:00")) == _E7.off_peak_rate
         # Outside custom off-peak
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == 0.25
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == _E7.peak_rate
 
     def test_economy_7_off_peak_hours(self):
         """Economy 7 off-peak period is 7 hours."""
@@ -484,7 +645,7 @@ class TestTariffConfigEconomy7:
         off_peak_hours = 0
         for hour in range(24):
             timestamp = pd.Timestamp(f"2024-01-15 {hour:02d}:30:00")
-            if tariff.get_rate(timestamp) == 0.09:
+            if tariff.get_rate(timestamp) == _E7.off_peak_rate:
                 off_peak_hours += 1
         assert off_peak_hours == 7
 
@@ -492,13 +653,13 @@ class TestTariffConfigEconomy7:
         """Economy 7 boundaries work correctly."""
         tariff = TariffConfig.economy_7()  # 00:30-07:30 off-peak
         # Just before off-peak starts (peak)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 00:29:00")) == 0.25
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 00:29:00")) == _E7.peak_rate
         # At off-peak start (off-peak)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 00:30:00")) == 0.09
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 00:30:00")) == _E7.off_peak_rate
         # Just before off-peak ends (off-peak)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 07:29:00")) == 0.09
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 07:29:00")) == _E7.off_peak_rate
         # At off-peak end (peak)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 07:30:00")) == 0.25
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 07:30:00")) == _E7.peak_rate
 
 
 class TestTariffConfigEconomy10:
@@ -514,12 +675,12 @@ class TestTariffConfigEconomy10:
         """Economy 10 uses correct default rates."""
         tariff = TariffConfig.economy_10()
         # Off-peak times
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 02:00:00")) == 0.08  # Night
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 14:00:00")) == 0.08  # Afternoon
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 21:00:00")) == 0.08  # Evening
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 02:00:00")) == _E10.off_peak_rate  # Night
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 14:00:00")) == _E10.off_peak_rate  # Afternoon
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 21:00:00")) == _E10.off_peak_rate  # Evening
         # Peak times
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 10:00:00")) == 0.27  # Morning
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 17:00:00")) == 0.27  # Afternoon peak
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 10:00:00")) == _E10.peak_rate  # Morning
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 17:00:00")) == _E10.peak_rate  # Afternoon peak
 
     def test_economy_10_custom_rates(self):
         """Economy 10 accepts custom rates."""
@@ -541,9 +702,9 @@ class TestTariffConfigEconomy10:
             evening_end="23:00"
         )
         # Check custom times work
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == 0.08
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 15:00:00")) == 0.08
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 22:00:00")) == 0.08
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == _E10.off_peak_rate
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 15:00:00")) == _E10.off_peak_rate
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 22:00:00")) == _E10.off_peak_rate
 
     def test_economy_10_off_peak_hours(self):
         """Economy 10 off-peak periods total 10 hours."""
@@ -552,7 +713,7 @@ class TestTariffConfigEconomy10:
         off_peak_hours = 0
         for hour in range(24):
             timestamp = pd.Timestamp(f"2024-01-15 {hour:02d}:30:00")
-            if tariff.get_rate(timestamp) == 0.08:
+            if tariff.get_rate(timestamp) == _E10.off_peak_rate:
                 off_peak_hours += 1
         assert off_peak_hours == 10
 
@@ -566,27 +727,35 @@ class TestTariffConfigEconomy10:
         assert "Peak (morning)" in period_names
 
 
-class TestTariffConfigPeakAndMeanPeriodRate:
-    """The peak is the highest period rate; the mean counts each period once."""
+class TestTariffConfigPeakRate:
+    """The peak is the highest period rate."""
 
-    def test_flat_rate_has_its_one_rate_as_both_peak_and_mean(self) -> None:
+    def test_flat_rate_has_its_one_rate_as_its_peak(self) -> None:
         tariff = TariffConfig.flat_rate(0.25)
 
         assert tariff.peak_rate == 0.25
-        assert tariff.mean_period_rate == 0.25
 
     @pytest.mark.parametrize(
         ("tariff", "expected_peak"),
         [
-            pytest.param(TariffConfig.economy_7(), 0.25, id="economy_7"),
-            pytest.param(TariffConfig.economy_10(), 0.27, id="economy_10"),
-            # Its float mean is 0.10000000000000002; only an exact peak shows no spread.
+            pytest.param(TariffConfig.economy_7(), _E7.peak_rate, id="economy_7"),
+            pytest.param(TariffConfig.economy_10(), _E10.peak_rate, id="economy_10"),
             pytest.param(
                 TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
                 0.1,
                 id="six_periods_one_rate",
             ),
-            pytest.param(REPEATED_OFF_PEAK_TARIFF, 0.40, id="repeated_off_peak"),
+            pytest.param(
+                TariffConfig(
+                    periods=(
+                        TariffPeriod("00:00", "07:00", 0.10, "Night"),
+                        TariffPeriod("07:00", "16:00", 0.40, "Day"),
+                        TariffPeriod("16:00", "00:00", 0.10, "Evening"),
+                    )
+                ),
+                0.40,
+                id="repeated_off_peak",
+            ),
         ],
     )
     def test_peak_rate_is_the_highest_period_rate_exactly(
@@ -594,21 +763,121 @@ class TestTariffConfigPeakAndMeanPeriodRate:
     ) -> None:
         assert tariff.peak_rate == expected_peak
 
-    def test_mean_period_rate_counts_each_period_once_whatever_its_length(self) -> None:
-        """Economy 7 is 7 h at 0.09 and 17 h at 0.25; weighting by hours would give 0.2033."""
-        assert TariffConfig.economy_7().mean_period_rate == pytest.approx(0.17)
 
-    def test_mean_period_rate_counts_a_repeated_rate_once_per_period(self) -> None:
-        """Averaging the distinct rates would give 0.25, and weighting by hours 0.2125."""
-        assert REPEATED_OFF_PEAK_TARIFF.mean_period_rate == pytest.approx(0.20)
+class TestTariffConfigCheapMinutes:
+    """A minute is cheap when its rate is below the peak and at or below the duration-weighted mean rate."""
+
+    @pytest.mark.parametrize(
+        ("tariff", "expected"),
+        [
+            pytest.param(TariffConfig.economy_7(), frozenset(range(30, 450)), id="economy_7"),
+            pytest.param(
+                TariffConfig.economy_10(),
+                frozenset([*range(0, 300), *range(780, 960), *range(1200, 1320)]),
+                id="economy_10",
+            ),
+            pytest.param(
+                TariffConfig(
+                    periods=(
+                        TariffPeriod("00:00", "07:00", 0.10, "Night"),
+                        TariffPeriod("07:00", "00:00", 0.30, "Day"),
+                    )
+                ),
+                frozenset(range(420)),
+                id="custom_two_rate",
+            ),
+            # Its weighted mean is 0.1125, 23 h at 0.10 and 1 h at 0.40.
+            pytest.param(
+                TariffConfig(
+                    periods=(
+                        TariffPeriod("17:00", "18:00", 0.40, "Peak"),
+                        TariffPeriod("18:00", "17:00", 0.10, "Off-peak"),
+                    )
+                ),
+                frozenset(range(1440)) - frozenset(range(1020, 1080)),
+                id="low_rate_most_of_the_day",
+            ),
+        ],
+    )
+    def test_a_two_rate_tariffs_cheap_minutes_are_the_minutes_at_its_lower_rate(
+        self, tariff: TariffConfig, expected: frozenset[int]
+    ) -> None:
+        assert tariff.cheap_minutes_of_day == expected
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(TariffConfig.flat_rate(0.25), id="flat_rate"),
+            pytest.param(
+                TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
+                id="six_periods_one_rate",
+            ),
+        ],
+    )
+    def test_a_one_rate_tariff_has_no_cheap_minutes(self, tariff: TariffConfig) -> None:
+        assert tariff.cheap_minutes_of_day == frozenset()
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS, id="four_periods"),
+            pytest.param(NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS, id="five_periods"),
+        ],
+    )
+    def test_the_cheap_minutes_follow_the_schedule_not_its_period_list(
+        self, tariff: TariffConfig
+    ) -> None:
+        assert tariff.cheap_minutes_of_day == frozenset(range(420))
+        assert describe_minutes_of_day(tariff.cheap_minutes_of_day) == "00:00-07:00"
+
+    def test_a_rate_at_or_below_the_weighted_mean_is_cheap_though_above_the_period_mean(
+        self,
+    ) -> None:
+        """The weighted mean is 0.28375, the mean of the three period rates 0.17."""
+        tariff = TariffConfig(
+            periods=(
+                TariffPeriod("00:00", "01:00", 0.01, "Night"),
+                TariffPeriod("01:00", "02:00", 0.20, "Shoulder"),
+                TariffPeriod("02:00", "00:00", 0.30, "Peak"),
+            )
+        )
+
+        assert tariff.cheap_minutes_of_day == frozenset(range(120))
+
+    @pytest.mark.parametrize(
+        ("timestamp", "cheap"),
+        [
+            pytest.param(pd.Timestamp("2024-06-21 00:30", tz="Europe/London"), True, id="00:30"),
+            pytest.param(
+                pd.Timestamp("2024-06-21 00:29:59", tz="Europe/London"), False, id="00:29:59"
+            ),
+            pytest.param(
+                pd.Timestamp("2024-06-21 07:29:59", tz="Europe/London"), True, id="07:29:59"
+            ),
+            pytest.param(pd.Timestamp("2024-06-21 07:30", tz="Europe/London"), False, id="07:30"),
+            pytest.param(datetime(2024, 1, 10, 3, 0), True, id="naive-03:00"),
+        ],
+    )
+    def test_is_cheap_at_reads_the_timestamps_wall_clock_minute(
+        self, timestamp: datetime, cheap: bool
+    ) -> None:
+        assert TariffConfig.economy_7().is_cheap_at(timestamp) is cheap
+
+    def test_one_instant_is_cheap_on_the_clock_that_reads_it_in_the_cheap_window(self) -> None:
+        """23:30 UTC on 2024-06-20 is 00:30 BST on 2024-06-21."""
+        instant = pd.Timestamp("2024-06-20 23:30", tz="UTC")
+        tariff = TariffConfig.economy_7()
+
+        assert tariff.is_cheap_at(instant) is False
+        assert tariff.is_cheap_at(instant.tz_convert("Europe/London")) is True
 
 
 class TestTariffConfigDerivedRatesStayOutOfIdentity:
-    """Reading the derived rates must not change a tariff's equality, fields or clones."""
+    """Reading the derived values must not change a tariff's equality, fields or clones."""
 
     def test_reading_the_rates_leaves_equality_hash_and_repr_alone(self) -> None:
         read = TariffConfig.economy_7()
-        _derived_rates(read)
+        _derived_values(read)
         unread = TariffConfig.economy_7()
 
         assert read == unread
@@ -616,9 +885,9 @@ class TestTariffConfigDerivedRatesStayOutOfIdentity:
         assert repr(read) == repr(unread)
 
     def test_a_tariff_rebuilt_from_its_fields_equals_the_original(self) -> None:
-        """web/storage.py's run storage writes fields() and passes them back to the constructor."""
+        """web/field_tree.py's field_tree writes fields() and its read_field_tree passes them back to the constructor."""
         tariff = TariffConfig.economy_7()
-        _derived_rates(tariff)
+        _derived_values(tariff)
 
         rebuilt = TariffConfig(
             **{f.name: getattr(tariff, f.name) for f in dataclasses.fields(tariff)}
@@ -629,22 +898,23 @@ class TestTariffConfigDerivedRatesStayOutOfIdentity:
     def test_a_pickled_tariff_carries_the_same_rates(self) -> None:
         """fleet.py's process pool pickles each home's config, its tariff included."""
         tariff = TariffConfig.economy_10()
-        expected = _derived_rates(tariff)
+        expected = _derived_values(tariff)
 
         unpickled: TariffConfig = pickle.loads(pickle.dumps(tariff))
 
         assert unpickled == tariff
         assert hash(unpickled) == hash(tariff)
-        assert _derived_rates(unpickled) == expected
+        assert _derived_values(unpickled) == expected
 
     def test_replace_derives_the_replacement_periods_rates(self) -> None:
-        tariff = TariffConfig.economy_7()
-        _derived_rates(tariff)
+        tariff = TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
+        peak, cheap_minutes = _derived_values(tariff)
 
         replaced = dataclasses.replace(tariff, periods=TariffConfig.flat_rate(0.30).periods)
 
-        assert _derived_rates(replaced) == (0.30, 0.30)
-        assert _derived_rates(tariff) == pytest.approx((0.25, 0.17))
+        assert _derived_values(replaced) == (0.30, frozenset())
+        assert peak == 0.25
+        assert cheap_minutes == frozenset(range(30, 450))
 
 
 class TestCalculateBill:
@@ -762,3 +1032,80 @@ class TestCalculateBill:
         assert bill_peak == pytest.approx(3.00)
         assert bill_offpeak == pytest.approx(1.00)
         assert bill_peak > bill_offpeak
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(TariffConfig.economy_7(), id="economy-7"),
+            pytest.param(TariffConfig.economy_10(), id="economy-10"),
+            pytest.param(TariffConfig.flat_rate(0.20), id="flat"),
+        ],
+    )
+    def test_calculate_bill_prices_each_minute_of_a_day_the_clocks_go_back_at_its_own_rate(
+        self, tariff: TariffConfig
+    ) -> None:
+        """Each minute, the first included, carries its own non-zero weight, so one mispriced minute moves the bill far beyond rel=1e-12, while summing in another order moves a minute year's by about 4e-14."""
+        index = pd.date_range(
+            "2024-10-27", "2024-10-28", freq="min", tz="Europe/London", inclusive="left"
+        )
+        energy = pd.Series(np.linspace(0.01, 0.05, len(index)), index=index)
+
+        each_minute_at_its_rate = math.fsum(
+            kwh * tariff.get_rate(timestamp) for timestamp, kwh in energy.items()
+        )
+        assert calculate_bill(energy, tariff) == pytest.approx(each_minute_at_its_rate, rel=1e-12)
+
+    @pytest.mark.parametrize(
+        ("missing", "dtype"),
+        [
+            pytest.param(float("nan"), "float64", id="float64-nan"),
+            pytest.param(pd.NA, "Float64", id="nullable-float64-na"),
+            pytest.param(pd.NA, object, id="object-na"),
+        ],
+    )
+    def test_a_missing_energy_gives_a_nan_bill(self, missing: object, dtype: str | type) -> None:
+        index = pd.date_range("2024-01-15", periods=3, freq="h")
+        energy = pd.Series([1.0, missing, 2.0], index=index, dtype=dtype)
+
+        assert math.isnan(calculate_bill(energy, TariffConfig.economy_7()))
+
+
+class TestDescribeMinutesOfDay:
+    """describe_minutes_of_day writes minutes of the day as the clock ranges a tariff refusal names."""
+
+    @pytest.mark.parametrize(
+        ("minutes", "expected"),
+        [
+            pytest.param(range(360, 720), "06:00-12:00", id="one-range"),
+            pytest.param(
+                [*range(1380, 1440), *range(0, 420)], "23:00-07:00", id="across-midnight"
+            ),
+            pytest.param(
+                [*range(0, 420), *range(720, 780), *range(1380, 1440)],
+                "12:00-13:00, 23:00-07:00",
+                id="ranges-in-order-of-their-start",
+            ),
+            pytest.param(range(1380, 1440), "23:00-00:00", id="ending-at-midnight"),
+            pytest.param(range(0, 60), "00:00-01:00", id="starting-at-midnight"),
+            pytest.param([1439], "23:59-00:00", id="the-last-minute"),
+            pytest.param(range(1440), "00:00-00:00", id="the-whole-day"),
+            pytest.param([], "", id="no-minutes"),
+        ],
+    )
+    def test_each_run_of_consecutive_minutes_is_one_clock_range(
+        self, minutes: Iterable[int], expected: str
+    ) -> None:
+        assert describe_minutes_of_day(minutes) == expected
+
+    def test_an_unordered_input_with_duplicates_reads_as_its_sorted_minutes(self) -> None:
+        unordered = [721, 0, 720, 1, 0]
+
+        assert describe_minutes_of_day(unordered) == describe_minutes_of_day(sorted(unordered))
+        assert describe_minutes_of_day(unordered) == "00:00-00:02, 12:00-12:02"
+
+    @pytest.mark.parametrize("minute", [1440, -1])
+    def test_a_minute_outside_the_day_is_refused_naming_it(self, minute: int) -> None:
+        with pytest.raises(ValueError) as refusal:
+            describe_minutes_of_day([0, minute])
+
+        assert names_as_a_word(str(refusal.value), minute)

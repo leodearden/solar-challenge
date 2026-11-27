@@ -1,0 +1,35 @@
+{
+  "total_generation_kwh": 26.819396222713607,
+  "total_demand_kwh": 7.594583275164039,
+  "total_self_consumption_kwh": 5.060221129965301,
+  "total_grid_import_kwh": 2.534362145198739,
+  "total_grid_export_kwh": 21.759175092748304,
+  "total_battery_charge_kwh": 0.0,
+  "total_battery_discharge_kwh": 0.0,
+  "peak_generation_kw": 3.5696686787601157,
+  "peak_demand_kw": 0.6070388021851361,
+  "self_consumption_ratio": 0.18867766775747735,
+  "grid_dependency_ratio": 0.33370654496431185,
+  "export_ratio": 0.8113223322425226,
+  "window": {
+    "first_day": "2024-06-21",
+    "last_day": "2024-06-21",
+    "cadence": "P0DT0H1M0S",
+    "timezone": "Europe/London"
+  },
+  "total_import_cost_gbp": 0.0,
+  "total_export_revenue_gbp": 3.2638762639122456,
+  "net_cost_gbp": -3.2638762639122456,
+  "strategy_name": "self_consumption",
+  "seg_revenue_gbp": 3.2638762639122456,
+  "total_heat_pump_load_kwh": null,
+  "peak_heat_pump_load_kw": null,
+  "heat_pump_load_ratio": null,
+  "total_grid_charge_cost_gbp": 0.0,
+  "total_grid_charge_kwh": 0.0,
+  "pricing": {
+    "import_tariff_mean_rate_gbp_per_kwh": null,
+    "seg_rate_pence_per_kwh": 15.0
+  },
+  "grid_charge_forecast": null
+}

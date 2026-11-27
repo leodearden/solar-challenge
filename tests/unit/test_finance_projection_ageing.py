@@ -11,15 +11,25 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import pytest
 
 from solar_challenge.battery import BatteryConfig, compute_soh
-from solar_challenge.finance import project_multi_year
-from solar_challenge.fleet import FleetResults
+from solar_challenge.projection import project_multi_year
 from solar_challenge.pv import calculate_degradation_factor
-from tests._finance_builders import make_fleet_results, make_scenario_and_finance, make_sim_results
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_scenario_and_finance,
+    make_sim_results,
+)
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from solar_challenge.fleet import FleetConfig, FleetResults
+    from solar_challenge.home import HomeConfig
 
 
 def _make_degrading_simulate(
@@ -32,10 +42,10 @@ def _make_degrading_simulate(
 
     The injected simulate reads pv_config.system_age_years from each home in
     the FleetConfig, computes a degradation factor, and scales the energy
-    output accordingly.  This makes fleet_self_consumption_kwh decline with age
+    output accordingly.  This makes fleet_billed_own_use_kwh decline with age
     in a controlled, verifiable way.
     """
-    def _simulate(fleet_config: "FleetConfig", start: "pd.Timestamp", end: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
         homes = fleet_config.homes
         # Mean degradation factor across homes
         mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
@@ -94,7 +104,7 @@ class TestProjectMultiYearSOH:
 
     def test_battery_soh_monotone_non_increasing(self) -> None:
         """points.battery_soh is monotone non-increasing across years (when batteries present)."""
-        def _simulate_with_battery(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        def _simulate_with_battery(fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp) -> FleetResults:
             homes = fc.homes
             mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
             pv_factor = calculate_degradation_factor(mean_age, 0.005)
@@ -114,7 +124,7 @@ class TestProjectMultiYearSOH:
 
     def test_battery_soh_declines_over_life(self) -> None:
         """battery_soh at end of life < beginning (calendar fade present)."""
-        def _simulate_with_battery(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        def _simulate_with_battery(fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp) -> FleetResults:
             homes = fc.homes
             mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
             pv_factor = calculate_degradation_factor(mean_age, 0.005)
@@ -142,8 +152,8 @@ class TestProjectMultiYearSOH:
         expected_age0 = calculate_degradation_factor(0.0, rate)
         assert curve.points[0].pv_soh == pytest.approx(expected_age0, rel=1e-6)
 
-        # Check fleet_self_consumption declines from year 0 to year 24
-        assert curve.points[24].fleet_self_consumption_kwh < curve.points[0].fleet_self_consumption_kwh
+        # Check fleet_billed_own_use_kwh declines from year 0 to year 24
+        assert curve.points[24].fleet_billed_own_use_kwh < curve.points[0].fleet_billed_own_use_kwh
 
     def test_no_battery_soh_defaults_to_one(self) -> None:
         """battery_soh == 1.0 for all years when the fleet has no batteries."""
@@ -162,7 +172,7 @@ class TestCycleFadeEngagement:
         discharge_kwh: float,
     ) -> Callable:
         """Synthetic simulate that returns a fixed per-home discharge amount."""
-        def _simulate(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+        def _simulate(fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp) -> FleetResults:
             return make_fleet_results(
                 homes=fc.homes,
                 self_kwh=3000.0,
@@ -212,7 +222,7 @@ _ANNUAL_DISCHARGE_KWH = 800.0
 
 
 def _make_battery_ageing_simulate(
-    discharge_kwh: "Callable[[HomeConfig], float]",  # type: ignore[name-defined]
+    discharge_kwh: Callable[[HomeConfig], float],
 ) -> Callable:
     """A simulate whose own-use decays with PV age and whose battery discharges discharge_kwh(home) a year.
 
@@ -221,7 +231,7 @@ def _make_battery_ageing_simulate(
     (demand − import) is 3000 kWh × exp(−0.1 × PV age) whatever the discharge,
     so the ages bisection samples depend on PV age alone.
     """
-    def _simulate(fc: "FleetConfig", s: "pd.Timestamp", e: "pd.Timestamp") -> "FleetResults":  # type: ignore[name-defined]
+    def _simulate(fc: FleetConfig, s: pd.Timestamp, e: pd.Timestamp) -> FleetResults:
         per_home = []
         for home in fc.homes:
             pv_decay = math.exp(-0.1 * home.pv_config.system_age_years)
@@ -234,7 +244,7 @@ def _make_battery_ageing_simulate(
                     discharge_kwh=discharge,
                 )
             )
-        return FleetResults(per_home_results=per_home, home_configs=list(fc.homes))
+        return make_fleet_results_of(per_home, homes=fc.homes)
 
     return _simulate
 
@@ -243,7 +253,7 @@ class TestBatterySohCountsThroughputToEachAge:
     """Each sampled age's battery SOH counts the battery throughput from installation to that age.
 
     Seed and bisection-trial ages alike, so battery_soh never rises year on
-    year.  Every battery fades 0.005/yr by calendar and 0.0002 per equivalent
+    year.  Every battery fades 0.005/yr by calendar and 0.0001 per equivalent
     full cycle.
     """
 
@@ -251,7 +261,7 @@ class TestBatterySohCountsThroughputToEachAge:
 
     def test_constant_discharge_soh_counts_discharge_times_years(self) -> None:
         """With a constant annual discharge D, year y's battery SOH is compute_soh(y, D × y)."""
-        scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
+        scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0001, calendar_fade=0.005)
         usable_kwh = battery.capacity_kwh * (battery.max_soc_fraction - battery.min_soc_fraction)
 
         curve = project_multi_year(
@@ -269,13 +279,39 @@ class TestBatterySohCountsThroughputToEachAge:
             )
             assert point.battery_soh == pytest.approx(expected_soh, abs=1e-12), f"year {point.year}"
 
+    def test_battery_soh_falls_by_its_calendar_and_cycle_fade_in_closed_form(self) -> None:
+        """Year y's battery SOH is 1 − 0.015 × y.
+
+        800 kWh/yr discharged over 8 kWh usable is 100 equivalent full cycles a year, so the
+        cycle fade is 1e-4 × 100 = 0.01/yr, beside the calendar fade of 0.005/yr.
+        """
+        scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0001, calendar_fade=0.005)
+        soh_fade_per_year = 0.015
+
+        curve = project_multi_year(
+            scenario,
+            finance,
+            error_target_pct=self._ERROR_TARGET_PCT,
+            simulate=_make_battery_ageing_simulate(lambda home: _ANNUAL_DISCHARGE_KWH),
+        )
+
+        assert battery.nominal_usable_capacity_kwh == pytest.approx(8.0), "premise: the battery has 8 kWh usable"
+        assert len(curve.sampled_ages) > 3, "premise: bisection sampled ages between the three seeds"
+        assert 1 - soh_fade_per_year * curve.points[-1].year > battery.soh_floor, (
+            "premise: the SOH floor clamps no year"
+        )
+        for point in curve.points:
+            assert point.battery_soh == pytest.approx(1 - soh_fade_per_year * point.year, abs=1e-9), (
+                f"year {point.year}"
+            )
+
     def test_each_home_counts_its_own_discharge_and_battery_soh_is_their_mean(self) -> None:
         """Each home's SOH counts its own constant discharge D_h, and battery_soh is the mean over homes.
 
         The two homes' batteries differ in size and discharge, so year y's
         battery_soh is the mean over homes of compute_soh(y, D_h × y).
         """
-        one_home_scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
+        one_home_scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0001, calendar_fade=0.005)
         small_battery = dataclasses.replace(battery, capacity_kwh=5.0)
         (home,) = one_home_scenario.homes
         scenario = dataclasses.replace(
@@ -327,10 +363,10 @@ class TestBatterySohCountsThroughputToEachAge:
     )
     def test_battery_soh_never_rises(
         self,
-        discharge_kwh: "Callable[[HomeConfig], float]",  # type: ignore[name-defined]
+        discharge_kwh: Callable[[HomeConfig], float],
     ) -> None:
         """battery_soh is non-increasing year on year, whether discharge falls or rises with age."""
-        scenario, finance, _ = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
+        scenario, finance, _ = _make_battery_scenario(cycle_fade=0.0001, calendar_fade=0.005)
 
         curve = project_multi_year(
             scenario,

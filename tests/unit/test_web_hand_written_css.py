@@ -5,7 +5,7 @@ not use, and no @keyframes another served stylesheet already defines.
 
 Tailwind compiles dist/style.css from the classes the dashboard applies, but nothing
 prunes the hand-written stylesheet (task 221 found .spinner, a second @keyframes spin
-and 16 unread --color-* variables). test_web_compiled_css.py guards the other
+and 16 unread --color-* variables). tests/unit/test_web_compiled_css.py guards the other
 direction.
 """
 

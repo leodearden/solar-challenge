@@ -1,20 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for a home: block and the battery, pv, heat_pump and ev sub-blocks inside it."""
+"""Tests for a home: block and the battery, pv, load, heat_pump and ev sub-blocks inside it."""
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Callable
 
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import (
-    DispatchStrategyConfig,
-    GridChargeConfig,
+    load_fleet_config,
     load_home_config,
-    parse_dispatch_strategy_config,
-    parse_home_block,
+)
+from solar_challenge.dispatch import (
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
@@ -23,6 +28,18 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    PV_CAPACITY_KW_WHEN_OMITTED,
+    parse_dispatch_strategy_config,
+    parse_home_block,
+    parse_tariff_config,
+)
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffConfig
+from tests._construction_refusals import prefixed_construction_refusal
+from tests._non_booleans import NON_BOOLEANS
+from tests._repository_paths import SCENARIOS_DIR
+from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
 
 def _parsed_home(**blocks: Any) -> HomeConfig:
@@ -35,137 +52,6 @@ def _refusal(build: Callable[[], object]) -> tuple[type[BaseException], str]:
     with pytest.raises(Exception) as raised:
         build()
     return type(raised.value), str(raised.value)
-
-
-class TestDispatchStrategyConfig:
-    """Tests for DispatchStrategyConfig class."""
-
-    def test_self_consumption_strategy(self) -> None:
-        """Test self-consumption strategy configuration."""
-        config = DispatchStrategyConfig(strategy_type="self_consumption")
-        assert config.strategy_type == "self_consumption"
-        assert config.peak_hours is None
-        assert config.import_limit_kw is None
-
-    def test_tou_optimized_strategy(self) -> None:
-        """Test TOU optimized strategy configuration."""
-        config = DispatchStrategyConfig(
-            strategy_type="tou_optimized",
-            peak_hours=[(16, 20), (7, 9)],
-        )
-        assert config.strategy_type == "tou_optimized"
-        assert config.peak_hours == [(16, 20), (7, 9)]
-
-    def test_peak_shaving_strategy(self) -> None:
-        """Test peak-shaving strategy configuration."""
-        config = DispatchStrategyConfig(
-            strategy_type="peak_shaving",
-            import_limit_kw=5.0,
-        )
-        assert config.strategy_type == "peak_shaving"
-        assert config.import_limit_kw == 5.0
-
-    def test_invalid_strategy_type_raises(self) -> None:
-        """Test invalid strategy type raises error."""
-        with pytest.raises(ConfigurationError, match="Invalid strategy_type"):
-            DispatchStrategyConfig(strategy_type="invalid_strategy")
-
-    def test_tou_without_peak_hours_raises(self) -> None:
-        """Test TOU strategy without peak_hours raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'peak_hours'"):
-            DispatchStrategyConfig(strategy_type="tou_optimized")
-
-    def test_tou_with_invalid_hour_range_raises(self) -> None:
-        """Test TOU strategy with invalid hour range raises error."""
-        with pytest.raises(ConfigurationError, match="must be in range"):
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(16, 25)],  # 25 is invalid
-            )
-
-    def test_tou_with_negative_hour_raises(self) -> None:
-        """Test TOU strategy with negative hour raises error."""
-        with pytest.raises(ConfigurationError, match="must be in range"):
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(-1, 10)],
-            )
-
-    def test_tou_with_start_after_end_raises(self) -> None:
-        """Test TOU strategy with start_hour >= end_hour raises error."""
-        with pytest.raises(ConfigurationError, match="start_hour must be less than"):
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(20, 16)],
-            )
-
-    def test_tou_with_equal_start_end_raises(self) -> None:
-        """Test TOU strategy with equal start and end hours raises error."""
-        with pytest.raises(ConfigurationError, match="start_hour must be less than"):
-            DispatchStrategyConfig(
-                strategy_type="tou_optimized",
-                peak_hours=[(16, 16)],
-            )
-
-    def test_peak_shaving_without_limit_raises(self) -> None:
-        """Test peak-shaving strategy without import_limit_kw raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'import_limit_kw'"):
-            DispatchStrategyConfig(strategy_type="peak_shaving")
-
-    def test_peak_shaving_with_negative_limit_raises(self) -> None:
-        """Test peak-shaving strategy with negative limit raises error."""
-        with pytest.raises(ConfigurationError, match="must be positive"):
-            DispatchStrategyConfig(
-                strategy_type="peak_shaving",
-                import_limit_kw=-5.0,
-            )
-
-    def test_peak_shaving_with_zero_limit_raises(self) -> None:
-        """Test peak-shaving strategy with zero limit raises error."""
-        with pytest.raises(ConfigurationError, match="must be positive"):
-            DispatchStrategyConfig(
-                strategy_type="peak_shaving",
-                import_limit_kw=0.0,
-            )
-
-
-class TestGridChargeConfig:
-    """Tests for GridChargeConfig class."""
-
-    def test_default_target_soc_fraction(self) -> None:
-        """GridChargeConfig() default target_soc_fraction is 0.9."""
-        config = GridChargeConfig()
-        assert config.target_soc_fraction == 0.9
-
-    def test_custom_target_soc_fraction(self) -> None:
-        """GridChargeConfig accepts custom target_soc_fraction."""
-        config = GridChargeConfig(target_soc_fraction=0.8)
-        assert config.target_soc_fraction == 0.8
-
-    def test_boundary_value_one_accepted(self) -> None:
-        """GridChargeConfig accepts target_soc_fraction == 1.0."""
-        config = GridChargeConfig(target_soc_fraction=1.0)
-        assert config.target_soc_fraction == 1.0
-
-    def test_small_positive_value_accepted(self) -> None:
-        """GridChargeConfig accepts small positive target_soc_fraction."""
-        config = GridChargeConfig(target_soc_fraction=0.01)
-        assert config.target_soc_fraction == 0.01
-
-    def test_zero_raises(self) -> None:
-        """target_soc_fraction == 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
-            GridChargeConfig(target_soc_fraction=0.0)
-
-    def test_negative_raises(self) -> None:
-        """target_soc_fraction < 0 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
-            GridChargeConfig(target_soc_fraction=-0.1)
-
-    def test_above_one_raises(self) -> None:
-        """target_soc_fraction > 1 raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="target_soc_fraction"):
-            GridChargeConfig(target_soc_fraction=1.5)
 
 
 class TestBatteryGridChargeParsing:
@@ -201,14 +87,14 @@ class TestBatteryGridChargeParsing:
         """grid_charging supplied as a number, string or list raises ConfigurationError."""
         with pytest.raises(
             ConfigurationError,
-            match=f"grid_charging must be a mapping, got {type_name}",
+            match=f"grid_charging: must be a mapping, got {type_name}",
         ):
             _parsed_home(
                 battery={"capacity_kwh": 5.0, "grid_charging": grid_charging}
             )
 
     def test_yaml_round_trip_grid_charging(self, tmp_path: Path) -> None:
-        """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
+        """YAML with battery.grid_charging, on a battery that dispatches tou_optimized on its tariff's clock, round-trips into home.battery_config.grid_charging."""
         yaml_content = """
 home:
   pv:
@@ -217,8 +103,12 @@ home:
     annual_consumption_kwh: 3400
   battery:
     capacity_kwh: 5.0
+    dispatch_strategy:
+      strategy_type: tou_optimized
     grid_charging:
       target_soc_fraction: 0.8
+  tariff:
+    type: economy_7
 """
         path = tmp_path / "home.yaml"
         path.write_text(yaml_content)
@@ -251,7 +141,13 @@ class TestBatterySOCEfficiencyParsing:
 
     def test_out_of_range_soc_raises_value_error(self) -> None:
         """Out-of-range SOC fractions propagate as ValueError."""
-        with pytest.raises(ValueError, match="SOC"):
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                "min_soc_fraction must be less than max_soc_fraction, "
+                "got min_soc_fraction=0.9 and max_soc_fraction=0.5"
+            ),
+        ):
             _parsed_home(
                 battery={
                     "capacity_kwh": 5.0,
@@ -266,7 +162,7 @@ class TestBatterySOCEfficiencyParsing:
             _parsed_home(battery={"capacity_kwh": 5.0, "charge_efficiency": 0.0})
 
     def test_yaml_round_trip_efficiency(self, tmp_path: Path) -> None:
-        """YAML with battery.efficiency round-trips into home.battery_config.charge_efficiency."""
+        """YAML battery.efficiency is the round trip: the battery holds the pair with_round_trip splits it into."""
         yaml_content = """
 home:
   pv:
@@ -280,11 +176,64 @@ home:
         path = tmp_path / "home.yaml"
         path.write_text(yaml_content)
 
-        home = load_home_config(path)
-        assert home.battery_config is not None
-        assert home.battery_config.efficiency == 0.95
-        assert home.battery_config.charge_efficiency == pytest.approx(math.sqrt(0.95))
-        assert home.battery_config.discharge_efficiency == pytest.approx(math.sqrt(0.95))
+        battery = load_home_config(path).battery_config
+        assert battery is not None
+        assert (battery.charge_efficiency, battery.discharge_efficiency) == (math.sqrt(0.95), math.sqrt(0.95))
+        assert battery == BatteryConfig(capacity_kwh=5.0).with_round_trip(0.95)
+
+    def test_the_economy_7_example_battery_holds_the_pair_its_round_trip_splits_into(self) -> None:
+        battery = load_home_config(SCENARIOS_DIR / "example-economy7.yaml").battery_config
+        assert battery == BatteryConfig(capacity_kwh=5.0).with_round_trip(0.95)
+
+    @pytest.mark.parametrize(
+        ("per_direction", "keys_named"),
+        [
+            pytest.param({"charge_efficiency": 0.975}, "charge_efficiency", id="charge-at-its-default"),
+            pytest.param({"discharge_efficiency": 0.7}, "discharge_efficiency", id="discharge"),
+            pytest.param(
+                {"discharge_efficiency": 0.7, "charge_efficiency": 0.99},
+                "charge_efficiency and discharge_efficiency",
+                id="both",
+            ),
+        ],
+    )
+    def test_a_block_setting_both_efficiency_forms_is_refused_naming_it_and_each_key(
+        self, per_direction: dict[str, float], keys_named: str
+    ) -> None:
+        """The refusal is by key, whatever the values, and names the per-direction keys in the battery block's order."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_home(battery={"capacity_kwh": 5.0, "efficiency": 0.95, **per_direction})
+        assert str(refusal.value) == (
+            f"home.battery: sets both forms of a battery's efficiency: efficiency and {keys_named}; "
+            "set efficiency, the round trip, or charge_efficiency and discharge_efficiency, not both"
+        )
+
+    @pytest.mark.parametrize(
+        ("efficiency", "refusal"),
+        [
+            pytest.param(1.5, "must be greater than 0 and at most 1, got 1.5", id="above-one"),
+            pytest.param(0, "must be greater than 0 and at most 1, got 0", id="zero"),
+            pytest.param("high", "must be a finite number, got 'high'", id="word"),
+            pytest.param(True, "must be a finite number, got True", id="boolean"),
+        ],
+    )
+    def test_an_efficiency_out_of_range_or_not_a_number_is_refused_naming_the_key_by_its_path(
+        self, efficiency: object, refusal: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_home(battery={"capacity_kwh": 5.0, "efficiency": efficiency})
+        assert str(raised.value) == f"home.battery.efficiency: round-trip efficiency {refusal}"
+
+    def test_a_null_efficiency_beside_the_pair_reads_as_absent(self) -> None:
+        battery = _parsed_home(
+            battery={
+                "capacity_kwh": 5.0,
+                "efficiency": None,
+                "charge_efficiency": 0.96,
+                "discharge_efficiency": 0.97,
+            }
+        ).battery_config
+        assert battery == BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.96, discharge_efficiency=0.97)
 
     def test_yaml_round_trip_min_max_soc(self, tmp_path: Path) -> None:
         """YAML with battery.min_soc_fraction/max_soc_fraction round-trips correctly."""
@@ -358,14 +307,11 @@ home:
 class TestOmittedAndNullKeys:
     """A block gives its dataclass only the keys it sets, and so does the home block, to HomeConfig.
 
-    An omitted key takes the dataclass's declared default; a null is a value set, handed on and
-    never read as the default.
-
-    The null cases characterize a known gap and endorse none of it: no block checks a value, so a
-    null in a field the dataclass does not check is held as None (a null use_stochastic is falsy,
-    which selects the deterministic load profile), and a null the dataclass compares is refused by
-    its own TypeError, which names neither the key nor the block. Refusing a null at the block
-    changes these cases.
+    An omitted key takes the dataclass's declared default, or the table's when-omitted value where
+    the dataclass declares none, and a key written as null reads as absent; tests/unit/config/test_component_blocks.py
+    sweeps every key of every table. One null is refused rather than read as absent: a null
+    grid_charging target_soc_fraction reaches GridChargeConfig, which refuses it, prefixed by the
+    block's path.
     """
 
     def test_omitted_home_keys_take_the_declared_defaults(self) -> None:
@@ -377,8 +323,8 @@ class TestOmittedAndNullKeys:
         )
 
     def test_omitted_pv_keys_take_the_declared_defaults(self) -> None:
-        """PVConfig declares no capacity, so a pv block omitting capacity_kw is a 4 kW array."""
-        assert _parsed_home(pv={}).pv_config == PVConfig(capacity_kw=4.0)
+        """PVConfig declares no capacity, so a pv block omitting capacity_kw is an array of PV_CAPACITY_KW_WHEN_OMITTED, the capacity a web home body that sends no pv_kw reads as too."""
+        assert _parsed_home(pv={}).pv_config == PVConfig(capacity_kw=PV_CAPACITY_KW_WHEN_OMITTED)
 
     def test_omitted_battery_keys_take_the_declared_defaults(self) -> None:
         """BatteryConfig declares no capacity, so a battery block omitting capacity_kwh is 5 kWh."""
@@ -389,107 +335,71 @@ class TestOmittedAndNullKeys:
         assert _parsed_home(load={}).load_config == LoadConfig()
 
     def test_omitted_grid_charging_keys_take_the_declared_defaults(self) -> None:
-        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default."""
-        battery = _parsed_home(battery={"capacity_kwh": 5.0, "grid_charging": {}}).battery_config
-        assert battery == BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig())
+        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default, on a battery that dispatches tou_optimized on its tariff's clock."""
+        battery = _parsed_home(
+            battery={"capacity_kwh": 5.0, "dispatch_strategy": {"strategy_type": "tou_optimized"}, "grid_charging": {}},
+            tariff={"type": "economy_7"},
+        ).battery_config
+        assert battery == BatteryConfig(
+            capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig(), grid_charging=GridChargeConfig()
+        )
 
     @pytest.mark.parametrize(
-        ("blocks", "attribute", "dataclass", "fields"),
+        ("blocks", "attribute", "expected"),
         [
             pytest.param(
-                {"pv": {"name": None}},
-                "pv_config",
-                PVConfig,
-                {"capacity_kw": 4.0, "name": None},
-                id="pv-name",
+                {"pv": {"tilt": None}}, "pv_config", PVConfig(capacity_kw=4.0, tilt=35.0), id="pv-tilt"
             ),
             pytest.param(
-                {"battery": {"name": None}},
-                "battery_config",
-                BatteryConfig,
-                {"capacity_kwh": 5.0, "name": None},
-                id="battery-name",
-            ),
-            pytest.param(
-                {"load": {"name": None}},
-                "load_config",
-                LoadConfig,
-                {"name": None},
-                id="load-name",
-            ),
-            pytest.param(
-                {"load": {"use_stochastic": None}},
-                "load_config",
-                LoadConfig,
-                {"use_stochastic": None},
-                id="load-use_stochastic",
+                {"heat_pump": {"heat_pump_type": "ASHP", "annual_heat_demand_kwh": None}},
+                "heat_pump_config",
+                HeatPumpConfig("ASHP", annual_heat_demand_kwh=8000.0),
+                id="heat_pump-annual_heat_demand_kwh",
             ),
         ],
     )
-    def test_a_null_in_a_field_the_dataclass_does_not_check_is_held_as_none(
-        self,
-        blocks: dict[str, Any],
-        attribute: str,
-        dataclass: Callable[..., object],
-        fields: dict[str, Any],
+    def test_a_null_key_takes_the_declared_default(
+        self, blocks: dict[str, Any], attribute: str, expected: object
     ) -> None:
-        """Known gap: a null name or use_stochastic is held as None, not replaced by the declared default."""
-        assert getattr(_parsed_home(**blocks), attribute) == dataclass(**fields)
+        """B4: a null tilt is a 35° array and a null annual demand an 8000 kWh heat pump, as if omitted."""
+        assert getattr(_parsed_home(**blocks), attribute) == expected
 
-    @pytest.mark.parametrize("key", ["name", "dispatch_strategy"])
-    def test_a_null_home_scalar_is_held_as_none(self, key: str) -> None:
-        """Known gap: HomeConfig checks no value, so a null name or dispatch_strategy is held as None, not defaulted."""
-        assert getattr(_parsed_home(**{key: None}), key) is None
+    @pytest.mark.parametrize("key", ["module_efficiency", "temperature_coefficient"])
+    def test_a_null_module_setting_is_the_modules_own_as_an_omitted_one_is(self, key: str) -> None:
+        """A null module setting reads as absent: PVConfig's declared None, the module's own value."""
+        pv_config = _parsed_home(pv={key: None}).pv_config
+
+        assert pv_config == PVConfig(capacity_kw=4.0)
+        assert getattr(pv_config, key) is None
+
+    def test_a_null_home_name_reads_as_absent(self) -> None:
+        """A null home name takes HomeConfig's declared empty name."""
+        assert _parsed_home(name=None).name == ""
 
     @pytest.mark.parametrize(
-        ("blocks", "dataclass", "fields"),
-        [
-            pytest.param(
-                {"pv": {"capacity_kw": None}},
-                PVConfig,
-                {"capacity_kw": None},
-                id="pv-capacity_kw",
-            ),
-            pytest.param(
-                {"pv": {"azimuth": None}},
-                PVConfig,
-                {"capacity_kw": 4.0, "azimuth": None},
-                id="pv-azimuth",
-            ),
-            pytest.param(
-                {"battery": {"capacity_kwh": None}},
-                BatteryConfig,
-                {"capacity_kwh": None},
-                id="battery-capacity_kwh",
-            ),
-            pytest.param(
-                {"battery": {"max_charge_kw": None}},
-                BatteryConfig,
-                {"capacity_kwh": 5.0, "max_charge_kw": None},
-                id="battery-max_charge_kw",
-            ),
-            pytest.param(
-                {"load": {"household_occupants": None}},
-                LoadConfig,
-                {"household_occupants": None},
-                id="load-household_occupants",
-            ),
-            pytest.param(
-                {"battery": {"grid_charging": {"target_soc_fraction": None}}},
-                GridChargeConfig,
-                {"target_soc_fraction": None},
-                id="grid_charging-target_soc_fraction",
-            ),
-        ],
+        "dispatch_strategy", ["tou_optimized", "greedy", None, "tou_optimised"], ids=["tou_optimized", "greedy", "null", "misspelt"]
     )
-    def test_a_null_the_dataclass_refuses_is_refused_as_constructing_it_refuses_it(
-        self,
-        blocks: dict[str, Any],
-        dataclass: Callable[..., object],
-        fields: dict[str, Any],
+    def test_a_home_dispatch_strategy_is_refused_naming_the_batterys(self, dispatch_strategy: object) -> None:
+        """The dispatch strategy is the battery's own setting, so a home block that sets one, of any value, is refused naming where it goes."""
+        with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("home.dispatch_strategy")):
+            _parsed_home(battery={"capacity_kwh": 5.0}, dispatch_strategy=dispatch_strategy)
+
+    @pytest.mark.parametrize(
+        "dispatch_strategy", ["tou_optimized", "greedy", None], ids=["tou_optimized", "greedy", "null"]
+    )
+    def test_a_homes_entry_s_dispatch_strategy_is_refused_naming_the_entry_and_the_batterys(
+        self, dispatch_strategy: object
     ) -> None:
-        """A null is not the declared default: the dataclass refuses it, with an error naming neither key nor block."""
-        assert _refusal(lambda: _parsed_home(**blocks)) == _refusal(lambda: dataclass(**fields))
+        with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("homes[0].dispatch_strategy")):
+            parse_home_block({"dispatch_strategy": dispatch_strategy}, Location.bristol(), block_path="homes[0]")
+
+    def test_a_null_grid_charging_target_is_refused_as_constructing_it_refuses_it(self) -> None:
+        grid_charging = {"target_soc_fraction": None}
+
+        assert _refusal(lambda: _parsed_home(battery={"grid_charging": grid_charging})) == (
+            ConfigurationError,
+            prefixed_construction_refusal("home.battery.grid_charging", lambda: GridChargeConfig(**grid_charging)),
+        )
 
     def test_a_bad_dispatch_strategy_is_reported_before_a_bad_grid_charging_block(self) -> None:
         """The battery block reads its dispatch_strategy before its grid_charging, in whatever order the file lists them."""
@@ -507,63 +417,198 @@ class TestOmittedAndNullKeys:
             _parsed_home(battery=battery)
 
 
+_DISPATCH_STRATEGY_PATH = "home.battery.dispatch_strategy"
+"""The path parse_home_block names a home battery's dispatch_strategy: block by."""
+
+
+def _parsed_strategy(block: object, **home_blocks: Any) -> object:
+    """The dispatch strategy a home battery's dispatch_strategy: block reads as, through parse_home_block, in a home also holding *home_blocks*."""
+    battery_config = _parsed_home(battery={"dispatch_strategy": block}, **home_blocks).battery_config
+    assert battery_config is not None
+    return battery_config.dispatch_strategy
+
+
 class TestDispatchStrategyParsing:
-    """Tests for parse_dispatch_strategy_config function."""
+    """A battery's dispatch_strategy: block reads as the variant its strategy_type names.
+
+    The block's other keys are that variant's fields. A null key another variant reads, as the
+    writer before the union wrote every key, reads as absent; any other key the variant does not
+    read is refused.
+    """
 
     def test_parse_none(self) -> None:
-        """Test parsing None returns None."""
-        result = parse_dispatch_strategy_config(None)
-        assert result is None
+        """A null block is no strategy."""
+        assert parse_dispatch_strategy_config(None) is None
 
-    def test_parse_self_consumption(self) -> None:
-        """Test parsing self-consumption strategy."""
-        data = {"strategy_type": "self_consumption"}
-        result = parse_dispatch_strategy_config(data)
-        assert result is not None
-        assert result.strategy_type == "self_consumption"
-        assert result.peak_hours is None
-        assert result.import_limit_kw is None
+    @pytest.mark.parametrize(
+        "battery",
+        [
+            pytest.param({"capacity_kwh": 5.0}, id="absent"),
+            pytest.param({"capacity_kwh": 5.0, "dispatch_strategy": None}, id="null"),
+        ],
+    )
+    def test_a_battery_that_names_no_strategy_dispatches_self_consumption(self, battery: dict[str, Any]) -> None:
+        battery_config = _parsed_home(battery=battery).battery_config
 
-    def test_parse_tou_optimized(self) -> None:
-        """Test parsing TOU optimized strategy."""
-        data = {
-            "strategy_type": "tou_optimized",
-            "peak_hours": [[16, 20], [7, 9]],
-        }
-        result = parse_dispatch_strategy_config(data)
-        assert result is not None
-        assert result.strategy_type == "tou_optimized"
-        assert result.peak_hours == [(16, 20), (7, 9)]
+        assert battery_config is not None
+        assert battery_config.dispatch_strategy == SelfConsumptionStrategyConfig()
 
-    def test_parse_peak_shaving(self) -> None:
-        """Test parsing peak-shaving strategy."""
-        data = {
-            "strategy_type": "peak_shaving",
-            "import_limit_kw": 5.0,
-        }
-        result = parse_dispatch_strategy_config(data)
-        assert result is not None
-        assert result.strategy_type == "peak_shaving"
-        assert result.import_limit_kw == 5.0
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            pytest.param(
+                {"strategy_type": "self_consumption"}, SelfConsumptionStrategyConfig(), id="self_consumption"
+            ),
+            pytest.param(
+                {"strategy_type": "tou_optimized", "peak_hours": [[16, 20], [7, 9]]},
+                TOUOptimizedStrategyConfig(((16, 20), (7, 9))),
+                id="tou_optimized",
+            ),
+            pytest.param(
+                {"strategy_type": "peak_shaving", "import_limit_kw": 5.0},
+                PeakShavingStrategyConfig(5.0),
+                id="peak_shaving",
+            ),
+        ],
+    )
+    def test_a_block_reads_as_the_variant_its_strategy_type_names(self, block: dict[str, Any], expected: object) -> None:
+        """Its peak_hours lists read as tuples, so the variant is a hashable value."""
+        strategy = _parsed_strategy(block)
 
-    def test_parse_missing_strategy_type_raises(self) -> None:
-        """Test parsing without strategy_type raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
-            parse_dispatch_strategy_config({})
+        assert strategy == expected
+        assert hash(strategy) == hash(expected)
 
-    def test_parse_empty_strategy_type_raises(self) -> None:
-        """Test parsing with empty strategy_type raises error."""
-        with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
-            parse_dispatch_strategy_config({"strategy_type": ""})
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            pytest.param(
+                {"strategy_type": "self_consumption", "peak_hours": None, "import_limit_kw": None},
+                SelfConsumptionStrategyConfig(),
+                id="self_consumption",
+            ),
+            pytest.param(
+                {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]], "import_limit_kw": None},
+                TOUOptimizedStrategyConfig(((16, 19),)),
+                id="tou_optimized",
+            ),
+            pytest.param(
+                {"strategy_type": "peak_shaving", "peak_hours": None, "import_limit_kw": 3.0},
+                PeakShavingStrategyConfig(3.0),
+                id="peak_shaving",
+            ),
+        ],
+    )
+    def test_a_block_the_writer_wrote_before_the_union_reads_as_its_variant(
+        self, block: dict[str, Any], expected: object
+    ) -> None:
+        """That writer wrote all three keys, the ones a strategy does not read null."""
+        assert _parsed_strategy(block) == expected
 
-    def test_parse_tou_with_null_peak_hours(self) -> None:
-        """Test parsing TOU strategy with null peak_hours raises error."""
-        data = {
-            "strategy_type": "tou_optimized",
-            "peak_hours": None,
-        }
-        with pytest.raises(ConfigurationError, match="requires 'peak_hours'"):
-            parse_dispatch_strategy_config(data)
+    @pytest.mark.parametrize(
+        "strategy_type",
+        [
+            pytest.param("tou_optimised", id="misspelt"),
+            pytest.param("", id="empty"),
+            pytest.param(42, id="number"),
+            pytest.param(["tou_optimized"], id="list"),
+        ],
+    )
+    def test_a_strategy_type_outside_the_table_is_refused_naming_its_path_and_the_tags(
+        self, strategy_type: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_strategy({"strategy_type": strategy_type})
+
+        assert str(raised.value) == (
+            f"{_DISPATCH_STRATEGY_PATH}.strategy_type: invalid value {strategy_type!r}; "
+            "valid values: ['peak_shaving', 'self_consumption', 'tou_optimized']"
+        )
+
+    @pytest.mark.parametrize(
+        "block", [pytest.param({}, id="absent"), pytest.param({"strategy_type": None}, id="null")]
+    )
+    def test_a_block_without_a_strategy_type_is_refused_naming_it(self, block: dict[str, Any]) -> None:
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_strategy(block)
+
+        assert str(raised.value) == f"{_DISPATCH_STRATEGY_PATH}: requires 'strategy_type'"
+
+    def test_peak_hours_that_are_no_list_are_refused_by_the_strategy_naming_the_block(self) -> None:
+        """The strategy's own type check refuses peak_hours that are no list, prefixed by the block's path."""
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_strategy({"strategy_type": "tou_optimized", "peak_hours": 5})
+
+        assert str(raised.value) == (
+            f"{_DISPATCH_STRATEGY_PATH}: peak_hours must be a list of (start, end) windows, got 5"
+        )
+
+    @pytest.mark.parametrize(
+        ("block", "unrecognised", "recognised"),
+        [
+            pytest.param(
+                {"strategy_type": "self_consumption", "peak_hours": [[16, 19]]},
+                "'peak_hours'",
+                "strategy_type",
+                id="self_consumption-peak_hours",
+            ),
+            pytest.param(
+                {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]], "import_limit_kw": 3.5},
+                "'import_limit_kw'",
+                "peak_hours, strategy_type",
+                id="tou_optimized-import_limit_kw",
+            ),
+            pytest.param(
+                {"strategy_type": "self_consumption", "turbo": None},
+                "'turbo'",
+                "strategy_type",
+                id="a-null-key-no-variant-reads",
+            ),
+        ],
+    )
+    def test_a_key_its_variant_does_not_read_is_refused_naming_the_block(
+        self, block: dict[str, Any], unrecognised: str, recognised: str
+    ) -> None:
+        """A key no variant reads is refused even when null: it is a typo, not the old writer's output."""
+        expected = f"{_DISPATCH_STRATEGY_PATH}: unrecognised keys {unrecognised}; recognised keys: {recognised}"
+
+        with pytest.raises(ConfigurationError, match=re.escape(expected)):
+            _parsed_strategy(block)
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param({"strategy_type": "tou_optimized"}, id="absent"),
+            pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, id="null"),
+        ],
+    )
+    def test_a_tou_optimized_block_without_peak_hours_reads_as_the_tariff_clock(self, block: dict[str, Any]) -> None:
+        """Its home is on Economy 7: with no tariff the strategy would have no clock (tests/unit/test_tou_tariff_clock.py)."""
+        assert _parsed_strategy(block, tariff={"type": "economy_7"}) == TOUOptimizedStrategyConfig()
+
+    @pytest.mark.parametrize(
+        ("block", "required_key"),
+        [
+            pytest.param({"strategy_type": "peak_shaving"}, "import_limit_kw", id="peak_shaving-absent"),
+            pytest.param(
+                {"strategy_type": "peak_shaving", "import_limit_kw": None}, "import_limit_kw", id="peak_shaving-null"
+            ),
+        ],
+    )
+    def test_a_required_key_left_out_or_null_is_refused_naming_the_block_and_the_key(
+        self, block: dict[str, Any], required_key: str
+    ) -> None:
+        expected = f"{_DISPATCH_STRATEGY_PATH}: requires {required_key!r}"
+
+        with pytest.raises(ConfigurationError, match=re.escape(expected)):
+            _parsed_strategy(block)
+
+    def test_a_window_its_variant_refuses_is_refused_as_constructing_the_variant_refuses_it(self) -> None:
+        block = {"strategy_type": "tou_optimized", "peak_hours": [[20, 16]]}
+
+        assert _refusal(lambda: _parsed_strategy(block)) == (
+            ConfigurationError,
+            prefixed_construction_refusal(_DISPATCH_STRATEGY_PATH, lambda: TOUOptimizedStrategyConfig(((20, 16),))),
+        )
 
 
 class TestLoadHomeConfig:
@@ -588,11 +633,50 @@ class TestLoadHomeConfig:
         assert home.battery_config.capacity_kwh == 10.0
         assert home.load_config.annual_consumption_kwh == 4000
 
+    def test_a_home_document_loads_a_home_exporting_at_its_seg_rate(self, tmp_path: Path) -> None:
+        path = tmp_path / "home.json"
+        path.write_text(json.dumps({"seg": {"rate_pence_per_kwh": 15.0}, "home": {"pv": {"capacity_kw": 4.0}}}))
+
+        assert load_home_config(path).seg_tariff == SEGTariff("", 15.0)
+
+    def test_a_fleet_document_is_refused_naming_its_homes_and_the_fleet_loader(self, tmp_path: Path) -> None:
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps({"homes": [{}, {}]}))
+
+        with pytest.raises(ConfigurationError) as refused:
+            load_home_config(path)
+
+        assert "fleet of 2 homes" in str(refused.value)
+        assert "load_fleet_config" in str(refused.value)
+
+    def test_a_one_home_fleet_document_is_refused_as_a_fleet_of_1_home(self, tmp_path: Path) -> None:
+        path = tmp_path / "home.json"
+        path.write_text(json.dumps({"homes": [{}]}))
+
+        with pytest.raises(ConfigurationError) as refused:
+            load_home_config(path)
+
+        assert str(refused.value) == (
+            "the top level: holds a fleet of 1 home, not a home: block: read it with load_fleet_config"
+        )
+
+    def test_a_flat_home_file_is_refused_naming_home(self, tmp_path: Path) -> None:
+        path = tmp_path / "home.json"
+        path.write_text(json.dumps({"pv": {"capacity_kw": 9}}))
+
+        with pytest.raises(ConfigurationError) as refused:
+            load_home_config(path)
+
+        assert str(refused.value).startswith("pv: ")
+        assert "home:" in str(refused.value)
+
     def test_load_home_without_battery(self, tmp_path: Path) -> None:
         """Test loading home without battery."""
         json_content = {
-            "pv": {"capacity_kw": 4.0},
-            "load": {"annual_consumption_kwh": 3400},
+            "home": {
+                "pv": {"capacity_kw": 4.0},
+                "load": {"annual_consumption_kwh": 3400},
+            }
         }
         path = tmp_path / "home.json"
         path.write_text(json.dumps(json_content))
@@ -600,6 +684,98 @@ class TestLoadHomeConfig:
         home = load_home_config(path)
         assert home.pv_config.capacity_kw == 4.0
         assert home.battery_config is None
+
+    @pytest.mark.parametrize(
+        ("document", "number_read", "expected"),
+        [
+            pytest.param(
+                'home:\n  pv:\n    capacity_kw: "4"\n',
+                lambda home: home.pv_config.capacity_kw,
+                4.0,
+                id="pv",
+            ),
+            pytest.param(
+                'home:\n  battery:\n    capacity_kwh: "5"\n',
+                lambda home: home.battery_config.capacity_kwh,
+                5.0,
+                id="battery",
+            ),
+            pytest.param(
+                'home:\n  load:\n    household_occupants: "2"\n',
+                lambda home: home.load_config.household_occupants,
+                2,
+                id="load",
+            ),
+            pytest.param(
+                'location:\n  latitude: "51.5"\n  longitude: -2.58\nhome: {}\n',
+                lambda home: home.location.latitude,
+                51.5,
+                id="location",
+            ),
+        ],
+    )
+    def test_a_quoted_number_in_a_block_reads_as_that_number(
+        self,
+        tmp_path: Path,
+        document: str,
+        number_read: Callable[[HomeConfig], object],
+        expected: object,
+    ) -> None:
+        """A YAML string spelling a number, such as "4", is held as that number in its field's type."""
+        path = tmp_path / "home.yaml"
+        path.write_text(document, encoding="utf-8")
+
+        number = number_read(load_home_config(path))
+
+        assert number == expected
+        assert type(number) is type(expected)
+
+
+_TOU_OPTIMIZED_BATTERY: dict[str, Any] = {"capacity_kwh": 5.0, "dispatch_strategy": {"strategy_type": "tou_optimized"}}
+
+
+class TestParseHomeBlockFleetTariff:
+    """A scenario's tariff reaches a home block that sets none, and a home's own differing tariff is refused."""
+
+    def test_a_block_without_a_tariff_is_built_with_the_fleet_tariff(self) -> None:
+        home = parse_home_block({}, Location.bristol(), block_path="homes[0]", fleet_tariff=TariffConfig.economy_7())
+
+        assert home.tariff_config == TariffConfig.economy_7()
+
+    def test_a_block_whose_own_tariff_equals_the_fleet_tariff_is_built_with_it(self) -> None:
+        home = parse_home_block(
+            {"tariff": {"type": "economy_7"}}, Location.bristol(), block_path="homes[0]", fleet_tariff=TariffConfig.economy_7()
+        )
+
+        assert home.tariff_config == TariffConfig.economy_7()
+
+    @pytest.mark.parametrize("block_path", ["homes[0]", "scenarios[2].homes[0]"])
+    def test_a_block_whose_own_tariff_differs_is_refused_naming_its_tariff_and_the_scenarios(self, block_path: str) -> None:
+        own = {"type": "flat_rate", "rate_per_kwh": 0.25}
+
+        with pytest.raises(ConfigurationError) as refused:
+            parse_home_block({"tariff": own}, Location.bristol(), block_path=block_path, fleet_tariff=TariffConfig.economy_7())
+
+        assert str(refused.value) == (
+            f"{block_path}.tariff: {parse_tariff_config(own)!r} differs from the scenario's top-level "
+            f"tariff: block, {TariffConfig.economy_7()!r}, which a home takes when it sets none; "
+            "set the tariff once, or make the two equal"
+        )
+
+    def test_a_tou_optimized_battery_without_its_own_tariff_dispatches_on_the_fleet_tariff(self) -> None:
+        home = parse_home_block({"battery": _TOU_OPTIMIZED_BATTERY}, Location.bristol(), fleet_tariff=TariffConfig.economy_7())
+
+        assert home.tariff_config == TariffConfig.economy_7()
+
+    def test_a_tou_optimized_battery_with_no_tariff_anywhere_is_refused_naming_tou_optimized_and_the_tariff(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            parse_home_block({"battery": _TOU_OPTIMIZED_BATTERY}, Location.bristol(), fleet_tariff=None)
+
+        assert "tou_optimized" in str(refused.value)
+        assert "tariff" in str(refused.value)
+
+    def test_without_a_fleet_tariff_a_block_without_a_tariff_has_none(self) -> None:
+        assert parse_home_block({}, Location.bristol()).tariff_config is None
 
 
 class TestParseHomeBlockHeatPumpEV:
@@ -646,32 +822,56 @@ class TestParseHomeBlockHeatPumpEV:
         assert result.ev_config is None, "ev_config should be None when key absent"
 
 
-class TestHeatPumpEvBlockErrors:
-    """parse_home_block refuses a heat_pump or ev block that lacks a required field, naming the field."""
+class TestHeatPumpEvRequiredAndOmittedKeys:
+    """A heat_pump or ev block may leave out every key but its type, which it is refused without, naming the block by its path."""
 
     def test_heat_pump_missing_heat_pump_type_raises(self) -> None:
-        """heat_pump block without heat_pump_type raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="heat_pump_type"):
+        """heat_pump block without heat_pump_type raises ConfigurationError naming the block's path."""
+        with pytest.raises(ConfigurationError, match=re.escape("home.heat_pump: requires 'heat_pump_type'")):
             _parsed_home(heat_pump={"thermal_capacity_kw": 8.0})
 
-    def test_heat_pump_missing_thermal_capacity_raises(self) -> None:
-        """heat_pump block without thermal_capacity_kw raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="thermal_capacity_kw"):
-            _parsed_home(heat_pump={"heat_pump_type": "ASHP"})
-
     def test_ev_missing_charger_type_raises(self) -> None:
-        """ev block without charger_type raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="charger_type"):
+        """ev block without charger_type raises ConfigurationError naming the block's path."""
+        with pytest.raises(ConfigurationError, match=re.escape("home.ev: requires 'charger_type'")):
             _parsed_home(ev={"arrival_hour": 18})
 
-    def test_ev_missing_arrival_hour_raises(self) -> None:
-        """ev block without arrival_hour raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="arrival_hour"):
-            _parsed_home(ev={"charger_type": "7kW"})
+    def test_ev_with_a_null_charger_type_raises(self) -> None:
+        """A null charger_type reads as absent, so the block is refused as one without it."""
+        with pytest.raises(ConfigurationError, match=re.escape("home.ev: requires 'charger_type'")):
+            _parsed_home(ev={"charger_type": None, "arrival_hour": 18})
+
+    def test_a_fleet_homes_ev_missing_charger_type_raises_naming_the_homes_place(
+        self, tmp_path: Path
+    ) -> None:
+        """Read through load_fleet_config, the path names the home by its place in the homes: list."""
+        path = tmp_path / "fleet.json"
+        path.write_text(
+            json.dumps({
+                "homes": [
+                    {"pv": {"capacity_kw": 4.0}},
+                    {"pv": {"capacity_kw": 4.0}, "ev": {"arrival_hour": 18}},
+                ]
+            })
+        )
+
+        with pytest.raises(ConfigurationError, match=re.escape("homes[1].ev: requires 'charger_type'")):
+            load_fleet_config(path)
+
+    def test_a_heat_pump_block_giving_only_its_type_is_an_8_kw_heat_pump(self) -> None:
+        """B4, P10: an omitted thermal_capacity_kw takes HeatPumpConfig's declared 8 kW."""
+        heat_pump = _parsed_home(heat_pump={"heat_pump_type": "ASHP"}).heat_pump_config
+
+        assert heat_pump == HeatPumpConfig("ASHP", thermal_capacity_kw=8.0)
+
+    def test_an_ev_block_giving_only_its_charger_type_arrives_at_18(self) -> None:
+        """B4, P11: an omitted arrival_hour takes EVConfig's declared 18:00."""
+        ev = _parsed_home(ev={"charger_type": "7kW"}).ev_config
+
+        assert ev == EVConfig("7kW", arrival_hour=18)
 
 
 class TestPVBlockParsing:
-    """parse_home_block threads the pv: block's degradation keys through to PVConfig."""
+    """A home's pv: block's keys reach its PVConfig."""
 
     def test_explicit_degradation_keys_are_passed_through(self) -> None:
         """system_age_years and degradation_rate_per_year from data reach PVConfig."""
@@ -683,3 +883,21 @@ class TestPVBlockParsing:
         pv = _parsed_home(pv=data).pv_config
         assert pv.system_age_years == 15.0
         assert pv.degradation_rate_per_year == 0.008
+
+    def test_a_home_file_sets_the_system_losses_home_run_simulates_with(self, tmp_path: Path) -> None:
+        """B1: a home file's pv: block sets system_losses, the losses `home run` simulates with."""
+        path = tmp_path / "home.yaml"
+        path.write_text("home:\n  pv:\n    capacity_kw: 4\n    system_losses: 0.05\n", encoding="utf-8")
+
+        assert home_config_for_run(path).pv_config == PVConfig(capacity_kw=4, system_losses=0.05)
+
+
+class TestLoadBlockUseStochastic:
+    """A load block's use_stochastic is true or false; null reads as absent, as tests/unit/config/test_component_blocks.py::test_a_null_key_reads_as_absent pins."""
+
+    @pytest.mark.parametrize("value", NON_BOOLEANS)
+    def test_a_value_that_is_not_a_bool_is_refused_naming_it(self, value: object) -> None:
+        """The refusal ends naming the field and the value, whatever block path task 866 puts ahead of them."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            _parsed_home(load={"use_stochastic": value})
+        assert str(exc_info.value).endswith(f"use_stochastic must be true or false, got {value!r}")

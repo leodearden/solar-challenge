@@ -1,57 +1,103 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Finance CLI commands for householder bill and distribution analysis (δ surface)."""
+"""Finance CLI commands for householder bill and distribution analysis."""
 
-import dataclasses
-import enum
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Sequence
 
-import pandas as pd
 import typer
 
-from solar_challenge.cli.utils import CliFleetSimulator, handle_errors, print_info, print_report
-from solar_challenge.config import (
-    ScenarioConfig,
-    SimulationPeriod,
-    load_config,
-    load_fleet_config,
-    parse_finance_config,
-    parse_seg_rate,
+from solar_challenge.board_report import AssumptionSection, FlexBlock, GridServicesIncome, generate_finance_report
+from solar_challenge.cli.utils import (
+    ASSUMPTION_BASES,
+    AssumptionMode,
+    EndOption,
+    StartOption,
+    handle_errors,
+    invocation,
+    print_info,
+    print_report,
+    required_finance,
+    with_window_options,
 )
-from solar_challenge.errors import ConfigurationError
+from solar_challenge.config import load_scenario
 from solar_challenge.finance import (
-    DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
-    CostRecoverySolution,
-    ProjectEconomics,
+    FinanceConfig,
     bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
+    with_own_use_basis,
 )
-from solar_challenge.flex import FlexibilityValueBand, resolve_flex_band
-from solar_challenge.fleet import FleetResults
-from solar_challenge.home import calculate_summary
-from solar_challenge.output import generate_finance_report
-from solar_challenge.seg import SEGTariff
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate, reusing
+from solar_challenge.gridservices import (
+    GridServicesBand,
+    GridServicesEventsConfig,
+    GridServicesModel,
+    NoGridServices,
+    compute_grid_services_at_events,
+)
+from solar_challenge.home import SummaryStatistics, calculate_summary
+from solar_challenge.projection import (
+    ScenarioFleet,
+    project_economics,
+    project_fleet,
+    run_cost_recovery,
+    scenario_fleet,
+)
 
 app = typer.Typer(help="Financial analysis commands")
 
 
-class AssumptionMode(str, enum.Enum):
-    """Self-consumption assumption mode for bill calculation."""
+def _grid_services_income(fleet_results: FleetResults, pricing: GridServicesModel) -> Optional[GridServicesIncome]:
+    """What *pricing* books on *fleet_results*, the bill run's fleet, or None when it prices no grid services.
 
-    physics = "physics"
-    spreadsheet = "spreadsheet"
-    both = "both"
+    Under events pricing the income is the capacity-at-events breakdown's,
+    priced once, on the path ``pricing.annual_income_gbp`` prices.
+    """
+    if isinstance(pricing, NoGridServices):
+        return None
+    batteries = [home.battery_config for home in fleet_results.home_configs if home.battery_config is not None]
+    at_events = (
+        compute_grid_services_at_events(fleet_results, pricing)
+        if isinstance(pricing, GridServicesEventsConfig)
+        else None
+    )
+    return GridServicesIncome(
+        pricing=pricing,
+        annual_income_gbp=pricing.annual_income_gbp(fleet_results) if at_events is None else at_events.annual_income_gbp,
+        battery_homes=len(batteries),
+        battery_discharge_kw=sum(battery.max_discharge_kw for battery in batteries),
+        at_events=at_events,
+    )
 
 
-class FlexBand(str, enum.Enum):
-    """Flexibility-value uncertainty band for the finance report block."""
-
-    low = "low"
-    central = "central"
-    high = "high"
+def _assumption_section(
+    summaries: Sequence[SummaryStatistics],
+    fleet: ScenarioFleet,
+    finance: FinanceConfig,
+    simulate: FleetSimulate,
+    *,
+    project: bool,
+    cost_recovery: bool,
+) -> AssumptionSection:
+    """One --assumptions mode's section, every figure computed under *finance*: the bill of *summaries*, and, when asked for, *fleet*'s one projection run by *simulate*, its economics if *project* and its cost-recovery solve if *cost_recovery*."""
+    bill = bill_distribution(summaries, finance)
+    if cost_recovery:
+        run = run_cost_recovery(fleet, finance, simulate=simulate)
+        return AssumptionSection(
+            finance,
+            bill,
+            projection=run.projection,
+            economics=run.economics if project else None,
+            cost_recovery=run.solution,
+        )
+    if project:
+        projection = project_fleet(fleet, finance, simulate=simulate)
+        return AssumptionSection(
+            finance,
+            bill,
+            projection=projection,
+            economics=project_economics(projection.curve, fleet, finance),
+        )
+    return AssumptionSection(finance, bill)
 
 
 @app.command()
@@ -74,20 +120,8 @@ def run(
             case_sensitive=False,
         ),
     ] = AssumptionMode.physics,
-    start: Annotated[
-        str,
-        typer.Option(
-            "--start",
-            help="Simulation start date (YYYY-MM-DD)",
-        ),
-    ] = "2024-01-01",
-    end: Annotated[
-        str,
-        typer.Option(
-            "--end",
-            help="Simulation end date (YYYY-MM-DD)",
-        ),
-    ] = "2024-12-31",
+    start: StartOption = None,
+    end: EndOption = None,
     project: Annotated[
         bool,
         typer.Option(
@@ -107,13 +141,12 @@ def run(
         ),
     ] = False,
     flex_band: Annotated[
-        Optional[FlexBand],
+        Optional[GridServicesBand],
         typer.Option(
             "--flex-band",
             help=(
                 "Render the flexibility-value (time-shift / grid-services) block for the "
-                "given uncertainty band {low,central,high}; overrides a scenario-level "
-                "flex_band key."
+                "given uncertainty band; overrides a scenario-level flex_band key."
             ),
             case_sensitive=False,
         ),
@@ -122,8 +155,16 @@ def run(
     """Run a householder bill analysis for a fleet scenario.
 
     Loads the fleet from the scenario YAML, simulates all homes over the
-    specified date range, and prints a finance report showing the
-    representative householder bill and fleet bill distribution.
+    scenario's period:, each of --start and --end replacing its own day, and
+    prints a finance report showing the representative householder bill and
+    fleet bill distribution.
+
+    Each --assumptions mode drives the bill, and with --project or
+    --cost-recovery the projection, the economics and the solve, from its own
+    finance, ``finance.with_own_use_basis`` of the scenario's: physics clears
+    any override, spreadsheet keeps the scenario's or sets the default, and
+    both runs the two.  Each mode is its column of every bill, economics and
+    cost-recovery table of the report.
 
     The scenario file must contain a ``finance:`` block with at least
     ``standing_charge_pence_per_day``.
@@ -134,165 +175,43 @@ def run(
         solar-challenge finance run scenarios/bristol-phase1.yaml \\
             --assumptions both --start 2024-06-01 --end 2024-08-31
     """
-    # ---- Load raw config + finance block ------------------------------------
-    raw = load_config(scenario)
-    finance = parse_finance_config(raw.get("finance"))
+    scenario_config = with_window_options(load_scenario(scenario), start=start, end=end)
+    finance = required_finance(scenario_config)
+    pricing = finance.grid_services_model
+    band = flex_band if flex_band is not None else scenario_config.flex_band
 
-    # ---- Resolve flexibility band (CLI flag > scenario key > None) ----------
-    # Scenario-level values are normalised to lowercase to match the CLI's
-    # case-insensitive FlexBand enum behaviour (e.g. "Central" → "central").
-    _raw_band = raw.get("flex_band")
-    band_name: Optional[str] = (
-        flex_band.value
-        if flex_band is not None
-        else (_raw_band.lower() if isinstance(_raw_band, str) else None)
+    fleet = scenario_fleet(scenario_config)
+
+    cli = invocation(ctx)
+    print_info(cli, f"Simulating fleet of {len(fleet.homes)} homes for {scenario_config.window().days} days…")
+    fleet_results = cli.runner.simulate(
+        FleetConfig(homes=fleet.homes, name=scenario_config.name), fleet.start, fleet.end
     )
-    resolved_flex_band: Optional[FlexibilityValueBand] = (
-        resolve_flex_band(band_name) if band_name else None
-    )
-    if finance is None:
-        raise ConfigurationError(
-            "No 'finance:' block found in the scenario file. "
-            "Add a finance: block with at least standing_charge_pence_per_day."
-        )
+    grid_services = _grid_services_income(fleet_results, pricing)
 
-    # ---- Load fleet config --------------------------------------------------
-    fleet_config = load_fleet_config(scenario)
+    summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
 
-    # Thread SEG tariff onto each home (load_fleet_config does not do this)
-    seg_rate = parse_seg_rate(raw.get("seg"))
-    if seg_rate is not None:
-        seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
-        homes_with_seg = [
-            dataclasses.replace(home, seg_tariff=seg_tariff)
-            for home in fleet_config.homes
-        ]
-        fleet_config = dataclasses.replace(fleet_config, homes=homes_with_seg)
-
-    # ---- Parse dates --------------------------------------------------------
-    loc = fleet_config.homes[0].location
-    start_date = pd.Timestamp(start, tz=loc.timezone)
-    end_date = pd.Timestamp(end, tz=loc.timezone)
-    days = (end_date - start_date).days + 1
-
-    n_homes = len(fleet_config.homes)
-    print_info(f"Simulating fleet of {n_homes} homes for {days} days…")
-
-    # ---- Simulate fleet -----------------------------------------------------
-    simulate = ctx.ensure_object(CliFleetSimulator).simulate
-    fleet_results: FleetResults = simulate(fleet_config, start_date, end_date)
-
-    # ---- Capacity-at-events grid-services figure (ε / task-76) -------------
-    # Computed once from the already-available fleet_results; None for flat model.
-    from solar_challenge.gridservices import GridServicesAtEvents as _GSAtEvents
-    from solar_challenge.gridservices import compute_grid_services_at_events as _cgs
-
-    _grid_services_at_events: Optional[_GSAtEvents] = (
-        _cgs(fleet_results, finance.grid_services_events)
-        if finance.grid_services_model == "capacity_at_events"
-        and finance.grid_services_events is not None
-        else None
-    )
-
-    # ---- Per-home summaries -------------------------------------------------
-    summaries = [
-        calculate_summary(r) for r in fleet_results.per_home_results
-    ]
-
-    # ---- Build bill distributions -------------------------------------------
-    # Only compute the distributions that are actually needed for the selected
-    # --assumptions mode.  dist_physics is skipped for spreadsheet-only to
-    # avoid unnecessary arithmetic (cheap but misleading control flow).
-    dist_physics = None
-    if assumptions in (AssumptionMode.physics, AssumptionMode.both):
-        finance_physics = dataclasses.replace(finance, self_consumption_override=None)
-        dist_physics = bill_distribution(summaries, finance_physics, days)
-
-    dist_spreadsheet = None
-    if assumptions in (AssumptionMode.spreadsheet, AssumptionMode.both):
-        # Use the finance.self_consumption_override if set, otherwise use the
-        # module-level default documented alongside the other finance constants.
-        override_val = (
-            finance.self_consumption_override
-            if finance.self_consumption_override is not None
-            else DEFAULT_SPREADSHEET_SELF_CONSUMPTION
-        )
-        finance_spreadsheet = dataclasses.replace(
-            finance, self_consumption_override=override_val
-        )
-        dist_spreadsheet = bill_distribution(summaries, finance_spreadsheet, days)
-
-    # ---- Build shared ScenarioConfig (used by --project and/or --cost-recovery) ---
-    econ_scenario: Optional[ScenarioConfig] = None
-    if project or cost_recovery:
-        _base = ScenarioConfig(
-            name=raw.get("name", str(scenario)),
-            period=SimulationPeriod(
-                start_date=start,
-                end_date=end,
-            ),
-            homes=list(fleet_config.homes),
-            location=loc,
-            finance=finance,
-        )
-        if cost_recovery and seg_rate is not None:
-            # Thread seg_tariff_pence_per_kwh only when --cost-recovery is active so that
-            # --project-only output is unchanged from pre-CR5 behaviour (avoids silently
-            # changing project_multi_year SEG revenue for existing --project callers).
-            econ_scenario = dataclasses.replace(_base, seg_tariff_pence_per_kwh=seg_rate)
-        else:
-            econ_scenario = _base
-
-    # ---- Project economics (optional) ---------------------------------------
-    economics_result: Optional[ProjectEconomics] = None
     if project:
-        assert econ_scenario is not None
-        print_info("Computing project-level economics (DSCR/IRR/payback)…")
-        curve = project_multi_year(econ_scenario, finance, simulate=simulate)
-        economics_result = project_economics(curve, econ_scenario, finance)
-
-    # ---- Cost-recovery solve (optional) ------------------------------------
-    cost_recovery_result: Optional[CostRecoverySolution] = None
+        print_info(cli, "Computing project-level economics (DSCR/IRR/payback)…")
     if cost_recovery:
-        assert econ_scenario is not None
-        print_info("Solving cost-recovery own-use rate…")
-        cost_recovery_result = solve_cost_recovery_rate(econ_scenario, finance, simulate=simulate)
+        print_info(cli, "Solving cost-recovery own-use rate…")
+    simulate = reusing(cli.runner.simulate, fleet_results, fleet.start, fleet.end)
+    sections = {
+        basis: _assumption_section(
+            summaries,
+            fleet,
+            with_own_use_basis(finance, basis),
+            simulate,
+            project=project,
+            cost_recovery=cost_recovery,
+        )
+        for basis in ASSUMPTION_BASES[assumptions]
+    }
 
-    # ---- Render report ------------------------------------------------------
-    if assumptions == AssumptionMode.physics:
-        assert dist_physics is not None
-        report = generate_finance_report(
-            dist_physics,
-            scenario_name=raw.get("name", str(scenario)),
-            economics=economics_result,
-            cost_recovery=cost_recovery_result,
-            flex_band=resolved_flex_band,
-            flex_band_name=band_name or "",
-            grid_services_at_events=_grid_services_at_events,
-        )
-    elif assumptions == AssumptionMode.spreadsheet:
-        assert dist_spreadsheet is not None
-        report = generate_finance_report(
-            dist_spreadsheet,
-            scenario_name=raw.get("name", str(scenario)),
-            economics=economics_result,
-            cost_recovery=cost_recovery_result,
-            flex_band=resolved_flex_band,
-            flex_band_name=band_name or "",
-            grid_services_at_events=_grid_services_at_events,
-        )
-    else:  # both
-        assert dist_physics is not None
-        assert dist_spreadsheet is not None
-        report = generate_finance_report(
-            dist_physics,
-            bill_spreadsheet=dist_spreadsheet,
-            scenario_name=raw.get("name", str(scenario)),
-            economics=economics_result,
-            cost_recovery=cost_recovery_result,
-            flex_band=resolved_flex_band,
-            flex_band_name=band_name or "",
-            grid_services_at_events=_grid_services_at_events,
-        )
-
+    report = generate_finance_report(
+        sections,
+        scenario_name=scenario_config.name or str(scenario),
+        grid_services=grid_services,
+        flex=FlexBlock(band) if band is not None else None,
+    )
     print_report(report)

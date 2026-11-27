@@ -1,6 +1,7 @@
 """End-to-end tests for the Scenario Builder page (/scenarios/builder)."""
 
 import re
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -8,6 +9,7 @@ from typing import Any, NamedTuple
 import pytest
 import yaml
 from playwright.sync_api import FloatRect, Locator, Page, Response, ViewportSize, expect
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from pytest_playwright import CreateContextCallback
 
 from solar_challenge.config import load_fleet_config
@@ -15,9 +17,16 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, days_window
+from tests._fleet_form import start_spec
+from tests.e2e._alpine_start import open_once_alpine_has_started
+from tests.e2e._css_transitions import finish_the_css_transitions
+from tests.e2e._fetches_handled import (
+    record_fetches_started_and_handled,
+    wait_until_the_page_has_handled_every_fetch_it_started,
+)
 from tests.e2e._scenario_builder_page import open_builder, upload_scenario
-
-pytestmark = pytest.mark.e2e
 
 
 # ── Page loading ─────────────────────────────────────────────────────
@@ -47,9 +56,12 @@ def test_builder_no_js_errors(
     loaded via ``defer`` in ``{% block head %}``.  Alpine.js may evaluate
     the ``x-data`` before the component function is registered, which
     throws an uncaught ReferenceError.
+
+    It reads page_errors once the page has handled its presets and first-preview answers.
     """
-    page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
+    record_fetches_started_and_handled(page)
+    open_once_alpine_has_started(page, live_server + "/scenarios/builder")
+    wait_until_the_page_has_handled_every_fetch_it_started(page)
 
     assert page_errors == [], f"Errors on /scenarios/builder: {page_errors}"
 
@@ -72,7 +84,6 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     and Tariff sections.
     """
     page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
 
     for section_name in _ACCORDION_SECTIONS:
         expect(
@@ -126,11 +137,21 @@ def test_the_section_the_builder_shows_before_alpine_starts_is_the_one_it_opens(
     )
 
 
-def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
-    """The sections of _ACCORDION_SECTIONS whose control lies, shown or hidden, in the element the header named *header* names in aria-controls."""
+def _panel_id_of(page: Page, header: str) -> str:
+    """The id the accordion header named *header* names in aria-controls, i.e. the id of that section's panel."""
     panel_id = page.get_by_role("button", name=header, exact=True).get_attribute("aria-controls")
     assert panel_id, f"the {header} header names no element in aria-controls"
-    panel = page.locator(f"id={panel_id}")
+    return panel_id
+
+
+def _panel_of(page: Page, header: str) -> Locator:
+    """The element the accordion header named *header* names in aria-controls, i.e. that section's panel."""
+    return page.locator(f"id={_panel_id_of(page, header)}")
+
+
+def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
+    """The sections of _ACCORDION_SECTIONS whose control lies, shown or hidden, in the element the header named *header* names in aria-controls."""
+    panel = _panel_of(page, header)
     return {
         section
         for section, (role, name) in _ACCORDION_SECTIONS.items()
@@ -160,7 +181,6 @@ def test_yaml_preview_visible(page: Page, live_server: str) -> None:
     ``<pre>`` element is attached to the DOM.
     """
     page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
 
     yaml_heading = page.locator("h3", has_text="YAML Preview")
     expect(yaml_heading).to_be_visible()
@@ -179,7 +199,6 @@ def test_yaml_preview_visible(page: Page, live_server: str) -> None:
 def test_download_yaml_button(page: Page, live_server: str) -> None:
     """The 'Download YAML' button exists and is clickable."""
     page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
 
     download_btn = page.locator("button", has_text="Download YAML")
     expect(download_btn).to_be_visible()
@@ -189,9 +208,159 @@ def test_download_yaml_button(page: Page, live_server: str) -> None:
 # ── Form controls: each caption names its control ────────────────────
 
 
-def _open_section(page: Page, section: str) -> None:
-    """Open the accordion section whose header button is named *section*, closing the open one; General is open when the page loads."""
-    page.get_by_role("button", name=section, exact=True).click()
+_ACCORDION_STATE = """({ opened, closed }) => {
+    const panel = (id) => document.getElementById(id);
+    const { scrollHeight, clientHeight } = panel(opened);
+    return { displayed: [opened, ...closed].filter((id) => panel(id).checkVisibility()), scrollHeight, clientHeight };
+}"""
+"""The state of the accordion with the panel whose id is *opened* open and the panels whose ids are *closed* closed: the ids of those panels that are displayed (checkVisibility()), *opened* first and then *closed* in its order, and the opened panel's scrollHeight and clientHeight."""
+
+_ACCORDION_IS_AT_REST = f"""(accordion) => {{
+    const {{ displayed, scrollHeight, clientHeight }} = ({_ACCORDION_STATE})(accordion);
+    return displayed.length === 1 && displayed[0] === accordion.opened && scrollHeight <= clientHeight;
+}}"""
+"""Whether the accordion is at rest, judged on the state _ACCORDION_STATE reads: the opened panel alone is displayed, no closed panel being displayed, as a panel is once it has finished closing, and the opened panel is tall enough to show all of its content, as a panel is once it has finished opening."""
+
+
+def _accordion_with_open(page: Page, section: str) -> dict[str, str | list[str]]:
+    """The argument of _ACCORDION_STATE and _ACCORDION_IS_AT_REST for the accordion with *section* open: the id of *section*'s panel and the ids of every other section's."""
+    return {
+        "opened": _panel_id_of(page, section),
+        "closed": [_panel_id_of(page, other) for other in _ACCORDION_SECTIONS if other != section],
+    }
+
+
+def _open_section(page: Page, section: str, *, rest_timeout_ms: float | None = None) -> None:
+    """Open the accordion section whose header button is named *section*, closing the open one, and return once the accordion is at rest: *section*'s panel shows all of its content and every other section's panel is hidden.
+
+    *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss. It waits for rest in real time rather than finishing the CSS transitions; test_finishing_the_css_transitions_leaves_a_closing_accordion_panel_displayed says why.
+
+    *rest_timeout_ms*, if given, bounds only the wait for rest, in milliseconds: the click and the panel-id reads keep the page's default timeout and the header check keeps expect's own, so a click slowed by a loaded host cannot fail a caller that expects the wait to time out.
+    """
+    header = page.get_by_role("button", name=section, exact=True, expanded=False)
+    expect(
+        header,
+        f"the {section} header should be exposed as collapsed before _open_section clicks it "
+        "(Alpine binds its aria-expanded, and a click on an open section's header closes it)",
+    ).to_be_visible()
+    accordion = _accordion_with_open(page, section)
+    header.click()
+    try:
+        page.wait_for_function(_ACCORDION_IS_AT_REST, arg=accordion, timeout=rest_timeout_ms)
+    except PlaywrightTimeoutError as timeout:
+        state = page.evaluate(_ACCORDION_STATE, accordion)
+        raise AssertionError(
+            f"the accordion did not come to rest after opening {section}: "
+            f"the state _ACCORDION_STATE reads, which _ACCORDION_IS_AT_REST judges, is {state}"
+        ) from timeout
+
+
+@pytest.mark.parametrize(
+    "stretched_panel",
+    [pytest.param("closing", id="closing_panel_stretched"), pytest.param("opening", id="opening_panel_stretched")],
+)
+def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str, stretched_panel: str) -> None:
+    """When _open_section returns, Playwright shows only the panel of the section it opened, laid out as tall as its content to within half a pixel, so the next click meets no header or control still moving.
+
+    The *stretched_panel*, the closing one (that of the section open when the page loads) or the opening one (that of the section the test opens), is made to take 3 s to move, far longer than the accordion's own transition. With the closing panel stretched, a helper that returns while that panel is still displayed is caught by `shown`. With the opening panel stretched, a helper that returns while that panel is still growing is caught by the height read. Either is caught by any read within 3 s of the click, not only by one that beats the transition.
+    """
+    section_open_on_load = "General"
+    section_to_open = "Period"
+    stretched_section = {"closing": section_open_on_load, "opening": section_to_open}[stretched_panel]
+    page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(
+        page,
+        section_open_on_load,
+        message=f"the test takes {section_open_on_load}'s panel to be the closing one, so {section_open_on_load}'s header alone should be exposed as expanded when the page loads",
+    )
+    panels = {section: _panel_of(page, section) for section in _ACCORDION_SECTIONS}
+    page.add_style_tag(content=f"#{_panel_id_of(page, stretched_section)} {{ transition-duration: 3s !important; }}")
+    _open_section(page, section_to_open)
+
+    shown = {section for section, panel in panels.items() if panel.is_visible()}
+    opened_height = _layout_box(panels[section_to_open])["height"]
+    opened_scroll_height = panels[section_to_open].evaluate("panel => panel.scrollHeight")
+
+    assert (shown, opened_height) == ({section_to_open}, pytest.approx(opened_scroll_height, abs=0.5))
+
+
+def test_open_section_fails_reporting_the_accordion_state_its_wait_judged(page: Page, live_server: str) -> None:
+    """When the accordion does not come to rest, here because General's panel is kept displayed after Period opens, _open_section fails reporting the state _ACCORDION_STATE reads, the state _ACCORDION_IS_AT_REST judged."""
+    page.goto(live_server + "/scenarios/builder")
+    page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ display: block !important; }}")
+
+    with pytest.raises(AssertionError) as failure:
+        _open_section(page, "Period", rest_timeout_ms=5000)
+
+    state = page.evaluate(_ACCORDION_STATE, _accordion_with_open(page, "Period"))
+    assert str(state) in str(failure.value)
+
+
+_BUSY_ON_MOUSEDOWN = """(element, busyMs) => element.addEventListener('mousedown', () => {
+    const until = performance.now() + busyMs;
+    while (performance.now() < until) {}
+    element.dataset.busyHandled = 'true';
+}, { once: true })"""
+"""Keeps the page's main thread busy for *busyMs* milliseconds the next time *element* takes a mousedown, as a loaded host's renderer is busy, so a click on *element* is not done until then; the handler then sets *element*'s data-busy-handled attribute to "true", so a test can see that the click met it."""
+
+
+def test_a_click_that_outlasts_open_sections_rest_timeout_still_lands_and_its_wait_for_rest_fails(page: Page, live_server: str) -> None:
+    """rest_timeout_ms bounds only _open_section's wait for rest: a click whose handling keeps the page busy for twice that bound still lands, opening Period, and _open_section then fails because the accordion does not come to rest, not because of the click."""
+    page.goto(live_server + "/scenarios/builder")
+    page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ display: block !important; }}")
+    period_header = page.get_by_role("button", name="Period", exact=True)
+    period_header.evaluate(_BUSY_ON_MOUSEDOWN, 2000)
+
+    with pytest.raises(AssertionError) as failure:
+        _open_section(page, "Period", rest_timeout_ms=1000)
+
+    assert isinstance(failure.value.__cause__, PlaywrightTimeoutError), (
+        f"_open_section should have failed in its wait for rest, an AssertionError raised from the wait's PlaywrightTimeoutError, but it failed with: {failure.value}"
+    )
+    expect(
+        period_header,
+        "the click should have run _BUSY_ON_MOUSEDOWN's handler on the Period header; if it did not, the click was not held up and this test cannot tell whether rest_timeout_ms wrongly bounds it",
+    ).to_have_attribute("data-busy-handled", "true")
+    expect(page.get_by_role("button", name="Period", exact=True, expanded=True)).to_be_visible()
+
+
+_A_HEIGHT_TRANSITION_RUNS_ON = """(panelId) => document.getAnimations().some((animation) =>
+    animation instanceof CSSTransition && animation.transitionProperty === 'height' && animation.effect.target.id === panelId
+)"""
+"""Whether a CSS transition of height runs on the element whose id is *panelId*, as one does on a panel x-collapse is opening or closing."""
+
+_MARK_THE_END_OF_ITS_HEIGHT_TRANSITION = """(panel) => panel.addEventListener('transitionend', (event) => {
+    if (event.target === panel && event.propertyName === 'height') panel.dataset.heightTransitionEnded = 'true';
+})"""
+"""Sets *panel*'s data-height-transition-ended attribute to "true" once the browser has dispatched the transitionend of *panel*'s height transition, the event an x-collapse that hid a closing panel when its transition ended would hide it on."""
+
+
+def test_finishing_the_css_transitions_leaves_a_closing_accordion_panel_displayed(page: Page, live_server: str) -> None:
+    """x-collapse hides a closing panel from the end callback of Alpine's own transition timer, not when its CSS transition ends, so finishing the transitions, as the suite's other settled reads do, cannot bring the accordion to rest, and _open_section waits for rest in real time.
+
+    General's panel, the closing one, is made to take 600 s to close, which makes Alpine's timer as long, so the timer cannot hide the panel during the test. The accordion is read once the browser has dispatched the transitionend of that panel's finished height transition, so the test fails once x-collapse hides the panel when its transition ends; _open_section could then finish the transitions instead.
+    """
+    page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(
+        page,
+        "General",
+        message="the test takes General's panel to be the closing one, so General's header alone should be exposed as expanded when the page loads",
+    )
+    general_panel_id = _panel_id_of(page, "General")
+    general_panel = page.locator(f"id={general_panel_id}")
+    accordion = _accordion_with_open(page, "Period")
+    page.add_style_tag(content=f"#{general_panel_id} {{ transition-duration: 600s !important; }}")
+    page.get_by_role("button", name="Period", exact=True, expanded=False).click()
+    page.wait_for_function(_A_HEIGHT_TRANSITION_RUNS_ON, arg=general_panel_id)
+    general_panel.evaluate(_MARK_THE_END_OF_ITS_HEIGHT_TRANSITION)
+
+    finish_the_css_transitions(page)
+    expect(
+        general_panel,
+        "the browser should dispatch the transitionend of General's panel once its height transition is finished",
+    ).to_have_attribute("data-height-transition-ended", "true")
+
+    assert page.evaluate(_ACCORDION_STATE, accordion)["displayed"] == [accordion["opened"], general_panel_id]
 
 
 def _form_sent_on_validate(page: Page) -> dict[str, Any]:
@@ -249,6 +418,43 @@ def test_section_control_named_by_its_caption_sets_its_field_of_the_form_the_bui
     assert _form_sent_on_validate(page)[field] == value
 
 
+def test_a_freshly_opened_builder_sends_no_seg_rate(page: Page, live_server: str) -> None:
+    """A freshly opened builder shows and sends an empty SEG export rate."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Tariff")
+
+    assert page.get_by_role("spinbutton", name="SEG Export Rate (p/kWh)", exact=True).input_value() == ""
+    assert _form_sent_on_validate(page)["seg_rate_pence_per_kwh"] == ""
+
+
+def _run_sent_by_a_freshly_opened_simulate_page(
+    page: Page, url: str, run_button: str, submission: str
+) -> dict[str, Any]:
+    """Open the simulate page at *url*, click its button named *run_button* and return the body of the run it POSTs to the route glob *submission*, aborted so no job reaches the live server's JobManager."""
+    page.route(submission, lambda route: route.abort())
+    page.goto(url)
+    with page.expect_request(submission) as sent:
+        page.get_by_role("button", name=run_button, exact=True).click()
+    return sent.value.post_data_json
+
+
+def test_the_builder_starts_with_no_seg_as_the_home_and_fleet_pages_do(page: Page, live_server: str) -> None:
+    """Freshly opened, the home and fleet pages run with no seg block, and the builder previews a scenario whose seg: block is null."""
+    home_run = _run_sent_by_a_freshly_opened_simulate_page(
+        page, live_server + "/simulate/home", "Run Simulation", "**/api/simulate/home"
+    )
+    fleet_run = _run_sent_by_a_freshly_opened_simulate_page(
+        page, live_server + "/simulate/fleet", "Run Fleet Simulation", "**/api/simulate/fleet-from-distribution"
+    )
+    builder_scenario = yaml.safe_load(open_builder(page, live_server).json()["yaml"])
+
+    assert {
+        "home": home_run.get("seg"),
+        "fleet": fleet_run.get("seg"),
+        "builder": builder_scenario["seg"],
+    } == {"home": None, "fleet": None, "builder": None}
+
+
 def test_custom_location_controls_named_by_their_captions_set_the_location_the_builder_sends(
     page: Page, live_server: str
 ) -> None:
@@ -274,30 +480,32 @@ def test_custom_location_controls_named_by_their_captions_set_the_location_the_b
 
 
 class _Card(NamedTuple):
-    """A distribution card: its heading, the prefix of its form fields, the field holding its fixed value, a fixed value for that field that differs from the card's default and lies within the card's min and max, and the value its add buttons start a new row at."""
+    """A distribution card: its heading, its block and its spec's key in the body the builder sends, a fixed value that differs from the one the card starts at and lies within its range, and the value its add buttons start a new row at."""
 
     heading: str
-    prefix: str
-    fixed_field: str
+    key: str
+    grammar_key: str
     non_default_fixed_value: float
     new_row_value: float
 
 
 _CARDS = (
-    _Card("PV Capacity (kW)", "pv", "pv_capacity_kw", 6.5, 4.0),
-    _Card("Battery Capacity (kWh)", "battery", "battery_capacity_kwh", 9.5, 5.0),
+    _Card("PV Capacity (kW)", "pv", "capacity_kw", 6.5, 4.0),
+    _Card("Battery Capacity (kWh)", "battery", "capacity_kwh", 9.5, 5.0),
     _Card("Annual Consumption (kWh)", "load", "annual_consumption_kwh", 4200, 3500),
 )
 
-_CARD_PARAMS = tuple(pytest.param(card, id=card.prefix) for card in _CARDS)
-
-_DISTRIBUTION_CARDS = tuple(pytest.param(card.heading, card.prefix, id=card.prefix) for card in _CARDS)
-"""(card heading, the prefix of its form fields)."""
+_CARD_PARAMS = tuple(pytest.param(card, id=card.key) for card in _CARDS)
 
 
-@pytest.mark.parametrize(("card", "prefix"), _DISTRIBUTION_CARDS)
+def _spec_sent(sent: dict[str, Any], card: _Card) -> Any:
+    """*card*'s spec in the body *sent*: its block's spec, the grammar's own."""
+    return sent[card.key][card.grammar_key]
+
+
+@pytest.mark.parametrize("card", _CARD_PARAMS)
 def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set_its_distribution(
-    page: Page, live_server: str, card: str, prefix: str
+    page: Page, live_server: str, card: _Card
 ) -> None:
     """The group named by a distribution card's heading holds that heading, and one combobox, Distribution Type.
 
@@ -307,9 +515,9 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Fleet Distribution")
 
-    card_group = page.get_by_role("group", name=card, exact=True)
+    card_group = page.get_by_role("group", name=card.heading, exact=True)
     expect(card_group.get_by_role("combobox")).to_have_count(1)
-    expect(card_group.get_by_role("heading", name=card, exact=True)).to_be_visible()
+    expect(card_group.get_by_role("heading", name=card.heading, exact=True)).to_be_visible()
     card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(
         label="Normal (Gaussian)"
     )
@@ -319,30 +527,25 @@ def test_distribution_card_is_a_group_whose_controls_named_by_their_captions_set
 
     sent = _form_sent_on_validate(page)
 
-    assert {field: value for field, value in sent.items() if field.startswith(prefix + "_")} == {
-        f"{prefix}_distribution_type": "normal",
-        f"{prefix}_mean": 7,
-        f"{prefix}_std": 3,
-        f"{prefix}_min": 1,
-        f"{prefix}_max": 9,
-    }
+    assert sent[card.key] == {card.grammar_key: {"type": "normal", "mean": 7, "std": 3, "min": 1, "max": 9}}
 
 
 @pytest.mark.parametrize("card", _CARD_PARAMS)
-def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_its_fixed_field(
+def test_a_card_at_fixed_value_shows_one_spinbutton_named_fixed_value_that_sets_its_spec(
     page: Page, live_server: str, card: _Card
 ) -> None:
-    """At Fixed Value, as every card opens, the card's group shows one spinbutton, named Fixed Value, which sets the card's fixed field of the form the builder sends."""
+    """Choosing Fixed Value shows one spinbutton in the card's group, named Fixed Value, which sets the card's spec of the form the builder sends to the number alone."""
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Fleet Distribution")
     card_group = page.get_by_role("group", name=card.heading, exact=True)
+    card_group.get_by_role("combobox", name="Distribution Type", exact=True).select_option(label="Fixed Value")
     fixed_value = card_group.get_by_role("spinbutton", name="Fixed Value", exact=True)
 
     expect(fixed_value).to_have_count(1)
     expect(card_group.get_by_role("spinbutton")).to_have_count(1)
     fixed_value.fill(str(card.non_default_fixed_value))
 
-    assert _form_sent_on_validate(page)[card.fixed_field] == card.non_default_fixed_value
+    assert _spec_sent(_form_sent_on_validate(page), card) == card.non_default_fixed_value
 
 
 def test_a_card_at_uniform_shows_two_spinbuttons_min_and_max_that_set_its_range(page: Page, live_server: str) -> None:
@@ -358,7 +561,7 @@ def test_a_card_at_uniform_shows_two_spinbuttons_min_and_max_that_set_its_range(
 
     sent = _form_sent_on_validate(page)
 
-    assert (sent["pv_distribution_type"], sent["pv_min"], sent["pv_max"]) == ("uniform", 2.5, 7.5)
+    assert _spec_sent(sent, _CARDS[0]) == {"type": "uniform", "min": 2.5, "max": 7.5}
 
 
 def _layout_box(control: Locator) -> FloatRect:
@@ -406,61 +609,67 @@ def _choose_in_every_card(page: Page, distribution_type: str) -> None:
         ).select_option(label=distribution_type)
 
 
-def _card_fields(sent: dict[str, Any], card: _Card) -> set[str]:
-    """The fields of the form *sent* that give *card*: those named with its prefix, and its fixed field."""
-    return {field for field in sent if field.startswith(card.prefix + "_") or field == card.fixed_field}
-
-
-def test_a_card_at_fixed_value_sends_only_its_fixed_value(page: Page, live_server: str) -> None:
-    """Every card opens at Fixed Value, and the form the builder previews on opening gives each card's fixed value alone."""
+def test_each_card_opens_at_its_components_start_which_the_builder_sends_as_the_grammars_spec(
+    page: Page, live_server: str
+) -> None:
+    """Every card opens at the fleet page's distribution, its component's start, and the form the builder previews on opening gives each card's block as that spec, written as the grammar reads it."""
     sent = open_builder(page, live_server).request.post_data_json
 
-    assert {card.prefix: _card_fields(sent, card) for card in _CARDS} == {
-        card.prefix: {card.fixed_field} for card in _CARDS
+    assert {card.key: sent[card.key] for card in _CARDS} == {
+        card.key: {card.grammar_key: start_spec(FLEET_COMPONENTS[card.key], FLEET_COMPONENTS[card.key].start.shown)} for card in _CARDS
     }
 
 
 @pytest.mark.parametrize(
-    ("distribution_type", "type_value", "parameters"),
+    ("distribution_type", "type_value"),
     [
-        pytest.param("Normal (Gaussian)", "normal", ("mean", "std", "min", "max"), id="normal"),
-        pytest.param("Uniform", "uniform", ("mean", "std", "min", "max"), id="uniform"),
-        pytest.param("Weighted Discrete", "weighted_discrete", ("wd_values",), id="weighted_discrete"),
-        pytest.param("Shuffled Pool", "shuffled_pool", ("sp_entries",), id="shuffled_pool"),
+        pytest.param("Normal (Gaussian)", "normal", id="normal"),
+        pytest.param("Uniform", "uniform", id="uniform"),
+        pytest.param("Weighted Discrete", "weighted_discrete", id="weighted_discrete"),
+        pytest.param("Shuffled Pool", "shuffled_pool", id="shuffled_pool"),
     ],
 )
-def test_a_card_set_to_a_distribution_sends_its_type_and_the_fields_that_type_reads(
-    page: Page, live_server: str, distribution_type: str, type_value: str, parameters: tuple[str, ...]
+def test_a_card_set_to_a_distribution_sends_its_start_spec_of_that_type(
+    page: Page, live_server: str, distribution_type: str, type_value: str
 ) -> None:
-    """With *distribution_type* chosen in every card, the form the builder sends gives each card that type and its *parameters*, and not its fixed value.
-
-    Uniform sends all four parameters as normal does; builder_form.py reads only min and max of it.
-    """
+    """With *distribution_type* chosen in every card, the form the builder sends gives each card its start's spec of that type, and only the keys that type reads."""
     page.goto(live_server + "/scenarios/builder")
     _choose_in_every_card(page, distribution_type)
 
     sent = _form_sent_on_validate(page)
 
-    assert {card.prefix: _card_fields(sent, card) for card in _CARDS} == {
-        card.prefix: {f"{card.prefix}_distribution_type", *(f"{card.prefix}_{name}" for name in parameters)}
-        for card in _CARDS
+    assert {card.key: _spec_sent(sent, card) for card in _CARDS} == {
+        card.key: start_spec(FLEET_COMPONENTS[card.key], type_value) for card in _CARDS
     }
-    assert {sent[f"{card.prefix}_distribution_type"] for card in _CARDS} == {type_value}
 
 
 class _RowList(NamedTuple):
-    """A distribution the cards hold as rows: its Distribution Type option, the form field after a card's prefix that holds its rows, and the number paired with each row's value and that number's caption."""
+    """A distribution the cards hold as rows: its Distribution Type option, the key of the list paired with its values, and that list's caption."""
 
     distribution_type: str
-    rows_field: str
-    column: str
+    paired_key: str
     column_caption: str
 
 
+_WEIGHTED_ROWS = _RowList("Weighted Discrete", "weights", "Weight")
+_POOL_ROWS = _RowList("Shuffled Pool", "counts", "Count")
 _ROW_LISTS = (
-    pytest.param(_RowList("Weighted Discrete", "wd_values", "weight", "Weight"), id="weighted_discrete"),
-    pytest.param(_RowList("Shuffled Pool", "sp_entries", "count", "Count"), id="shuffled_pool"),
+    pytest.param(_WEIGHTED_ROWS, id="weighted_discrete"),
+    pytest.param(_POOL_ROWS, id="shuffled_pool"),
 )
+
+
+def _rows_sent(sent: dict[str, Any], card: _Card, row_list: _RowList) -> list[tuple[Any, Any]]:
+    """*card*'s rows in the body *sent*: each value with the entry of its paired list, in order."""
+    spec = _spec_sent(sent, card)
+    return list(zip(spec["values"], spec[row_list.paired_key], strict=True))
+
+
+def _with_rows(sent: dict[str, Any], card: _Card, row_list: _RowList, rows: list[tuple[Any, Any]]) -> dict[str, Any]:
+    """The body *sent* with *card*'s spec holding *rows*, as its values and paired lists."""
+    values, paired = ([row[0] for row in rows], [row[1] for row in rows])
+    spec = {**_spec_sent(sent, card), "values": values, row_list.paired_key: paired}
+    return {**sent, card.key: {card.grammar_key: spec}}
 
 _REMOVE_ROW_BUTTONS = re.compile(r"^Remove Row \d+$")
 """The names of a card's remove buttons: Remove Row and the number of the row it removes, counted from 1 within the card."""
@@ -478,18 +687,17 @@ def test_a_cards_add_and_remove_buttons_change_only_its_rows(
     page.goto(live_server + "/scenarios/builder")
     _choose_in_every_card(page, row_list.distribution_type)
     card_group = page.get_by_role("group", name=card.heading, exact=True)
-    rows_field = f"{card.prefix}_{row_list.rows_field}"
     sent_before = _form_sent_on_validate(page)
-    rows = sent_before[rows_field]
-    new_row = {"value": card.new_row_value, row_list.column: 10}
+    rows = _rows_sent(sent_before, card, row_list)
+    new_row = (card.new_row_value, 10)
 
     card_group.get_by_role("button", name="Add Row", exact=True).click()
     expect(card_group.get_by_role("spinbutton")).to_have_count(2 * (len(rows) + 1))
-    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows, new_row]}
+    assert _form_sent_on_validate(page) == _with_rows(sent_before, card, row_list, [*rows, new_row])
 
     card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
     expect(card_group.get_by_role("spinbutton")).to_have_count(2 * len(rows))
-    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [*rows[1:], new_row]}
+    assert _form_sent_on_validate(page) == _with_rows(sent_before, card, row_list, [*rows[1:], new_row])
 
 
 @pytest.mark.parametrize("row_list", _ROW_LISTS)
@@ -498,21 +706,21 @@ def test_a_cards_last_row_has_no_remove_button(page: Page, live_server: str, row
     page.goto(live_server + "/scenarios/builder")
     _choose_in_every_card(page, row_list.distribution_type)
     sent_before = _form_sent_on_validate(page)
-    rows_before = {card.prefix: sent_before[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS}
+    rows_before = {card.key: _rows_sent(sent_before, card, row_list) for card in _CARDS}
     assert all(len(rows) > 1 for rows in rows_before.values()), (
         f"every card must open with more than one row, or the test removes none: {rows_before}"
     )
 
     for card in _CARDS:
         card_group = page.get_by_role("group", name=card.heading, exact=True)
-        for remaining in range(len(rows_before[card.prefix]) - 1, 0, -1):
+        for remaining in range(len(rows_before[card.key]) - 1, 0, -1):
             card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
             expect(card_group.get_by_role("spinbutton")).to_have_count(2 * remaining)
         expect(card_group.get_by_role("button", name=_REMOVE_ROW_BUTTONS)).to_have_count(0)
 
     sent_after = _form_sent_on_validate(page)
-    assert {card.prefix: sent_after[f"{card.prefix}_{row_list.rows_field}"] for card in _CARDS} == {
-        prefix: rows[-1:] for prefix, rows in rows_before.items()
+    assert {card.key: _rows_sent(sent_after, card, row_list) for card in _CARDS} == {
+        key: rows[-1:] for key, rows in rows_before.items()
     }
 
 
@@ -525,18 +733,15 @@ def test_a_cards_rows_have_spinbuttons_named_for_their_row_that_set_that_row(
     page.goto(live_server + "/scenarios/builder")
     _choose_in_every_card(page, row_list.distribution_type)
     card_group = page.get_by_role("group", name=card.heading, exact=True)
-    rows_field = f"{card.prefix}_{row_list.rows_field}"
     sent_before = _form_sent_on_validate(page)
-    typed = [{"value": 100 + n, row_list.column: n} for n in range(1, len(sent_before[rows_field]) + 1)]
+    typed = [(100 + n, n) for n in range(1, len(_rows_sent(sent_before, card, row_list)) + 1)]
     expect(card_group.get_by_role("spinbutton")).to_have_count(2 * len(typed))
 
-    for n, row in enumerate(typed, start=1):
-        card_group.get_by_role("spinbutton", name=f"Value {n}", exact=True).fill(str(row["value"]))
-        card_group.get_by_role("spinbutton", name=f"{row_list.column_caption} {n}", exact=True).fill(
-            str(row[row_list.column])
-        )
+    for n, (value, paired) in enumerate(typed, start=1):
+        card_group.get_by_role("spinbutton", name=f"Value {n}", exact=True).fill(str(value))
+        card_group.get_by_role("spinbutton", name=f"{row_list.column_caption} {n}", exact=True).fill(str(paired))
 
-    assert _form_sent_on_validate(page) == {**sent_before, rows_field: typed}
+    assert _form_sent_on_validate(page) == _with_rows(sent_before, card, row_list, typed)
 
 
 def _expect_remove_buttons_numbered(card_group: Locator, rows: int) -> None:
@@ -556,16 +761,15 @@ def test_a_cards_remove_row_n_button_removes_row_n_and_the_rows_after_it_are_ren
     page.goto(live_server + "/scenarios/builder")
     _choose_in_every_card(page, row_list.distribution_type)
     card_group = page.get_by_role("group", name=card.heading, exact=True)
-    rows_field = f"{card.prefix}_{row_list.rows_field}"
     sent_before = _form_sent_on_validate(page)
-    rows = sent_before[rows_field]
+    rows = _rows_sent(sent_before, card, row_list)
     assert len(rows) > 2, f"the card must open with more than two rows, or Remove Row 2 renumbers none: {rows}"
     _expect_remove_buttons_numbered(card_group, len(rows))
 
     card_group.get_by_role("button", name="Remove Row 2", exact=True).click()
 
     _expect_remove_buttons_numbered(card_group, len(rows) - 1)
-    assert _form_sent_on_validate(page) == {**sent_before, rows_field: [rows[0], *rows[2:]]}
+    assert _form_sent_on_validate(page) == _with_rows(sent_before, card, row_list, [rows[0], *rows[2:]])
 
 
 def test_a_cards_shuffled_pool_shows_the_total_of_its_counts(page: Page, live_server: str) -> None:
@@ -573,7 +777,7 @@ def test_a_cards_shuffled_pool_shows_the_total_of_its_counts(page: Page, live_se
     page.goto(live_server + "/scenarios/builder")
     _choose_in_every_card(page, "Shuffled Pool")
     sent = _form_sent_on_validate(page)
-    totals = {card.heading: sum(row["count"] for row in sent[f"{card.prefix}_sp_entries"]) for card in _CARDS}
+    totals = {card.heading: sum(_spec_sent(sent, card)["counts"]) for card in _CARDS}
     card_groups = {card.heading: page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS}
     for heading, card_group in card_groups.items():
         expect(card_group.get_by_text("Total:")).to_have_text(f"Total: {totals[heading]} homes")
@@ -659,21 +863,25 @@ def test_on_a_phone_a_cards_second_row_starts_each_column_where_its_first_row_do
 def test_default_form_previews_yaml_the_fleet_loader_loads(
     page: Page, live_server: str, tmp_path: Path
 ) -> None:
-    """The YAML previewed for the builder's default form loads through load_fleet_config.
+    """The YAML previewed for the builder's default form loads through load_fleet_config, its PV the start's shuffled pool, and has no SEG.
 
     The page previews its default form as soon as it opens, so this pins the real
-    payload of getFormData(), which tests/unit/test_web_scenarios.py's
-    TestBuilderScenarioYaml._DEFAULT_FORM mirrors.
+    payload of getFormData(), which
+    tests/unit/test_web_scenarios.py::TestBuilderScenarioYaml's _DEFAULT_FORM mirrors.
     """
     response = open_builder(page, live_server)
     assert response.status == 200
+    yaml_text = response.json()["yaml"]
     path = tmp_path / "builder.yaml"
-    path.write_text(response.json()["yaml"], encoding="utf-8")
+    path.write_text(yaml_text, encoding="utf-8")
 
     fleet = load_fleet_config(path)
 
-    assert len(fleet.homes) == 100
-    assert {home.pv_config.capacity_kw for home in fleet.homes} == {4.0}
+    pool = start_spec(FLEET_COMPONENTS[_CARDS[0].key], "shuffled_pool")
+    assert Counter(home.pv_config.capacity_kw for home in fleet.homes) == dict(
+        zip(pool["values"], pool["counts"], strict=True)
+    )
+    assert yaml.safe_load(yaml_text)["seg"] is None
 
 
 def _form_previewed_after(page: Page, action: Callable[[], None]) -> dict[str, Any]:
@@ -687,7 +895,8 @@ def test_each_edit_to_a_cards_distribution_previews_the_form_with_that_edit(page
     """Choosing a card's distribution type, typing in one of its rows, adding a row and removing one each make the builder preview the form with that edit."""
     open_builder(page, live_server)
     _open_section(page, "Fleet Distribution")
-    card_group = page.get_by_role("group", name="PV Capacity (kW)", exact=True)
+    pv = _CARDS[0]
+    card_group = page.get_by_role("group", name=pv.heading, exact=True)
 
     chosen = _form_previewed_after(
         page,
@@ -695,7 +904,7 @@ def test_each_edit_to_a_cards_distribution_previews_the_form_with_that_edit(page
             label="Weighted Discrete"
         ),
     )
-    rows = chosen["pv_wd_values"]
+    rows = _rows_sent(chosen, pv, _WEIGHTED_ROWS)
     typed = _form_previewed_after(
         page, lambda: card_group.get_by_role("spinbutton", name="Value 1", exact=True).fill("3.5")
     )
@@ -704,11 +913,11 @@ def test_each_edit_to_a_cards_distribution_previews_the_form_with_that_edit(page
         page, lambda: card_group.get_by_role("button", name="Remove Row 1", exact=True).click()
     )
 
-    new_row = {"value": 4.0, "weight": 10}
-    assert chosen["pv_distribution_type"] == "weighted_discrete"
-    assert typed["pv_wd_values"] == [{**rows[0], "value": 3.5}, *rows[1:]]
-    assert added["pv_wd_values"] == [{**rows[0], "value": 3.5}, *rows[1:], new_row]
-    assert removed["pv_wd_values"] == [*rows[1:], new_row]
+    new_row = (pv.new_row_value, 10)
+    assert _spec_sent(chosen, pv)["type"] == "weighted_discrete"
+    assert _rows_sent(typed, pv, _WEIGHTED_ROWS) == [(3.5, rows[0][1]), *rows[1:]]
+    assert _rows_sent(added, pv, _WEIGHTED_ROWS) == [(3.5, rows[0][1]), *rows[1:], new_row]
+    assert _rows_sent(removed, pv, _WEIGHTED_ROWS) == [*rows[1:], new_row]
 
 
 @pytest.mark.parametrize(("section", "role", "caption", "field", "value"), _SECTION_CONTROLS)
@@ -800,6 +1009,42 @@ def test_uploading_a_scenario_shows_each_distribution_in_its_card(page: Page, li
         expect(card_group.get_by_role(role, name=name, exact=True)).to_have_value(value)
 
 
+_SCALAR_FORM_AND_UNCLAMPED_NORMAL_YAML = yaml.safe_dump(
+    {
+        "name": "Hand-written specs",
+        "fleet_distribution": {
+            "n_homes": 12,
+            "pv": {"capacity_kw": {"type": "fixed", "value": 4}},
+            "battery": {"capacity_kwh": {"type": "normal", "mean": 6.0, "std": 1.5}},
+            "load": {"annual_consumption_kwh": 3100},
+        },
+    }
+)
+"""A fleet scenario whose PV is the scalar form's mapping and whose battery is a normal without clamps."""
+
+
+def test_uploading_a_fixed_spec_and_a_normal_without_clamps_shows_fixed_value_and_blank_clamps(
+    page: Page, live_server: str, tmp_path: Path
+) -> None:
+    """Upload YAML loads {type: fixed, value: 4} as Fixed Value 4, and a normal without clamps with its clamps blank, which the builder then sends as null."""
+    open_builder(page, live_server)
+    with page.expect_response("**/api/scenarios/preview-yaml") as after_upload:
+        upload_scenario(page, tmp_path / "scenario.yaml", _SCALAR_FORM_AND_UNCLAMPED_NORMAL_YAML)
+    _open_section(page, "Fleet Distribution")
+    pv, battery = (page.get_by_role("group", name=card.heading, exact=True) for card in _CARDS[:2])
+
+    expect(pv.get_by_role("combobox", name="Distribution Type", exact=True)).to_have_value("")
+    expect(pv.get_by_role("spinbutton", name="Fixed Value", exact=True)).to_have_value("4")
+    expect(battery.get_by_role("combobox", name="Distribution Type", exact=True)).to_have_value("normal")
+    for clamp in ("Min (clamp)", "Max (clamp)"):
+        expect(battery.get_by_role("spinbutton", name=clamp, exact=True)).to_have_value("")
+    sent = after_upload.value.request.post_data_json
+    assert (_spec_sent(sent, _CARDS[0]), _spec_sent(sent, _CARDS[1])) == (
+        4,
+        {"type": "normal", "mean": 6, "std": 1.5, "min": None, "max": None},
+    )
+
+
 def _preview_after_uploading(
     page: Page, live_server: str, tmp_path: Path, yaml_text: str
 ) -> Response:
@@ -832,30 +1077,29 @@ _UPLOADED_FORM_GENERAL_FIELDS: dict[str, Any] = {
         pytest.param(
             {
                 **_UPLOADED_FORM_GENERAL_FIELDS,
-                "pv_distribution_type": "weighted_discrete",
-                "pv_wd_values": [{"value": 3.0, "weight": 1}, {"value": 5.0, "weight": 3}],
-                "battery_distribution_type": "normal",
-                "battery_mean": 5.0,
-                "battery_std": 2.0,
-                "battery_min": 0,
-                "battery_max": 10.0,
-                "load_distribution_type": "shuffled_pool",
-                "load_sp_entries": [{"value": 2900, "count": 6}, {"value": 4100, "count": 6}],
+                "pv": {"capacity_kw": {"type": "weighted_discrete", "values": [3.0, 5.0], "weights": [1, 3]}},
+                "battery": {"capacity_kwh": {"type": "normal", "mean": 5.0, "std": 2.0, "min": 0, "max": 10.0}},
+                "load": {"annual_consumption_kwh": {"type": "shuffled_pool", "values": [2900, 4100], "counts": [6, 6]}},
             },
-            id="distribution rows and min 0",
+            id="distribution-rows-and-min-0",
         ),
         pytest.param(
             {
                 **_UPLOADED_FORM_GENERAL_FIELDS,
-                "pv_distribution_type": "uniform",
-                "pv_mean": 4.0,
-                "pv_std": 1.0,
-                "pv_min": 2,
-                "pv_max": 8,
-                "battery_capacity_kwh": 0,
-                "annual_consumption_kwh": 3100,
+                "pv": {"capacity_kw": {"type": "uniform", "min": 2, "max": 8}},
+                "battery": {"capacity_kwh": 0},
+                "load": {"annual_consumption_kwh": 3100},
             },
-            id="fixed values and uniform",
+            id="fixed-values-and-uniform",
+        ),
+        pytest.param(
+            {
+                **_UPLOADED_FORM_GENERAL_FIELDS,
+                "pv": {"capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0, "min": None, "max": None}},
+                "battery": {"capacity_kwh": {"type": "shuffled_pool", "values": [None, 5.0], "counts": [6, 6]}},
+                "load": {"annual_consumption_kwh": 3100},
+            },
+            id="null-clamps-and-a-null-pool-value",
         ),
     ],
 )
@@ -940,19 +1184,33 @@ _RUN_EXPORT_YAML = scenario_yaml(
 @pytest.mark.parametrize(
     ("yaml_text", "refusal"),
     [
-        pytest.param(_RUN_EXPORT_YAML, "fleet_distribution", id="run-history export"),
+        pytest.param(_RUN_EXPORT_YAML, re.escape("fleet_distribution"), id="run-history-export"),
         pytest.param(
             yaml.safe_dump(
                 {
-                    "name": "Pool without values",
+                    "name": "Consumption proportional to PV",
                     "fleet_distribution": {
                         "n_homes": 5,
-                        "pv": {"capacity_kw": {"type": "weighted_discrete", "weights": [1, 3]}},
+                        "pv": {"capacity_kw": 4.0},
+                        "load": {
+                            "annual_consumption_kwh": {
+                                "type": "proportional_to",
+                                "source": "pv.capacity_kw",
+                                "multiplier": 1000,
+                            }
+                        },
                     },
                 }
             ),
-            "fleet_distribution.pv.capacity_kw",
-            id="weighted_discrete without values",
+            ".*".join(
+                re.escape(text)
+                for text in (
+                    "fleet_distribution.load.annual_consumption_kwh",
+                    *(each.name for each in FLEET_COMPONENTS["load"].editor_types),
+                    "proportional_to",
+                )
+            ),
+            id="a-type-the-editor-does-not-hold",
         ),
     ],
 )
@@ -961,14 +1219,31 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
 ) -> None:
     """Uploading a scenario the builder's form cannot hold leaves every field as it was, and the preview says why.
 
-    A run-history export has no fleet_distribution: block for the form to edit, and a
-    weighted_discrete distribution without values has no rows to show.
+    A run-history export has no fleet_distribution: block for the form to edit, and the
+    editor holds no proportional_to: the refusal names its path, the editor's types and the
+    type written.
     """
     form_before_upload = open_builder(page, live_server).request.post_data_json
 
     upload_scenario(page, tmp_path / "scenario.yaml", yaml_text)
 
     expect(page.locator("pre")).to_have_text(
-        re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")
+        re.compile(rf"^# scenario\.yaml was not loaded: .*{refusal}")
     )
     assert _form_sent_on_validate(page) == form_before_upload
+
+
+def test_full_year_sets_the_period_to_the_default_window(page: Page, live_server: str) -> None:
+    """Full Year, after 1 Week moved the period, fills Start Date and End Date with timebase's default window."""
+    open_builder(page, live_server)
+    _open_section(page, "Period")
+    start, end = page.get_by_label("Start Date", exact=True), page.get_by_label("End Date", exact=True)
+
+    page.get_by_role("button", name="1 Week", exact=True).click()
+    week_start, week_end = days_window(7)
+    expect(start).to_have_value(week_start.isoformat())
+    expect(end).to_have_value(week_end.isoformat())
+
+    page.get_by_role("button", name="Full Year", exact=True).click()
+    expect(start).to_have_value(DEFAULT_FIRST_DAY.isoformat())
+    expect(end).to_have_value(DEFAULT_LAST_DAY.isoformat())

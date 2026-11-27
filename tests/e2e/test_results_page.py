@@ -1,17 +1,50 @@
 """End-to-end tests for the Results page (/results/home/<id>).
 
 Uses seeded data fixtures (no live simulation needed) to verify
-page rendering, chart containers, tab switching, stat cards,
-download links and error handling, that the daily balance
+page rendering, that each tab shows only its own charts, stat
+cards, download links and error handling, that the daily balance
 chart agrees with the stat cards, how a chart whose figure
-cannot be drawn is reported, and that a hidden tab's chart is
-drawn only once its tab is shown.
+cannot be drawn is reported, that a hidden tab's chart is drawn
+only once its tab is shown, and that showing every tab logs no
+errors.
+Each chart drawn on load is as wide as its container, and each
+drawn chart ends as wide as its container whenever the
+container's width changes: when the sidebar collapses or expands
+and when the window narrows, and, for a chart whose tab is
+hidden at the time, once its tab is shown again. A chart is
+redrawn only at the width its container settles at, never at
+one the container passes through as the sidebar slides,
+however far apart the slide's frames are, and whether or not
+the slide is reversed halfway. A chart hidden while a slide
+runs is fitted once its tab is shown again. A chart that
+cannot be fitted to its container logs one error naming it.
+A chart container added to a shown tab after load is drawn by
+the adding script's next microtask, even inside a parent that a
+transform scales to zero width, and a drawn container given
+another figure is redrawn with it by the setting script's next
+microtask; a container added and given another figure in one
+task is drawn once. A drawn container removed from the page has
+its chart purged, and a theme toggle after it logs no error.
 """
 
-import pytest
-from playwright.sync_api import Locator, Page, expect
+from collections.abc import Sequence
 
-pytestmark = pytest.mark.e2e
+from playwright.sync_api import JSHandle, Locator, Page, expect
+
+from tests._chart_absences import monthly_reason, seasonal_reason
+from tests.e2e._chart_tabs import open_chart_tab, show_chart_tab
+from tests.e2e._chart_widths import charts_not_as_wide_as_their_containers
+
+
+# -- The page's chart tabs --------------------------------------------------
+
+# The charts each tab shows for seeded_home_run, the tab selected on load last.
+_CHART_IDS_BY_TAB = {
+    "Power Flow": ("chart-power-flow",),
+    "Battery & Finance": ("chart-battery-soc", "chart-financial"),
+    "Analysis": (),
+    "Overview": ("chart-sankey", "chart-daily-balance"),
+}
 
 
 # -- Results page loads with seeded data ------------------------------------
@@ -31,41 +64,74 @@ def test_results_page_loads(
     expect(page.get_by_role("heading", level=1)).to_have_text(run_name)
 
 
-# -- Chart containers exist ------------------------------------------------
+# -- Each tab shows only its own charts -------------------------------------
 
 
-def test_results_chart_containers_exist(
+def test_results_tabs_each_show_only_their_own_charts(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Overview tab shows both chart containers: #chart-sankey, #chart-daily-balance."""
-    run_id, _ = seeded_home_run
-    page.goto(live_server + f"/results/home/{run_id}")
-
-    for chart_id in ("#chart-sankey", "#chart-daily-balance"):
-        expect(page.locator(chart_id)).to_be_visible()
-
-
-# -- Tab switching ----------------------------------------------------------
-
-
-def test_results_tab_switching(
-    page: Page,
-    live_server: str,
-    seeded_home_run: tuple[str, str],
-) -> None:
-    """Clicking each chart tab makes it the only selected tab.
+    """Clicking each chart tab selects it alone and shows only its own charts, drawn by Plotly.
 
     Overview is selected on load, so it is clicked last: only then does
     its click have to move the selection.
     """
     run_id, _ = seeded_home_run
     page.goto(live_server + f"/results/home/{run_id}")
+    selected_tab = page.get_by_role("tab", selected=True)
+    last_listed_tab = list(_CHART_IDS_BY_TAB)[-1]
+    expect(
+        selected_tab,
+        f"expected the tab selected on load to be {last_listed_tab!r}, the last in _CHART_IDS_BY_TAB",
+    ).to_have_accessible_name(last_listed_tab)
 
-    for name in ("Power Flow", "Battery & Finance", "Analysis", "Overview"):
-        page.get_by_role("tab", name=name, exact=True).click()
-        expect(page.get_by_role("tab", selected=True)).to_have_accessible_name(name)
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
+        expect(selected_tab).to_have_accessible_name(tab_name)
+        expect(page.locator(".js-plotly-plot").filter(visible=True)).to_have_count(len(chart_ids))
+
+
+def test_results_tabs_of_a_one_day_run_give_the_reason_its_monthly_and_seasonal_charts_are_absent(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """The monthly summary needs 90 days and the seasonal comparison 180, and seeded_home_run covers 1."""
+    run_id, _ = seeded_home_run
+    page.goto(live_server + f"/results/home/{run_id}")
+
+    for tab_name, chart_id, reason in (
+        ("Battery & Finance", "chart-monthly", monthly_reason(1)),
+        ("Analysis", "chart-seasonal", seasonal_reason(1)),
+    ):
+        open_chart_tab(page, tab_name)
+        absence = page.locator(f"#{chart_id}")
+        expect(absence).to_be_visible()
+        expect(absence).to_have_text(reason)
+
+
+# -- Showing every tab logs no errors ---------------------------------------
+
+
+def test_results_page_shows_every_tab_without_errors(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Loading the page and showing each of its tabs logs no console error and throws no uncaught exception.
+
+    chart-renderer.js draws a hidden tab's charts only once the tab is shown, so every tab is shown.
+    """
+    run_id, _ = seeded_home_run
+    response = page.goto(live_server + f"/results/home/{run_id}")
+    assert response is not None
+    assert response.status == 200
+    for tab_name, chart_ids in _CHART_IDS_BY_TAB.items():
+        show_chart_tab(page, tab_name, chart_ids)
+
+    assert page_errors == [], f"Errors on /results/home/{run_id}: {page_errors}"
 
 
 # -- Stat card labels not truncated ----------------------------------------
@@ -173,7 +239,7 @@ def _serve_with(page: Page, url: str, insertion: str, anchor: str) -> None:
 
 
 def _errors_naming(page_errors: list[str], element_id: str) -> list[str]:
-    """The entries of page_errors that contain element_id, so an unrelated entry, such as a Plotly CDN failure, cannot change a verdict about the chart."""
+    """The entries of page_errors that contain element_id, so an unrelated entry, such as a resource the browser failed to load, cannot change a verdict about the chart."""
     return [error for error in page_errors if element_id in error]
 
 
@@ -196,7 +262,7 @@ def test_a_chart_whose_figure_cannot_be_drawn_logs_one_error_naming_its_id_and_i
     expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
 
     with page.expect_console_message(lambda message: _UNDRAWABLE_CHART_ID in message.text):
-        page.get_by_role("tab", name="Power Flow", exact=True).click()
+        open_chart_tab(page, "Power Flow")
 
     expect(page.locator("#chart-power-flow.js-plotly-plot")).to_be_visible()
     errors_naming_the_chart = _errors_naming(page_errors, _UNDRAWABLE_CHART_ID)
@@ -219,7 +285,7 @@ def test_a_chart_whose_drawing_fails_after_plotly_newplot_returns_logs_one_error
     expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
 
     with page.expect_console_message(lambda message: _POWER_FLOW_CHART_ID in message.text):
-        page.get_by_role("tab", name="Power Flow", exact=True).click()
+        open_chart_tab(page, "Power Flow")
 
     errors_naming_the_chart = _errors_naming(page_errors, _POWER_FLOW_CHART_ID)
     uncaught_failures = [
@@ -244,9 +310,424 @@ def test_a_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown(
     expect(page.locator("#chart-daily-balance.js-plotly-plot")).to_be_visible()
     expect(page.locator("#chart-power-flow.js-plotly-plot")).to_have_count(0)
 
-    page.get_by_role("tab", name="Power Flow", exact=True).click()
+    open_chart_tab(page, "Power Flow")
 
     expect(page.locator("#chart-power-flow.js-plotly-plot")).to_be_visible()
+
+
+# -- Each chart is as wide as its container --------------------------------
+
+_OVERVIEW_CHART_IDS = ("chart-sankey", "chart-daily-balance")
+
+
+def _open_with_the_overview_charts_drawn(page: Page, live_server: str, run_id: str) -> None:
+    """Open run_id's results page and wait until Plotly has drawn each chart of Overview, the tab shown on load, visible."""
+    page.goto(live_server + f"/results/home/{run_id}")
+    for chart_id in _OVERVIEW_CHART_IDS:
+        expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
+
+
+def test_each_overview_chart_drawn_on_load_is_as_wide_as_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """The Overview charts, drawn on load in the tab shown on load, are each as wide as their containers."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
+
+
+def test_after_the_sidebar_collapses_each_chart_is_as_wide_as_its_container_whether_its_tab_was_shown_or_hidden(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Collapsing the sidebar widens the main column: the Overview charts, shown then, and Power Flow's chart, drawn but hidden then, each end as wide as its container, and the page logs no error."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    show_chart_tab(page, "Power Flow", (_POWER_FLOW_CHART_ID,))
+    open_chart_tab(page, "Overview")
+
+    page.get_by_title("Collapse sidebar", exact=True).click()
+    overview = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
+    open_chart_tab(page, "Power Flow")
+    power_flow = charts_not_as_wide_as_their_containers(page, [_POWER_FLOW_CHART_ID])
+
+    assert (overview, power_flow, page_errors) == ([], [], [])
+
+
+def test_after_the_sidebar_expands_each_shown_chart_is_as_wide_as_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """Expanding a sidebar collapsed on load narrows the main column, which clips a chart that keeps its width: each Overview chart ends as wide as its container."""
+    run_id, _ = seeded_home_run
+    page.add_init_script("localStorage.setItem('sidebarOpen', 'false')")
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    page.get_by_title("Expand sidebar", exact=True).click()
+
+    assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
+
+
+# Stretches base.html's main-column slide, the transition of the wrapper whose child is #main-content, into one
+# intermediate width, held for 1 s. The slide's frames are then further apart than Plotly.Plots.resize's 100 ms wait,
+# as they are on a renderer starved of CPU.
+_A_SLIDE_IN_STEPS_FURTHER_APART_THAN_PLOTLYS_RESIZE_WAIT = (
+    ":has(> #main-content) { transition-duration: 2s !important; transition-timing-function: steps(2) !important; }"
+)
+
+# Holds the slide that expands the sidebar at its start width for 1 s, so that a fit pending when a test clicks runs at
+# that width, and then at its intermediate width for the first half of a 60 s transition, so that whatever a test does
+# while it runs is done mid-slide however loaded the host is: the test ends it by finishing it, as
+# charts_not_as_wide_as_their_containers does. The reverse slide, which collapses the sidebar, takes 2 s, shortened to
+# 1 s when it replaces the first at its intermediate width, so a test can let it end on its own, as
+# _NO_CSS_TRANSITION_RUNS waits for.
+_A_SLIDE_HELD_AT_ITS_INTERMEDIATE_WIDTH = (
+    ":has(> #main-content) { transition-delay: 1s !important; transition-duration: 60s !important;"
+    " transition-timing-function: steps(2, jump-start) !important; }"
+    " html.sidebar-collapsed :has(> #main-content) { transition-delay: 0s !important; transition-duration: 2s !important; }"
+)
+
+# Records, for each container of chartIds, the width of its chart's first .main-svg at each plotly_afterplot from now
+# on, and returns the record by container id, which the page goes on filling.
+_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT = """(chartIds) => Object.fromEntries(chartIds.map(id => {
+    const chart = document.getElementById(id);
+    const widths = [];
+    chart.on('plotly_afterplot', () => widths.push(Number(chart.querySelector('.main-svg').getAttribute('width'))));
+    return [id, widths];
+}))"""
+
+_NO_CSS_TRANSITION_RUNS = "() => !document.getAnimations().some(animation => animation instanceof CSSTransition)"
+
+# True once no container among those of widths, by id, has the width widths gives it: for the held slide, once its delay
+# has passed and a frame has laid out the intermediate width, in which the renderer's ResizeObserver reports it too.
+_NO_CONTAINER_HAS_ITS_WIDTH_IN = (
+    "(widths) => Object.entries(widths).every(([id, width]) => document.getElementById(id).clientWidth !== width)"
+)
+
+_NO_OVERVIEW_CHART_IS_DRAWN_MID_SLIDE = {chart_id: [] for chart_id in _OVERVIEW_CHART_IDS}
+
+
+def _container_widths(page: Page, chart_ids: Sequence[str]) -> dict[str, int]:
+    """The clientWidth of each container among chart_ids, the ids of page's chart containers, by container id."""
+    widths: dict[str, int] = page.evaluate(
+        "chartIds => Object.fromEntries(chartIds.map(id => [id, document.getElementById(id).clientWidth]))",
+        list(chart_ids),
+    )
+    return widths
+
+
+def _open_collapsed_with_the_slide_stretched(page: Page, live_server: str, run_id: str, stretch: str) -> dict[str, int]:
+    """Open run_id's results page with the sidebar collapsed, wait until Plotly has drawn each Overview chart, and add the stylesheet stretch, one of the constants above, to the page.
+
+    Returns the width of each Overview chart's container, by container id, before any slide.
+    """
+    page.add_init_script("localStorage.setItem('sidebarOpen', 'false')")
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    before = _container_widths(page, _OVERVIEW_CHART_IDS)
+    page.add_style_tag(content=stretch)
+    return before
+
+
+def _misfits_and_mid_slide_draws(
+    page: Page, before: dict[str, int], drawn: JSHandle
+) -> tuple[list[dict[str, object]], dict[str, list[float]]]:
+    """Once the slide has ended: the Overview charts that are not as wide as their containers, and, by chart id, the widths each was drawn at that are neither its container's width before the slide, as before gives it, nor the one it settled at.
+
+    charts_not_as_wide_as_their_containers ends the slide if it still runs. drawn is the record
+    _RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT returned, read after the misfits are, so a draw at the settled width that
+    the wait for them let through is in it.
+    """
+    misfits = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
+    settled = _container_widths(page, _OVERVIEW_CHART_IDS)
+    mid_slide = {
+        chart_id: [width for width in widths if abs(width - before[chart_id]) > 1 and abs(width - settled[chart_id]) > 1]
+        for chart_id, widths in drawn.json_value().items()
+    }
+    return misfits, mid_slide
+
+
+def test_a_sidebar_slide_drawn_in_frames_further_apart_than_plotlys_resize_wait_redraws_each_shown_chart_only_at_its_settled_width(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """A renderer starved of CPU draws the sidebar's slide in frames further apart than Plotly.Plots.resize's 100 ms wait, and a chart must be redrawn only at the width its container settles at, never at one the container passes through mid-slide.
+
+    That is the lane's misfit, a chart drawn 1001.08 px wide in its 958 px container (flake debt task 1519).
+    """
+    run_id, _ = seeded_home_run
+    before = _open_collapsed_with_the_slide_stretched(
+        page, live_server, run_id, _A_SLIDE_IN_STEPS_FURTHER_APART_THAN_PLOTLYS_RESIZE_WAIT
+    )
+    drawn = page.evaluate_handle(_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT, list(_OVERVIEW_CHART_IDS))
+
+    page.get_by_title("Expand sidebar", exact=True).click()
+    # The slide runs to its natural end first: finishing it, as charts_not_as_wide_as_their_containers does, would skip
+    # the intermediate width this test is about.
+    page.wait_for_function(_NO_CSS_TRANSITION_RUNS)
+
+    misfits, mid_slide = _misfits_and_mid_slide_draws(page, before, drawn)
+    assert (misfits, mid_slide, page_errors) == ([], _NO_OVERVIEW_CHART_IS_DRAWN_MID_SLIDE, [])
+
+
+def test_a_sidebar_slide_reversed_halfway_redraws_each_shown_chart_only_at_its_settled_width(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Collapsing the sidebar again while its slide is at its intermediate width cancels the slide's transition and starts the reverse one: the charts, whose fit was waiting for the first, are fitted once the second ends, at the width it settles at, and the page logs no error."""
+    run_id, _ = seeded_home_run
+    before = _open_collapsed_with_the_slide_stretched(page, live_server, run_id, _A_SLIDE_HELD_AT_ITS_INTERMEDIATE_WIDTH)
+    drawn = page.evaluate_handle(_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT, list(_OVERVIEW_CHART_IDS))
+
+    page.get_by_title("Expand sidebar", exact=True).click()
+    page.wait_for_function(_NO_CONTAINER_HAS_ITS_WIDTH_IN, arg=before)
+    page.get_by_title("Collapse sidebar", exact=True).click()
+    # The reverse slide runs to its natural end, so that a fit made at its intermediate width, its first half, has been
+    # drawn by then.
+    page.wait_for_function(_NO_CSS_TRANSITION_RUNS)
+
+    misfits, mid_slide = _misfits_and_mid_slide_draws(page, before, drawn)
+    assert (misfits, mid_slide, page_errors) == ([], _NO_OVERVIEW_CHART_IS_DRAWN_MID_SLIDE, [])
+
+
+def test_after_a_tab_switch_in_the_middle_of_the_sidebars_slide_each_chart_is_as_wide_as_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Showing Power Flow while the sidebar's slide is at its intermediate width hides the Overview charts, whose fit was waiting for the slide, and draws Power Flow's chart: no Overview chart is drawn while hidden, once the slide ends Power Flow's chart is as wide as its container, and so is each Overview chart once Overview is shown again, with no error logged."""
+    run_id, _ = seeded_home_run
+    before = _open_collapsed_with_the_slide_stretched(page, live_server, run_id, _A_SLIDE_HELD_AT_ITS_INTERMEDIATE_WIDTH)
+    drawn = page.evaluate_handle(_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT, list(_OVERVIEW_CHART_IDS))
+
+    page.get_by_title("Expand sidebar", exact=True).click()
+    page.wait_for_function(_NO_CONTAINER_HAS_ITS_WIDTH_IN, arg=before)
+    show_chart_tab(page, "Power Flow", (_POWER_FLOW_CHART_ID,))
+    drawn_when_hidden = drawn.json_value()
+    power_flow = charts_not_as_wide_as_their_containers(page, [_POWER_FLOW_CHART_ID])
+    drawn_once_the_slide_ended = drawn.json_value()
+    open_chart_tab(page, "Overview")
+    overview = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
+
+    assert (overview, power_flow, drawn_once_the_slide_ended, page_errors) == ([], [], drawn_when_hidden, [])
+
+
+def test_after_the_window_narrows_each_shown_chart_is_as_wide_as_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """At 1100 px the window is still Tailwind's lg, so the sidebar stays and the main column narrows: each Overview chart ends as wide as its container."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    page.set_viewport_size({"width": 1100, "height": 720})
+
+    assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
+
+
+# -- A chart that cannot be fitted is reported -----------------------------
+
+_FAILED_FITTING = "the fitting failed after Plotly.Plots.resize returned"
+_FAILED_TO_FIT_THE_POWER_FLOW_CHART = f"failed to fit the chart of #{_POWER_FLOW_CHART_ID}"
+_REJECT_THE_FIRST_FITTING_OF = """([chartId, failure]) => {
+    const resize = Plotly.Plots.resize;
+    let rejected = false;
+    Plotly.Plots.resize = function (container) {
+        if (container.id === chartId && !rejected) {
+            rejected = true;
+            return Promise.reject(new Error(failure));
+        }
+        return resize.apply(this, arguments);
+    };
+}"""
+
+
+def test_a_chart_whose_fitting_fails_after_plotly_plots_resize_returns_logs_one_error_naming_its_id(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Plotly.Plots.resize returns a promise, which rejects when a fit fails; that failure is one error saying which chart failed to fit, not an uncaught rejection.
+
+    Only the chart's first fit fails, so the test need not know how often it is fitted:
+    its container can change size, and the chart be fitted again, while the page settles.
+    """
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    page.evaluate(_REJECT_THE_FIRST_FITTING_OF, [_POWER_FLOW_CHART_ID, _FAILED_FITTING])
+
+    with page.expect_console_message(lambda message: _POWER_FLOW_CHART_ID in message.text):
+        open_chart_tab(page, "Power Flow")
+
+    errors_naming_the_chart = _errors_naming(page_errors, _POWER_FLOW_CHART_ID)
+    failures_to_fit = [error for error in errors_naming_the_chart if _FAILED_TO_FIT_THE_POWER_FLOW_CHART in error]
+    uncaught_failures = [
+        error for error in page_errors if _FAILED_FITTING in error and _POWER_FLOW_CHART_ID not in error
+    ]
+    assert (len(errors_naming_the_chart), len(failures_to_fit), uncaught_failures) == (1, 1, []), (
+        f"expected one error naming {_POWER_FLOW_CHART_ID!r}, saying {_FAILED_TO_FIT_THE_POWER_FLOW_CHART!r}, "
+        f"and no other carrying {_FAILED_FITTING!r}, but the page logged: {page_errors}"
+    )
+
+
+# -- A chart container added, given another figure or removed after load --
+
+# Adds, right after the drawn container it is called on, a container carrying that
+# container's figure but not its class, the js-plotly-plot Plotly gave it.
+_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER = """(drawn) => {
+    const added = document.createElement('div');
+    added.id = 'chart-added-late';
+    added.dataset.chartFigure = drawn.dataset.chartFigure;
+    drawn.after(added);
+}"""
+
+_GIVE_IT_THE_SANKEYS_FIGURE = """(container) => {
+    container.dataset.chartFigure = document.getElementById('chart-sankey').dataset.chartFigure;
+}"""
+
+# Gives the container the Sankey's figure, then awaits one microtask, whose continuation the attribute change queued
+# behind the MutationObserver's, and returns the title Plotly has drawn in the container by then, null if it has none.
+_GIVE_IT_THE_SANKEYS_FIGURE_AND_READ_ITS_TITLE_BY_THE_NEXT_MICROTASK = f"""async (container) => {{
+    ({_GIVE_IT_THE_SANKEYS_FIGURE})(container);
+    await Promise.resolve();
+    return container.querySelector('.gtitle')?.textContent ?? null;
+}}"""
+
+
+# Adds the container, then awaits one microtask, whose continuation the addition queued behind the
+# MutationObserver's, and returns whether Plotly has drawn the added container by then.
+_ADD_ONE_AND_SAY_WHETHER_IT_IS_DRAWN_BY_THE_NEXT_MICROTASK = f"""async (drawn) => {{
+    ({_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER})(drawn);
+    await Promise.resolve();
+    return document.getElementById('chart-added-late').classList.contains('js-plotly-plot');
+}}"""
+
+
+def test_a_chart_container_added_to_a_shown_tab_after_load_is_drawn_before_the_adding_scripts_next_microtask(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """A container added to the shown Overview tab is drawn in the microtask that reports its addition, ahead of the adding script's next, and the page logs no error."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    drawn_by_the_next_microtask = page.locator("#chart-daily-balance").evaluate(
+        _ADD_ONE_AND_SAY_WHETHER_IT_IS_DRAWN_BY_THE_NEXT_MICROTASK
+    )
+
+    expect(page.locator("#chart-added-late.js-plotly-plot")).to_be_visible()
+    assert (drawn_by_the_next_microtask, page_errors) == (True, [])
+
+
+_SCALE_ITS_PARENT_TO_ZERO_WIDTH = "(container) => { container.parentElement.style.transform = 'scale(0)'; }"
+
+
+def test_a_chart_container_added_inside_a_parent_scaled_to_zero_width_is_drawn_by_the_adding_scripts_next_microtask(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """A transform changes no layout width, so a container added to the shown Overview tab inside a parent that a transform scales to zero width is drawn as promptly as one at full width."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    drawn = page.locator("#chart-daily-balance")
+    drawn.evaluate(_SCALE_ITS_PARENT_TO_ZERO_WIDTH)
+
+    assert drawn.evaluate(_ADD_ONE_AND_SAY_WHETHER_IT_IS_DRAWN_BY_THE_NEXT_MICROTASK) is True
+
+
+def test_a_drawn_chart_container_given_another_figure_is_redrawn_with_it(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """The daily balance's container, given the Sankey's figure, is redrawn titled as the Sankey's layout is, by the setting script's next microtask, and the page logs no error."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    title = page.locator("#chart-daily-balance .gtitle")
+    expect(title).to_have_text("Daily Energy Balance")
+
+    title_by_the_next_microtask = page.locator("#chart-daily-balance").evaluate(
+        _GIVE_IT_THE_SANKEYS_FIGURE_AND_READ_ITS_TITLE_BY_THE_NEXT_MICROTASK
+    )
+
+    expect(title).to_have_text("Energy Flow")
+    assert (title_by_the_next_microtask, page_errors) == ("Energy Flow", [])
+
+
+# Counts on window.__drawsOf, by container id, each chart Plotly.newPlot draws from now on.
+_COUNT_EACH_CONTAINERS_DRAWS = """() => {
+    const newPlot = Plotly.newPlot;
+    window.__drawsOf = {};
+    Plotly.newPlot = function (container) {
+        window.__drawsOf[container.id] = (window.__drawsOf[container.id] || 0) + 1;
+        return newPlot.apply(this, arguments);
+    };
+}"""
+
+# Adds a container after the drawn container it is called on and gives it the Sankey's figure in the same task,
+# so one batch of mutation records names the added container twice: as added, and as given another figure.
+_ADD_ONE_AND_GIVE_IT_THE_SANKEYS_FIGURE = f"""(drawn) => {{
+    ({_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER})(drawn);
+    ({_GIVE_IT_THE_SANKEYS_FIGURE})(document.getElementById('chart-added-late'));
+}}"""
+
+
+def test_a_chart_container_added_and_given_another_figure_in_one_task_is_drawn_once_with_that_figure(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """A container added to the shown Overview tab and given the Sankey's figure in the same task is drawn once, titled as the Sankey's layout is."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    page.evaluate(_COUNT_EACH_CONTAINERS_DRAWS)
+
+    page.locator("#chart-daily-balance").evaluate(_ADD_ONE_AND_GIVE_IT_THE_SANKEYS_FIGURE)
+
+    expect(page.locator("#chart-added-late .gtitle")).to_have_text("Energy Flow")
+    assert page.evaluate("() => window.__drawsOf") == {"chart-added-late": 1}
+
+
+_REMOVE_IT = "container => { container.remove(); return container; }"
+
+# Plotly draws a chart into its container's .plot-container, which Plotly.purge removes.
+_ITS_CHART_IS_PURGED = "container => container.querySelector('.plot-container') === null"
+
+
+def test_a_drawn_chart_container_removed_after_load_has_its_chart_purged_and_a_theme_toggle_then_logs_no_error(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Purging the removed container's chart leaves the renderer holding none of it; the toggle recolours the Sankey, the chart left in the tab."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    sankey_title = page.locator("#chart-sankey .gtitle")
+    sankey_title_fill = sankey_title.evaluate("title => getComputedStyle(title).fill")
+
+    removed = page.locator("#chart-daily-balance").evaluate_handle(_REMOVE_IT)
+
+    page.wait_for_function(_ITS_CHART_IS_PURGED, arg=removed)
+    page.get_by_role("button", name="Toggle dark mode").click()
+    expect(sankey_title).not_to_have_css("fill", sankey_title_fill)
+    assert page_errors == []
 
 
 # -- Download CSV returns 200 ----------------------------------------------
@@ -305,14 +786,8 @@ def test_results_nonexistent_run_returns_error(
     page: Page,
     live_server: str,
 ) -> None:
-    """/results/home/nonexistent -> redirect to dashboard."""
-    response = page.goto(live_server + "/results/home/nonexistent-run-id-xyz")
-    assert response is not None
+    """/results/<id no run has> -> the dashboard, which flashes "Run not found."."""
+    page.goto(live_server + "/results/nonexistent-run-id-xyz")
 
-    # Should redirect to dashboard (status 200 after redirect, or 302)
-    # The route flashes an error and redirects to main.index
-    final_url = page.url
-    # After redirect we should be on the dashboard or root
-    assert "/results/home/nonexistent" not in final_url, (
-        f"Expected redirect away from nonexistent results page, still at {final_url}"
-    )
+    expect(page).to_have_url(live_server + "/")
+    expect(page.get_by_text("Run not found.", exact=True)).to_be_visible()

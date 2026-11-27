@@ -8,7 +8,6 @@ each one, in a browser, carries the classes the server-drawn badge has for the s
 """
 
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,12 +15,11 @@ import pytest
 pytest.importorskip("flask")
 from flask import Flask
 
-from solar_challenge.web.database import RUN_STATUSES, RUN_TYPES, RunStatus, RunType
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.storage import RUN_STATUSES, RunStatus, RunStorage
+from solar_challenge.web.stored_runs import RUN_TYPES, RunType
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, texts
-from tests._server_drawn_badges import dashboard_macros_of, server_drawn_badge, server_drawn_classes
-from tests._web_app import build_test_app
+from tests._server_drawn_badges import server_drawn_badge, server_drawn_classes
 from tests._web_runs import store_fleet_run, store_home_run
 
 _BADGE = {"inline-flex", "items-center", "px-2.5", "py-0.5", "rounded-full", "text-xs", "font-medium"}
@@ -38,18 +36,6 @@ def _colours(palette: str) -> set[str]:
     }
 
 
-@pytest.fixture
-def app(tmp_path: Path) -> Flask:
-    """The dashboard app, with an empty store."""
-    return build_test_app(tmp_path)
-
-
-@pytest.fixture
-def macros(app: Flask) -> Any:
-    """The public macros of components/macros.html, as callables that return their markup."""
-    return dashboard_macros_of(app)
-
-
 def _spans(app: Flask, path: str) -> list[Mapping[str, str | None]]:
     """The attributes of each span of the page *app* serves at *path*, in document order."""
     response = app.test_client().get(path)
@@ -57,23 +43,17 @@ def _spans(app: Flask, path: str) -> list[Mapping[str, str | None]]:
     return element_attributes(response.get_data(as_text=True), "span")
 
 
-def _storage(app: Flask) -> RunStorage:
-    """The RunStorage *app* keeps its runs in, which its pages read."""
-    storage: RunStorage = app.extensions["storage"]
-    return storage
-
-
-def _save_home_run(app: Flask, run_id: str, status: RunStatus = "completed") -> None:
-    """Save a 1-day home run under *run_id* to *app*'s store, with *status*."""
-    store_home_run(_storage(app), run_id, make_home_config(), make_sim_results(days=1), status=status)
+def _save_home_run(storage: RunStorage, run_id: str, status: RunStatus = "completed") -> None:
+    """Save a 1-day home run under *run_id* to *storage*, with *status*."""
+    store_home_run(storage, run_id, make_home_config(), make_sim_results(days=1), status=status)
 
 
 @pytest.mark.parametrize(
     ("status", "colours"),
     [
-        pytest.param("running", _colours("amber"), id="running"),
-        pytest.param("completed", _colours("green"), id="completed"),
-        pytest.param("failed", _colours("red"), id="failed"),
+        pytest.param("running", _colours("status-running"), id="running"),
+        pytest.param("completed", _colours("status-completed"), id="completed"),
+        pytest.param("failed", _colours("status-failed"), id="failed"),
         pytest.param("pending", _NEUTRAL, id="pending"),
         pytest.param("queued", _NEUTRAL, id="a status with no colours of its own"),
     ],
@@ -102,7 +82,6 @@ def test_each_status_a_run_is_stored_with_has_colours_of_its_own(
     [
         pytest.param("home", _colours("blue"), id="home"),
         pytest.param("fleet", _colours("green"), id="fleet"),
-        pytest.param("sweep", _colours("purple"), id="sweep"),
         pytest.param("batch", _NEUTRAL, id="a type with no colours of its own"),
     ],
 )
@@ -126,10 +105,10 @@ def test_each_type_a_run_is_stored_with_has_colours_of_its_own(
 
 
 def test_the_dashboard_draws_each_recent_runs_status_with_run_status_badge(
-    app: Flask, macros: Any
+    app: Flask, storage: RunStorage, macros: Any
 ) -> None:
     for status in RUN_STATUSES:
-        _save_home_run(app, f"{status}-run", status)
+        _save_home_run(storage, f"{status}-run", status)
 
     spans = _spans(app, "/")
 
@@ -140,10 +119,10 @@ def test_the_dashboard_draws_each_recent_runs_status_with_run_status_badge(
 
 
 def test_the_compare_page_draws_each_runs_type_with_run_type_badge(
-    app: Flask, macros: Any
+    app: Flask, storage: RunStorage, macros: Any
 ) -> None:
-    _save_home_run(app, "cmp-home")
-    store_fleet_run(_storage(app), "cmp-fleet", make_fleet_results(n_homes=2, days=1))
+    _save_home_run(storage, "cmp-home")
+    store_fleet_run(storage, "cmp-fleet", make_fleet_results(n_homes=2, days=1))
 
     spans = _spans(app, "/history/compare?ids=cmp-home,cmp-fleet")
 

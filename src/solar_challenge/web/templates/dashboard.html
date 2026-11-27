@@ -11,20 +11,20 @@
 <!-- Quick-start action cards -->
 <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
     <!-- Run Single Home -->
-    <a href="{{ url_for('main.simulate_home_page') }}" class="group block bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 hover:shadow-md hover:border-amber-300 dark:hover:border-amber-600 transition-all">
+    {% call card(href=url_for('main.simulate_home_page'), classes='group block p-6 hover:shadow-md hover:border-primary-300 dark:hover:border-primary-600 transition-all') %}
         <div class="flex items-center gap-4 mb-3">
-            <div class="p-3 bg-amber-50 dark:bg-amber-900/30 rounded-lg group-hover:bg-amber-100 dark:group-hover:bg-amber-900/50 transition-colors">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-amber-600 dark:text-amber-400" viewBox="0 0 20 20" fill="currentColor">
+            <div class="p-3 bg-primary-50 dark:bg-primary-900/30 rounded-lg group-hover:bg-primary-100 dark:group-hover:bg-primary-900/50 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-primary-600 dark:text-primary-400" viewBox="0 0 20 20" fill="currentColor">
                     <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
                 </svg>
             </div>
-            <h3 class="text-lg font-semibold text-slate-900 dark:text-white group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">Run Single Home</h3>
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors">Run Single Home</h3>
         </div>
         <p class="text-sm text-slate-500 dark:text-slate-400">Simulate solar PV, battery storage, and energy flows for a single household.</p>
-    </a>
+    {% endcall %}
 
     <!-- Run Fleet Simulation -->
-    <a href="{{ url_for('main.simulate_fleet_page') }}" class="group block bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 hover:shadow-md hover:border-sky-300 dark:hover:border-sky-600 transition-all">
+    {% call card(href=url_for('main.simulate_fleet_page'), classes='group block p-6 hover:shadow-md hover:border-sky-300 dark:hover:border-sky-600 transition-all') %}
         <div class="flex items-center gap-4 mb-3">
             <div class="p-3 bg-sky-50 dark:bg-sky-900/30 rounded-lg group-hover:bg-sky-100 dark:group-hover:bg-sky-900/50 transition-colors">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-sky-600 dark:text-sky-400" viewBox="0 0 20 20" fill="currentColor">
@@ -34,10 +34,10 @@
             <h3 class="text-lg font-semibold text-slate-900 dark:text-white group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors">Run Fleet Simulation</h3>
         </div>
         <p class="text-sm text-slate-500 dark:text-slate-400">Model energy flows across multiple homes in a community energy fleet.</p>
-    </a>
+    {% endcall %}
 
     <!-- Build Scenario -->
-    <a href="{{ url_for('scenarios.builder') }}" class="group block bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 hover:shadow-md hover:border-emerald-300 dark:hover:border-emerald-600 transition-all">
+    {% call card(href=url_for('scenarios.builder'), classes='group block p-6 hover:shadow-md hover:border-emerald-300 dark:hover:border-emerald-600 transition-all') %}
         <div class="flex items-center gap-4 mb-3">
             <div class="p-3 bg-emerald-50 dark:bg-emerald-900/30 rounded-lg group-hover:bg-emerald-100 dark:group-hover:bg-emerald-900/50 transition-colors">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-emerald-600 dark:text-emerald-400" viewBox="0 0 20 20" fill="currentColor">
@@ -48,18 +48,18 @@
             <h3 class="text-lg font-semibold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">Build Scenario</h3>
         </div>
         <p class="text-sm text-slate-500 dark:text-slate-400">Create and configure custom simulation scenarios with fleet distributions.</p>
-    </a>
+    {% endcall %}
 </div>
 
 <!-- Aggregate stats -->
 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-    {{ stat_card("Total Runs", stats.total_runs, icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><polygon points="5,3 19,10 5,17" /></svg>') }}
-    {{ stat_card("Homes Simulated", stats.total_homes, icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" /></svg>') }}
-    {{ stat_card("Energy Modelled", stats.total_energy_mwh, unit="MWh", icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.381z" clip-rule="evenodd" /></svg>') }}
+    {{ stat_card("Total Runs", totals.run_count, icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><polygon points="5,3 19,10 5,17" /></svg>') }}
+    {{ stat_card("Homes Simulated", totals.home_count, icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" /></svg>') }}
+    {{ stat_card("Energy Modelled", (totals.generation_kwh / 1000) | round(2), unit="MWh", icon='<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.381z" clip-rule="evenodd" /></svg>') }}
 </div>
 
 <!-- Recent runs table -->
-{% call card(title="Recent Runs", subtitle="Last 10 simulation runs") %}
+{% call card(title="Recent Runs", subtitle="Last 10 simulation runs", body_classes="p-6") %}
 {% if runs %}
     <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
         <table id="recent-runs-table" class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
@@ -75,11 +75,11 @@
                 {% for run in runs %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                        <a href="{{ url_for('main.home_results', run_id=run.id) if run.type == 'home' else url_for('main.fleet_results', run_id=run.id) }}"
+                        <a href="{{ url_for('main.run_results', run_id=run.id) }}"
                            class="text-primary-600 dark:text-primary-400 hover:underline">{{ run.name }}</a>
                     </td>
                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ run.type }}</td>
-                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ run.date }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300 whitespace-nowrap">{{ run.created_at[:10] if run.created_at else '' }}</td>
                     <td class="px-4 py-3 text-sm whitespace-nowrap">{{ run_status_badge(run.status) }}</td>
                 </tr>
                 {% endfor %}

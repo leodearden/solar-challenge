@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A whole number in each form other than an int that a web integer field reads as that int.
 
-solar_challenge.web.number_fields.as_whole_number refuses a fraction, a boolean and a value
+solar_challenge.number_fields.as_whole_number refuses a fraction, a boolean and a value
 that is not a finite number, and reads a whole number sent as a float, a numeric string or a
-whole-float string as the int it equals. Its own tests, in tests/unit/test_web_number_fields.py,
+whole-float string as the int it equals. Its own tests, in tests/unit/test_number_fields.py,
 cover its full matrix, so a field read through it needs only one value of each form.
 
 whole_number_forms spells those forms for any whole number, such as one just beyond a field's

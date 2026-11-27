@@ -13,8 +13,14 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.web.database import get_chat_history, init_db, save_chat_message
+from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
+from tests._chat_message_rows import insert_chat_message
+from tests._error_records import error_records
+from tests._css_classes import names_palette
+from tests._html_page import element_attributes
+from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
+from tests._web_app import database_of, point_store_config_at_a_missing_directory
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
@@ -39,99 +45,19 @@ def anthropic_api(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
     return install_fake_anthropic(monkeypatch)
 
 
-class TestChatMessagePersistence:
-    """Tests for save_chat_message and get_chat_history helpers."""
-
-    def test_write_and_read_two_turns(self, tmp_path: Path) -> None:
-        """Writing user+assistant rows for one session_id returns both in order."""
-        db_path = tmp_path / "chat_test.db"
-        init_db(db_path)
-
-        save_chat_message(db_path, "session-1", "user", "Hello")
-        save_chat_message(db_path, "session-1", "assistant", "Hi there!")
-
-        history = get_chat_history(db_path, "session-1")
-        assert len(history) == 2
-        assert history[0]["role"] == "user"
-        assert history[0]["content"] == "Hello"
-        assert history[1]["role"] == "assistant"
-        assert history[1]["content"] == "Hi there!"
-        # created_at must be populated
-        assert history[0]["created_at"] is not None
-        assert history[1]["created_at"] is not None
-
-    def test_session_scoping(self, tmp_path: Path) -> None:
-        """Rows for a different session_id are NOT returned."""
-        db_path = tmp_path / "scope_test.db"
-        init_db(db_path)
-
-        save_chat_message(db_path, "session-A", "user", "For A")
-        save_chat_message(db_path, "session-B", "user", "For B")
-
-        history_a = get_chat_history(db_path, "session-A")
-        history_b = get_chat_history(db_path, "session-B")
-
-        assert len(history_a) == 1
-        assert history_a[0]["content"] == "For A"
-        assert len(history_b) == 1
-        assert history_b[0]["content"] == "For B"
-
-    def test_metadata_roundtrip(self, tmp_path: Path) -> None:
-        """A metadata dict round-trips through metadata_json (dict in → dict out)."""
-        db_path = tmp_path / "meta_test.db"
-        init_db(db_path)
-
-        meta = {"cache_read_input_tokens": 42, "model": "claude-opus-4-8"}
-        save_chat_message(db_path, "session-meta", "assistant", "reply", metadata=meta)
-
-        history = get_chat_history(db_path, "session-meta")
-        assert len(history) == 1
-        assert history[0]["metadata"] == meta
-
-    def test_no_metadata_returns_none(self, tmp_path: Path) -> None:
-        """A row written without metadata returns metadata=None."""
-        db_path = tmp_path / "nometa_test.db"
-        init_db(db_path)
-
-        save_chat_message(db_path, "session-nm", "user", "no meta")
-
-        history = get_chat_history(db_path, "session-nm")
-        assert history[0]["metadata"] is None
-
-    def test_empty_session_returns_empty_list(self, tmp_path: Path) -> None:
-        """get_chat_history returns [] for a session with no messages."""
-        db_path = tmp_path / "empty_test.db"
-        init_db(db_path)
-
-        history = get_chat_history(db_path, "nonexistent-session")
-        assert history == []
-
-    def test_insertion_order_preserved(self, tmp_path: Path) -> None:
-        """Multiple messages are returned in insertion order (ORDER BY id ASC)."""
-        db_path = tmp_path / "order_test.db"
-        init_db(db_path)
-
-        for i in range(5):
-            save_chat_message(db_path, "session-ord", "user", f"msg-{i}")
-
-        history = get_chat_history(db_path, "session-ord")
-        contents = [h["content"] for h in history]
-        assert contents == [f"msg-{i}" for i in range(5)]
-
-
 class TestAssistantHistory:
     """Tests for GET /assistant/history endpoint."""
 
     def test_history_returns_seeded_messages(self, client: FlaskClient, app: Flask) -> None:
         """Seeding rows under a pinned session_id → GET /history returns them in order."""
-        db_path = app.config["DATABASE"]
+        database = database_of(app)
 
         # Pin a session_id in the signed cookie
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "test-history-sid"
 
-        save_chat_message(db_path, "test-history-sid", "user", "What is SOC?")
-        save_chat_message(db_path, "test-history-sid", "assistant", "SOC is state of charge.")
+        save_chat_message(database, "test-history-sid", "user", "What is SOC?")
+        save_chat_message(database, "test-history-sid", "assistant", "SOC is state of charge.")
 
         resp = client.get("/assistant/history")
         assert resp.status_code == 200
@@ -155,7 +81,7 @@ class TestAssistantHistory:
 
     def test_history_session_isolation(self, app: Flask) -> None:
         """Two clients with different session_ids see only their own messages."""
-        db_path = app.config["DATABASE"]
+        database = database_of(app)
 
         client_a = app.test_client()
         client_b = app.test_client()
@@ -165,8 +91,8 @@ class TestAssistantHistory:
         with client_b.session_transaction() as sess:
             sess["assistant_session_id"] = "sid-b"
 
-        save_chat_message(db_path, "sid-a", "user", "message A")
-        save_chat_message(db_path, "sid-b", "user", "message B")
+        save_chat_message(database, "sid-a", "user", "message A")
+        save_chat_message(database, "sid-b", "user", "message B")
 
         resp_a = client_a.get("/assistant/history")
         resp_b = client_b.get("/assistant/history")
@@ -178,6 +104,40 @@ class TestAssistantHistory:
         assert msgs_a[0]["content"] == "message A"
         assert len(msgs_b) == 1
         assert msgs_b[0]["content"] == "message B"
+
+    def test_history_answers_from_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self, client: FlaskClient, app: Flask, tmp_path: Path
+    ) -> None:
+        """GET /history reads the Database create_app built, whatever the app's store config names afterwards."""
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "moved-store-config-sid"
+        save_chat_message(database_of(app), "moved-store-config-sid", "user", "What is SOC?")
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        resp = client.get("/assistant/history")
+
+        assert resp.status_code == 200
+        assert [(m["role"], m["content"]) for m in resp.get_json()["messages"]] == [("user", "What is SOC?")]
+
+    def test_history_lists_a_message_whose_stored_metadata_is_not_json_with_metadata_null(
+        self, client: FlaskClient, app: Flask
+    ) -> None:
+        """A stored message whose metadata is not JSON leaves GET /history answering, with that message listed and its metadata null."""
+        database = database_of(app)
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "damaged-metadata-history-sid"
+        save_chat_message(database, "damaged-metadata-history-sid", "user", "What is SOC?")
+        insert_chat_message(
+            database, "damaged-metadata-history-sid", "assistant", "SOC is state of charge.", "{not json"
+        )
+
+        resp = client.get("/assistant/history")
+
+        assert resp.status_code == 200
+        assert [(m["role"], m["content"], m["metadata"]) for m in resp.get_json()["messages"]] == [
+            ("user", "What is SOC?", None),
+            ("assistant", "SOC is state of charge.", None),
+        ]
 
 
 class TestChatEndpointHappyPath:
@@ -274,6 +234,26 @@ class TestChatEndpointHappyPath:
         assert messages[1]["role"] == "assistant"
         assert "mock reply" in messages[1]["content"]
 
+    def test_a_chat_turn_is_stored_in_the_apps_database_after_its_store_config_names_a_missing_directory(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+        tmp_path: Path,
+    ) -> None:
+        """POST /chat stores its turn in the Database create_app built, whatever the app's store config names afterwards."""
+        database = database_of(app)
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "moved-store-config-chat-sid"
+        anthropic_api.set_chunks(["Hi", " there"])
+        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+
+        body = client.post("/assistant/chat", json={"message": "Hello"}).get_data(as_text=True)
+
+        assert reply_text(parse_sse_events(body)) == "Hi there"
+        stored = get_chat_history(database, "moved-store-config-chat-sid")
+        assert [(m["role"], m["content"]) for m in stored] == [("user", "Hello"), ("assistant", "Hi there")]
+
     def test_chat_completes_when_sdk_reports_cache_tokens_as_none(
         self,
         client: FlaskClient,
@@ -296,7 +276,7 @@ class TestChatEndpointHappyPath:
         events = parse_sse_events(resp.get_data(as_text=True))
 
         event_types = [e.event for e in events]
-        assert "error" not in event_types, f"Unexpected error frame: {events}"
+        assert "failed" not in event_types, f"Unexpected failed frame: {events}"
         assert event_types[-1] == "done"
         messages = client.get("/assistant/history").get_json()["messages"]
         assert [m["role"] for m in messages] == ["user", "assistant"]
@@ -338,7 +318,7 @@ class TestChatEndpointHappyPath:
         events = parse_sse_events(resp.get_data(as_text=True))
 
         event_types = [e.event for e in events]
-        assert "error" not in event_types, f"Unexpected error frame: {events}"
+        assert "failed" not in event_types, f"Unexpected failed frame: {events}"
         assert event_types[-1] == "done"
         messages = client.get("/assistant/history").get_json()["messages"]
         assert [m["role"] for m in messages] == ["user", "assistant"]
@@ -347,60 +327,61 @@ class TestChatEndpointHappyPath:
         assert metadata["cache_read_input_tokens"] == 3 + 50
         assert metadata["model"] == anthropic_api.last_kwargs["model"]
 
+    def test_a_turn_replays_a_stored_reply_whose_metadata_is_not_json_and_streams_its_answer(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A session holding a reply whose stored metadata is not JSON still takes its next turn, which replays that reply and streams its answer."""
+        database = database_of(app)
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "damaged-metadata-chat-sid"
+        save_chat_message(database, "damaged-metadata-chat-sid", "user", "hello")
+        insert_chat_message(database, "damaged-metadata-chat-sid", "assistant", "Hi there!", "{not json")
+        anthropic_api.set_chunks(["Hello again."])
+
+        body = client.post("/assistant/chat", json={"message": "again"}).get_data(as_text=True)
+
+        assert reply_text(parse_sse_events(body)) == "Hello again."
+        assert anthropic_api.last_kwargs["messages"] == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "again"},
+        ]
+
 
 class TestChatDegradation:
-    """Graceful degradation: a chat that cannot start returns an error SSE frame, never a 500."""
+    """Graceful degradation: a chat that cannot start is answered with a lone ``failed`` SSE frame, never a 500."""
 
-    def test_missing_api_key_returns_error_frame(
+    def test_missing_api_key_answers_one_failed_frame_naming_the_key(
         self,
         client: FlaskClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """POST /chat without ANTHROPIC_API_KEY returns 200 with an error SSE frame."""
+        """Without ANTHROPIC_API_KEY, POST /chat answers 200 with exactly one ``failed`` frame: its
+        data is just the message naming the key, and it carries no id or retry."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
         resp = client.post("/assistant/chat", json={"message": "hi"})
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert "text/event-stream" in resp.content_type
 
-        body = resp.get_data(as_text=True)
-        events = parse_sse_events(body)
-        assert [e.event for e in events] == ["error"], f"Expected a lone error frame; got: {events}"
-
-    def test_missing_api_key_error_frame_has_message_field(
-        self,
-        client: FlaskClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The error SSE frame carries a JSON data payload whose 'message' names ANTHROPIC_API_KEY."""
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-        resp = client.post("/assistant/chat", json={"message": "hi"})
-        body = resp.get_data(as_text=True)
-
-        events = parse_sse_events(body)
-        error_frames = [e for e in events if e.event == "error"]
-        assert error_frames, f"Could not find error data payload; events: {events}"
-        error_data = error_frames[0].data
-        assert isinstance(error_data, dict) and "message" in error_data, (
-            f"Error payload missing 'message': {error_data}"
-        )
-        assert "ANTHROPIC_API_KEY" in error_data["message"], (
-            f"Expected the error message to name ANTHROPIC_API_KEY; got: {error_data['message']!r}"
-        )
+        assert resp.status_code == 200
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame("failed", {"message": "AI assistant is not configured: set ANTHROPIC_API_KEY."})
+        ]
 
     @pytest.mark.parametrize(
         "body",
         [{"message": ""}, {"message": " \n"}, {}],
         ids=["empty", "whitespace", "absent"],
     )
-    def test_a_message_without_text_returns_error_frame_and_saves_no_turn(
+    def test_a_message_without_text_returns_failed_frame_and_saves_no_turn(
         self,
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
         body: dict[str, str],
     ) -> None:
-        """A message without text gets a lone error frame saying so; the model is not called and no chat turn is saved."""
+        """A message without text gets a lone failed frame saying so; the model is not called and no chat turn is saved."""
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "empty-message-sid"
 
@@ -408,18 +389,18 @@ class TestChatDegradation:
 
         assert resp.status_code == 200
         assert parse_sse_events(resp.get_data(as_text=True)) == [
-            SseFrame(event="error", data={"message": "Message cannot be empty."})
+            SseFrame(event="failed", data={"message": "Message cannot be empty."})
         ]
         assert anthropic_api.calls == []
         assert client.get("/assistant/history").get_json() == {"messages": []}
 
-    def test_client_construction_failure_returns_error_frame_and_saves_no_turn(
+    def test_client_construction_failure_returns_failed_frame_and_saves_no_turn(
         self,
         client: FlaskClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A client the SDK cannot construct, as from a malformed ANTHROPIC_BASE_URL,
-        yields an error frame naming that failure and saves no chat turn."""
+        yields a failed frame naming that failure and saves no chat turn."""
         malformed_port = "notaport"
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy-test-key")
         monkeypatch.setenv("ANTHROPIC_BASE_URL", f"http://localhost:{malformed_port}")
@@ -432,25 +413,83 @@ class TestChatDegradation:
         assert "text/event-stream" in resp.content_type
         body = resp.get_data(as_text=True)
         events = parse_sse_events(body)
-        assert [e.event for e in events] == ["error"], f"Expected a lone error frame; got: {events}"
+        assert [e.event for e in events] == ["failed"], f"Expected a lone failed frame; got: {events}"
         assert malformed_port in events[0].data["message"], (
             f"Expected the error message to name {malformed_port!r}; got: {events[0].data}"
         )
         assert client.get("/assistant/history").get_json() == {"messages": []}
 
-    def test_body_that_is_not_a_json_object_returns_error_frame_naming_its_type_and_saves_no_turn(
-        self, client: FlaskClient, anthropic_api: FakeAnthropic
+    def test_body_that_is_not_a_json_object_returns_failed_frame_naming_its_type_and_saves_no_turn(
+        self, client: FlaskClient, anthropic_api: FakeAnthropic, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A body that is not a JSON object gets a lone error frame naming its type, and no chat turn is saved."""
+        """A body that is not a JSON object gets a lone failed frame naming its type, and no chat turn is saved; the refusal is no defect, so nothing is logged at ERROR."""
         resp = client.post("/assistant/chat", json=[1])
 
         assert resp.status_code == 200
         assert "text/event-stream" in resp.content_type
         events = parse_sse_events(resp.get_data(as_text=True))
-        assert [e.event for e in events] == ["error"]
+        assert [e.event for e in events] == ["failed"]
         assert events[0].data == {"message": "Request body must be a JSON object, got list"}
         assert anthropic_api.calls == []  # the model is never called
         assert client.get("/assistant/history").get_json() == {"messages": []}
+        assert error_records(caplog) == []
+
+    @pytest.mark.parametrize(
+        ("body", "field", "type_name"),
+        [
+            pytest.param({"message": 5}, "message", "int", id="message-integer"),
+            pytest.param({"message": None}, "message", "NoneType", id="message-null"),
+            pytest.param({"message": ["hi"]}, "message", "list", id="message-array"),
+            pytest.param({"message": {"text": "hi"}}, "message", "dict", id="message-object"),
+            pytest.param({"message": "hi", "run_id": 5}, "run_id", "int", id="run-id-integer"),
+        ],
+    )
+    def test_a_field_that_is_not_a_json_string_returns_failed_frame_naming_it_and_saves_no_turn(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        caplog: pytest.LogCaptureFixture,
+        body: dict[str, object],
+        field: str,
+        type_name: str,
+    ) -> None:
+        """A message is a JSON string and a run_id a JSON string or null, never the text str() makes of another value: any other value gets a lone failed frame naming the field and its type, the model is not called and no chat turn is saved; the refusal is no defect, so nothing is logged at ERROR."""
+        resp = client.post("/assistant/chat", json=body)
+
+        assert resp.status_code == 200
+        assert parse_sse_events(resp.get_data(as_text=True)) == [
+            SseFrame("failed", {"message": f"{field} must be a JSON string, got {type_name}"})
+        ]
+        assert anthropic_api.calls == []
+        assert client.get("/assistant/history").get_json() == {"messages": []}
+        assert error_records(caplog) == []
+
+
+class TestChatResponsePolicy:
+    """POST /assistant/chat answers a chat it streams and one it refuses as the same uncached, unbuffered event stream."""
+
+    @pytest.mark.parametrize(
+        ("body", "model_called"),
+        [({"message": "hi"}, True), ([1], False)],
+        ids=["answered", "refused"],
+    )
+    def test_a_chat_is_served_with_the_event_stream_response_policy(
+        self,
+        client: FlaskClient,
+        anthropic_api: FakeAnthropic,
+        body: object,
+        model_called: bool,
+    ) -> None:
+        anthropic_api.set_chunks(["ok"])
+
+        resp = client.post("/assistant/chat", json=body)
+        resp.get_data()
+
+        assert bool(anthropic_api.calls) is model_called
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        assert resp.headers["Cache-Control"] == "no-cache"
+        assert resp.headers["X-Accel-Buffering"] == "no"
 
 
 class TestChatPageWiring:
@@ -467,27 +506,20 @@ class TestChatPageWiring:
             "Expected assistant.js script include when ANTHROPIC_API_KEY is set"
         )
 
-    def test_page_exposes_chat_url_data_attribute(
+    def test_the_one_assistant_chat_div_carries_the_chat_and_history_urls_assistant_js_reads(
         self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """chat.html exposes the chat endpoint URL via a data-* attribute."""
+        """static/js/assistant.js finds the chat by its id, assistant-chat, and reads two URLs from
+        it: data-chat-url, where it posts each message, and data-history-url, where it loads the
+        chat history."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
-        resp = client.get("/assistant")
-        html = resp.data.decode()
-        assert "data-chat-url" in html, (
-            "Expected data-chat-url attribute for JS to POST to"
-        )
+        page = client.get("/assistant").get_data(as_text=True)
 
-    def test_page_exposes_history_url_data_attribute(
-        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """chat.html exposes the history endpoint URL via a data-* attribute."""
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
-        resp = client.get("/assistant")
-        html = resp.data.decode()
-        assert "data-history-url" in html, (
-            "Expected data-history-url attribute for JS to load history from"
-        )
+        chat_roots = [div for div in element_attributes(page, "div") if div.get("id") == "assistant-chat"]
+
+        assert [(root.get("data-chat-url"), root.get("data-history-url")) for root in chat_roots] == [
+            ("/assistant/chat", "/assistant/history")
+        ]
 
     def test_no_configure_notice_when_key_set(
         self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
@@ -510,6 +542,30 @@ class TestChatPageWiring:
         assert "ANTHROPIC_API_KEY" in html, (
             "Configure-notice MUST appear when ANTHROPIC_API_KEY is unset"
         )
+
+    def test_configure_notice_is_drawn_in_the_warning_palette(
+        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without ANTHROPIC_API_KEY, the configure-notice is drawn in the token file's
+        tailwind.warning role, and no other div of the page is."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        resp = client.get("/assistant")
+
+        warning_classes = {
+            css_class
+            for div in element_attributes(resp.get_data(as_text=True), "div")
+            for css_class in (div.get("class") or "").split()
+            if names_palette(css_class, "warning")
+        }
+
+        assert warning_classes == {
+            "border-warning-300",
+            "bg-warning-50",
+            "text-warning-800",
+            "dark:border-warning-700",
+            "dark:bg-warning-900/20",
+            "dark:text-warning-300",
+        }
 
     def test_foundation_markers_present_key_set(
         self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
@@ -561,7 +617,7 @@ class TestChatLiveSmoke:
         event_types = [e.event for e in events]
         assert "delta" in event_types, "Expected at least one delta frame"
         assert "done" in event_types, "Expected done frame"
-        assert "error" not in event_types, f"Unexpected error frame: {body[:500]}"
+        assert "failed" not in event_types, f"Unexpected failed frame: {body[:500]}"
 
         reconstructed = reply_text(events)
         assert len(reconstructed) > 0, "Expected non-empty reconstructed reply"
@@ -617,12 +673,12 @@ class TestEveryTurnStoresAReplyWithText:
         stored_reply: str,
     ) -> None:
         """A reply stored without text, as the old error path stored one, is not replayed."""
-        db_path = app.config["DATABASE"]
+        database = database_of(app)
         with client.session_transaction() as sess:
             sess["assistant_session_id"] = "replay-skip-sid"
-        save_chat_message(db_path, "replay-skip-sid", "user", "hello")
+        save_chat_message(database, "replay-skip-sid", "user", "hello")
         save_chat_message(
-            db_path,
+            database,
             "replay-skip-sid",
             "assistant",
             stored_reply,
@@ -656,7 +712,7 @@ class TestEveryTurnStoresAReplyWithText:
         )
         client.post("/assistant/chat", json={"message": "again"}).get_data(as_text=True)
 
-        assert [f.event for f in failed] == ["error"]
+        assert [f.event for f in failed] == ["failed"]
         notice = failed[0].data["message"]
         assert anthropic_api.calls[1]["messages"] == [
             {"role": "user", "content": "hello"},
@@ -682,7 +738,7 @@ class TestEveryTurnStoresAReplyWithText:
             client.post("/assistant/chat", json={"message": "hi"}).get_data(as_text=True)
         )
 
-        assert [f.event for f in frames] == ["delta", "error"]
+        assert [f.event for f in frames] == ["delta", "failed"]
         messages = client.get("/assistant/history").get_json()["messages"]
         assert [(m["role"], m["content"]) for m in messages] == [("user", "hi"), ("assistant", "Hello")]
         assert messages[1]["metadata"] == {"error": "overloaded_error: Overloaded", "truncated": True}
@@ -802,15 +858,14 @@ class TestRunContextInjection:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """POST with run_id injects summary into messages[-1]['content'] before API call."""
-        db_path = app.config["DATABASE"]
         summary_marker = 987.65
         seed_run(
-            db_path,
+            database_of(app),
             run_id="ctx-run-001",
             name="ctx-signal-run",
             status="completed",
             created_at="2026-06-01T09:00:00+00:00",
-            summary={"total_generation_kwh": summary_marker},
+            summary=home_summary(total_generation_kwh=summary_marker),
         )
 
         anthropic_api.set_chunks(["ok"])
@@ -841,14 +896,13 @@ class TestRunContextInjection:
         anthropic_api: FakeAnthropic,
     ) -> None:
         """The persisted user row contains only the original user message, not injected context."""
-        db_path = app.config["DATABASE"]
         seed_run(
-            db_path,
+            database_of(app),
             run_id="ctx-run-002",
             name="ctx-persist-run",
             status="completed",
             created_at="2026-06-01T10:00:00+00:00",
-            summary={"total_generation_kwh": 123.0},
+            summary=home_summary(total_generation_kwh=123.0),
         )
 
         with client.session_transaction() as sess:
@@ -886,12 +940,12 @@ class TestRunContextInjection:
     ) -> None:
         """A turn with run context sends the system block a turn without it sends, so the cached prompt prefix still matches."""
         seed_run(
-            app.config["DATABASE"],
+            database_of(app),
             run_id="ctx-run-003",
             name="ctx-cache-run",
             status="completed",
             created_at="2026-06-01T11:00:00+00:00",
-            summary={"total_generation_kwh": 456.0},
+            summary=home_summary(total_generation_kwh=456.0),
         )
         anthropic_api.set_chunks(["ok"])
 
@@ -910,7 +964,7 @@ class TestRunContextInjection:
         app: Flask,
         anthropic_api: FakeAnthropic,
     ) -> None:
-        """POST with an unknown run_id streams normally (delta+done, no error/500)."""
+        """POST with an unknown run_id streams normally (delta+done, no failed frame, no 500)."""
         anthropic_api.set_chunks(["normal reply"])
 
         resp = client.post(
@@ -923,7 +977,7 @@ class TestRunContextInjection:
         event_types = [e.event for e in parse_sse_events(body)]
         assert "delta" in event_types, "Expected delta frames for unknown run_id"
         assert "done" in event_types, "Expected done frame for unknown run_id"
-        assert "error" not in event_types, f"Unexpected error frame for unknown run_id: {body[:300]}"
+        assert "failed" not in event_types, f"Unexpected failed frame for unknown run_id: {body[:300]}"
 
         # Messages sent to API must NOT contain injected run context for unknown id
         msgs = anthropic_api.last_kwargs["messages"]
@@ -932,17 +986,25 @@ class TestRunContextInjection:
             f"Unknown run_id should not appear in injected content; got: {last_content!r}"
         )
 
+    @pytest.mark.parametrize(
+        "run_id_field",
+        [
+            pytest.param({}, id="run-id-absent"),
+            pytest.param({"run_id": None}, id="run-id-null"),
+        ],
+    )
     def test_no_run_id_leaves_user_message_unchanged(
         self,
         client: FlaskClient,
         anthropic_api: FakeAnthropic,
+        run_id_field: dict[str, None],
     ) -> None:
-        """POST without run_id: messages[-1]['content'] equals exactly the user message."""
+        """POST without run_id, or with a null one: messages[-1]['content'] equals exactly the user message."""
         anthropic_api.set_chunks(["plain reply"])
 
         resp = client.post(
             "/assistant/chat",
-            json={"message": "plain message no run"},
+            json={"message": "plain message no run", **run_id_field},
         )
         assert resp.status_code == 200
         resp.get_data(as_text=True)

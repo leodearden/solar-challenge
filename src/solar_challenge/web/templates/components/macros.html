@@ -8,27 +8,97 @@
 #}
 
 
-{# Card container with optional title and subtitle #}
-{% macro card(title='', subtitle='', classes='') %}
-<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm {{ classes }}">
+{# The classes every card is drawn in, which only card writes #}
+{% set _card_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm' %}
+{# The classes every panel is drawn in, which only panel writes: the card's surface in a larger radius #}
+{% set _panel_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm' %}
+{# The divider ruled under a header band or a tab bar, which the bands' classes and tab_bar build on #}
+{% set _divider_classes = 'border-b border-slate-200 dark:border-slate-700' %}
+{# The classes of the header band a titled panel draws above its content, which only panel writes #}
+{% set _panel_title_band_classes = 'px-5 py-4 ' ~ _divider_classes %}
+{# The classes every flat card is drawn in, which only flat_card writes: the card's surface with no shadow #}
+{% set _flat_card_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg' %}
+{# The classes of a split card's top and bottom parts, which only split_card writes: the bottom has no top border, so the top's bottom border divides them #}
+{% set _split_card_top_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg' %}
+{% set _split_card_bottom_classes = 'bg-white dark:bg-slate-800 border border-t-0 border-slate-200 dark:border-slate-700 rounded-b-lg' %}
+{# The frame of the header band at a card's top, which card's title band and chart_panel's band share #}
+{% set _header_band_classes = 'px-6 ' ~ _divider_classes %}
+
+
+{# A card around its caller's content: a link to href if given, else a div, in the card classes and classes. A title draws a header band in header_classes: a dot in dot_classes, the title and header_aside in a row, then the subtitle. body_classes wraps the content in a div of them #}
+{% macro card(title='', subtitle='', classes='', header_classes='', dot_classes='', header_aside='', body_classes='', href='') %}
+{% if href %}<a href="{{ href }}" class="{{ _card_classes }} {{ classes }}">{% else %}<div class="{{ _card_classes }} {{ classes }}">{% endif %}
     {% if title %}
-    <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700">
-        <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ title }}</h3>
+    <div class="{{ _header_band_classes }} py-4 {{ header_classes }}">
+        <div class="flex items-center gap-2">
+            {% if dot_classes %}
+            <div class="w-3 h-3 rounded-full {{ dot_classes }}"></div>
+            {% endif %}
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">{{ title }}</h3>
+            {{ header_aside }}
+        </div>
         {% if subtitle %}
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ subtitle }}</p>
         {% endif %}
     </div>
     {% endif %}
-    <div class="p-6">
+    {% if body_classes %}
+    <div class="{{ body_classes }}">
         {{ caller() }}
     </div>
+    {% else %}
+    {{ caller() }}
+    {% endif %}
+{% if href %}</a>{% else %}</div>{% endif %}
+{% endmacro %}
+
+
+{# A panel around its caller's content: a div in the panel classes and classes. A title draws a header band above the content: the title, then the subtitle the Alpine expression subtitle_expression holds #}
+{% macro panel(title='', subtitle_expression='', classes='') %}
+<div class="{{ _panel_classes }} {{ classes }}">
+    {% if title %}
+    <div class="{{ _panel_title_band_classes }}">
+        <h3 class="font-semibold text-slate-800 dark:text-white">{{ title }}</h3>
+        {% if subtitle_expression %}
+        <p class="text-xs text-slate-400 mt-1" x-text="{{ subtitle_expression }}"></p>
+        {% endif %}
+    </div>
+    {% endif %}
+    {{ caller() }}
 </div>
+{% endmacro %}
+
+
+{# A flat card around its caller's content: a div in the flat card classes and classes #}
+{% macro flat_card(classes='') %}
+<div class="{{ _flat_card_classes }} {{ classes }}">
+    {{ caller() }}
+</div>
+{% endmacro %}
+
+
+{# A card in two parts, top above bottom: each a div in its part's classes, the bottom's in bottom_classes too #}
+{% macro split_card(top, bottom, bottom_classes='') %}
+<div class="{{ _split_card_top_classes }}">
+    {{ top }}
+</div>
+<div class="{{ _split_card_bottom_classes }} {{ bottom_classes }}">
+    {{ bottom }}
+</div>
+{% endmacro %}
+
+
+{# An option per location preset of presets, a mapping of key to Location such as location.LOCATION_PRESETS: valued its key and labelled its name, then its latitude and longitude if with_coordinates #}
+{% macro location_preset_options(presets, with_coordinates=false) %}
+{% for key, preset in presets.items() %}
+<option value="{{ key }}">{{ preset.name }}{% if with_coordinates %} ({{ '%.2f'|format(preset.latitude|abs) }}&deg;{{ 'N' if preset.latitude >= 0 else 'S' }}, {{ '%.2f'|format(preset.longitude|abs) }}&deg;{{ 'E' if preset.longitude >= 0 else 'W' }}){% endif %}</option>
+{% endfor %}
 {% endmacro %}
 
 
 {# Stat display card for key metrics #}
 {% macro stat_card(label, value, unit='', icon='', trend='') %}
-<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-5">
+{% call card(classes='p-5') %}
     <div class="flex items-center justify-between">
         <div class="flex-1 min-w-0">
             <p class="text-sm font-medium text-slate-500 dark:text-slate-400 break-words" title="{{ label }}">{{ label }}</p>
@@ -48,7 +118,7 @@
         </div>
         {% endif %}
     </div>
-</div>
+{% endcall %}
 {% endmacro %}
 
 
@@ -74,20 +144,65 @@
 {% endmacro %}
 
 
-{# The titled card of the chart static/js/chart-renderer.js draws from figure; a figure with nothing to draw (none or '{}') gets the card of empty_message instead, or no card, and an undefined figure, read under a name the page's route never set, fails the render, naming that name #}
-{% macro chart_panel(id, title, figure, min_height, empty_message='') %}
-{% if figure is undefined %}
-{{ figure() }}{# calling an undefined raises the UndefinedError that names it #}
-{% elif figure and figure != '{}' %}
-<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm overflow-hidden">
-    <div class="px-6 py-3 border-b border-slate-200 dark:border-slate-700">
-        <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">{{ title }}</h3>
+{# The titled card of a charts.ChartPanel: the container static/js/chart-renderer.js draws its figure in, in the chrome colours it reads from the container's style, or the reason it has none #}
+{% macro chart_panel(panel) %}
+{% call card(classes='overflow-hidden') %}
+    <div class="{{ _header_band_classes }} py-3">
+        <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">{{ panel.title }}</h3>
     </div>
-    <div id="{{ id }}" class="w-full" style="min-height: {{ min_height }};" data-chart-figure="{{ figure }}"></div>
+    {% if panel.figure_json is not none %}
+    <div id="{{ panel.dom_id }}" class="w-full text-slate-800 dark:text-slate-200 [--chart-grid:theme(colors.slate.200)] dark:[--chart-grid:theme(colors.slate.700)]" style="min-height: {{ panel.height_px }}px;" data-chart-figure="{{ panel.figure_json }}"></div>
+    {% else %}
+    <p id="{{ panel.dom_id }}" class="p-6 text-sm text-slate-500 dark:text-slate-400">{{ panel.absence_reason }}</p>
+    {% endif %}
+{% endcall %}
+{% endmacro %}
+
+
+{# Every tab bar's colours: the selected tab's, and each other tab's #}
+{% set _selected_tab_classes = 'border-primary-500 text-primary-600 dark:text-primary-400' %}
+{% set _unselected_tab_classes = 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:border-slate-300 dark:hover:border-slate-600' %}
+
+
+{# A tab bar named label: each of tabs sets the Alpine variable model to its key, and the server draws the first selected. tests/e2e/test_tab_bar_colours.py says why its :class is an object #}
+{% macro tab_bar(tabs, label, classes='', list_classes='', tab_classes='', model='activeTab') %}
+<div class="{{ _divider_classes }} {{ classes }}">
+    <nav class="flex overflow-x-auto scrollbar-hide {{ list_classes }}" aria-label="{{ label }}" role="tablist">
+        {% for tab in tabs %}
+        <button
+            type="button"
+            @click='{{ model }} = {{ tab.key | tojson }}'
+            class="whitespace-nowrap flex-shrink-0 py-3 border-b-2 font-medium text-sm transition-colors {{ tab_classes }} {{ _selected_tab_classes if loop.first else _unselected_tab_classes }}"
+            :class='{ {{ _selected_tab_classes | tojson }}: {{ model }} === {{ tab.key | tojson }}, {{ _unselected_tab_classes | tojson }}: {{ model }} !== {{ tab.key | tojson }} }'
+            role="tab"
+            aria-selected="{{ 'true' if loop.first else 'false' }}"
+            :aria-selected='{{ model }} === {{ tab.key | tojson }}'
+        >{{ tab.label }}</button>
+        {% endfor %}
+    </nav>
 </div>
-{% elif empty_message %}
-{% call card() %}<p class="text-sm text-slate-500 dark:text-slate-400">{{ empty_message }}</p>{% endcall %}
-{% endif %}
+{% endmacro %}
+
+
+{# A page's charts.ChartTab tabs: their tab_bar, the first tab open, then each tab's panels, shown while activeTab is its key #}
+{% macro chart_tabs(tabs) %}
+<div x-data='{ activeTab: {{ tabs[0].key | tojson }} }' class="mb-8">
+    {{ tab_bar(tabs, label='Chart tabs', classes='mb-6', list_classes='-mb-px space-x-6', tab_classes='px-1') }}
+    {% for tab in tabs %}
+    <div x-show='activeTab === {{ tab.key | tojson }}'{% if not loop.first %} x-cloak{% endif %} class="space-y-6">
+        {% for panel in tab.panels %}
+        {{ chart_panel(panel) }}
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% endmacro %}
+
+
+{# The scripts a chart page loads: Plotly, then static/js/chart-renderer.js, which draws each chart_panel container #}
+{% macro chart_scripts() %}
+<script src="{{ url_for('plotly_js.script') }}"></script>
+<script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
 {% endmacro %}
 
 
@@ -106,19 +221,43 @@
 {% endmacro %}
 
 
+{# A number input bound to the Alpine expression model, inside the label that names it: the caption label, then the input, carrying id if given, step, and a min and max for each bound within gives. within is an Interval with finite bounds, such as a fleet component's value_range, or a mapping giving one bound, such as {'low': 0} #}
+{% macro number_field(id, label, model, within=none, step='any') %}
+<label class="block space-y-1.5">
+    <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ label }}</span>
+    <input type="number"{% if id %} id="{{ id }}"{% endif %} step="{{ step }}"{% if within.low is defined and within.low is not none %} min="{{ within.low }}"{% endif %}{% if within.high is defined and within.high is not none %} max="{{ within.high }}"{% endif %} x-model.number="{{ model }}"
+        class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
+</label>
+{% endmacro %}
+
+
+{# A button per day choice of limits, a PageLimits, in order: each sets the Alpine expression model to its days and is drawn selected while model holds them, captioned '1 year' for the full year, else '<days> days' #}
+{% macro day_choice_buttons(model, limits) %}
+<div class="flex flex-wrap gap-2">
+    {% for days in limits.day_choices %}
+    <button type="button" @click="{{ model }} = {{ days }}"
+        class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors"
+        :class="{{ model }} == {{ days }}
+            ? 'bg-primary-500 text-white border-primary-500'
+            : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-primary-400 dark:hover:border-primary-500'"
+    >{{ '1 year' if days == limits.full_year_days else days ~ ' days' }}</button>
+    {% endfor %}
+</div>
+{% endmacro %}
+
+
 {# Run badges: a pill naming a run's status or type in that value's colours; a value with none of its own is drawn neutral #}
 {% set _badge_shape_classes = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium' %}
 {% set _neutral_badge_classes = 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300' %}
 {% set _run_status_badge_classes = {
     'pending': _neutral_badge_classes,
-    'running': 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
-    'completed': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-    'failed': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+    'running': 'bg-status-running-100 text-status-running-800 dark:bg-status-running-900/30 dark:text-status-running-400',
+    'completed': 'bg-status-completed-100 text-status-completed-800 dark:bg-status-completed-900/30 dark:text-status-completed-400',
+    'failed': 'bg-status-failed-100 text-status-failed-800 dark:bg-status-failed-900/30 dark:text-status-failed-400',
 } %}
 {% set _run_type_badge_classes = {
     'home': 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
     'fleet': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-    'sweep': 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
 } %}
 
 

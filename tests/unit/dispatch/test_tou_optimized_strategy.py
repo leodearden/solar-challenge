@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for TOUOptimizedStrategy, which discharges the battery only in its peak hours and grid-charges it in cheap periods."""
 
+import re
 from datetime import datetime
 
 import pytest
@@ -12,6 +13,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
     compute_grid_charge_power_kw,
 )
+from solar_challenge.errors import ConfigurationError
 
 
 @pytest.fixture
@@ -55,6 +57,7 @@ class TestTOUOptimizedStrategyBasics:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert isinstance(decision, DispatchDecision)
 
@@ -63,23 +66,37 @@ class TestTOUOptimizedStrategyValidation:
     """Test TOUOptimizedStrategy input validation."""
 
     def test_invalid_peak_hour_range_raises(self):
-        """Peak hours outside 0-23 range raises error."""
-        with pytest.raises(ValueError, match="must be in range 0-23"):
+        """A peak period past midnight is refused, naming its start hour and the day's bounds."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape("peak_hours[0][0] must be between 0 and 24, got 25")
+        ):
             TOUOptimizedStrategy(peak_hours=[(25, 28)])
 
     def test_negative_peak_hour_raises(self):
-        """Negative peak hours raise error."""
-        with pytest.raises(ValueError, match="must be in range 0-23"):
+        """A peak period starting at a negative hour is refused, naming its start hour and the day's bounds."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape("peak_hours[0][0] must be between 0 and 24, got -1")
+        ):
             TOUOptimizedStrategy(peak_hours=[(-1, 5)])
 
     def test_peak_start_after_end_raises(self):
-        """Peak period with start >= end raises error."""
-        with pytest.raises(ValueError, match="start must be before end"):
+        """A peak period starting after its end is refused, naming the window."""
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape(
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (20, 17)"
+            ),
+        ):
             TOUOptimizedStrategy(peak_hours=[(20, 17)])
 
     def test_peak_start_equals_end_raises(self):
-        """Peak period with start == end raises error."""
-        with pytest.raises(ValueError, match="start must be before end"):
+        """A peak period starting at its end is refused, naming the window."""
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape(
+                "peak_hours[0] must be a (start, end) window that starts before it ends, got (17, 17)"
+            ),
+        ):
             TOUOptimizedStrategy(peak_hours=[(17, 17)])
 
     def test_off_peak_hours_is_refused(self):
@@ -98,6 +115,7 @@ class TestTOUOptimizedStrategyValidation:
                 demand_kw=1.0,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_negative_demand_raises(self, standard_tou_strategy):
@@ -110,6 +128,7 @@ class TestTOUOptimizedStrategyValidation:
                 demand_kw=-1.0,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_negative_soc_raises(self, standard_tou_strategy):
@@ -122,6 +141,7 @@ class TestTOUOptimizedStrategyValidation:
                 demand_kw=1.0,
                 battery_soc_kwh=-1.0,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_zero_capacity_raises(self, standard_tou_strategy):
@@ -134,6 +154,7 @@ class TestTOUOptimizedStrategyValidation:
                 demand_kw=1.0,
                 battery_soc_kwh=0.0,
                 battery_capacity_kwh=0.0,
+                timestep_minutes=1.0,
             )
 
     def test_zero_timestep_raises(self, standard_tou_strategy):
@@ -163,6 +184,7 @@ class TestTOUOptimizedStrategyOffPeak:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 3.0 - 1.0 = 2.0 kW
         assert decision.charge_kw == 2.0
@@ -178,6 +200,7 @@ class TestTOUOptimizedStrategyOffPeak:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Off-peak: let cheap grid power handle shortfall, preserve battery for peak
         assert decision.charge_kw == 0.0
@@ -193,6 +216,7 @@ class TestTOUOptimizedStrategyOffPeak:
             demand_kw=2.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -207,6 +231,7 @@ class TestTOUOptimizedStrategyOffPeak:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Should charge from excess (off-peak behavior)
         assert decision.charge_kw == 2.0
@@ -226,6 +251,7 @@ class TestTOUOptimizedStrategyPeak:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 3.0 - 1.0 = 2.0 kW - charges even during peak
         assert decision.charge_kw == 2.0
@@ -241,6 +267,7 @@ class TestTOUOptimizedStrategyPeak:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Shortfall = 3.0 - 1.0 = 2.0 kW
         assert decision.charge_kw == 0.0
@@ -256,6 +283,7 @@ class TestTOUOptimizedStrategyPeak:
             demand_kw=2.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -270,6 +298,7 @@ class TestTOUOptimizedStrategyPeak:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Should discharge (peak behavior)
         assert decision.discharge_kw == 2.0
@@ -284,6 +313,7 @@ class TestTOUOptimizedStrategyPeak:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Off-peak: preserve battery, no discharge
         assert decision.discharge_kw == 0.0
@@ -298,6 +328,7 @@ class TestTOUOptimizedStrategyPeak:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Should charge from excess (off-peak behavior)
         assert decision.charge_kw == 2.0
@@ -316,6 +347,7 @@ class TestTOUOptimizedStrategyMultiplePeaks:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Should discharge (peak behavior)
         assert decision.discharge_kw == 2.0
@@ -330,6 +362,7 @@ class TestTOUOptimizedStrategyMultiplePeaks:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Should discharge (peak behavior)
         assert decision.discharge_kw == 2.0
@@ -344,6 +377,7 @@ class TestTOUOptimizedStrategyMultiplePeaks:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Should charge from excess (off-peak behavior)
         assert decision.charge_kw == 2.0
@@ -358,6 +392,7 @@ class TestTOUOptimizedStrategyMultiplePeaks:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Should charge from excess (off-peak behavior)
         assert decision.charge_kw == 2.0
@@ -376,6 +411,7 @@ class TestTOUOptimizedStrategySOCIndependence:
             demand_kw=3.0,
             battery_soc_kwh=4.0,  # High SOC
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         decision_low = standard_tou_strategy.decide_action(
             timestamp=timestamp,
@@ -383,6 +419,7 @@ class TestTOUOptimizedStrategySOCIndependence:
             demand_kw=3.0,
             battery_soc_kwh=0.5,  # Low SOC
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
         assert decision_high.charge_kw == decision_low.charge_kw
@@ -401,6 +438,7 @@ class TestTOUOptimizedStrategyEdgeCases:
             demand_kw=2.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Midnight is off-peak, preserve battery
         assert decision.discharge_kw == 0.0
@@ -414,6 +452,7 @@ class TestTOUOptimizedStrategyEdgeCases:
             demand_kw=2.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # 11 PM is off-peak, preserve battery
         assert decision.discharge_kw == 0.0
@@ -427,6 +466,7 @@ class TestTOUOptimizedStrategyEdgeCases:
             demand_kw=0.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -440,6 +480,7 @@ class TestTOUOptimizedStrategyEdgeCases:
             demand_kw=0.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -457,7 +498,7 @@ class TestTOUOptimizedStrategyGridCharging:
         current_rate=0.10,
         peak_rate=0.35,
         is_cheap_period=True,
-        target_soc_fraction=0.9,
+        target_soc_kwh=4.5,
         max_charge_kw=3.0,
         round_trip_efficiency=0.9,
         charge_efficiency=0.95,
@@ -478,7 +519,6 @@ class TestTOUOptimizedStrategyGridCharging:
         expected_grid = compute_grid_charge_power_kw(
             ctx,
             battery_soc_kwh=1.0,
-            capacity_kwh=5.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
@@ -491,7 +531,8 @@ class TestTOUOptimizedStrategyGridCharging:
         """(2) Off-peak excess PV: grid fills remaining headroom after PV charge.
 
         Hand-computed literal: residual_kw = max_charge_kw(3.0) - pv(2.0) = 1.0 kW.
-        gate3 gap_power_kw = (4.5-1.0)/0.95/1.0 ≈ 3.68 kW > residual → residual clamps.
+        post-PV SOC = 1.0 + 2.0 × 1.0 × 0.95 = 2.9 kWh.
+        gate3 gap_power_kw = (4.5-2.9)/0.95/1.0 ≈ 1.68 kW > residual → residual clamps.
         """
         ctx = self._FAVOURABLE_CTX
         decision = standard_tou_strategy.decide_action(
@@ -531,7 +572,7 @@ class TestTOUOptimizedStrategyGridCharging:
             current_rate=0.30,
             peak_rate=0.31,
             is_cheap_period=True,
-            target_soc_fraction=0.9,
+            target_soc_kwh=4.5,
             max_charge_kw=3.0,
             round_trip_efficiency=0.9,
             charge_efficiency=0.95,
@@ -553,7 +594,7 @@ class TestTOUOptimizedStrategyGridCharging:
             current_rate=0.35,
             peak_rate=0.35,
             is_cheap_period=False,  # peak, not cheap
-            target_soc_fraction=0.9,
+            target_soc_kwh=4.5,
             max_charge_kw=3.0,
             round_trip_efficiency=0.9,
             charge_efficiency=0.95,
@@ -578,6 +619,7 @@ class TestTOUOptimizedStrategyGridCharging:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == pytest.approx(2.0)
         assert decision.discharge_kw == 0.0
@@ -591,6 +633,7 @@ class TestTOUOptimizedStrategyGridCharging:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == pytest.approx(2.0)
@@ -609,7 +652,7 @@ class TestTOUOptimizedStrategyGridCharging:
             current_rate=0.10,
             peak_rate=0.35,
             is_cheap_period=True,  # caller says cheap — Gate1 passes
-            target_soc_fraction=0.9,
+            target_soc_kwh=4.5,
             max_charge_kw=3.0,
             round_trip_efficiency=0.9,
             charge_efficiency=0.95,
@@ -630,12 +673,12 @@ class TestTOUOptimizedStrategyGridCharging:
     def test_soc_at_target_no_grid_charge(self, standard_tou_strategy):
         """Gate 3: battery already at target SOC → controller returns 0.0."""
         ctx = self._FAVOURABLE_CTX
-        # soc == target_soc_fraction * capacity → gap_kwh = 0.0
+        # soc == target_soc_kwh → gap_kwh = 0.0
         decision = standard_tou_strategy.decide_action(
             timestamp=datetime(2024, 1, 1, 3, 0, 0),  # off-peak
             generation_kw=0.0,
             demand_kw=1.0,
-            battery_soc_kwh=4.5,   # = 0.9 * 5.0
+            battery_soc_kwh=4.5,   # = target_soc_kwh
             battery_capacity_kwh=5.0,
             timestep_minutes=60.0,
             grid_charge_ctx=ctx,
@@ -643,12 +686,13 @@ class TestTOUOptimizedStrategyGridCharging:
         assert decision.grid_charge_kw == 0.0
 
     def test_is_cheap_period_true_overrides_peak_hours(self, standard_tou_strategy):
-        """Seam test: ctx.is_cheap_period=True is the authority on grid-charging,
-        even when the timestamp falls inside the strategy's configured peak_hours.
+        """ctx.is_cheap_period=True decides grid-charging, even when the timestamp falls inside
+        the peak_hours of a strategy built without a tariff.
 
         The strategy's peak_hours govern charge_kw/discharge_kw decisions; they do
         NOT suppress grid charging when the caller-supplied ctx says is_cheap_period=True.
-        This locks the dual-source-of-truth seam to an explicit contract: ctx wins.
+        Built with the step's tariff, the strategy and the context agree, so no minute is
+        both peak and cheap (tests/unit/test_tou_tariff_clock.py, Row 10).
         """
         ctx = self._FAVOURABLE_CTX  # is_cheap_period=True, spread passes
         # Peak hour (18:00 in peak_hours=[(17,20)]), balanced load → no shortfall

@@ -45,7 +45,6 @@ htmlcov/
 
 # Data caches
 .cache/
-data/cache/
 *.pkl
 *.pickle
 
@@ -70,4 +69,10 @@ node_modules/
 # .task/ in particular: if committed, it contaminates every future worktree.
 .task/
 .taskmaster/
-data/escalations/
+
+# What runs leave at the root of the main checkout: the orchestrator's runtime state and abandoned
+# worktrees, and simulation output. Anchored with a leading /, so a project directory of the same
+# name deeper in the tree is still listed. Pinned by tests/unit/test_gitignore.py.
+/data/
+/.worktrees-orphaned/
+/results/

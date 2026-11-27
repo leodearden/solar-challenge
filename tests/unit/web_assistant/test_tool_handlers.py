@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
+import json
+import logging
 import time
 from datetime import date
 from pathlib import Path
@@ -11,7 +13,13 @@ import pytest
 
 pytest.importorskip("flask")
 from flask import Flask
+from flask.testing import FlaskClient
 
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet import calculate_fleet_summary
+from solar_challenge.number_fields import Interval, as_whole_number
+from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
+from solar_challenge.web import assistant
 from solar_challenge.web.assistant import (
     METRIC_TABLE,
     explain_metric,
@@ -21,12 +29,25 @@ from solar_challenge.web.assistant import (
     run_home_simulation,
     suggest_config,
 )
-from solar_challenge.web.database import get_db, init_db
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.database import Database
+from solar_challenge.web.dashboard import dashboard_of
+from solar_challenge.web.field_tree import field_tree
+from solar_challenge.web.request_boundary import read_location, require_encodable_text
+from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.stored_runs import StoredRunUnreadable
 
+from tests._error_records import error_records
+from tests._raising import raising
+from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
+from tests._run_stores import empty_run_storage, run_storage_over
+from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, summary_json
+from tests._web_app import run_storage_of
+from tests._web_job_days import web_job_days
+from tests._web_runs import store_fleet_run
 from tests.unit.web_assistant._fakes import seed_run
+from tests.unit.web_assistant._number_tokens import numbers_in
 
 
 class TestExplainMetric:
@@ -195,10 +216,17 @@ class TestSuggestConfig:
             f"> bill_savings battery ({bs['recommended_battery_kwh']})"
         )
 
+    def test_bill_savings_sizes_pv_at_the_default_systems_bristol_yield(self) -> None:
+        """PV is sized at the yield the simulator's own default system gives in Bristol, and the note quotes it."""
+        result = suggest_config(3100.0, "bill_savings")
 
-def _storage(db_path: Path) -> RunStorage:
-    """The RunStorage over the database at *db_path*, its run files beside it."""
-    return RunStorage(db_path=db_path, data_dir=db_path.parent)
+        expected_pv_kwp = round(3100.0 / BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP, 2)
+        assert result["recommended_pv_kwp"] == expected_pv_kwp, (
+            f"Expected {expected_pv_kwp} kWp for 3100 kWh a year; got {result['recommended_pv_kwp']}"
+        )
+        assert f"{BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}" in numbers_in(result["note"]), (
+            f"Expected the note to quote {BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP:g}; got {result['note']!r}"
+        )
 
 
 class TestGetRunResults:
@@ -209,10 +237,10 @@ class TestGetRunResults:
 
         seed_run leaves n_homes at the schema's default, 1.
         """
-        db_path = tmp_path / "grr_test.db"
-        summary = {"total_generation_kwh": 1234.5, "self_consumption_ratio": 0.62}
+        storage = empty_run_storage(tmp_path)
+        summary = home_summary(total_generation_kwh=1234.5, self_consumption_ratio=0.62)
         seed_run(
-            db_path,
+            storage.database,
             run_id="run-abc-123",
             name="test-run",
             type="home",
@@ -221,7 +249,7 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result = get_run_results("run-abc-123", _storage(db_path))
+        result = get_run_results("run-abc-123", storage)
 
         assert result == {
             "run_id": "run-abc-123",
@@ -230,15 +258,41 @@ class TestGetRunResults:
             "status": "completed",
             "created_at": "2026-01-01T12:00:00+00:00",
             "n_homes": 1,
-            "summary": summary,
+            "summary": field_tree(summary),
         }
+
+    def test_a_summary_s_window_is_answered_as_its_field_tree_which_json_encodes(self, tmp_path: Path) -> None:
+        """The run context and the tool loop json.dumps what get_run_results answers, so a summary's window is answered as its stored text."""
+        storage = empty_run_storage(tmp_path)
+        summary = home_summary(window=JUNE_WEEK_WINDOW)
+        seed_run(
+            storage.database,
+            run_id="windowed-run",
+            name="windowed",
+            created_at="2026-01-01T12:00:00+00:00",
+            summary=summary,
+        )
+
+        result = get_run_results("windowed-run", storage)
+
+        assert result["summary"] == field_tree(summary)
+        assert json.loads(json.dumps(result)) == result
+
+    def test_a_fleet_run_answers_the_field_tree_of_its_fleet_summary(self, storage: RunStorage) -> None:
+        """get_run_results of a saved fleet run answers its FleetSummary's fields, fleet_self_consumption_ratio among them."""
+        fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+        store_fleet_run(storage, "fleet-run", fleet)
+
+        result = get_run_results("fleet-run", storage)
+
+        assert result["summary"] == field_tree(calculate_fleet_summary(fleet))
 
     def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
         """get_run_results(name, storage) resolves to the same row as lookup by id."""
-        db_path = tmp_path / "grr_name_test.db"
-        summary = {"self_sufficiency": 0.45}
+        storage = empty_run_storage(tmp_path)
+        summary = fleet_summary()
         seed_run(
-            db_path,
+            storage.database,
             run_id="run-xyz-456",
             name="my-named-run",
             type="fleet",
@@ -247,8 +301,8 @@ class TestGetRunResults:
             summary=summary,
         )
 
-        result_by_id = get_run_results("run-xyz-456", _storage(db_path))
-        result_by_name = get_run_results("my-named-run", _storage(db_path))
+        result_by_id = get_run_results("run-xyz-456", storage)
+        result_by_name = get_run_results("my-named-run", storage)
 
         # Both should resolve to the same row
         assert result_by_id.get("run_id") == "run-xyz-456"
@@ -261,18 +315,18 @@ class TestGetRunResults:
 
     def test_unknown_id_returns_graceful_dict(self, tmp_path: Path) -> None:
         """get_run_results with unknown id returns a graceful dict, does NOT raise."""
-        db_path = tmp_path / "grr_unknown_test.db"
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            db_path,
+            storage.database,
             run_id="run-known",
             name="known-run",
             status="completed",
             created_at="2026-01-01T00:00:00+00:00",
-            summary={},
+            summary=home_summary(),
         )
 
         try:
-            result = get_run_results("totally-unknown-id-xyz", _storage(db_path))
+            result = get_run_results("totally-unknown-id-xyz", storage)
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for unknown id; got: {exc!r}"
@@ -287,27 +341,27 @@ class TestGetRunResults:
 
     def test_name_collision_returns_newest_run(self, tmp_path: Path) -> None:
         """When two rows share a name, get_run_results returns the one with the later created_at."""
-        db_path = tmp_path / "grr_collision_test.db"
+        storage = empty_run_storage(tmp_path)
         # Older run seeded first
         seed_run(
-            db_path,
+            storage.database,
             run_id="run-old-collision",
             name="shared-run-name",
             status="completed",
             created_at="2026-01-01T00:00:00+00:00",
-            summary={"total_generation_kwh": 100.0},
+            summary=home_summary(total_generation_kwh=100.0),
         )
         # Newer run with same name seeded second
         seed_run(
-            db_path,
+            storage.database,
             run_id="run-new-collision",
             name="shared-run-name",
             status="completed",
             created_at="2026-03-01T00:00:00+00:00",
-            summary={"total_generation_kwh": 200.0},
+            summary=home_summary(total_generation_kwh=200.0),
         )
 
-        result = get_run_results("shared-run-name", _storage(db_path))
+        result = get_run_results("shared-run-name", storage)
 
         assert result.get("run_id") == "run-new-collision", (
             f"Name tie-break should return newest run (run-new-collision); "
@@ -316,9 +370,8 @@ class TestGetRunResults:
 
     def test_null_summary_json_returns_empty_dict(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json returns summary=={} and does not raise."""
-        db_path = tmp_path / "grr_null_summary.db"
-        init_db(db_path)
-        with get_db(db_path) as conn:
+        storage = empty_run_storage(tmp_path)
+        with storage.database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -327,7 +380,7 @@ class TestGetRunResults:
             )
 
         try:
-            result = get_run_results("run-null-summary", _storage(db_path))
+            result = get_run_results("run-null-summary", storage)
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for NULL summary_json; got: {exc!r}"
@@ -337,12 +390,28 @@ class TestGetRunResults:
             f"Expected summary=={{}} for NULL summary_json; got {result.get('summary')!r}"
         )
 
+    def test_a_run_whose_summary_cannot_be_read_answers_the_refusal_naming_the_run_not_a_database_error(
+        self, tmp_path: Path
+    ) -> None:
+        """The error is RunRecord.summary's StoredRunUnreadable, which names the run and runs.summary_json."""
+        storage = empty_run_storage(tmp_path)
+        seed_run(storage.database, run_id="garbled-run", name="garbled", created_at="2026-01-01T00:00:00+00:00", summary=home_summary())
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", ("{not json", "garbled-run"))
+        record = storage.run_record("garbled-run")
+        assert record is not None
+        with pytest.raises(StoredRunUnreadable) as refusal:
+            record.summary()
+
+        assert get_run_results("garbled-run", storage) == {"error": str(refusal.value)}
+        assert (refusal.value.run_id, refusal.value.document) == ("garbled-run", "runs.summary_json")
+
     def test_corrupt_db_path_returns_error_dict(self, tmp_path: Path) -> None:
         """get_run_results over a storage whose database cannot be opened returns {'error':...}, no raise."""
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = get_run_results("any-run-id", RunStorage(db_path=bad_path, data_dir=tmp_path))
+            result = get_run_results("any-run-id", run_storage_over(Database(bad_path)))
         except Exception as exc:
             raise AssertionError(
                 f"get_run_results should not raise for bad db_path; got: {exc!r}"
@@ -355,23 +424,23 @@ class TestGetRunResults:
 
 
 class TestListRecentRuns:
-    """Tests for list_recent_runs(limit, db_path) -> dict."""
+    """Tests for list_recent_runs(limit, storage) -> dict."""
 
     def test_returns_newest_first_bounded_by_limit(self, tmp_path: Path) -> None:
         """list_recent_runs returns runs newest-first, count bounded by limit."""
-        db_path = tmp_path / "lrr_test.db"
+        storage = empty_run_storage(tmp_path)
         # Seed 5 runs with distinct created_at timestamps
         for i in range(5):
             seed_run(
-                db_path,
+                storage.database,
                 run_id=f"run-{i:03d}",
                 name=f"run-name-{i}",
                 status="completed",
                 created_at=f"2026-01-{i + 1:02d}T12:00:00+00:00",
-                summary={"total_generation_kwh": float(i * 100)},
+                summary=home_summary(total_generation_kwh=float(i * 100)),
             )
 
-        result = list_recent_runs(3, db_path)
+        result = list_recent_runs(3, storage)
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert "runs" in result, f"Expected 'runs' key; got {result}"
@@ -389,18 +458,18 @@ class TestListRecentRuns:
 
     def test_each_row_has_identifying_fields(self, tmp_path: Path) -> None:
         """Each entry carries id/run_id, name, type, status, created_at."""
-        db_path = tmp_path / "lrr_fields_test.db"
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            db_path,
+            storage.database,
             run_id="run-fields-001",
             name="fields-run",
             type="fleet",
             status="completed",
             created_at="2026-03-15T09:00:00+00:00",
-            summary={"self_consumption_ratio": 0.70},
+            summary=fleet_summary(fleet_self_consumption_ratio=0.70),
         )
 
-        result = list_recent_runs(10, db_path)
+        result = list_recent_runs(10, storage)
         runs = result["runs"]
         assert runs, "Expected at least one run"
         row = runs[0]
@@ -415,11 +484,10 @@ class TestListRecentRuns:
 
     def test_empty_db_returns_empty_list(self, tmp_path: Path) -> None:
         """list_recent_runs on empty DB returns {'runs': []} without raising."""
-        db_path = tmp_path / "lrr_empty_test.db"
-        init_db(db_path)
+        storage = empty_run_storage(tmp_path)
 
         try:
-            result = list_recent_runs(10, db_path)
+            result = list_recent_runs(10, storage)
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise on empty DB; got: {exc!r}"
@@ -433,19 +501,19 @@ class TestListRecentRuns:
 
     def test_limit_is_clamped_to_sane_max(self, tmp_path: Path) -> None:
         """A very large limit is clamped so returned count <= clamp ceiling."""
-        db_path = tmp_path / "lrr_clamp_test.db"
+        storage = empty_run_storage(tmp_path)
         # Seed 60 rows — more than any sane clamp ceiling (50)
         for i in range(60):
             seed_run(
-                db_path,
+                storage.database,
                 run_id=f"clamp-run-{i:03d}",
                 name=f"clamp-{i}",
                 status="completed",
                 created_at=f"2026-01-01T{i // 60:02d}:{i % 60:02d}:00+00:00",
-                summary={},
+                summary=home_summary(),
             )
 
-        result = list_recent_runs(9999, db_path)
+        result = list_recent_runs(9999, storage)
         runs = result["runs"]
         # Returned count must be <= some sane upper bound (the implementation clamps to 1..50)
         assert len(runs) <= 50, (
@@ -454,18 +522,18 @@ class TestListRecentRuns:
 
     def test_non_positive_limit_returns_results(self, tmp_path: Path) -> None:
         """A non-positive limit is handled gracefully (clamped to default, no raise)."""
-        db_path = tmp_path / "lrr_nonpos_test.db"
+        storage = empty_run_storage(tmp_path)
         seed_run(
-            db_path,
+            storage.database,
             run_id="run-np-001",
             name="np-run",
             status="completed",
             created_at="2026-01-01T00:00:00+00:00",
-            summary={},
+            summary=home_summary(),
         )
 
         try:
-            result = list_recent_runs(0, db_path)
+            result = list_recent_runs(0, storage)
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for limit=0; got: {exc!r}"
@@ -480,9 +548,8 @@ class TestListRecentRuns:
 
     def test_null_summary_json_does_not_raise(self, tmp_path: Path) -> None:
         """A run stored with NULL summary_json is returned with None metrics, no crash."""
-        db_path = tmp_path / "lrr_null_summary.db"
-        init_db(db_path)
-        with get_db(db_path) as conn:
+        storage = empty_run_storage(tmp_path)
+        with storage.database.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, status, created_at, summary_json) "
                 "VALUES (?, ?, ?, ?, ?, NULL)",
@@ -491,7 +558,7 @@ class TestListRecentRuns:
             )
 
         try:
-            result = list_recent_runs(5, db_path)
+            result = list_recent_runs(5, storage)
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for NULL summary_json; got: {exc!r}"
@@ -510,7 +577,7 @@ class TestListRecentRuns:
         bad_path = tmp_path / "nonexistent" / "missing.db"  # parent dir does not exist
 
         try:
-            result = list_recent_runs(5, bad_path)
+            result = list_recent_runs(5, run_storage_over(Database(bad_path)))
         except Exception as exc:
             raise AssertionError(
                 f"list_recent_runs should not raise for bad db_path; got: {exc!r}"
@@ -523,9 +590,83 @@ class TestListRecentRuns:
             f"Expected 'error' key for unreadable db_path; got {result}"
         )
 
+    def test_a_fleet_run_is_listed_with_the_figures_the_history_list_shows_for_it(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """B7: a fleet run is listed with its FleetSummary's generation and fleet_self_consumption_ratio, not None, as GET /api/history/runs lists it."""
+        fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+        store_fleet_run(storage, "fleet-run", fleet)
+        summary = calculate_fleet_summary(fleet)
+        assert summary.fleet_self_consumption_ratio == pytest.approx(0.25)
+
+        [entry] = list_recent_runs(10, storage)["runs"]
+        [row] = client.get("/api/history/runs").get_json()["runs"]
+
+        figures = (entry["total_generation_kwh"], entry["self_consumption_ratio"])
+        assert figures == (summary.total_generation_kwh, summary.fleet_self_consumption_ratio)
+        assert figures == (row["total_generation_kwh"], row["self_consumption_ratio"])
+
+    @pytest.mark.parametrize(
+        "damaged_summary_json",
+        [
+            pytest.param("{not json", id="summary-not-json"),
+            pytest.param(
+                json.dumps({**field_tree(home_summary()), "retired_figure": 12.5}),
+                id="summary-with-a-key-no-field-has",
+            ),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=10**400)),
+                id="summary-holding-a-generation-no-float-can-hold",
+            ),
+        ],
+    )
+    def test_a_run_whose_summary_cannot_be_read_is_listed_without_figures_with_its_refusal_beside_the_others(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
+    ) -> None:
+        """One damaged run neither fails the list nor hides the other runs' figures; its entry carries its refusal as unreadable, as its History row does, and a warning names it (the G7 waiver in docs/prds/run-store-one-owner.md)."""
+        storage = empty_run_storage(tmp_path)
+        seed_run(
+            storage.database,
+            run_id="readable-run",
+            name="readable",
+            created_at="2026-01-02T00:00:00+00:00",
+            summary=home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37),
+        )
+        seed_run(
+            storage.database,
+            run_id="garbled-run",
+            name="garbled",
+            created_at="2026-01-01T00:00:00+00:00",
+            summary=home_summary(),
+        )
+        with storage.database.transaction() as conn:
+            conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (damaged_summary_json, "garbled-run"))
+        garbled = storage.run_record("garbled-run")
+        assert garbled is not None
+        with pytest.raises(StoredRunUnreadable) as refusal:
+            garbled.summary()
+        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
+
+        result = list_recent_runs(10, storage)
+
+        assert "error" not in result, result
+        assert [
+            (entry["run_id"], entry["total_generation_kwh"], entry["self_consumption_ratio"], entry["unreadable"])
+            for entry in result["runs"]
+        ] == [("readable-run", 987.65, 0.37, None), ("garbled-run", None, None, str(refusal.value))]
+        assert "runs.summary_json" in str(refusal.value)
+        assert [record.levelno for record in caplog.records if "garbled-run" in record.getMessage()] == [
+            logging.WARNING
+        ]
+
+
+def _results_url_for_test(run_id: str) -> str:
+    """The results_url builder a test hands a trigger tool: a path no route of the app serves, so a URL it returns came from this builder."""
+    return f"/results-for-test/{run_id}"
+
 
 class TestRunHomeSimulation:
-    """Tests for run_home_simulation(params, job_manager, db_path, data_dir) -> dict."""
+    """Tests for run_home_simulation(params, job_manager, results_url) -> dict, *results_url* building the path of a run's results page."""
 
     def _make_jm(self) -> NonCallableMagicMock:
         """Return an autospecced JobManager double with submit_home_job stubbed."""
@@ -533,25 +674,25 @@ class TestRunHomeSimulation:
         jm.submit_home_job.return_value = ("job-h", "run-h")
         return jm
 
-    def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
-        """run_home_simulation returns {run_id, results_url} with correct values."""
+    def test_returns_run_id_and_results_url(self) -> None:
+        """run_home_simulation returns {run_id, results_url}, results_url being what its builder gives for the run."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
-        result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        result = run_home_simulation(params, jm, _results_url_for_test)
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert result.get("run_id") == "run-h", (
             f"Expected run_id='run-h'; got {result.get('run_id')!r}"
         )
-        assert result.get("results_url") == "/results/home/run-h", (
-            f"Expected results_url='/results/home/run-h'; got {result.get('results_url')!r}"
+        assert result.get("results_url") == _results_url_for_test("run-h"), (
+            f"Expected results_url={_results_url_for_test('run-h')!r}; got {result.get('results_url')!r}"
         )
 
-    def test_submit_home_job_called_with_correct_config(self, tmp_path: Path) -> None:
+    def test_submit_home_job_called_with_correct_config(self) -> None:
         """submit_home_job called once; config has correct pv_kw and battery_kwh."""
         jm = self._make_jm()
         params = {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"}
-        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_home_simulation(params, jm, _results_url_for_test)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -569,13 +710,13 @@ class TestRunHomeSimulation:
             f"Expected battery capacity_kwh=5.0; got {config.battery_config.capacity_kwh}"
         )
 
-    def test_days_drives_start_end_window(self, tmp_path: Path) -> None:
+    def test_days_drives_start_end_window(self) -> None:
         """days parameter is reflected in the start/end dates passed to submit_home_job."""
         jm = self._make_jm()
         params_7 = {"pv_kw": 4, "days": 7, "location": "bristol"}
         params_30 = {"pv_kw": 4, "days": 30, "location": "bristol"}
 
-        run_home_simulation(params_7, jm, str(tmp_path / "t7.db"), str(tmp_path))
+        run_home_simulation(params_7, jm, _results_url_for_test)
         call_7 = jm.submit_home_job.call_args
         start_7 = call_7.kwargs.get("start_date") or call_7.args[1]
         end_7 = call_7.kwargs.get("end_date") or call_7.args[2]
@@ -584,7 +725,7 @@ class TestRunHomeSimulation:
         jm.reset_mock()
         jm.submit_home_job.return_value = ("job-h", "run-h")
 
-        run_home_simulation(params_30, jm, str(tmp_path / "t30.db"), str(tmp_path))
+        run_home_simulation(params_30, jm, _results_url_for_test)
         call_30 = jm.submit_home_job.call_args
         start_30 = call_30.kwargs.get("start_date") or call_30.args[1]
         end_30 = call_30.kwargs.get("end_date") or call_30.args[2]
@@ -594,13 +735,13 @@ class TestRunHomeSimulation:
             f"Expected 30-day span ({span_30}) > 7-day span ({span_7})"
         )
 
-    def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
+    def test_invalid_pv_kw_returns_graceful_error(self) -> None:
         """Invalid pv_kw (out of 0.5-20 range) returns error dict; submit not called; no raise."""
         jm = self._make_jm()
         params = {"pv_kw": 999, "battery_kwh": 5, "days": 7, "location": "bristol"}
 
         try:
-            result = run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+            result = run_home_simulation(params, jm, _results_url_for_test)
         except Exception as exc:
             raise AssertionError(
                 f"run_home_simulation should not raise on invalid params; got: {exc!r}"
@@ -610,7 +751,7 @@ class TestRunHomeSimulation:
         assert "error" in result, f"Expected 'error' key; got {result}"
         jm.submit_home_job.assert_not_called()
 
-    def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
+    def test_submit_failure_returns_error_naming_it(self) -> None:
         """A submit_home_job that raises yields an error dict naming the failure, and no run link."""
         jm = self._make_jm()
         submit_failure = "job queue unavailable"
@@ -619,19 +760,18 @@ class TestRunHomeSimulation:
         result = run_home_simulation(
             {"pv_kw": 4, "battery_kwh": 5, "days": 7, "location": "bristol"},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
+            _results_url_for_test,
         )
 
         assert submit_failure in result["error"]
         assert "run_id" not in result
 
-    def test_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
+    def test_days_defaults_to_7_when_omitted(self) -> None:
         """When 'days' is absent the window passed to submit_home_job is 7 days, not the full year."""
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
-        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_home_simulation(params, jm, _results_url_for_test)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -647,12 +787,12 @@ class TestRunHomeSimulation:
             "Handler is using the full-year fallback instead of the documented 7-day default"
         )
 
-    def test_explicit_days_honored_over_default(self, tmp_path: Path) -> None:
+    def test_explicit_days_honored_over_default(self) -> None:
         """A caller-supplied 'days' value is not overwritten by the default."""
         jm = self._make_jm()
         # Explicit days=30 must produce a 30-day window (span=29)
         params: dict[str, Any] = {"pv_kw": 4, "days": 30, "location": "bristol"}
-        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_home_simulation(params, jm, _results_url_for_test)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -665,12 +805,12 @@ class TestRunHomeSimulation:
             "Caller-supplied 'days' must not be clobbered by the default."
         )
 
-    def test_home_days_none_defaults_to_7(self, tmp_path: Path) -> None:
+    def test_home_days_none_defaults_to_7(self) -> None:
         """Explicit days=None is treated as absent — handler falls back to 7-day window."""
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
         params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
-        run_home_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        run_home_simulation(params, jm, _results_url_for_test)
 
         jm.submit_home_job.assert_called_once()
         call_kwargs = jm.submit_home_job.call_args
@@ -686,26 +826,23 @@ class TestRunHomeSimulation:
             "Handler uses full-year fallback for days=None instead of the 7-day default"
         )
 
-    def test_start_and_end_sent_run_that_window_not_the_7_day_default(self, tmp_path: Path) -> None:
+    def test_start_and_end_sent_run_that_window_not_the_7_day_default(self) -> None:
         """A start and end the model sends are run as POST /api/simulate/home runs them, not overridden by the 7-day default."""
         jm = self._make_jm()
         result = run_home_simulation(
             {"pv_kw": 4, "location": "bristol", "start": "2024-03-01", "end": "2024-03-05"},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
+            _results_url_for_test,
         )
 
-        assert result == {"run_id": "run-h", "results_url": "/results/home/run-h"}
+        assert result == {"run_id": "run-h", "results_url": _results_url_for_test("run-h")}
         submitted = jm.submit_home_job.call_args.kwargs
         assert (submitted["start_date"].date(), submitted["end_date"].date()) == (
             date(2024, 3, 1),
             date(2024, 3, 5),
         )
 
-    def test_days_sent_with_start_and_end_returns_the_refusal_naming_what_was_sent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_days_sent_with_start_and_end_returns_the_refusal_naming_what_was_sent(self) -> None:
         """A days the model sends with a start and end is refused naming those values, never replaced by the default; nothing is submitted."""
         jm = self._make_jm()
         result = run_home_simulation(
@@ -717,8 +854,7 @@ class TestRunHomeSimulation:
                 "end": "2024-03-05",
             },
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
+            _results_url_for_test,
         )
 
         assert result == {
@@ -727,26 +863,37 @@ class TestRunHomeSimulation:
         }
         jm.submit_home_job.assert_not_called()
 
-    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(
-        self, tmp_path: Path
-    ) -> None:
-        """A location the model sends that resolve_location refuses is returned as its refusal, never run at Bristol; nothing is submitted."""
+    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(self) -> None:
+        """A location the model sends that read_location refuses is returned as its refusal, never run at Bristol; nothing is submitted."""
         jm = self._make_jm()
         result = run_home_simulation(
             {"pv_kw": 4, "days": 7, "location": "Cardiff"},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
+            _results_url_for_test,
+        )
+
+        jm.submit_home_job.assert_not_called()
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location("Cardiff")
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+
+    def test_a_name_holding_a_lone_surrogate_returns_the_refusal_naming_name_and_submits_nothing(self) -> None:
+        """A name the model sends holding a lone surrogate, which the run store cannot bind, is returned as require_encodable_text's refusal naming name, never a run; nothing is submitted."""
+        jm = self._make_jm()
+        result = run_home_simulation(
+            {"pv_kw": 4, "days": 7, "location": "bristol", "name": chr(0xD800)},
+            jm,
+            _results_url_for_test,
         )
 
         jm.submit_home_job.assert_not_called()
         with pytest.raises(ValueError) as refusal:
-            resolve_location("Cardiff")
+            require_encodable_text(chr(0xD800), "name")
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
 
 class TestRunFleetSimulation:
-    """Tests for run_fleet_simulation(params, job_manager, db_path, data_dir) -> dict."""
+    """Tests for run_fleet_simulation(n_homes, params, job_manager, results_url) -> dict, *params* being the per-home fields and *results_url* building the path of a run's results page."""
 
     def _make_jm(self) -> NonCallableMagicMock:
         """Return an autospecced JobManager double with submit_fleet_job stubbed."""
@@ -754,25 +901,25 @@ class TestRunFleetSimulation:
         jm.submit_fleet_job.return_value = ("job-f", "run-f")
         return jm
 
-    def test_returns_run_id_and_results_url(self, tmp_path: Path) -> None:
-        """run_fleet_simulation returns {run_id, results_url} for fleet."""
+    def test_returns_run_id_and_results_url(self) -> None:
+        """run_fleet_simulation returns {run_id, results_url} for fleet, results_url being what its builder gives for the run."""
         jm = self._make_jm()
-        params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
-        result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params = {"pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
+        result = run_fleet_simulation(3, params, jm, _results_url_for_test)
 
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"
         assert result.get("run_id") == "run-f", (
             f"Expected run_id='run-f'; got {result.get('run_id')!r}"
         )
-        assert result.get("results_url") == "/results/fleet/run-f", (
-            f"Expected results_url='/results/fleet/run-f'; got {result.get('results_url')!r}"
+        assert result.get("results_url") == _results_url_for_test("run-f"), (
+            f"Expected results_url={_results_url_for_test('run-f')!r}; got {result.get('results_url')!r}"
         )
 
-    def test_submit_fleet_job_called_with_correct_configs_list(self, tmp_path: Path) -> None:
+    def test_submit_fleet_job_called_with_correct_configs_list(self) -> None:
         """submit_fleet_job called once; configs is list of length n_homes with correct pv."""
         jm = self._make_jm()
-        params = {"n_homes": 3, "pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params = {"pv_kw": 4, "battery_kwh": 5, "location": "bristol", "days": 7}
+        run_fleet_simulation(3, params, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -788,39 +935,42 @@ class TestRunFleetSimulation:
                 f"configs[{i}].pv_config.capacity_kw expected 4.0; got {cfg.pv_config.capacity_kw}"
             )
 
-    def test_n_homes_clamped_to_max_100(self, tmp_path: Path) -> None:
-        """n_homes=9999 results in configs list clamped to <= 100."""
+    @pytest.mark.parametrize("n_homes", [0, -1, 101, 9999])
+    def test_an_n_homes_outside_1_to_100_is_refused_naming_it_its_value_and_the_bound(self, n_homes: int) -> None:
+        """A fleet size outside the tool's 1 to 100 homes is refused, not clamped to another fleet than the one asked for, and nothing is submitted."""
         jm = self._make_jm()
-        params = {"n_homes": 9999, "pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        with pytest.raises(ValueError) as refusal:
+            as_whole_number(n_homes, "n_homes", Interval(1, 100))
+
+        result = run_fleet_simulation(n_homes, {"pv_kw": 4, "location": "bristol", "days": 7}, jm, _results_url_for_test)
+
+        assert result == {"error": str(refusal.value)}
+        jm.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize("n_homes", [1, 100])
+    def test_an_n_homes_at_either_end_of_1_to_100_submits_a_fleet_of_that_many_homes(self, n_homes: int) -> None:
+        jm = self._make_jm()
+
+        run_fleet_simulation(n_homes, {"pv_kw": 4, "location": "bristol", "days": 7}, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
-        call_kwargs = jm.submit_fleet_job.call_args
-        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
-        assert len(configs) <= 100, (
-            f"Expected n_homes clamped to <= 100; got {len(configs)}"
-        )
+        assert len(jm.submit_fleet_job.call_args.kwargs["configs"]) == n_homes
 
-    def test_n_homes_zero_clamped_to_at_least_1(self, tmp_path: Path) -> None:
-        """n_homes=0 is clamped to at least 1 (no empty fleet)."""
+    def test_submits_no_name_of_its_own(self) -> None:
+        """The tool gives the run no name: the JobManager names it (RunKind.default_name)."""
         jm = self._make_jm()
-        params = {"n_homes": 0, "pv_kw": 4, "location": "bristol", "days": 7}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
 
-        jm.submit_fleet_job.assert_called_once()
-        call_kwargs = jm.submit_fleet_job.call_args
-        configs = call_kwargs.kwargs.get("configs") or call_kwargs.args[0]
-        assert len(configs) >= 1, (
-            f"Expected n_homes=0 clamped to >= 1; got {len(configs)}"
-        )
+        run_fleet_simulation(2, {"pv_kw": 4.0}, jm, _results_url_for_test)
 
-    def test_invalid_pv_kw_returns_graceful_error(self, tmp_path: Path) -> None:
+        assert jm.submit_fleet_job.call_args.kwargs["name"] is None
+
+    def test_invalid_pv_kw_returns_graceful_error(self) -> None:
         """Invalid pv_kw returns error dict; submit_fleet_job NOT called; no raise."""
         jm = self._make_jm()
-        params = {"n_homes": 3, "pv_kw": 999, "location": "bristol", "days": 7}
+        params = {"pv_kw": 999, "location": "bristol", "days": 7}
 
         try:
-            result = run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+            result = run_fleet_simulation(3, params, jm, _results_url_for_test)
         except Exception as exc:
             raise AssertionError(
                 f"run_fleet_simulation should not raise on invalid params; got: {exc!r}"
@@ -830,28 +980,28 @@ class TestRunFleetSimulation:
         assert "error" in result, f"Expected 'error' key; got {result}"
         jm.submit_fleet_job.assert_not_called()
 
-    def test_submit_failure_returns_error_naming_it(self, tmp_path: Path) -> None:
+    def test_submit_failure_returns_error_naming_it(self) -> None:
         """A submit_fleet_job that raises yields an error dict naming the failure, and no run link."""
         jm = self._make_jm()
         submit_failure = "job queue unavailable"
         jm.submit_fleet_job.side_effect = RuntimeError(submit_failure)
 
         result = run_fleet_simulation(
-            {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": 7},
+            3,
+            {"pv_kw": 4, "location": "bristol", "days": 7},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
+            _results_url_for_test,
         )
 
         assert submit_failure in result["error"]
         assert "run_id" not in result
 
-    def test_fleet_days_defaults_to_7_when_omitted(self, tmp_path: Path) -> None:
+    def test_fleet_days_defaults_to_7_when_omitted(self) -> None:
         """When 'days' is absent the fleet window passed to submit_fleet_job is 7 days, not the full year."""
         jm = self._make_jm()
         # No 'days' key — handler must default to 7
-        params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol"}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params: dict[str, Any] = {"pv_kw": 4, "location": "bristol"}
+        run_fleet_simulation(3, params, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -867,12 +1017,12 @@ class TestRunFleetSimulation:
             "Fleet handler is using the full-year fallback instead of the documented 7-day default"
         )
 
-    def test_fleet_days_none_defaults_to_7(self, tmp_path: Path) -> None:
+    def test_fleet_days_none_defaults_to_7(self) -> None:
         """Explicit days=None in fleet params is treated as absent — handler falls back to 7."""
         jm = self._make_jm()
         # Model may emit {"days": null} — must be normalised to 7, not the full-year fallback
-        params: dict[str, Any] = {"n_homes": 3, "pv_kw": 4, "location": "bristol", "days": None}
-        run_fleet_simulation(params, jm, str(tmp_path / "t.db"), str(tmp_path))
+        params: dict[str, Any] = {"pv_kw": 4, "location": "bristol", "days": None}
+        run_fleet_simulation(3, params, jm, _results_url_for_test)
 
         jm.submit_fleet_job.assert_called_once()
         call_kwargs = jm.submit_fleet_job.call_args
@@ -888,65 +1038,130 @@ class TestRunFleetSimulation:
             "Fleet handler uses full-year fallback for days=None instead of the 7-day default"
         )
 
-    def test_fleet_start_and_end_sent_run_that_window_not_the_7_day_default(
-        self, tmp_path: Path
-    ) -> None:
+    def test_fleet_start_and_end_sent_run_that_window_not_the_7_day_default(self) -> None:
         """A start and end the model sends are the window the fleet runs, not overridden by the 7-day default."""
         jm = self._make_jm()
         result = run_fleet_simulation(
+            2,
             {
-                "n_homes": 2,
                 "pv_kw": 4,
                 "location": "bristol",
                 "start": "2024-03-01",
                 "end": "2024-03-05",
             },
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
+            _results_url_for_test,
         )
 
-        assert result == {"run_id": "run-f", "results_url": "/results/fleet/run-f"}
+        assert result == {"run_id": "run-f", "results_url": _results_url_for_test("run-f")}
         submitted = jm.submit_fleet_job.call_args.kwargs
         assert (submitted["start_date"].date(), submitted["end_date"].date()) == (
             date(2024, 3, 1),
             date(2024, 3, 5),
         )
 
-    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(
-        self, tmp_path: Path
-    ) -> None:
-        """A location the model sends that resolve_location refuses is returned as its refusal, never a fleet at Bristol; nothing is submitted."""
+    def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(self) -> None:
+        """A location the model sends that read_location refuses is returned as its refusal, never a fleet at Bristol; nothing is submitted."""
         jm = self._make_jm()
         result = run_fleet_simulation(
-            {"n_homes": 3, "pv_kw": 4, "days": 7, "location": "Cardiff"},
+            3,
+            {"pv_kw": 4, "days": 7, "location": "Cardiff"},
             jm,
-            str(tmp_path / "t.db"),
-            str(tmp_path),
+            _results_url_for_test,
+        )
+
+        jm.submit_fleet_job.assert_not_called()
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location("Cardiff")
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+
+    def test_a_name_holding_a_lone_surrogate_returns_the_refusal_naming_name_and_submits_nothing(self) -> None:
+        """A fleet name the model sends holding a lone surrogate, which the run store cannot bind, is returned as require_encodable_text's refusal naming name, never a fleet; nothing is submitted."""
+        jm = self._make_jm()
+        result = run_fleet_simulation(
+            3,
+            {"pv_kw": 4, "days": 7, "location": "bristol", "name": chr(0xD800)},
+            jm,
+            _results_url_for_test,
         )
 
         jm.submit_fleet_job.assert_not_called()
         with pytest.raises(ValueError) as refusal:
-            resolve_location("Cardiff")
+            require_encodable_text(chr(0xD800), "name")
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
 
-@pytest.mark.slow
-class TestRunHomeSimulationWithRealJobManager:
-    """SLOW: real 1-day Bristol home sim via real JobManager (excluded from fast verify).
+_CARDIFF_PARAMS: dict[str, Any] = {"pv_kw": 4, "location": "cardiff"}
+"""Trigger-tool params whose location read_location refuses, and which send no window."""
 
-    Excluded from the standard verify loop by the 'slow' marker.  Run with
-    ``pytest -m slow`` when you need the anti-fake-done end-to-end proof.
+
+class TestTriggerToolsJudgeARefusalWithRefusalText:
+    """The trigger tools answer a ValueError their reader raises as an error, logging one that is not a ConfigurationError as a probable defect; anything else is not a refusal and propagates."""
+
+    def test_a_home_its_reader_refuses_is_answered_with_the_refusal_and_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        jm = autospecced_job_manager()
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_home_config(with_default_days(_CARDIFF_PARAMS, 7))
+        assert "cardiff" in str(refusal.value), "premise: the reader refuses the location"
+
+        result = run_home_simulation(_CARDIFF_PARAMS, jm, _results_url_for_test)
+
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+        assert jm.method_calls == []
+        assert error_records(caplog) == []
+
+    def test_a_fleet_its_reader_refuses_is_answered_with_the_refusal_and_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        jm = autospecced_job_manager()
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_home_config(with_default_days(_CARDIFF_PARAMS, 7))
+
+        result = run_fleet_simulation(2, _CARDIFF_PARAMS, jm, _results_url_for_test)
+
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+        assert jm.method_calls == []
+        assert error_records(caplog) == []
+
+    def test_a_value_error_that_is_not_a_configuration_error_is_answered_and_logged_as_a_probable_defect(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(assistant, "parse_home_config", raising(ValueError("probe")))
+        jm = autospecced_job_manager()
+
+        result = run_home_simulation({"pv_kw": 4}, jm, _results_url_for_test)
+
+        assert result == {"error": "Invalid simulation parameters: probe"}
+        assert jm.method_calls == []
+        [record] = error_records(caplog)
+        assert "ValueError" in record.getMessage()
+
+    def test_a_type_error_is_not_a_refusal_and_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(assistant, "parse_home_config", raising(TypeError("probe")))
+        jm = autospecced_job_manager()
+
+        with pytest.raises(TypeError, match="probe"):
+            run_home_simulation({"pv_kw": 4}, jm, _results_url_for_test)
+        assert jm.method_calls == []
+
+
+_REAL_JOB_DAYS = web_job_days(count=1)
+bristol_june_tmy = _REAL_JOB_DAYS.bristol_tmy_fixture()
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
+class TestRunHomeSimulationWithRealJobManager:
+    """A real 1-day Bristol home simulation through the app's JobManager: the end-to-end proof that run_home_simulation's job completes and that get_run_results reads it.
+
+    Its one day is the clear June day on SHORT_WINDOW_START that bristol_june_tmy seeds as Bristol's TMY.
     """
 
-    def test_run_home_simulation_real_job_lands_in_runs(
-        self, app: Flask, tmp_path: Path
-    ) -> None:
-        """run_home_simulation() with the real JobManager creates a completed run."""
-        db_path: str = app.config["DATABASE"]
-        data_dir: str = app.config["DATA_DIR"]
-        job_manager = app.extensions["job_manager"]
-        storage = RunStorage(db_path=db_path, data_dir=data_dir)
+    def test_run_home_simulation_real_job_lands_in_runs(self, app: Flask) -> None:
+        """run_home_simulation() with the real JobManager creates a completed run in the app's RunStorage."""
+        job_manager = dashboard_of(app).jobs
+        storage = run_storage_of(app)
 
         result = run_home_simulation(
             {
@@ -954,11 +1169,10 @@ class TestRunHomeSimulationWithRealJobManager:
                 "battery_kwh": 0,
                 "occupants": 3,
                 "location": "bristol",
-                "days": 1,
+                "days": _REAL_JOB_DAYS.count,
             },
             job_manager,
-            db_path,
-            data_dir,
+            _results_url_for_test,
         )
 
         assert "error" not in result, (
@@ -967,8 +1181,8 @@ class TestRunHomeSimulationWithRealJobManager:
         run_id: str = result.get("run_id", "")
         results_url: str = result.get("results_url", "")
         assert run_id, f"Expected non-empty run_id; got {run_id!r}"
-        assert results_url == f"/results/home/{run_id}", (
-            f"Expected results_url='/results/home/{run_id}'; got {results_url!r}"
+        assert results_url == _results_url_for_test(run_id), (
+            f"Expected results_url={_results_url_for_test(run_id)!r}; got {results_url!r}"
         )
 
         # Poll (monotonic deadline ≤ 120 s) until the real sim completes.
