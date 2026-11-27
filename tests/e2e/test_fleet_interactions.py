@@ -17,11 +17,13 @@ period runs the page's default period, that the page shows why an imported
 file cannot load or a fleet cannot export, that the simulation name reaches
 the submitted run, that Run shows why the page refuses a form, submits nothing
 and leaves the results link of an earlier run in place, that the period
-selector offers presets and a custom date range, and that each economy tariff
-type shows and keeps its own rates, Run submitting the selected type's.
+selector offers presets and a custom date range, that each economy tariff
+type shows and keeps its own rates, Run submitting the selected type's, and
+that Preview shows each card's summary of Run's homes, or the server's refusal.
 """
 
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -852,6 +854,79 @@ def test_fleet_run_that_refuses_the_form_leaves_the_earlier_runs_results_link(
         f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
     )
     expect(results_link).to_have_attribute("href", earlier_results)
+
+
+# -- Preview ---------------------------------------------------------------
+
+
+def _preview_summary(page: Page, subject: str) -> Locator:
+    """The note under the card of *subject* that summarises the previewed homes' values."""
+    return page.get_by_role("note", name=f"{subject} Preview", exact=True)
+
+
+def _as_the_page_writes(value: float) -> str:
+    """*value* as the page writes a number: an integral float without its '.0'."""
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def test_fleet_preview_posts_runs_body_and_shows_each_cards_summary(
+    page: Page, live_server: str, fleet_submissions: list[Any], page_errors: list[str]
+) -> None:
+    """Preview posts the body Run posts, and each card shows its homes' values: each value with its count of homes for a pool, min, median and max for a normal."""
+    page.goto(live_server + "/simulate/fleet")
+
+    with page.expect_response("**/api/fleet/preview-distribution") as answer:
+        page.get_by_role("button", name="Preview", exact=True).click()
+
+    assert answer.value.status == 200
+    values = answer.value.json()["values"]
+    for key in ("pv", "battery"):
+        component = FLEET_COMPONENTS[key]
+        expect(_preview_summary(page, component.subject)).to_have_text(
+            ", ".join(
+                f"{_as_the_page_writes(value)} {component.unit} × {count} homes"
+                for value, count in sorted(Counter(values[key]).items())
+            )
+        )
+    assert 0.0 in values["battery"]
+    load = FLEET_COMPONENTS["load"]
+    assert len(set(values["load"])) > 8
+    unit = re.escape(load.unit)
+    summary_pattern = re.compile(
+        rf"^min ([\d.]+) {unit}, median ([\d.]+) {unit}, max ([\d.]+) {unit}$"
+    )
+    load_summary = _preview_summary(page, load.subject)
+    expect(load_summary).to_have_text(summary_pattern)
+    shown_min, _shown_median, shown_max = summary_pattern.fullmatch(load_summary.inner_text()).groups()
+    assert float(shown_min) == pytest.approx(min(values["load"]), abs=0.01)
+    assert float(shown_max) == pytest.approx(max(values["load"]), abs=0.01)
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+    with _fleet_run_fails(page):
+        page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    (run_body,) = fleet_submissions
+    assert answer.value.request.post_data_json == run_body
+
+
+def test_fleet_preview_of_a_refused_form_shows_the_servers_refusal(page: Page, live_server: str) -> None:
+    """Preview of a normal PV distribution whose min clamp exceeds its max shows the server's refusal and hides the PV card's summary."""
+    page.goto(live_server + "/simulate/fleet")
+    with page.expect_response("**/api/fleet/preview-distribution"):
+        page.get_by_role("button", name="Preview", exact=True).click()
+    expect(_preview_summary(page, "PV Capacity")).to_have_count(1)
+    page.get_by_role("combobox", name="PV Capacity Distribution Type", exact=True).select_option(
+        label="Normal (Gaussian)"
+    )
+    page.get_by_role("spinbutton", name="PV Capacity Min (clamp)", exact=True).fill("8")
+    page.get_by_role("spinbutton", name="PV Capacity Max (clamp)", exact=True).fill("2")
+
+    with page.expect_response("**/api/fleet/preview-distribution") as answer:
+        page.get_by_role("button", name="Preview", exact=True).click()
+
+    assert answer.value.status == 400
+    expect(page.get_by_role("alert")).to_have_text(answer.value.json()["error"])
+    expect(_preview_summary(page, "PV Capacity")).to_have_count(0)
 
 
 # -- Period selector -------------------------------------------------------

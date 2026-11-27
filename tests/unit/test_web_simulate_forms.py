@@ -274,6 +274,29 @@ class TestFleetConfigRoute:
         assert element_count(page, "button", {"@click": "exportYaml()"}) == 1
         assert element_count(page, "button", {"@click": "submitFleet()"}) == 1
 
+    def test_fleet_page_offers_a_preview_button_and_a_preview_summary_under_each_components_card(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/fleet renders one Preview button, which calls preview(), and one note per component bound to its entry of previewSummaries."""
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        assert texts(page).count("Preview") == 1
+        assert element_count(page, "button", {"@click": "preview()"}) == 1
+        summaries = [
+            attributes
+            for attributes in element_attributes(page, "p")
+            if (attributes.get("x-text") or "").startswith("previewSummaries.")
+        ]
+        assert summaries == [
+            {
+                "role": "note",
+                "aria-label": f"{component.subject} Preview",
+                "x-text": f"previewSummaries.{component.key}",
+                ":hidden": f"!previewSummaries.{component.key}",
+                "class": summary["class"],
+            }
+            for component, summary in zip(FLEET_COMPONENTS.values(), summaries, strict=True)
+        ]
+
     def test_fleet_page_offers_the_fleet_run_kinds_default_name_as_its_simulation_name_placeholder(
         self, client: FlaskClient
     ) -> None:
