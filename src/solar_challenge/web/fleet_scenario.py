@@ -14,7 +14,7 @@ from typing import Any
 import pandas as pd
 
 from solar_challenge.config import read_fleet_scenario
-from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyConfig, TOUOptimizedStrategyConfig
+from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import ComponentDistribution
 from solar_challenge.home import HomeConfig
@@ -242,8 +242,6 @@ def _read_location(location: Location) -> BlockRead:
 def _read_battery(fleet: Mapping[str, Any], path: str, read: ComponentDistribution | None) -> BlockRead:
     """The fleet form's battery capacity and dispatch strategy: the battery block of the *path* fleet block *fleet*, whose grammar reading is *read*, none when it is absent or null.
 
-    A dispatch strategy on its tariff's clock loads none, and its path is named not loaded.
-
     Raises:
         ConfigurationError: From ComponentLimits.editor_spec, for a capacity the editor cannot
             hold, or for a dispatch strategy the form cannot hold.
@@ -395,23 +393,12 @@ def _read_tariff(tariff: Any) -> BlockRead:
 def _read_dispatch(dispatch: Any, path: str) -> BlockRead:
     """The fleet form's dispatch strategy: the *path* dispatch block, none when it is absent or null.
 
-    A tou_optimized on its tariff's clock, which the form has no control for, loads none and
-    names *path* not loaded.
-
     Raises:
         ConfigurationError: For a dispatch strategy the form cannot hold, naming its setting.
     """
     if dispatch is None:
         return {}, ()
-    if _on_its_tariffs_clock(dispatch, path):
-        return {}, (path,)
     form_dispatch, unheld = read_typed_block(
         dispatch, path, "strategy_type", FLEET_FORM_DISPATCH, _PAGE
     )
     return {"dispatch_strategy": form_dispatch}, unheld
-
-
-def _on_its_tariffs_clock(dispatch: dict[str, Any], path: str) -> bool:
-    """Whether the *path* dispatch block, one read_fleet_scenario accepted, is tou_optimized on its tariff's clock: it sets no peak_hours."""
-    strategy = parse_dispatch_strategy_config(dispatch, block_path=path)
-    return isinstance(strategy, TOUOptimizedStrategyConfig) and strategy.peak_hours is None
