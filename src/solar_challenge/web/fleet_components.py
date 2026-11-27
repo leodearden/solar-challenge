@@ -439,6 +439,7 @@ class PageLimits:
             the window default_days runs.
         period_presets: The builder's period buttons, each title with the window it sets,
             in button order.
+        flat_rate_start: The flat import rate, in £/kWh, every form's flat-rate tariff starts at.
         components: The fleet components, in FLEET_COMPONENTS order.
 
     Raises:
@@ -461,6 +462,7 @@ class PageLimits:
     default_days: int
     custom_range_default: tuple[date, date]
     period_presets: Mapping[str, tuple[date, date]]
+    flat_rate_start: float
     components: Mapping[str, ComponentLimits]
 
     def __post_init__(self) -> None:
@@ -514,6 +516,7 @@ class PageLimits:
             "period_presets": [
                 {"title": title, "window": _window_json(window)} for title, window in self.period_presets.items()
             ],
+            "flat_rate_start": self.flat_rate_start,
             "components": [component.as_json() for component in self.components.values()],
         }
 
@@ -540,6 +543,7 @@ _PAGE_LIMITS = PageLimits(
         "1 Month": days_window(30),
         "1 Week": days_window(7),
     }),
+    flat_rate_start=0.28,
     components=FLEET_COMPONENTS,
 )
 
