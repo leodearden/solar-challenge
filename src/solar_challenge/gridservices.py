@@ -34,6 +34,9 @@ Key public symbols:
   :meth:`~GridServicesEventsConfig.annual_income_gbp` prices a simulated fleet.
 * :func:`drawn_event_days` — the seeded draw of the days of a simulated period
   on which an event window's events fall.
+* :func:`enrolled_event_windows` — the event windows a dispatched fleet's
+  battery homes are enrolled in over a simulated period, and pricing expects
+  them to carry.
 * :class:`NoGridServices` — frozen pricing value under which a fleet earns no
   grid-services income.
 * :class:`FlatGridServices` — frozen pricing value paying a flat rate per kW of
@@ -66,7 +69,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import as_event_days
+from solar_challenge.dispatch import EventDischargeWindow, as_event_days
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     NON_NEGATIVE,
@@ -78,6 +81,7 @@ from solar_challenge.number_fields import (
     as_whole_numbers,
     read_field,
 )
+from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
     from solar_challenge.fleet import FleetResults
@@ -469,6 +473,30 @@ def drawn_event_days(window: EventWindow, days: Iterable[date], seed: int, *, po
     )
     chosen = generator.choice(len(eligible), size=_event_day_count(window, eligible), replace=False)
     return tuple(sorted(eligible[int(index)] for index in chosen))
+
+
+def _drawn_days_by_window(events: GridServicesEventsConfig, period: SimulationWindow) -> tuple[tuple[date, ...], ...]:
+    """The days each of *events*' windows draws over *period*'s dates, in window order, none for a window no day of the period is eligible for: :func:`drawn_event_days` with the events' seed at the window's position."""
+    dates = tuple(period.first_day + timedelta(days=offset) for offset in range(period.days))
+    return tuple(
+        drawn_event_days(window, dates, events.event_day_seed, position=position)
+        for position, window in enumerate(events.event_windows)
+    )
+
+
+def enrolled_event_windows(events: GridServicesEventsConfig, period: SimulationWindow) -> tuple[EventDischargeWindow, ...]:
+    """The event windows a dispatched fleet's battery homes are enrolled in over *period*, and pricing expects them to carry.
+
+    One :class:`~solar_challenge.dispatch.EventDischargeWindow` per window of *events* that
+    draws a day of *period*, in window order: the days :func:`drawn_event_days` draws over
+    the period's dates with the events' seed at the window's position, in the window's
+    hours.  A window that draws no day is omitted.  Only the period's dates are read.
+    """
+    return tuple(
+        EventDischargeWindow(days=days, hours=window.hours)
+        for window, days in zip(events.event_windows, _drawn_days_by_window(events, period), strict=True)
+        if days
+    )
 
 
 def _is_eligible(window: EventWindow, day: date) -> bool:

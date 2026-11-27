@@ -10,7 +10,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
@@ -48,7 +48,7 @@ from solar_challenge.gridservices import (
     EventParticipation,
     GridServicesBand,
     GridServicesEventsConfig,
-    drawn_event_days,
+    enrolled_event_windows,
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
@@ -175,15 +175,15 @@ class ScenarioConfig:
         """The homes this scenario simulates, in order.
 
         One with no SEG tariff of its own exports at the scenario's rate. When the events
-        configuration is dispatched, each battery home carries the same windows, the days
-        drawn_event_days draws over the period, and the configuration's site export limit;
-        a home with no battery is unchanged.
+        configuration is dispatched, each battery home carries the same windows, those
+        enrolled_event_windows gives over the period, and the configuration's site export
+        limit; a home with no battery is unchanged.
         """
         homes = self._homes_at_the_seg_rate()
         events = self._dispatched_events()
         if events is None:
             return homes
-        windows = _event_discharge(events, self.period)
+        windows = enrolled_event_windows(events, self.period)
         return tuple(_enrolled(home, windows, events.site_export_limit_kw) for home in homes)
 
     def map_homes(self, transform: Callable[[HomeConfig], HomeConfig]) -> "ScenarioConfig":
@@ -319,16 +319,6 @@ class ScenarioConfig:
                 f"{home.seg_tariff.rate_pence_per_kwh}p/kWh but scenario '{self.name}' sets "
                 f"seg_tariff_pence_per_kwh={rate}p/kWh. Set only one, or use matching rates."
             )
-
-
-def _event_discharge(events: GridServicesEventsConfig, period: SimulationWindow) -> tuple[EventDischargeWindow, ...]:
-    """One EventDischargeWindow per window of *events* that draws a day of *period*: the days drawn_event_days draws with the events' seed at the window's position, in the window's hours."""
-    dates = tuple(period.first_day + timedelta(days=offset) for offset in range(period.days))
-    drawn = (
-        (window, drawn_event_days(window, dates, events.event_day_seed, position=position))
-        for position, window in enumerate(events.event_windows)
-    )
-    return tuple(EventDischargeWindow(days=days, hours=window.hours) for window, days in drawn if days)
 
 
 def _enrolled(
