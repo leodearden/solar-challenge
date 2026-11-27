@@ -251,11 +251,15 @@ def test_the_page_opens_previewing_the_points_the_server_answers_for_its_startin
 def test_a_geometric_preview_from_zero_shows_the_servers_refusal_until_linear_is_chosen(
     page: Page, live_server: str
 ) -> None:
-    """Min 0 in the preselected geometric mode previews no values: the page shows the points endpoint's refusal and keeps Run disabled, until choosing Linear previews the values the server answers.
+    """With Battery chosen, Min 0 in the preselected geometric mode previews no values: the page shows the points endpoint's refusal and keeps Run disabled, until choosing Linear previews the values the server answers.
 
-    No page_errors: Chromium logs the refusal's 400 as a console error.
+    Battery, since its range admits 0, which PV's and load's do not. No page_errors: Chromium logs the
+    refusal's 400 as a console error.
     """
     page.goto(live_server + "/scenarios/sweep")
+    page.get_by_role("combobox", name="Parameter to Sweep", exact=True).select_option(
+        label=SWEEP_PARAMETERS["battery_capacity_kwh"].label
+    )
     sweep_values = page.get_by_role("list", name="Sweep values", exact=True).get_by_role("listitem")
     run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
 
@@ -997,6 +1001,7 @@ def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
     So the page follows its points one at a time, in the order the server queues their jobs. The cost: a row shows 'pending' until the page follows its point, even if that point's job is running or done by then, and the rows after a point wait for its job to end.
     """
     page.goto(live_server + "/scenarios/sweep")
+    page.get_by_role("radio", name="Linear", exact=True).check()
     page.get_by_label("Min Value", exact=True).fill("1")
     page.get_by_label("Max Value", exact=True).fill("8")
     page.get_by_label("Steps", exact=True).fill("8")

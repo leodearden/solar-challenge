@@ -28,26 +28,21 @@ document.addEventListener('alpine:init', () => {
         submitting: false,
         errorMsg: '',
 
-        // Sweep point preview calculations
-        get previewValues() {
-            const min = parseFloat(this.minVal);
-            const max = parseFloat(this.maxVal);
-            const n = parseInt(this.steps);
-            if (isNaN(min) || isNaN(max) || isNaN(n) || n < 2 || min >= max) return [];
+        // The sweep's points as POST /api/simulate/sweep/points last answered them, or why it refused the sweep
+        previewValues: [],
+        previewRefusal: '',
+        // Aborts the preview request still in flight, whose answer the form has outrun
+        _previewRequest: new AbortController(),
 
-            let values = [];
-            if (this.mode === 'geometric') {
-                const logMin = Math.log(min);
-                const logMax = Math.log(max);
-                for (let i = 0; i < n; i++) {
-                    values.push(Math.exp(logMin + (logMax - logMin) * i / (n - 1)));
-                }
-            } else {
-                for (let i = 0; i < n; i++) {
-                    values.push(min + (max - min) * i / (n - 1));
-                }
-            }
-            return values.map(v => Math.round(v * 1000) / 1000);
+        // The sweep the form describes: the body of both its preview and its submission
+        get sweepBody() {
+            return {
+                parameter: this.parameter,
+                min: parseFloat(this.minVal),
+                max: parseFloat(this.maxVal),
+                steps: parseInt(this.steps),
+                mode: this.mode,
+            };
         },
 
         // Start at the parameter options sweep.html rendered, each carrying its starting range, and its checked mode.
@@ -63,6 +58,38 @@ document.addEventListener('alpine:init', () => {
             this.parameter = select.value;
             this.mode = this.$el.querySelector('input[name="sweep_mode"]:checked').value;
             this.onParameterChange();
+            this.$watch('sweepBody', body => this._preview(body));
+            this._preview(this.sweepBody);
+        },
+
+        // Show the points POST /api/simulate/sweep/points answers for body, or its refusal; an answer to a
+        // request a later preview aborted writes nothing
+        async _preview(body) {
+            this._previewRequest.abort();
+            const previewRequest = new AbortController();
+            this._previewRequest = previewRequest;
+            const signal = previewRequest.signal;
+            try {
+                const resp = await fetch('/api/simulate/sweep/points', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal,
+                });
+                const data = await resp.json().catch(() => null);
+                if (signal.aborted) return;
+                if (resp.ok) {
+                    this.previewValues = data.values;
+                    this.previewRefusal = '';
+                } else {
+                    this.previewValues = [];
+                    this.previewRefusal = (data && data.error) || 'HTTP ' + resp.status;
+                }
+            } catch (e) {
+                if (signal.aborted) return;
+                this.previewValues = [];
+                this.previewRefusal = e.message;
+            }
         },
 
         get currentParam() {
@@ -81,6 +108,7 @@ document.addEventListener('alpine:init', () => {
 
         destroy() {
             this._sweepRequests.abort();
+            this._previewRequest.abort();
         },
 
         // Submit sweep
@@ -89,19 +117,12 @@ document.addEventListener('alpine:init', () => {
             this.errorMsg = '';
             this.sweepResults = [];
             this.sweepCharts = '';
-            this.destroy();
+            this._sweepRequests.abort();
             // Label the table and the charts with the parameter this sweep runs, not one selected while it runs
             const parameterLabel = this.currentParam.label;
             this.sweptParameterLabel = parameterLabel;
 
-            const payload = {
-                parameter: this.parameter,
-                min: parseFloat(this.minVal),
-                max: parseFloat(this.maxVal),
-                steps: parseInt(this.steps),
-                mode: this.mode,
-                base_config: this.baseConfig,
-            };
+            const payload = { ...this.sweepBody, base_config: this.baseConfig };
 
             try {
                 const resp = await fetch('/api/simulate/sweep', {
