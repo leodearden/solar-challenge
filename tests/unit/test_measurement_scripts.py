@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 from pvlib.modelchain import ModelChain
 
 import solar_challenge
@@ -54,6 +55,7 @@ from solar_challenge.weather import (
 from tests import _synthetic_weather
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._committed_weather_cache import COMMITTED_WEATHER_CACHE_DIR
+from tests._markdown_tables import table_rows
 from tests._repository_paths import SCENARIOS_DIR
 from tests._scripts import load_script
 from tests._seeded_tmy import ClearJuneDays
@@ -734,6 +736,16 @@ def victron() -> ScenarioConfig:
     return load_scenario(_VICTRON_SCENARIO)
 
 
+def _short_life_victron(directory: Path) -> Path:
+    """A copy of the Victron scenario in directory on a two-year asset life and loan term, as ε's Victron signal runs it."""
+    document = yaml.safe_load(_VICTRON_SCENARIO.read_text(encoding="utf-8"))
+    document["finance"]["asset_life_years"] = 2
+    document["finance"]["loan_term_years"] = 2
+    path = directory / "victron-short-life.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    return path
+
+
 class TestMeasureBatterySizing:
     """measure_battery_sizing prices the Victron sweep enrolled and not at each band (scripts/measure_battery_sizing.py, docs/battery-sizing-with-events.md)."""
 
@@ -767,3 +779,47 @@ class TestMeasureBatterySizing:
     def test_by_default_the_script_reads_the_committed_bristol_tmy(self, battery_sizing: ModuleType) -> None:
         """The script cannot import tests/, so it names the committed cache itself; this pins the two to one directory."""
         assert battery_sizing.COMMITTED_WEATHER_CACHE_DIR == COMMITTED_WEATHER_CACHE_DIR
+
+    def test_main_prints_one_ranked_table_per_band_and_what_it_was_measured_on_offline(
+        self, battery_sizing: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """One home over two winter weekdays, on a two-year life so each projection simulates two ages; the cache holds synthetic weather at the scenario's location, so main fetches nothing."""
+        scenario_path = _short_life_victron(tmp_path)
+        cache_dir = tmp_path / "weather-cache"
+        WeatherCache(cache_dir).put(_synthetic_weather.synthetic_tmy(), "tmy", load_scenario(scenario_path).get_location())
+
+        battery_sizing.main(
+            [
+                "--scenario", str(scenario_path),
+                "--cache-dir", str(cache_dir),
+                "--homes", "1",
+                "--start", "2024-01-15",
+                "--end", "2024-01-16",
+                "--no-parallel",
+            ]
+        )
+        report = capsys.readouterr().out
+
+        lines = report.splitlines()
+        assert solar_challenge.__version__ in report
+        assert sum(line.startswith("Commit: ") for line in lines) == 1
+        assert any("first 1 of 100 homes" in line and "£2,500" in line for line in lines), report
+        assert any("2024-01-15 to 2024-01-16" in line for line in lines), report
+        reference_kwh, reference_kw = (f"{figure:g}" for figure in battery_sizing.BATTERIES[0])
+        for heading in ("### Low band", "### Central band", "### High band"):
+            header, *rows = table_rows(report, heading)
+            assert len(rows) == 8, heading
+            cells = [dict(zip(header, row, strict=True)) for row in rows]
+            assert [row["Participation"] for row in cells] == ["dispatched"] * 4 + ["observed"] * 4, heading
+            assert {row["Pays for itself"] for row in cells} <= {"yes", "no"}, heading
+            references = [
+                row for row in cells if (row["Battery kWh"], row["Battery kW"]) == (reference_kwh, reference_kw)
+            ]
+            assert [row["Extra capex/home £"] for row in references] == ["+£0", "+£0"], heading
+
+    def test_main_refuses_a_homes_count_beyond_the_fleet(self, battery_sizing: ModuleType, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"\b101\b.*\b100 homes\b"):
+            battery_sizing.main(
+                ["--scenario", str(_short_life_victron(tmp_path)), "--cache-dir", str(tmp_path), "--homes", "101"]
+            )
+
