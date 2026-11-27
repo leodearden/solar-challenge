@@ -13,13 +13,13 @@ from dataclasses import asdict
 from datetime import date
 from typing import Any, get_args
 
-import pandas as pd
 from flask import Blueprint, Response, jsonify, request, url_for
 from werkzeug.exceptions import InternalServerError
 
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.home import HomeConfig
-from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
+from solar_challenge.home import run_window
+from solar_challenge.number_fields import as_whole_number
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import (
     builder_form_errors,
@@ -59,7 +59,7 @@ from solar_challenge.web.run_names import read_run_name
 from solar_challenge.web.scenario_import import ImportedForm
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
-from solar_challenge.web.sweep_request import SWEEP_MAX_STEPS
+from solar_challenge.web.sweep_request import SweepRequest, read_sweep_request
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from solar_challenge.web.text_options import read_one_of
@@ -444,109 +444,65 @@ def _loaded_form_answer(imported: ImportedForm) -> tuple[Response, int]:
 # ---------------------------------------------------------------------------
 
 
-_SWEEP_PARAMETER_HOME_KEYS: Mapping[str, str] = {
-    "pv_capacity_kw": "pv_kw",
-    "battery_capacity_kwh": "battery_kwh",
-    "annual_consumption_kwh": "consumption_kwh",
-}
-
 #: The days each point of a sweep runs when its base_config sends no window of its own.
 _SWEEP_DEFAULT_DAYS = 7
 
 
 @api_bp.route("/simulate/sweep", methods=["POST"])
 def simulate_sweep() -> tuple[Response, int]:
-    """Submit a parameter sweep for background execution.
+    """Submit a parameter sweep for background execution, one home job per point.
 
-    Generates a set of sweep points (linear or geometric) and submits one
-    background home-simulation job per point.  Returns the rounded sweep
-    values and the ids of the submitted jobs.
-
-    Expects a JSON object whose fields are all optional, so ``{}`` runs the default sweep:
-      - parameter: str, a key of _SWEEP_PARAMETER_HOME_KEYS (default "pv_capacity_kw")
-      - min: finite number (default 1.0)
-      - max: finite number (default 10.0)
-      - steps: whole number, 2 to SWEEP_MAX_STEPS (default 5)
-      - mode: "linear" | "geometric"
-      - base_config: JSON object (optional, default {}), the home config
-        every sweep point starts from.  A window it sends is read as
-        parse_home_config reads a home's; one that sends none, as
-        with_default_days reads a body, runs _SWEEP_DEFAULT_DAYS days.
+    Expects a JSON object of read_sweep_request's fields (parameter, min, max, steps and
+    mode) and base_config, a JSON object read as parse_home_config reads a home, running
+    _SWEEP_DEFAULT_DAYS days when it sends no window; each field omitted takes its
+    reader's default, so ``{}`` runs the default sweep.
 
     Returns:
         JSON with parameter, values and job_ids, HTTP 201.
-        HTTP 400 for an unsupported parameter (the error lists the supported
-        ones), a min, max or steps it cannot use, or a steps outside 2 to
-        SWEEP_MAX_STEPS (the error names the field and the value sent), an
-        invalid range, a min and max too far apart for the sweep's points to
-        be computed (the error names both), a base_config that is not a JSON
-        object (the error names the type sent), or a point whose home config
-        is invalid, a window parse_home_config refuses included.
-        Every 400 comes before any job is submitted.
+        HTTP 400 for read_sweep_request's refusals, a base_config refusal
+        ("base_config: ...") or a point's ("Invalid config for <knob>=<value>: ...");
+        every 400 comes before any job is submitted.
     """
     data = request_json_object()
-    parameter = str(data.get("parameter", "pv_capacity_kw"))
-    home_config_key = _SWEEP_PARAMETER_HOME_KEYS.get(parameter)
-    if home_config_key is None:
-        supported = ", ".join(_SWEEP_PARAMETER_HOME_KEYS)
-        return jsonify({
-            "error": f"Unsupported sweep parameter {parameter!r}; supported parameters: {supported}",
-        }), 400
-    min_val = as_finite_float(data.get("min", 1.0), "min")
-    max_val = as_finite_float(data.get("max", 10.0), "max")
-    steps = as_whole_number(data.get("steps", 5), "steps", within=Interval(2, SWEEP_MAX_STEPS))
-    if min_val >= max_val:
-        return jsonify({"error": "Min must be less than max"}), 400
-    mode = str(data.get("mode", "linear"))
-    base_config = require_json_object(data.get("base_config", {}), "base_config")
+    sweep = read_sweep_request(data)
+    base = _sweep_base(require_json_object(data.get("base_config", {}), "base_config"), sweep)
+    points = sweep.point_homes(base)
+    start_date, end_date = base.simulation_bounds()
+    knob = sweep.parameter.knob
 
-    # Generate sweep points
-    if mode == "geometric":
-        if min_val <= 0:
-            return jsonify({"error": "Min must be positive for geometric sweep"}), 400
-        ratio = max_val / min_val
-        values = [min_val * ratio ** (i / (steps - 1)) for i in range(steps)]
-    else:
-        values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
-    if not all(math.isfinite(v) for v in values):
-        return jsonify({
-            "error": (
-                f"min {min_val!r} and max {max_val!r} are too far apart to sweep:"
-                " computing the points between them overflows a float"
-            ),
-        }), 400
-
-    rounded_values = [round(v, 3) for v in values]
-
-    # Build every point's home before any job is submitted
-    point_base_config = with_default_days(base_config, _SWEEP_DEFAULT_DAYS)
-    point_homes: list[tuple[float, HomeConfig, pd.Timestamp, pd.Timestamp]] = []
-    for val in rounded_values:
-        point_config = {**point_base_config, home_config_key: val}
-        try:
-            home_config, start_date, end_date, _ = parse_home_config(point_config)
-        except ConfigurationError as refusal:
-            raise ConfigurationError(f"Invalid config for {parameter}={val}: {refusal}") from refusal
-        point_homes.append((val, home_config, start_date, end_date))
-
-    # Submit one home job per sweep point
     job_manager = get_job_manager()
-
     job_ids: list[str] = []
-    for val, home_config, start_date, end_date in point_homes:
+    for value, home_config in points:
         job_id, _ = job_manager.submit_home_job(
             config=home_config,
             start_date=start_date,
             end_date=end_date,
-            name=f"Sweep {parameter}={val}",
+            name=f"Sweep {knob.name}={value}",
         )
         job_ids.append(job_id)
 
     return jsonify({
-        "parameter": parameter,
-        "values": rounded_values,
+        "parameter": knob.name,
+        "values": [value for value, _ in points],
         "job_ids": job_ids,
     }), 201
+
+
+def _sweep_base(base_config: Mapping[str, Any], sweep: SweepRequest) -> ScenarioConfig:
+    """The single-home scenario every point of *sweep* starts from: *base_config*'s home over its window.
+
+    Raises:
+        ConfigurationError: For a base_config parse_home_config refuses, as "base_config: <refusal>".
+    """
+    try:
+        home, start_date, end_date, _ = parse_home_config(with_default_days(base_config, _SWEEP_DEFAULT_DAYS))
+    except ConfigurationError as refusal:
+        raise ConfigurationError(f"base_config: {refusal}") from refusal
+    return ScenarioConfig(
+        name=f"Sweep {sweep.parameter.knob.name}",
+        period=run_window(home.location, start_date, end_date),
+        home=home,
+    )
 
 
 # ---------------------------------------------------------------------------
