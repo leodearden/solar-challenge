@@ -4,6 +4,7 @@
 import dataclasses
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import date, timedelta
@@ -48,6 +49,7 @@ from solar_challenge.web.fleet_components import (
     EditorStart,
     PageLimits,
     days_window,
+    fleet_component_values,
     page_limits,
     read_fleet_seed,
     read_fleet_size,
@@ -674,6 +676,54 @@ class TestRefuseHomesOutsideRanges:
         (home,) = _fleet_homes(1, battery={"capacity_kwh": 0}, load={})
         assert FLEET_COMPONENTS["battery"].value_of(home) is None
         assert FLEET_COMPONENTS["load"].value_of(home) is None
+
+
+class TestFleetComponentValues:
+    """fleet_component_values reads each fleet component's value of each home as value_of reads it, spelling a component a home lacks as its absent_value."""
+
+    def test_each_component_is_read_for_every_home_in_home_order_keyed_in_fleet_components_order(self) -> None:
+        homes = _fleet_homes(
+            6,
+            pv={"capacity_kw": {"type": "uniform", "min": 2, "max": 8}},
+            battery={"capacity_kwh": {"type": "shuffled_pool", "values": [5, 10], "counts": [3, 3]}},
+            load={"annual_consumption_kwh": {"type": "normal", "mean": 3400, "std": 800}},
+        )
+        assert len({home.pv_config.capacity_kw for home in homes}) == len(homes)
+        values = fleet_component_values(homes)
+        assert list(values) == list(FLEET_COMPONENTS)
+        assert values == {
+            key: [component.value_of(home) for home in homes] for key, component in FLEET_COMPONENTS.items()
+        }
+
+    def test_a_home_without_a_battery_reads_the_batterys_absent_value_and_an_unscaled_load_reads_none(
+        self,
+    ) -> None:
+        """A battery capacity of 0 and a null pool value both mean no battery; a load block without a total leaves it unscaled."""
+        homes = _fleet_homes(
+            3,
+            battery={"capacity_kwh": {"type": "shuffled_pool", "values": [0, None, 5], "counts": [1, 1, 1]}},
+            load={},
+        )
+        values = fleet_component_values(homes)
+        assert [home.battery_config is None for home in homes].count(True) == 2
+        assert values["battery"] == [
+            0.0 if home.battery_config is None else home.battery_config.capacity_kwh for home in homes
+        ]
+        assert values["load"] == [None, None, None]
+
+    def test_an_absent_value_the_grammar_reads_as_a_component_is_refused_naming_absent_value_and_the_value(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape("absent_value of fleet component 'battery'")) as exc_info:
+            replace(FLEET_COMPONENTS["battery"], absent_value=5.0)
+        assert str(exc_info.value).endswith(", got 5.0")
+
+    def test_an_absent_value_of_a_component_whose_grammar_key_is_no_presence_field_is_refused_naming_absent_value(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match=re.escape("absent_value of fleet component 'pv'")) as exc_info:
+            replace(FLEET_COMPONENTS["pv"], absent_value=0.0)
+        assert str(exc_info.value).endswith(", got 0.0")
 
 
 @pytest.mark.parametrize(
