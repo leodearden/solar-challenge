@@ -1195,9 +1195,13 @@ class EventDischargeStrategy(DispatchStrategy):
                 max_discharge_kw is a bool, not a finite number or not greater than 0, naming it.
         """
         self._base = base
-        self._windows = as_event_discharge_windows(windows, "windows")
+        self._slots = frozenset(
+            (day, hour)
+            for window in as_event_discharge_windows(windows, "windows")
+            for day in window.days
+            for hour in window.hours
+        )
         self._max_discharge_kw = as_finite_float(max_discharge_kw, "max_discharge_kw", POSITIVE)
-        self._slots = frozenset((day, hour) for window in self._windows for day in window.days for hour in window.hours)
 
     @property
     def name(self) -> str:
