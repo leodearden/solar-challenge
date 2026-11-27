@@ -11,9 +11,8 @@ import math
 from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import date
-from typing import Any
+from typing import Any, get_args
 
-import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, jsonify, request, url_for
 from werkzeug.exceptions import InternalServerError
@@ -22,20 +21,24 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import scenario_yaml
-from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
-from solar_challenge.web.builtin_scenarios import builtin_scenario_files
+from solar_challenge.web.builder_form import (
+    builder_form_errors,
+    builder_form_from_saved_preset,
+    builder_form_from_yaml,
+    scenario_from_builder_form,
+)
+from solar_challenge.web.builtin_scenarios import builtin_scenario_form, builtin_scenarios_loaded_by
 from solar_challenge.web.dashboard import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_components import fleet_component_values
-from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
-    ImportedFleetForm,
     fleet_form_from_yaml,
     parse_fleet_form,
     scenario_from_fleet_form,
 )
 from solar_challenge.web.presets import (
     PresetNameTaken,
+    PresetSource,
     PresetType,
     SavedPresetUnreadable,
     home_preset_named,
@@ -53,6 +56,7 @@ from solar_challenge.web.request_boundary import (
     require_json_object,
 )
 from solar_challenge.web.run_names import read_run_name
+from solar_challenge.web.scenario_import import ImportedForm
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
@@ -397,14 +401,14 @@ def import_fleet_yaml() -> tuple[Response, int]:
     Accepts the raw YAML text as the request body (Content-Type: text/yaml).
 
     Returns:
-        The answer of :func:`_loaded_fleet_form_answer`; or the ``error``, HTTP 400, for an
+        The answer of :func:`_loaded_form_answer`; or the ``error``, HTTP 400, for an
         empty body, YAML that does not parse, or a scenario the fleet page cannot load.
     """
     yaml_text = request.get_data(as_text=True)
     if not yaml_text:
         return jsonify({"error": "Empty request body"}), 400
     imported = fleet_form_from_yaml(yaml_text)
-    return _loaded_fleet_form_answer(imported)
+    return _loaded_form_answer(imported)
 
 
 @api_bp.route("/fleet/presets/<name>", methods=["GET"])
@@ -412,25 +416,25 @@ def fleet_preset(name: str) -> tuple[Response, int]:
     """Load the built-in scenario file *name* as the fleet page's form.
 
     Returns:
-        The answer of :func:`_loaded_fleet_form_answer` for the preset's form; or the
+        The answer of :func:`_loaded_form_answer` for the preset's form; or the
         ``error``: HTTP 400 for a built-in scenario file the fleet form cannot load, which
         the Load Preset menu does not offer
-        (:func:`~solar_challenge.web.fleet_presets.fleet_preset_names`); HTTP 404 when no
+        (:func:`~solar_challenge.web.builtin_scenarios.builtin_scenarios_loaded_by`); HTTP 404 when no
         built-in scenario file is named *name*.
     """
-    imported = fleet_preset_form(name)
+    imported = builtin_scenario_form(name, fleet_form_from_yaml)
     if imported is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
-    return _loaded_fleet_form_answer(imported)
+    return _loaded_form_answer(imported)
 
 
-def _loaded_fleet_form_answer(imported: ImportedFleetForm) -> tuple[Response, int]:
-    """The fleet page's answer for the fleet form *imported* from a scenario.
+def _loaded_form_answer(imported: ImportedForm) -> tuple[Response, int]:
+    """A page's answer for the form *imported* from a scenario.
 
     Returns:
-        JSON ``{"form", "not_loaded"}``, HTTP 200: the form is the body the fleet page
-        posts, and not_loaded the paths of the scenario's settings it has no control for
-        (see :func:`~solar_challenge.web.fleet_scenario.fleet_form_from_scenario`).
+        JSON ``{"form", "not_loaded"}``, HTTP 200: the form is the body the page posts, and
+        not_loaded the paths of the scenario's settings it has no control for (see
+        docs/web-ui-design.md, *Scenario import policy*).
     """
     return jsonify({"form": dict(imported.form), "not_loaded": list(imported.not_loaded)}), 200
 
@@ -855,16 +859,19 @@ def scenarios_validate_scenario() -> tuple[Response, int]:
 
 @api_bp.route("/scenarios/save", methods=["POST"])
 def scenarios_save_scenario() -> tuple[Response, int]:
-    """Save a scenario configuration as a fleet preset.
+    """Save the scenario a builder form describes as a fleet preset.
 
-    Expects a JSON body with a ``name`` and a ``config``, a JSON object; a body that sends
-    no ``config`` is itself the config, but for its name and type.
+    Expects a JSON body with a ``name`` and a ``config``, the builder's form, a JSON object; a
+    body that sends no ``config`` is itself the config, but for its name and type. The preset
+    stored is the scenario document
+    :func:`~solar_challenge.web.builder_form.scenario_from_builder_form` builds from the config.
 
     Returns:
-        JSON confirmation with preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400, before any database access, for a name that is not a JSON string, a blank
+        JSON confirmation with preset name and id, HTTP 201 on success; or HTTP 400, before
+        any database access: the ``error`` for a name that is not a JSON string, a blank
         name, a name holding a lone surrogate or a sent config that is not a JSON object,
-        HTTP 409 for a name a saved home preset holds.
+        and the ``errors`` builder_form_errors lists for a config it refuses; or the
+        ``error``, HTTP 409, for a name a saved home preset holds.
     """
     data = request_json_object()
     name = _read_preset_name(data, "Scenario")
@@ -872,12 +879,35 @@ def scenarios_save_scenario() -> tuple[Response, int]:
         config_payload = require_json_object(data["config"], "config")
     else:
         config_payload = {k: v for k, v in data.items() if k not in ("name", "type")}
-    return _answer_preset_save(name, "fleet", config_payload)
+    errors = builder_form_errors(config_payload)
+    if errors:
+        return jsonify({"errors": errors}), 400
+    return _answer_preset_save(name, "fleet", scenario_from_builder_form(config_payload))
+
+
+@api_bp.route("/scenarios/import-yaml", methods=["POST"])
+def scenarios_import_yaml() -> tuple[Response, int]:
+    """Import a fleet scenario's YAML as the scenario builder's form.
+
+    Accepts the raw YAML text as the request body (Content-Type: text/yaml).
+
+    Returns:
+        The answer of :func:`_loaded_form_answer`; or the ``error``, HTTP 400, for an
+        empty body, YAML that does not parse, or a scenario the builder cannot load.
+    """
+    yaml_text = request.get_data(as_text=True)
+    if not yaml_text:
+        return jsonify({"error": "Empty request body"}), 400
+    return _loaded_form_answer(builder_form_from_yaml(yaml_text))
+
+
+#: The sources of the scenario builder's presets: the built-in scenario files, then the saved fleet presets.
+_PRESET_SOURCES: tuple[PresetSource, ...] = get_args(PresetSource)
 
 
 @api_bp.route("/scenarios/presets", methods=["GET"])
 def scenarios_list_presets() -> tuple[Response, int]:
-    """List the built-in scenario files, then the saved fleet presets, each by name.
+    """List the built-in scenario files the builder loads, then the saved fleet presets, each by name.
 
     When the database cannot be read, the built-in files are listed alone and
     saved_fleet_presets logs the fault.
@@ -885,9 +915,9 @@ def scenarios_list_presets() -> tuple[Response, int]:
     Returns:
         JSON with the ``presets`` array, HTTP 200.
     """
+    builtin: PresetSource = "builtin"
     presets: list[dict[str, Any]] = [
-        {"name": name, "source": "builtin", "filename": path.name}
-        for name, path in builtin_scenario_files().items()
+        {"name": name, "source": builtin} for name in builtin_scenarios_loaded_by(builder_form_from_yaml)
     ]
     presets.extend(saved_fleet_presets(get_database()))
     return jsonify({"presets": presets}), 200
@@ -895,29 +925,23 @@ def scenarios_list_presets() -> tuple[Response, int]:
 
 @api_bp.route("/scenarios/presets/<name>", methods=["GET"])
 def scenarios_get_preset(name: str) -> tuple[Response, int]:
-    """Get the built-in scenario file named *name*, else the saved fleet preset named *name*.
+    """Load the preset *name* of the ``source`` query parameter, ``builtin`` or ``saved``, as the scenario builder's form.
 
-    Args:
-        name: The preset name to look up.
+    A built-in and a saved preset may share a name, so the request names which it wants.
 
     Returns:
-        JSON preset object, HTTP 200; or the ``error``: HTTP 404 when neither is named *name*,
-        so a saved home preset's name is not found; HTTP 500 for a built-in file that does not
-        parse; HTTP 500, with the fault logged, for a saved preset that cannot be read.
+        The answer of :func:`_loaded_form_answer`; or the ``error``: HTTP 400 for a source
+        that is neither, a preset the builder cannot load, or a saved preset in the builder's
+        former form format; HTTP 404 when no preset of the source is named *name*, so a saved
+        home preset's name is not found; HTTP 500, with the fault logged, for a saved preset
+        that cannot be read.
     """
-    # Try built-in scenarios directory
-    path = builtin_scenario_files().get(name)
-    if path is not None:
-        try:
-            content = _yaml.safe_load(path.read_text())
-            return jsonify({
-                "name": name,
-                "source": "builtin",
-                "config": content,
-            }), 200
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
-    preset = saved_fleet_preset_named(get_database(), name)
-    if preset is None:
+    source = read_one_of(request.args.get("source"), _PRESET_SOURCES, "source")
+    if source == "builtin":
+        imported = builtin_scenario_form(name, builder_form_from_yaml)
+    else:
+        preset = saved_fleet_preset_named(get_database(), name)
+        imported = None if preset is None else builder_form_from_saved_preset(name, preset["config"])
+    if imported is None:
         return jsonify({"error": f"Preset '{name}' not found"}), 404
-    return jsonify(preset), 200
+    return _loaded_form_answer(imported)

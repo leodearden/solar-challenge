@@ -1,9 +1,7 @@
 """Tests for the scenario builder and parameter sweep web features."""
 
 import json
-import logging
 import math
-import sqlite3
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -15,6 +13,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge import web
 from solar_challenge.config import load_fleet_config
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
@@ -32,20 +31,23 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES, ComponentLimits
-from solar_challenge.web.request_boundary import read_string, require_encodable_text
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
+    MAX_DAYS,
+    MAX_FLEET_HOMES,
+    ComponentLimits,
+    page_limits,
+)
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
-from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_names
-from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._error_records import error_records
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._fleet_form import fleet_reader_refusal
+from tests._html_labels import labelled_inputs
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
 from tests._html_select_options import option_texts
 from tests._plotly_figure import traces_by_name
 from tests._run_summaries import home_summary
-from tests._web_app import database_of, point_store_config_at_a_missing_directory
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -109,6 +111,32 @@ class TestScenarioBuilderRoute:
             **{key: preset.name for key, preset in LOCATION_PRESETS.items()},
             "custom": "Custom Location",
         }
+
+    def test_the_builder_offers_a_seed_input_bounded_as_the_dashboard_bounds_a_fleets_seed(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/builder labels one number input Seed, stepping by whole numbers between page_limits().seed's low and high."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        seed = page_limits().seed
+
+        assert [
+            {key: attributes.get(key) for key in ("type", "step", "min", "max")}
+            for caption, attributes in labelled_inputs(page)
+            if caption == "Seed"
+        ] == [{"type": "number", "step": "1", "min": str(seed.low), "max": str(seed.high)}]
+
+    def test_the_builder_loads_no_script_from_the_js_yaml_vendor_directory(self, client: FlaskClient) -> None:
+        """The builder imports a scenario on the server, so GET /scenarios/builder loads no script under static/vendor/js-yaml."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+
+        sources = [attributes.get("src") or "" for attributes in element_attributes(page, "script")]
+
+        assert sources, "the builder page loads no script at all, so this check would pass vacuously"
+        assert [src for src in sources if "/static/vendor/js-yaml/" in src] == []
+
+    def test_the_web_package_vendors_no_js_yaml(self) -> None:
+        """static/vendor/js-yaml is gone from the web package: no page parses YAML in the browser."""
+        assert not (Path(web.__file__).parent / "static" / "vendor" / "js-yaml").exists()
 
 
 class TestSweepRoute:
@@ -428,294 +456,6 @@ class TestScenarioAPI:
                     f"{field} {value!r}, beyond what the page allows, was accepted: {answer}"
                 )
 
-    def test_list_presets(self, client: FlaskClient) -> None:
-        """Test GET /api/scenarios/presets returns a list."""
-        response = client.get("/api/scenarios/presets")
-        assert response.status_code == 200
-        data = response.get_json()
-        assert isinstance(data, dict)
-        assert "presets" in data
-        assert isinstance(data["presets"], list)
-
-    def test_save_preset(self, client: FlaskClient) -> None:
-        """Test POST /api/scenarios/save stores a preset."""
-        response = client.post(
-            "/api/scenarios/save",
-            json={"name": "test-preset", "config": {"n_homes": 10}},
-        )
-        assert response.status_code in (200, 201)
-        data = response.get_json()
-        assert data["name"] == "test-preset"
-
-    @pytest.mark.parametrize(
-        "body",
-        [
-            pytest.param({"config": {"n_homes": 10}}, id="no-name"),
-            pytest.param({"name": "   ", "config": {"n_homes": 9}}, id="blank-name"),
-        ],
-    )
-    def test_save_preset_without_a_name_returns_400_and_saves_nothing(
-        self, app: Flask, client: FlaskClient, body: dict[str, Any]
-    ) -> None:
-        """Test POST /api/scenarios/save with no name, or a blank one, returns 400."""
-        response = client.post("/api/scenarios/save", json=body)
-
-        assert (response.status_code, response.get_json()) == (400, {"error": "Scenario name is required"})
-        assert saved_preset_names(database_of(app)) == []
-
-    @pytest.mark.parametrize(
-        "name",
-        [
-            pytest.param(5, id="integer"),
-            pytest.param(None, id="null"),
-        ],
-    )
-    def test_save_of_a_name_that_is_not_a_json_string_returns_400_naming_name_and_saves_nothing(
-        self, app: Flask, client: FlaskClient, name: object
-    ) -> None:
-        with pytest.raises(ConfigurationError) as refusal:
-            read_string(name, "name")
-
-        response = client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}})
-
-        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
-        assert saved_preset_names(database_of(app)) == []
-
-    @pytest.mark.parametrize(
-        ("config", "type_name"),
-        [
-            pytest.param([1, 2], "list", id="array"),
-            pytest.param([], "list", id="empty-array"),
-            pytest.param("", "str", id="empty-string"),
-            pytest.param(0, "int", id="zero"),
-            pytest.param(None, "NoneType", id="null"),
-        ],
-    )
-    def test_save_of_a_config_that_is_not_a_json_object_returns_400_and_saves_nothing(
-        self, app: Flask, client: FlaskClient, config: object, type_name: str
-    ) -> None:
-        """A sent config, falsy or not, must be a JSON object: it is never the cue to save the rest of the body as the preset."""
-        response = client.post("/api/scenarios/save", json={"name": "s", "config": config})
-
-        assert (response.status_code, response.get_json()) == (
-            400,
-            {"error": f"config must be a JSON object, got {type_name}"},
-        )
-        assert saved_preset_names(database_of(app)) == []
-
-    def test_save_of_a_body_that_sends_no_config_saves_its_flat_form(self, client: FlaskClient) -> None:
-        """Every key of the body but name and type is the preset's config."""
-        response = client.post("/api/scenarios/save", json={"name": "Flat", "n_homes": 3})
-
-        assert response.status_code == 201
-        assert client.get("/api/scenarios/presets/Flat").get_json()["config"] == {"n_homes": 3}
-
-    def test_save_of_an_empty_config_object_saves_that_object(self, client: FlaskClient) -> None:
-        """A sent config is the preset's config even when it is an empty object: whether config was sent, not its truthiness, decides the flat-form fallback."""
-        response = client.post("/api/scenarios/save", json={"name": "Empty", "config": {}})
-
-        assert response.status_code == 201
-        assert client.get("/api/scenarios/presets/Empty").get_json()["config"] == {}
-
-    def test_save_of_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_saves_nothing(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
-        """A JSON string can escape a lone surrogate, which sqlite3 cannot bind, so such a name is refused as request_boundary.require_encodable_text refuses it, before any database access."""
-        name = chr(0xD800)
-        with pytest.raises(ValueError) as refusal:
-            require_encodable_text(name, "name")
-
-        response = client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}})
-
-        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
-        assert saved_preset_names(database_of(app)) == []
-
-    def test_save_under_a_name_a_saved_home_preset_holds_returns_409_and_changes_nothing(
-        self, client: FlaskClient
-    ) -> None:
-        """Saved presets share one namespace: a scenario save under a home preset's name is a 409 naming that preset, which keeps its config."""
-        assert client.post("/api/presets", json={"name": "Taken", "pv_kw": 3.0}).status_code == 201
-
-        response = client.post("/api/scenarios/save", json={"name": "Taken", "config": {"n_homes": 9}})
-
-        assert response.status_code == 409
-        assert response.get_json() == {"error": "A saved home preset is already named 'Taken'"}
-        home_preset = client.get("/api/presets/Taken").get_json()
-        assert (home_preset["source"], home_preset["pv_kw"]) == ("saved", 3.0)
-        assert "Taken" not in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
-
-    def test_saving_a_scenario_again_replaces_its_config_and_keeps_its_id(self, client: FlaskClient) -> None:
-        """A second save under a saved scenario's name updates that preset in place."""
-        first = client.post("/api/scenarios/save", json={"name": "again", "config": {"n_homes": 9}})
-        second = client.post("/api/scenarios/save", json={"name": "again", "config": {"n_homes": 12}})
-        assert (first.status_code, second.status_code) == (201, 201)
-        assert second.get_json()["id"] == first.get_json()["id"]
-        assert client.get("/api/scenarios/presets/again").get_json()["config"] == {"n_homes": 12}
-
-    def test_save_and_list_roundtrip(self, client: FlaskClient) -> None:
-        """Test saving a preset and then finding it in the list."""
-        # Save
-        client.post(
-            "/api/scenarios/save",
-            json={"name": "roundtrip-test", "config": {"n_homes": 25}},
-        )
-        # List
-        response = client.get("/api/scenarios/presets")
-        data = response.get_json()
-        names = [p["name"] for p in data["presets"]]
-        assert "roundtrip-test" in names
-
-    def test_get_preset_not_found(self, client: FlaskClient) -> None:
-        """Test GET /api/scenarios/presets/<name> returns 404 for unknown."""
-        response = client.get("/api/scenarios/presets/nonexistent-preset-xyz")
-        assert response.status_code == 404
-
-    def test_get_saved_preset(self, client: FlaskClient) -> None:
-        """Test saving then loading a specific preset by name."""
-        # Save first
-        client.post(
-            "/api/scenarios/save",
-            json={"name": "fetch-me", "config": {"n_homes": 30}},
-        )
-        # Fetch
-        response = client.get("/api/scenarios/presets/fetch-me")
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data["name"] == "fetch-me"
-        assert data["source"] == "saved"
-
-    def test_a_builtin_scenario_file_is_listed_and_served_by_its_name(self, client: FlaskClient) -> None:
-        """GET /api/scenarios/presets lists scenarios/bristol-phase1.yaml as the builtin preset bristol-phase1, and GET /api/scenarios/presets/bristol-phase1 answers that file's scenario."""
-        listed = client.get("/api/scenarios/presets").get_json()["presets"]
-        preset = client.get("/api/scenarios/presets/bristol-phase1")
-
-        assert {"name": "bristol-phase1", "source": "builtin", "filename": "bristol-phase1.yaml"} in listed
-        assert preset.status_code == 200
-        answer = preset.get_json()
-        assert (answer["name"], answer["source"], answer["config"]["name"]) == (
-            "bristol-phase1",
-            "builtin",
-            "Bristol Phase 1",
-        )
-
-    def test_saved_scenario_presets_are_listed_and_found_in_the_apps_database_after_its_store_config_names_a_missing_directory(
-        self, app: Flask, client: FlaskClient, tmp_path: Path
-    ) -> None:
-        """The scenario preset list and lookup read the Database create_app built, whatever the app's store config names afterwards."""
-        assert client.post("/api/scenarios/save", json={"name": "Fleet", "config": {"n_homes": 9}}).status_code == 201
-        point_store_config_at_a_missing_directory(app, tmp_path / "missing")
-
-        listed = client.get("/api/scenarios/presets").get_json()["presets"]
-        assert [preset["name"] for preset in listed if preset["source"] == "saved"] == ["Fleet"]
-        found = client.get("/api/scenarios/presets/Fleet")
-        assert (found.status_code, found.get_json()["config"]) == (200, {"n_homes": 9})
-
-    def test_a_name_only_a_saved_home_preset_holds_is_not_a_scenario_preset(self, client: FlaskClient) -> None:
-        """The lookup serves saved fleet presets only, as the list holds them: a saved home preset's name is not found."""
-        assert client.post("/api/presets", json={"name": "Home only", "pv_kw": 3.0}).status_code == 201
-
-        resp = client.get("/api/scenarios/presets/Home only")
-
-        assert (resp.status_code, resp.get_json()) == (404, {"error": "Preset 'Home only' not found"})
-        assert "Home only" not in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
-
-    def test_the_builtin_scenario_files_are_listed_alone_and_a_warning_logged_when_the_database_cannot_be_read(
-        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """A database that cannot be read leaves the list answering, with the built-in scenario files alone, and the presets module logs the database's error once, as a warning."""
-        builtin_names = [
-            p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"] if p["source"] == "builtin"
-        ]
-        assert builtin_names, "the list holds no built-in preset, so it cannot show them listed alone"
-        assert client.post("/api/scenarios/save", json={"name": "Mine", "config": {"n_homes": 9}}).status_code == 201
-        database_of(app).path.write_bytes(b"not a database")
-
-        with caplog.at_level(logging.WARNING):
-            resp = client.get("/api/scenarios/presets")
-
-        assert resp.status_code == 200
-        assert [(p["name"], p["source"]) for p in resp.get_json()["presets"]] == [
-            (name, "builtin") for name in builtin_names
-        ]
-        records = [r for r in caplog.records if r.name == "solar_challenge.web.presets"]
-        assert [r.levelno for r in records] == [logging.WARNING]
-        assert records[0].exc_info is not None
-        assert isinstance(records[0].exc_info[1], sqlite3.DatabaseError)
-
-    def test_a_saved_preset_the_database_cannot_read_answers_500_naming_it_and_logs_an_error_naming_it(
-        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """A database fault in the lookup of a saved preset is a 500 naming the preset and the fault, not "not found", logged once at ERROR with the database's error in its traceback."""
-        assert client.post("/api/scenarios/save", json={"name": "Mine", "config": {"n_homes": 9}}).status_code == 201
-        database_of(app).path.write_bytes(b"not a database")
-
-        with caplog.at_level(logging.WARNING):
-            resp = client.get("/api/scenarios/presets/Mine")
-
-        message = "Saved preset 'Mine' could not be read: file is not a database"
-        assert (resp.status_code, resp.get_json()) == (500, {"error": message})
-        records = [r for r in caplog.records if "'Mine'" in r.getMessage()]
-        assert [(r.levelno, r.getMessage()) for r in records] == [(logging.ERROR, message)]
-        assert records[0].exc_info is not None
-        assert isinstance(records[0].exc_info[1].__cause__, sqlite3.DatabaseError)
-
-    def test_a_saved_fleet_preset_whose_config_is_not_json_answers_500_naming_it(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
-        """A saved fleet preset the list holds, but whose config is not JSON, is a 500 naming it, not "not found"."""
-        insert_saved_fleet_preset(database_of(app), "Broken", "{not json")
-        assert "Broken" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
-
-        resp = client.get("/api/scenarios/presets/Broken")
-
-        assert (resp.status_code, resp.get_json()) == (
-            500,
-            {"error": "Saved preset 'Broken' could not be read: its config is not JSON"},
-        )
-
-    def test_a_saved_fleet_preset_whose_config_is_nested_too_deeply_to_decode_answers_500_naming_it_caused_by_the_recursion(
-        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """A saved fleet preset the list holds, but whose config json.loads gives up on as nested too deeply, is a 500 naming it and that fault, logged once at ERROR with the RecursionError as the cause."""
-        insert_saved_fleet_preset(database_of(app), "Deep", JSON_NESTED_TOO_DEEPLY_TO_DECODE)
-        assert "Deep" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
-
-        with caplog.at_level(logging.WARNING):
-            resp = client.get("/api/scenarios/presets/Deep")
-
-        message = "Saved preset 'Deep' could not be read: its config is nested too deeply to decode as JSON"
-        assert (resp.status_code, resp.get_json()) == (500, {"error": message})
-        records = [r for r in caplog.records if "'Deep'" in r.getMessage()]
-        assert [(r.levelno, r.getMessage()) for r in records] == [(logging.ERROR, message)]
-        assert records[0].exc_info is not None
-        assert isinstance(records[0].exc_info[1].__cause__, RecursionError)
-
-    @pytest.mark.parametrize("config_json", ["[1]", "3", '"text"', "null"], ids=["array", "number", "string", "json-null"])
-    def test_a_saved_fleet_preset_whose_config_is_json_but_not_an_object_answers_500_naming_it(
-        self, app: Flask, client: FlaskClient, config_json: str
-    ) -> None:
-        """A saved fleet preset the list holds, but whose config is JSON other than an object, is a 500 naming it, as one whose config is not JSON is."""
-        insert_saved_fleet_preset(database_of(app), "Not an object", config_json)
-        assert "Not an object" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
-
-        resp = client.get("/api/scenarios/presets/Not an object")
-
-        assert (resp.status_code, resp.get_json()) == (
-            500,
-            {"error": "Saved preset 'Not an object' could not be read: its config is not a JSON object"},
-        )
-
-    @pytest.mark.parametrize("config_json", ["", None], ids=["empty-text", "sql-null"])
-    def test_a_saved_fleet_preset_whose_config_is_stored_as_empty_text_or_null_is_served_with_an_empty_config(
-        self, app: Flask, client: FlaskClient, config_json: str | None
-    ) -> None:
-        """A saved fleet preset whose config is stored as empty text or as NULL is served, with the config {}."""
-        insert_saved_fleet_preset(database_of(app), "Empty", config_json)
-
-        resp = client.get("/api/scenarios/presets/Empty")
-
-        assert (resp.status_code, resp.get_json()["config"]) == (200, {})
-
 
 def _preview_document(client: FlaskClient, form: dict[str, Any]) -> tuple[str, Any]:
     """The YAML text /api/scenarios/preview-yaml answers for the builder *form*, and the document it holds."""
@@ -735,6 +475,7 @@ class TestBuilderScenarioYaml:
         "end_date": "2024-12-31",
         "location_preset": "bristol",
         "n_homes": 100,
+        "seed": 42,
         "import_rate": 0.245,
         "seg_rate_pence_per_kwh": "",
         "pv": {"capacity_kw": 4},

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
 {% from "components/distribution-editor.html" import distribution_editor %}
-{% from "components/macros.html" import location_preset_options, panel %}
+{% from "components/macros.html" import import_notice, location_preset_options, number_field, panel %}
 
 {# One fleet component's distribution card: a group, named by its heading, editing scenarioBuilder's dists.<key> #}
 {% macro distribution_card(component) %}
@@ -40,9 +40,6 @@
 {% block title %}Scenario Builder{% endblock %}
 
 {% block head %}
-{# Vendored verbatim; why, and how to upgrade: tests/unit/test_web_page_scripts.py #}
-<!-- js-yaml for client-side YAML parsing (used by Upload YAML feature) -->
-<script src="{{ url_for('static', filename='vendor/js-yaml/js-yaml-4.1.0.min.js') }}" integrity="sha384-+pxiN6T7yvpryuJmE1gM9PX7yQit15auDb+ZwwvJOd/4be2Cie5/IuVXgQb/S9du"></script>
 <script src="{{ url_for('static', filename='js/distribution-editor.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/scenario-builder.js') }}" defer></script>
 {% endblock %}
@@ -129,6 +126,7 @@
                     <input id="builder_n_homes" type="number" min="{{ page_limits.fleet_size.low }}" max="{{ page_limits.fleet_size.high }}" x-model="n_homes"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
+                {{ number_field('builder_seed', 'Seed', 'seed', within=page_limits.seed, step=1) }}
 
                 {% for component in page_limits.components.values() %}
                 {{ distribution_card(component) }}
@@ -165,8 +163,8 @@
                 </button>
                 <div x-show="presetDropdownOpen" x-cloak @click.away="presetDropdownOpen = false"
                     class="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
-                    <template x-for="preset in presets" :key="preset.name">
-                        <button @click="loadPreset(preset.name)"
+                    <template x-for="preset in presets" :key="preset.source + ':' + preset.name">
+                        <button @click="loadPreset(preset)"
                             class="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
                             x-text="preset.name + (preset.source === 'builtin' ? ' (built-in)' : '')"></button>
                     </template>
@@ -232,6 +230,8 @@
                 </div>
             </div>
         </div>
+
+        {{ import_notice('importNotice') }}
 
         <!-- Validation Result -->
         <div x-show="validationResult" x-cloak class="mt-2">

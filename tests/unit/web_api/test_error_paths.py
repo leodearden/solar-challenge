@@ -23,7 +23,7 @@ from tests._error_records import error_records
 from tests._fleet_form import valid_distribution_form
 
 
-_API_ENDPOINTS_THAT_READ_NO_JSON_BODY = frozenset({"api.import_fleet_yaml"})
+_API_ENDPOINTS_THAT_READ_NO_JSON_BODY = frozenset({"api.import_fleet_yaml", "api.scenarios_import_yaml"})
 
 
 class TestErrorPaths:

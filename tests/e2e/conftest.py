@@ -11,9 +11,13 @@ weather by overriding live_server_weather to return a WeatherCache of its own.
 Includes data-seeding fixtures, which save completed runs through the
 live server's own RunStorage, for tests that need pre-existing
 simulation runs (dashboard, results pages, history interactions,
-compare page), and home_preset_saved_under_a_builtin_name, which writes
+compare page); home_preset_saved_under_a_builtin_name, which writes
 a saved home preset under a built-in preset's name straight into the
-live server's database.
+live server's database;
+fleet_preset_saved_under_a_builtin_scenario_name, which saves a fleet
+preset under a built-in scenario's name through the live server's
+POST /api/scenarios/save; and preset_name_deleted_at_teardown, a name
+no saved preset holds, for a test that saves a preset from a page.
 Also stubs the Run History page's runs-list API for tests that need it
 empty, unanswered or listing a run of each badge, and collects the
 errors a page reports. release_held_simulations holds the live server's
@@ -65,6 +69,7 @@ from solar_challenge.web.dashboard import dashboard_of, get_job_stream_policy
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
 
+from tests._builder_form import accepted_builder_form
 from tests._config_preset_rows import insert_saved_home_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._server_drawn_badges import dashboard_macros_of
@@ -413,6 +418,38 @@ def home_preset_saved_under_a_builtin_name(_e2e_app: Flask) -> Iterator[dict[str
     yield config
     with database.transaction() as conn:
         conn.execute("DELETE FROM config_presets WHERE id = ?", (preset_id,))
+
+
+@pytest.fixture
+def fleet_preset_saved_under_a_builtin_scenario_name(_e2e_app: Flask) -> Iterator[dict[str, Any]]:
+    """Save accepted_builder_form() as a fleet preset named after the first built-in scenario the scenario builder lists, through POST /api/scenarios/save.
+
+    Yields the preset's name and the form saved. The session's tests share the database, so
+    the preset is deleted at teardown.
+    """
+    client = _e2e_app.test_client()
+    listed = client.get("/api/scenarios/presets").get_json()["presets"]
+    builtins = [preset["name"] for preset in listed if preset["source"] == "builtin"]
+    assert builtins, "the scenario builder lists no built-in scenario to name a saved preset after"
+    form = accepted_builder_form()
+    saved = client.post("/api/scenarios/save", json={"name": builtins[0], "config": form})
+    assert saved.status_code == 201, saved.get_json()
+    yield {"name": builtins[0], "form": form}
+    with database_of(_e2e_app).transaction() as conn:
+        conn.execute("DELETE FROM config_presets WHERE id = ?", (saved.get_json()["id"],))
+
+
+@pytest.fixture
+def preset_name_deleted_at_teardown(_e2e_app: Flask) -> Iterator[str]:
+    """A preset name unique to the test, which no saved preset holds.
+
+    The session's tests share the database, so a preset the test saves under the name is
+    deleted at teardown.
+    """
+    name = f"e2e preset {uuid.uuid4().hex[:8]}"
+    yield name
+    with database_of(_e2e_app).transaction() as conn:
+        conn.execute("DELETE FROM config_presets WHERE name = ?", (name,))
 
 
 # ---------------------------------------------------------------------------

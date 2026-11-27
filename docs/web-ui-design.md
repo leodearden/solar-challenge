@@ -71,6 +71,15 @@ The Fleet Simulator leaves validation to the server: Run posts the form as enter
 
 Each fleet component's editor offers Fixed Value and `fleet_distribution.editor_types` of its field's kind, the kind its block's fleet row gives the field, in the order of fleet_distribution.py's `DISTRIBUTION_TYPES`. Its `start`, an `EditorStart`, is built from fleet_distribution.py's spec objects: one spec of each type the editor offers, and the type the card shows. PV and battery start at shuffled pools, PV 3, 4, 5 and 6 kW in 20, 40, 30 and 10 homes, and battery 0, 5 and 10 kWh in 40, 40 and 20 homes; load starts at a normal of 3,400 ± 800 kWh clamped to 2,000–6,000. `ComponentLimits` checks at construction that a start holds one spec of each editor type, in order, and that each shuffled pool's counts total the default fleet size, `FLEET_SIZE_DEFAULT`. `#page-limits` writes a start as the editor holds it: `{type, fixed, specs: {<type>: <its spec without the type>}}`.
 
+### Scenario import policy
+
+The Fleet Simulator and the Scenario Builder each import a fleet scenario file, uploaded or a preset, as their own form, on the server: `fleet_form_from_scenario` (web/fleet_scenario.py) and `builder_form_from_scenario` (web/builder_form.py). Both compose the readers of web/scenario_import.py, and each page declares what its form holds as the reads it gives `read_blocks`. A page answers `{form, not_loaded}`, or `{error}` with HTTP 400 for a refusal. Each setting of the scenario is judged in this order:
+
+1. **The reader's refusal.** The document must be a mapping holding a `fleet_distribution:` block, and its period's dates must be days, with no time of day or time zone, since the pages' date fields hold neither. The Fleet Simulator then refuses a window that ends before it starts or spans more than `MAX_WINDOW_DAYS` days. Next, `config.read_fleet_scenario` reads the document in `parse_scenario`'s order, and `refuse_a_fleet_the_dashboard_cannot_run` holds its fleet to the dashboard's bounds. No home is generated for these checks.
+2. **A setting the form needs but cannot hold exactly.** Such a setting is refused, naming its path and the page, because loading the scenario without it would run another fleet. Examples are a component distribution its editor does not offer, such as `proportional_to` (`ComponentLimits.editor_spec`), a tariff type or dispatch strategy the page does not hold, a setting the page always sets but the scenario leaves out, and a SEG key the page does not hold.
+3. **The page's own reader.** The form loaded is then read as the page reads its own form: the Fleet Simulator's by `parse_fleet_form`, which generates the import's one set of homes, and the Scenario Builder's by `builder_form_errors`. A missing scenario name is the one reason the builder does not refuse: the form loads with a blank name, which Validate and Save still require.
+4. **Everything else.** The form has no control for any other setting, so the form loads without it and `not_loaded` names its path, in document order, e.g. `finance`, `fleet_distribution.random_order` or `fleet_distribution.pv.azimuth`. The page lists those paths in its notice. A setting the scenario leaves out is left out of the form.
+
 ### 1. Dashboard
 
 The landing page providing an overview of activity and quick-start actions.
@@ -163,12 +172,17 @@ Visual editor for `ScenarioConfig` YAML files.
 
 **Actions:**
 - "Validate" -> runs `ScenarioConfig` parsing, shows errors inline with field highlighting
-- "Save YAML" / "Download YAML" -> export
-- "Load from File" -> file upload
-- "Load Preset" -> built-in scenarios (bristol-phase1, dispatch-comparison, etc.)
+- "Download YAML" -> export
+- "Upload YAML" -> file upload, imported on the server (POST /api/scenarios/import-yaml)
+- "Load Preset" -> the built-in scenarios the builder loads, then the saved fleet presets (GET /api/scenarios/presets/<name>?source=builtin|saved)
+- "Save" -> a saved fleet preset (POST /api/scenarios/save)
 - Schema documentation tooltips on each field
 
-**Fleet distribution:** The builder's PV, battery and load cards are the Fleet Simulator's distribution editors, and start at the fleet page's distributions, `page_limits().components[...].start`. Validate and the YAML preview post the same component blocks as the fleet page, and `builder_form_errors` reads them with `read_form_fleet` at the form's own paths. "Load from File" loads each spec through `DistributionEditor.load` at its path in the file, `fleet_distribution.<component>.<field>`, and refuses a type the editor does not hold, as the fleet import does.
+**Import:** Upload YAML and Load Preset import the scenario on the server, under the *Scenario import policy* above, through `builder_form_from_scenario`. A refused scenario leaves every field as it was, and the preview says why; a loaded one sets the form, and a status notice names the settings it did not load. Load Preset lists only the built-in scenarios the builder loads (`builtin_scenarios_loaded_by(builder_form_from_yaml)`), and a saved preset and a built-in may share a name, so each item names its source.
+
+**Save:** Save validates the form as Validate does and answers a refused form with HTTP 400 and the `errors` Validate lists, which the page shows. An accepted form is stored as the scenario document `scenario_from_builder_form` builds, so a saved preset reloads through the same import as a file. A preset saved in the builder's former form format, which holds no `fleet_distribution:` block, is refused by name and must be saved again.
+
+**Fleet distribution:** The builder's PV, battery and load cards are the Fleet Simulator's distribution editors, and start at the fleet page's distributions, `page_limits().components[...].start`. Its seed starts at the fleet page's, `page_limits().seed_default`, within `page_limits().seed`. Validate and the YAML preview post the same component blocks as the fleet page, and `builder_form_errors` reads them with `read_form_fleet` at the form's own paths. An import loads each spec as the grammar reads it, in canonical form (`ComponentLimits.editor_spec`), through `DistributionEditor.load` at its path in the file, `fleet_distribution.<component>.<field>`; a type the editor does not hold is refused, as the fleet import refuses it.
 
 ### 5. Sweep Configuration
 

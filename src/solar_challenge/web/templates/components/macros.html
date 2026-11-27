@@ -231,6 +231,16 @@
 {% endmacro %}
 
 
+{# The settings of an imported or preset scenario the page's form has no control for: a status notice showing the Alpine expression model while it is not empty #}
+{% macro import_notice(model) %}
+<template x-if="{{ model }}">
+    <div role="status" class="mb-6 px-4 py-3 rounded-lg text-sm font-medium border-l-4 bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-400 border-sky-500">
+        <span x-text="{{ model }}"></span>
+    </div>
+</template>
+{% endmacro %}
+
+
 {# A button per day choice of limits, a PageLimits, in order: each sets the Alpine expression model to its days and is drawn selected while model holds them, captioned '1 year' for the full year, else '<days> days' #}
 {% macro day_choice_buttons(model, limits) %}
 <div class="flex flex-wrap gap-2">

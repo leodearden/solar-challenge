@@ -1,52 +1,19 @@
 document.addEventListener('alpine:init', () => {
-    // A scenario value as a form input holds it, '' (a cleared input, which the server reads as absent) for none, and
-    // whether a scenario document or one of its blocks is a mapping: the distribution editor's rules
-    const { blankIfNull, isMapping } = DistributionEditor;
+    // A null or absent form value as a form input holds it: '' (a cleared input, which the server reads as absent)
+    const { blankIfNull } = DistributionEditor;
 
     // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
     const limits = JSON.parse(document.getElementById('page-limits').textContent);
     // The fleet components, each with its key (its fleet_distribution block), its grammar key and its editor's start
     const components = limits.components;
 
-    // The form fields whose preview is `scenario`, a document in the preview's grammar. Each component's dist is its
-    // one in `dists` showing the spec the scenario gives it.
-    // Throws, saying why, for a document the form cannot hold.
-    function scenarioFormFields(scenario, dists) {
-        if (!isMapping(scenario)) {
-            throw new Error('it does not hold a YAML mapping');
-        }
-        const fleet = scenario.fleet_distribution;
-        if (!isMapping(fleet)) {
-            throw new Error('it has no fleet_distribution: block for the builder to edit (a run export lists its homes instead)');
-        }
-        const period = scenario.period || {};
-        const tariff = scenario.tariff || {};
-        const fields = {
-            name: blankIfNull(scenario.name),
-            description: blankIfNull(scenario.description),
-            start_date: blankIfNull(period.start_date),
-            end_date: blankIfNull(period.end_date),
-            n_homes: blankIfNull(fleet.n_homes),
-            import_rate: tariff.type === 'flat_rate' ? blankIfNull(tariff.rate_per_kwh) : '',
-            seg_rate_pence_per_kwh: blankIfNull((scenario.seg || {}).rate_pence_per_kwh),
-            dists: Object.fromEntries(components.map((component) => [
-                component.key,
-                DistributionEditor.load(
-                    dists[component.key],
-                    (fleet[component.key] || {})[component.grammar_key],
-                    component,
-                    'fleet_distribution.' + component.key + '.' + component.grammar_key,
-                ),
-            ])),
-        };
-        if (scenario.location) {
-            fields.location_preset = 'custom';
-            fields.latitude = blankIfNull(scenario.location.latitude);
-            fields.longitude = blankIfNull(scenario.location.longitude);
-            fields.altitude = blankIfNull(scenario.location.altitude);
-        }
-        return fields;
-    }
+    // The builder form's fields other than the custom coordinates and the components' blocks
+    const FORM_FIELDS = [
+        'name', 'description', 'start_date', 'end_date', 'location_preset', 'n_homes', 'seed', 'import_rate',
+        'seg_rate_pence_per_kwh',
+    ];
+    // The custom location's coordinates, which a form holds only for a location under no preset
+    const CUSTOM_COORDINATES = ['latitude', 'longitude', 'altitude'];
 
     Alpine.data('scenarioBuilder', (initialSection) => ({
         // Form state
@@ -59,6 +26,7 @@ document.addEventListener('alpine:init', () => {
         longitude: -2.58,
         altitude: 11.0,
         n_homes: limits.fleet_size_default,
+        seed: limits.seed_default,
         import_rate: 0.245,
         seg_rate_pence_per_kwh: '',
 
@@ -67,6 +35,7 @@ document.addEventListener('alpine:init', () => {
 
         // UI state
         yamlPreview: '# Configure your scenario...',
+        importNotice: '',
         validationResult: null,
         accordionOpen: initialSection,
         presetDropdownOpen: false,
@@ -137,8 +106,9 @@ document.addEventListener('alpine:init', () => {
                 const result = await resp.json();
                 if (resp.ok) {
                     this.validationResult = { valid: true, errors: [], message: 'Scenario saved as: ' + name };
+                    await this.loadPresets();
                 } else {
-                    this.validationResult = { valid: false, errors: [result.error || 'Save failed'] };
+                    this.validationResult = { valid: false, errors: result.errors || [result.error] };
                 }
             } catch (e) {
                 this.validationResult = { valid: false, errors: ['Network error during save'] };
@@ -156,22 +126,17 @@ document.addEventListener('alpine:init', () => {
             URL.revokeObjectURL(url);
         },
 
-        // Upload YAML file: set the form to the scenario it holds, or, for one the form cannot hold,
-        // leave every field as it is and say why in the preview
+        // Upload YAML file: the server imports it as the builder's form
         async uploadYaml(event) {
             const file = event.target.files[0];
             if (!file) return;
             const text = await file.text();
             event.target.value = '';
-            let fields;
-            try {
-                fields = scenarioFormFields(jsyaml.load(text), this.dists);
-            } catch (e) {
-                this.yamlPreview = '# ' + file.name + ' was not loaded: ' + e.message;
-                return;
-            }
-            Object.assign(this, fields);
-            this.yamlPreview = text;
+            await this._loadForm(
+                '/api/scenarios/import-yaml',
+                { method: 'POST', headers: { 'Content-Type': 'text/yaml' }, body: text },
+                file.name,
+            );
         },
 
         // Load presets list
@@ -185,44 +150,64 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        // Load a specific preset
-        async loadPreset(presetName) {
-            try {
-                const resp = await fetch('/api/scenarios/presets/' + presetName);
-                const data = await resp.json();
-                if (data.config) {
-                    const cfg = data.config;
-                    if (cfg.name) this.name = cfg.name;
-                    if (cfg.location) {
-                        this.latitude = cfg.location.latitude || 51.45;
-                        this.longitude = cfg.location.longitude || -2.58;
-                        this.location_preset = 'custom';
-                    }
-                    if (cfg.fleet_distribution) {
-                        const fd = cfg.fleet_distribution;
-                        if (fd.n_homes) this.n_homes = fd.n_homes;
-                    }
-                }
-                this.presetDropdownOpen = false;
-            } catch (e) { /* ignore */ }
+        // Load the Load Preset menu's item `preset`, by its name and source
+        async loadPreset(preset) {
+            this.presetDropdownOpen = false;
+            await this._loadForm(
+                '/api/scenarios/presets/' + encodeURIComponent(preset.name)
+                    + '?' + new URLSearchParams({ source: preset.source }),
+                {},
+                preset.name,
+            );
         },
 
-        getFormData() {
-            const data = {
-                name: this.name,
-                description: this.description,
-                start_date: this.start_date,
-                end_date: this.end_date,
-                location_preset: this.location_preset,
-                n_homes: this.n_homes,
-                import_rate: this.import_rate,
-                seg_rate_pence_per_kwh: this.seg_rate_pence_per_kwh,
-            };
-            if (this.location_preset === 'custom') {
-                data.latitude = this.latitude;
-                data.longitude = this.longitude;
-                data.altitude = this.altitude;
+        // Fetch `url` with `options` for the form the server imports from the scenario `what` names, and set the
+        // form to it, naming the scenario's settings the builder has no control for; for a scenario the server
+        // refuses, leave every field as it is and say why in the preview
+        async _loadForm(url, options, what) {
+            let resp, data;
+            try {
+                resp = await fetch(url, options);
+                data = await resp.json();
+            } catch (e) {
+                this.yamlPreview = '# ' + what + ' was not loaded: ' + e.message;
+                return;
             }
+            if (!resp.ok) {
+                this.yamlPreview = '# ' + what + ' was not loaded: ' + data.error;
+                return;
+            }
+            this.applyForm(data.form);
+            // A form equal to the one shown changes nothing $watch reads, yet replaces a refusal the preview shows
+            this.updatePreview();
+            this.importNotice = data.not_loaded.length > 0
+                ? 'Not loaded: the builder has no control for ' + data.not_loaded.join(', ') + '.'
+                : '';
+        },
+
+        // Set the form state to `form`, the body getFormData posts
+        applyForm(form) {
+            for (const field of FORM_FIELDS) {
+                this[field] = blankIfNull(form[field]);
+            }
+            for (const coordinate of CUSTOM_COORDINATES) {
+                if (coordinate in form) this[coordinate] = form[coordinate];
+            }
+            for (const component of components) {
+                this.dists[component.key] = DistributionEditor.load(
+                    this.dists[component.key],
+                    form[component.key][component.grammar_key],
+                    component,
+                    'fleet_distribution.' + component.key + '.' + component.grammar_key,
+                );
+            }
+        },
+
+        // The form the page posts, the one applyForm sets: each of FORM_FIELDS, the CUSTOM_COORDINATES for a custom
+        // location, and each component's block
+        getFormData() {
+            const fields = this.location_preset === 'custom' ? [...FORM_FIELDS, ...CUSTOM_COORDINATES] : FORM_FIELDS;
+            const data = Object.fromEntries(fields.map((field) => [field, this[field]]));
             for (const component of components) {
                 data[component.key] = { [component.grammar_key]: DistributionEditor.wire(this.dists[component.key]) };
             }

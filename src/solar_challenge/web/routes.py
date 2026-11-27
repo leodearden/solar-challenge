@@ -16,9 +16,10 @@ from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import PRESET_RATES
+from solar_challenge.web.builtin_scenarios import builtin_scenarios_loaded_by
 from solar_challenge.web.charts import fleet_results_tabs, home_results_tabs
 from solar_challenge.web.dashboard import get_storage
-from solar_challenge.web.fleet_presets import fleet_preset_names
+from solar_challenge.web.fleet_scenario import fleet_form_from_yaml
 from solar_challenge.web.storage import RunQuery
 from solar_challenge.web.stored_runs import RUN_KINDS, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 
@@ -64,7 +65,7 @@ def simulate_fleet_page() -> str:
     """
     return str(render_template(
         "simulate/fleet.html",
-        presets=fleet_preset_names(),
+        presets=builtin_scenarios_loaded_by(fleet_form_from_yaml),
         seg_presets=SEG_PRESETS,
         tariff_preset_rates=_tariff_preset_rates(),
         default_run_name=RUN_KINDS["fleet"].default_name(()),

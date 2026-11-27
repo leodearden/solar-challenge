@@ -18,6 +18,7 @@ from werkzeug.test import TestResponse
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.web.request_boundary import read_string, require_encodable_text
+from tests._builder_form import accepted_builder_form
 from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -266,13 +267,14 @@ class TestSavePreset:
         self, client: FlaskClient
     ) -> None:
         """Saved presets share one namespace: a home save under a fleet preset's name is a 409 naming that preset, which keeps its config."""
-        assert client.post("/api/scenarios/save", json={"name": "Taken", "config": {"n_homes": 9}}).status_code == 201
+        assert client.post("/api/scenarios/save", json={"name": "Taken", "config": accepted_builder_form()}).status_code == 201
+        saved = client.get("/api/scenarios/presets/Taken?source=saved").get_json()
 
         resp = client.post("/api/presets", json={"name": "Taken", "pv_kw": 3.0})
 
         assert resp.status_code == 409
         assert resp.get_json() == {"error": "A saved fleet preset is already named 'Taken'"}
-        assert client.get("/api/scenarios/presets/Taken").get_json()["config"] == {"n_homes": 9}
+        assert client.get("/api/scenarios/presets/Taken?source=saved").get_json() == saved
         assert "Taken" not in [p["name"] for p in client.get("/api/presets").get_json()]
 
     @pytest.mark.parametrize("name", _BUILTIN_PRESET_NAMES)
@@ -299,7 +301,7 @@ class TestSavePreset:
         [
             pytest.param(("/api/presets", {"name": "Raced", "pv_kw": 2.0}), [201, 201], id="home-save"),
             pytest.param(
-                ("/api/scenarios/save", {"name": "Raced", "config": {"n_homes": 9}}), [201, 409], id="fleet-save"
+                ("/api/scenarios/save", {"name": "Raced", "config": accepted_builder_form()}), [201, 409], id="fleet-save"
             ),
         ],
     )
@@ -351,7 +353,7 @@ class TestGetPreset:
     def test_a_name_only_a_saved_fleet_preset_holds_answers_404(self, app: Flask, client: FlaskClient) -> None:
         """The lookup answers home presets only, as the list holds them: a saved fleet preset's name is not found."""
         _save_home_presets_one_of_them_under_a_builtin_name(app, client)
-        assert client.post("/api/scenarios/save", json={"name": "Fleet only", "config": {"n_homes": 9}}).status_code == 201
+        assert client.post("/api/scenarios/save", json={"name": "Fleet only", "config": accepted_builder_form()}).status_code == 201
 
         resp = client.get("/api/presets/Fleet only")
 
@@ -363,8 +365,8 @@ class TestGetPreset:
         self, client: FlaskClient, name: str
     ) -> None:
         """Only home saves are refused a built-in home preset's name: a fleet preset may hold it, since the lookup answers home presets only."""
-        assert client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}}).status_code == 201
-        assert client.get(f"/api/scenarios/presets/{name}").get_json()["config"] == {"n_homes": 9}
+        assert client.post("/api/scenarios/save", json={"name": name, "config": accepted_builder_form()}).status_code == 201
+        assert client.get(f"/api/scenarios/presets/{name}?source=saved").get_json()["form"]["name"] == "One home"
 
         resp = client.get(f"/api/presets/{name}")
 
@@ -421,6 +423,6 @@ class TestPresetsAnswerFromTheAppsDatabase:
     ) -> None:
         point_store_config_at_a_missing_directory(app, tmp_path / "missing")
 
-        assert client.post("/api/scenarios/save", json={"name": "Fleet", "config": {"n_homes": 9}}).status_code == 201
+        assert client.post("/api/scenarios/save", json={"name": "Fleet", "config": accepted_builder_form()}).status_code == 201
 
         assert saved_preset_names(database_of(app)) == ["Fleet"]
