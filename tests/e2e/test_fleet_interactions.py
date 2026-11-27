@@ -17,11 +17,17 @@ period runs the page's default period, that the page shows why an imported
 file cannot load or a fleet cannot export, that the simulation name reaches
 the submitted run, that Run shows why the page refuses a form, submits nothing
 and leaves the results link of an earlier run in place, that the period
-selector offers presets and a custom date range, and that each economy tariff
-type shows and keeps its own rates, Run submitting the selected type's.
+selector offers presets and a custom date range, that each economy tariff
+type shows and keeps its own rates, Run submitting the selected type's, and
+that Preview shows each card's summary of Run's homes, or the server's refusal,
+that a summary lists at most 8 values as written and past that the min, median
+and max, that a change to the form clears every summary, and that an answer to
+an earlier Preview arriving late leaves the later Preview's summaries.
 """
 
 import re
+from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -852,6 +858,209 @@ def test_fleet_run_that_refuses_the_form_leaves_the_earlier_runs_results_link(
         f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
     )
     expect(results_link).to_have_attribute("href", earlier_results)
+
+
+# -- Preview ---------------------------------------------------------------
+
+
+def _preview_summary(page: Page, subject: str) -> Locator:
+    """The note under the card of *subject* that summarises the previewed homes' values."""
+    return page.get_by_role("note", name=f"{subject} Preview", exact=True)
+
+
+def _as_the_page_writes(value: float) -> str:
+    """*value* as the page writes a number: an integral float without its '.0'."""
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def _homes(count: int) -> str:
+    """*count* homes as a preview summary writes them: '1 home', or e.g. '20 homes'."""
+    return "1 home" if count == 1 else f"{count} homes"
+
+
+def test_fleet_preview_posts_runs_body_and_shows_each_cards_summary(
+    page: Page, live_server: str, fleet_submissions: list[Any], page_errors: list[str]
+) -> None:
+    """Preview posts the body Run posts, and each card shows its homes' values: each value with its count of homes for a pool, min, median and max for a normal."""
+    page.goto(live_server + "/simulate/fleet")
+
+    with page.expect_response("**/api/fleet/preview-distribution") as answer:
+        page.get_by_role("button", name="Preview", exact=True).click()
+
+    assert answer.value.status == 200
+    values = answer.value.json()["values"]
+    for key in ("pv", "battery"):
+        component = FLEET_COMPONENTS[key]
+        expect(_preview_summary(page, component.subject)).to_have_text(
+            ", ".join(
+                f"{_as_the_page_writes(value)} {component.unit} × {_homes(count)}"
+                for value, count in sorted(Counter(values[key]).items())
+            )
+        )
+    assert 0.0 in values["battery"]
+    load = FLEET_COMPONENTS["load"]
+    assert len(set(values["load"])) > 8
+    unit = re.escape(load.unit)
+    summary_pattern = re.compile(
+        rf"^min ([\d.]+) {unit}, median ([\d.]+) {unit}, max ([\d.]+) {unit}$"
+    )
+    load_summary = _preview_summary(page, load.subject)
+    expect(load_summary).to_have_text(summary_pattern)
+    shown_min, shown_median, shown_max = summary_pattern.fullmatch(load_summary.inner_text()).groups()
+    loads = sorted(values["load"])
+    assert float(shown_min) == pytest.approx(loads[0], abs=0.01)
+    assert float(shown_median) == pytest.approx(loads[(len(loads) - 1) // 2], abs=0.01)
+    assert float(shown_max) == pytest.approx(loads[-1], abs=0.01)
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+    with _fleet_run_fails(page):
+        page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    (run_body,) = fleet_submissions
+    assert answer.value.request.post_data_json == run_body
+
+
+def test_fleet_preview_of_a_refused_form_shows_the_servers_refusal(page: Page, live_server: str) -> None:
+    """Preview of a normal PV distribution whose min clamp exceeds its max shows the server's refusal and hides the PV card's summary."""
+    page.goto(live_server + "/simulate/fleet")
+    with page.expect_response("**/api/fleet/preview-distribution"):
+        page.get_by_role("button", name="Preview", exact=True).click()
+    expect(_preview_summary(page, "PV Capacity")).to_have_count(1)
+    page.get_by_role("combobox", name="PV Capacity Distribution Type", exact=True).select_option(
+        label="Normal (Gaussian)"
+    )
+    page.get_by_role("spinbutton", name="PV Capacity Min (clamp)", exact=True).fill("8")
+    page.get_by_role("spinbutton", name="PV Capacity Max (clamp)", exact=True).fill("2")
+
+    with page.expect_response("**/api/fleet/preview-distribution") as answer:
+        page.get_by_role("button", name="Preview", exact=True).click()
+
+    assert answer.value.status == 400
+    expect(page.get_by_role("alert")).to_have_text(answer.value.json()["error"])
+    expect(_preview_summary(page, "PV Capacity")).to_have_count(0)
+
+
+PV_UNIT = FLEET_COMPONENTS["pv"].unit
+
+
+@pytest.mark.parametrize(
+    ("values", "counts", "summary"),
+    [
+        pytest.param(
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [2, 1, 1, 1, 1, 1, 1, 1],
+            ", ".join([f"1 {PV_UNIT} × 2 homes", *(f"{value} {PV_UNIT} × 1 home" for value in range(2, 9))]),
+            id="eight_distinct_values_each_listed",
+        ),
+        pytest.param(
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [2, 1, 1, 1, 1, 1, 1, 1, 1],
+            f"min 1 {PV_UNIT}, median 4 {PV_UNIT}, max 9 {PV_UNIT}",
+            id="nine_distinct_values_as_min_lower_median_and_max",
+        ),
+        pytest.param(
+            [4.001, 4.004, 5],
+            [1, 1, 1],
+            f"4 {PV_UNIT} × 2 homes, 5 {PV_UNIT} × 1 home",
+            id="values_written_alike_counted_together",
+        ),
+    ],
+)
+def test_fleet_preview_summarises_a_pv_pool_as_its_values_shown(
+    page: Page, live_server: str, tmp_path: Path, values: list[float], counts: list[int], summary: str
+) -> None:
+    """The PV card's summary lists each value it writes, to 2 decimals, with its count of homes, for at most 8 such values; past 8 it writes the min, the lower middle home's median and the max."""
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(
+        "fleet_distribution:\n"
+        f"  n_homes: {sum(counts)}\n"
+        "  pv:\n"
+        f"    capacity_kw: {{type: shuffled_pool, values: {values}, counts: {counts}}}\n"
+        "  load:\n"
+        "    annual_consumption_kwh: 3400\n"
+    )
+    page.goto(live_server + "/simulate/fleet")
+    with page.expect_file_chooser() as chooser:
+        page.get_by_role("button", name="Import YAML", exact=True).click()
+    chooser.value.set_files(fleet_file)
+    expect(page.get_by_label("Number of Homes", exact=True)).to_have_value(str(sum(counts)))
+
+    with page.expect_response("**/api/fleet/preview-distribution") as answer:
+        page.get_by_role("button", name="Preview", exact=True).click()
+
+    assert answer.value.status == 200, answer.value.text()
+    assert sorted(answer.value.json()["values"]["pv"]) == sorted(
+        value for value, count in zip(values, counts, strict=True) for _ in range(count)
+    )
+    expect(_preview_summary(page, "PV Capacity")).to_have_text(summary)
+
+
+def _set_the_number_of_homes_to_50(page: Page) -> None:
+    page.get_by_label("Number of Homes", exact=True).fill("50")
+
+
+def _set_the_first_pv_pool_value_to_3_5(page: Page) -> None:
+    page.get_by_role("spinbutton", name="PV Capacity Value 1", exact=True).fill("3.5")
+
+
+def _load_the_preset_of_identical_homes(page: Page) -> None:
+    with page.expect_response("**/api/fleet/presets/*"):
+        page.get_by_role("combobox", name="Load Preset", exact=True).select_option("bristol-fin-calibration")
+
+
+@pytest.mark.parametrize(
+    "change_the_form",
+    [
+        pytest.param(_set_the_number_of_homes_to_50, id="number_of_homes"),
+        pytest.param(_set_the_first_pv_pool_value_to_3_5, id="pv_distribution"),
+        pytest.param(_load_the_preset_of_identical_homes, id="load_preset"),
+    ],
+)
+def test_fleet_preview_summaries_clear_once_the_form_changes(
+    page: Page, live_server: str, change_the_form: Callable[[Page], None]
+) -> None:
+    """A change to the form Preview posted, typed or loaded, hides every card's summary of the homes it previewed."""
+    page.goto(live_server + "/simulate/fleet")
+    with page.expect_response("**/api/fleet/preview-distribution"):
+        page.get_by_role("button", name="Preview", exact=True).click()
+    for component in FLEET_COMPONENTS.values():
+        expect(_preview_summary(page, component.subject)).to_have_count(1)
+
+    change_the_form(page)
+
+    for component in FLEET_COMPONENTS.values():
+        expect(_preview_summary(page, component.subject)).to_have_count(0)
+
+
+def test_fleet_preview_answer_that_arrives_after_a_later_previews_leaves_the_later_summaries(
+    page: Page, live_server: str
+) -> None:
+    """A Preview's answer that arrives after the form changed and was previewed again leaves the summaries of the later Preview."""
+    held: list[Route] = []
+
+    def hold_the_first_preview(route: Route) -> None:
+        if held:
+            route.fallback()
+        else:
+            held.append(route)
+
+    record_fetches_started_and_handled(page)
+    page.goto(live_server + "/simulate/fleet")
+    page.route("**/api/fleet/preview-distribution", hold_the_first_preview)
+    page.get_by_role("button", name="Preview", exact=True).click()
+    _set_the_first_pv_pool_value_to_3_5(page)
+    with page.expect_response("**/api/fleet/preview-distribution") as answer:
+        page.get_by_role("button", name="Preview", exact=True).click()
+    pv_summary = _preview_summary(page, "PV Capacity")
+    expect(pv_summary).to_contain_text(f"3.5 {PV_UNIT}")
+    later_summary = pv_summary.inner_text()
+
+    (earlier,) = held
+    assert earlier.request.post_data_json != answer.value.request.post_data_json
+    earlier.fallback()
+    wait_until_the_page_has_handled_every_fetch_it_started(page)
+
+    assert pv_summary.inner_text() == later_summary
 
 
 # -- Period selector -------------------------------------------------------

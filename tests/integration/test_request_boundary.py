@@ -25,7 +25,6 @@ from solar_challenge.cli.main import app as cli_app
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.web import api
 from solar_challenge.web.builder_form import scenario_from_builder_form
-from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_scenario import fleet_form_from_yaml, parse_fleet_form, scenario_from_fleet_form
 from solar_challenge.web.request_boundary import read_string, require_json_object
 from solar_challenge.web.simulation_params import parse_home_config
@@ -95,7 +94,6 @@ class _RouteProbe:
 
 _HOME_AT_LONDN = {"location": "londn"}
 _NAME_NOT_A_STRING = 5
-_UNKNOWN_DISTRIBUTION = {"type": "bogus", "params": {}}
 _FLEET_FORM_AT_LONDN = {**valid_distribution_form(), "location": "londn"}
 _UNREADABLE_YAML = "a: ["
 _NOT_AN_OBJECT = [1]
@@ -122,9 +120,9 @@ _ROUTE_PROBES: Mapping[str, _RouteProbe] = {
         reaching={"json": {"name": "x"}},
     ),
     "api.preview_distribution": _RouteProbe(
-        refused={"json": _UNKNOWN_DISTRIBUTION},
-        refusal=partial(sample_distribution, _UNKNOWN_DISTRIBUTION["type"], _UNKNOWN_DISTRIBUTION["params"], 100),
-        reader="sample_distribution",
+        refused={"json": _FLEET_FORM_AT_LONDN},
+        refusal=partial(parse_fleet_form, _FLEET_FORM_AT_LONDN),
+        reader="parse_fleet_form",
         reaching={"json": {}},
     ),
     "api.simulate_fleet_from_distribution": _RouteProbe(

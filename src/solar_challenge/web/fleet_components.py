@@ -12,7 +12,8 @@ field's kind, and starts at fleet_distribution spec objects, which construction 
 Each fleet component's value_range bounds every home's value, fixed or drawn.
 simulation_params.parse_home_config reads a home's value within it, and the fleet page
 and the scenario builder refuse a fleet whose generated homes hold a value outside it
-with refuse_homes_outside_ranges.
+with refuse_homes_outside_ranges, and the fleet page's preview answers each home's values
+with fleet_component_values.
 """
 
 from collections.abc import Callable, Mapping, Sequence
@@ -45,8 +46,8 @@ def _require(admitted: bool, field_name: str, requirement: str, value: object) -
         raise ValueError(f"{field_name} must {requirement}, got {value!r}")
 
 
-#: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, and the
-#: preview a shuffled pool that holds values for more homes or a draw of more values.
+#: The most homes a dashboard fleet holds. The fleet forms, the fleet page's preview
+#: included, refuse a larger fleet.
 MAX_FLEET_HOMES = 10_000
 #: The numbers of homes a dashboard fleet holds.
 FLEET_SIZE = Interval(1, MAX_FLEET_HOMES)
@@ -170,6 +171,14 @@ class EditorStart:
         return {"type": self.shown, "fixed": self.fixed, "specs": specs}
 
 
+def _asks_for_no_component(block: ComponentBlock[Any], value: float, path: str) -> bool:
+    """Whether *block*'s grammar reads *value*, its presence field's at *path*, as asking for no component; a value the grammar refuses asks for none of either."""
+    try:
+        return not block.asks_for_component(value, path)
+    except ConfigurationError:
+        return False
+
+
 @dataclass(frozen=True)
 class ComponentLimits:
     """A fleet component: the names the form and the scenario grammar give it, the range of a home's value, and what its distribution editor offers and starts at.
@@ -189,12 +198,16 @@ class ComponentLimits:
         start: What its card's editor starts at.
         value_of: The value a home holds for it, None when the home has no such component
             or leaves the value unset.
+        absent_value: The value a home without the component holds as its editor spells
+            that, e.g. a battery's 0 kWh; None for a component every home holds or whose
+            unset value has no spelling.
 
     Raises:
         ValueError: For a grammar_key outside its block's fleet rows, a start whose fixed value
             lies outside value_range, whose specs are not one of each editor type in order,
             whose shown type is neither '' nor an editor type, or whose shuffled pool's counts
-            do not total FLEET_SIZE_DEFAULT, naming the field and the value.
+            do not total FLEET_SIZE_DEFAULT, or for an absent_value that is no value of its
+            block's presence field asking for no component, naming the field and the value.
     """
 
     key: str
@@ -207,6 +220,7 @@ class ComponentLimits:
     new_row_value: float
     start: EditorStart
     value_of: Callable[[HomeConfig], float | None] = field(compare=False, repr=False)
+    absent_value: float | None = None
 
     def __post_init__(self) -> None:
         component = f"fleet component {self.key!r}"
@@ -247,6 +261,19 @@ class ComponentLimits:
                     f"hold shuffled pools whose counts total FLEET_SIZE_DEFAULT, {FLEET_SIZE_DEFAULT}",
                     spec.counts,
                 )
+        if self.absent_value is not None:
+            _require(
+                self.grammar_key == self.block.presence
+                and _asks_for_no_component(self.block, self.absent_value, f"{self.key}.{self.grammar_key}"),
+                f"absent_value of {component}",
+                f"be a value of its block's presence field ({self.block.presence}) that asks for no component",
+                self.absent_value,
+            )
+
+    def shown_value(self, home: HomeConfig) -> float | None:
+        """The value *home* holds for it as its editor spells it: value_of(home), or absent_value when that reads none."""
+        value = self.value_of(home)
+        return self.absent_value if value is None else value
 
     @property
     def field_kind(self) -> FieldKind:
@@ -364,6 +391,7 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
                 ),
             ),
             value_of=lambda home: None if home.battery_config is None else home.battery_config.capacity_kwh,
+            absent_value=0.0,
         ),
         ComponentLimits(
             key="load",
@@ -541,6 +569,11 @@ def refuse_homes_outside_ranges(homes: Sequence[HomeConfig]) -> None:
                     f"{component.key}.{component.grammar_key} must be {component.value_range} "
                     f"for every home, got {value!r} for home {number}"
                 )
+
+
+def fleet_component_values(homes: Sequence[HomeConfig]) -> dict[str, list[float | None]]:
+    """Each fleet component's value of each of *homes*, in home order, keyed by component key in FLEET_COMPONENTS order: value_of's reading, as refuse_homes_outside_ranges reads it, with absent_value where value_of reads none."""
+    return {key: [component.shown_value(home) for home in homes] for key, component in FLEET_COMPONENTS.items()}
 
 
 def _interval_json(interval: Interval) -> dict[str, float]:

@@ -123,7 +123,7 @@ The server enforces two rules on a run's window. Their constants, `MAX_DAYS` and
 
 ### 3. Fleet Simulator
 
-Fleet configuration with distribution editors and live preview.
+Fleet configuration with distribution editors, and a preview that summarises under each card the homes Run builds from the form.
 
 **Layout:**
 - Fleet size selector (n_homes: 1 to 10,000; the slider is a 10–500 convenience)
@@ -144,11 +144,12 @@ Fleet configuration with distribution editors and live preview.
 
 **Import:** Import YAML and Load Preset load each component's spec as the grammar reads it, written back in canonical form (`ComponentLimits.editor_spec`), through `DistributionEditor.load`. A fixed spec loads as Fixed Value, a normal without clamps with blank clamps, and a pool's null value as a blank value. Any other type, such as `proportional_to`, is refused, naming its path and the editor's types.
 
-**Live Preview:** Each distribution card shows a Plotly histogram of the expected fleet composition, updating on input change (debounced HTMX call or client-side for simple distributions).
+**Preview:** The Preview action posts the form Run posts to `POST /api/fleet/preview-distribution`. It answers each component's value per home of `parse_fleet_form(form).homes`, in home order (`fleet_component_values`: the battery 0 for a home without one, the load null when unscaled), or Run's refusal, which the page shows in its error alert. The page writes each card's summary under its editor: each value, to 2 decimals, with its count of homes for at most 8 distinct values so written, else the min, the median (the lower middle home's) and the max. A summary describes the form its preview posted, so a change to the form, typed, imported or loaded from a preset, clears every summary, and the page drops the answer to any preview but the latest.
 
 **Actions:**
 - "Run Fleet" -> background job with per-home progress bar
 - "Export as YAML" -> generates `ScenarioConfig`-compatible YAML download
+- "Preview" -> summary of Run's homes under each card
 - "Import YAML" -> file upload that populates the form
 - "Load Preset" -> dropdown of built-in scenarios
 

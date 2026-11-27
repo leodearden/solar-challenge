@@ -3,6 +3,7 @@
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
 {% from "components/macros.html" import card, day_choice_buttons, toggle_switch, range_input %}
 {% from "components/distribution-editor.html" import distribution_editor %}
+{% from "simulate/partials/preview-summary.html" import preview_summary %}
 
 {% block title %}Fleet Simulation{% endblock %}
 
@@ -93,6 +94,7 @@
             body_classes='p-6'
         ) %}
             {{ distribution_editor('pvDist', component, subject=component.subject) }}
+            {{ preview_summary(component) }}
         {% endcall %}
         {% endwith %}
 
@@ -115,6 +117,7 @@
         ) %}
             <div class="p-6" x-show="batteryEnabled" x-transition>
                 {{ distribution_editor('batteryDist', component, subject=component.subject) }}
+                {{ preview_summary(component) }}
             </div>
             <div class="p-6 text-sm text-slate-500 dark:text-slate-400" x-show="!batteryEnabled" x-cloak>
                 Battery storage is disabled for this fleet.
@@ -133,6 +136,7 @@
             body_classes='p-6'
         ) %}
             {{ distribution_editor('loadDist', component, subject=component.subject) }}
+            {{ preview_summary(component) }}
         {% endcall %}
         {% endwith %}
 
@@ -364,6 +368,19 @@
                         <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
                     </svg>
                     Export YAML
+                </button>
+            </div>
+
+            <!-- Preview: each card's summary of the homes Run builds -->
+            <div class="flex-shrink-0 self-end">
+                <button type="button" @click="preview()"
+                    class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-sm font-medium"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                        <path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" />
+                    </svg>
+                    Preview
                 </button>
             </div>
 

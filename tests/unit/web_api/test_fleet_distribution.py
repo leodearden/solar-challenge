@@ -3,6 +3,7 @@
 
 import re
 from collections.abc import Callable
+from typing import Any
 from unittest.mock import NonCallableMagicMock
 
 import pytest
@@ -19,44 +20,31 @@ from solar_challenge.fleet_distribution import (
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import parse_location_block
-from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
-from solar_challenge.web.fleet_config import sample_distribution
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
+    MAX_FLEET_HOMES,
+    MAX_FLEET_SEED,
+    MAX_WINDOW_DAYS,
+    fleet_component_values,
+    page_limits,
+)
+from solar_challenge.web.fleet_scenario import parse_fleet_form
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from tests._default_pv_pool_fleet import DEFAULT_PV_POOL_FLEET_FORM, DEFAULT_PV_POOL_FLEET_HOMES
 from tests._error_records import error_records
 from tests._falsy_json_values import FALSY_SENT_VALUES
 from tests._non_mapping_block_refusals import non_mapping_block_refusal
-from tests._fleet_form import FLEET_FORM_BLOCKS, FLEET_FORM_COMPONENT_BLOCKS, form_fleet_blocks
+from tests._fleet_form import (
+    FLEET_FORM_BLOCKS,
+    FLEET_FORM_COMPONENT_BLOCKS,
+    form_fleet_blocks,
+    start_spec,
+    valid_distribution_form,
+)
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES
 
-
-#: Shuffled pools, as their values and counts lists, whose counts the preview cannot use, with
-#: its refusal: a count that is not a whole number from 0 to the dashboard's fleet limit, or
-#: counts totalling more than that limit.
-UNUSABLE_SHUFFLED_POOL_COUNTS = [
-    pytest.param(
-        {"values": [4.0], "counts": [float("inf")]},
-        "params.counts[0] must be a finite number, got inf",
-        id="infinity",
-    ),
-    pytest.param(
-        {"values": [4.0], "counts": [2.5]},
-        "params.counts[0] must be a whole number, got 2.5",
-        id="fraction",
-    ),
-    pytest.param(
-        {"values": [4.0], "counts": [1e300]},
-        f"params.counts[0] must be between 0 and {MAX_FLEET_HOMES}, got 1e+300",
-        id="huge-float",
-    ),
-    pytest.param(
-        {"values": [4.0, 5.0], "counts": [MAX_FLEET_HOMES, 1]},
-        f"params.counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
-        id="pool-total-one-above-the-fleet-limit",
-    ),
-]
 
 #: Shuffled pools, as their values and counts lists, that fleet_distribution.py's grammar refuses for the 2-home fleet TestFleetFromDistribution posts: a count that is not a whole number of at least 0, or counts that do not total n_homes.
 POOLS_THE_GRAMMAR_REFUSES = [
@@ -88,189 +76,115 @@ REQUIRED_BLOCK_DISTRIBUTIONS = {"pv": "'pv'"}
 OPTIONAL_BLOCKS = tuple(key for key in FLEET_FORM_BLOCKS if key not in REQUIRED_BLOCK_DISTRIBUTIONS)
 
 
+def fleet_page_starting_form() -> dict[str, Any]:
+    """The fleet form the fleet page starts at: page_limits()'s fleet size, seed and days, and each component's editor at the type its card shows."""
+    limits = page_limits()
+    return {
+        "n_homes": limits.fleet_size_default,
+        "seed": limits.seed_default,
+        "days": limits.default_days,
+        **{
+            component.key: {component.grammar_key: start_spec(component, component.start.shown)}
+            for component in FLEET_COMPONENTS.values()
+        },
+    }
+
+
+def run_refusal(form: dict[str, Any]) -> str:
+    """The str() of parse_fleet_form's refusal of the fleet *form*, Run's reader; the calling test fails if it reads it."""
+    with pytest.raises(ConfigurationError) as refusal:
+        parse_fleet_form(form)
+    return str(refusal.value)
+
+
+#: PV specs Run refuses for a 6-home fleet: a normal whose clamp is inverted, a weighted
+#: discrete with a negative weight, and a shuffled pool whose counts total 3 homes.
+PV_SPECS_RUN_REFUSES = [
+    pytest.param({"type": "normal", "mean": 4, "std": 1, "min": 9, "max": 2}, id="P8-inverted-clamp"),
+    pytest.param({"type": "weighted_discrete", "values": [4, 5], "weights": [-1, 3]}, id="P9-negative-weight"),
+    pytest.param({"type": "shuffled_pool", "values": [3, 4], "counts": [2, 1]}, id="P10-pool-short-of-n-homes"),
+]
+
+
 class TestPreviewDistribution:
-    """Tests for POST /api/fleet/preview-distribution."""
+    """POST /api/fleet/preview-distribution answers the homes Run builds from the same fleet form, or Run's refusal."""
 
-    def test_normal_distribution_returns_samples(self, client: FlaskClient) -> None:
-        """Normal distribution preview returns expected number of samples."""
-        resp = client.post(
-            "/api/fleet/preview-distribution",
-            json={
-                "type": "normal",
-                "params": {"mean": 4.0, "std": 1.0},
-                "n_samples": 50,
-            },
-        )
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert len(data["samples"]) == 50
-
-    def test_uniform_distribution_returns_samples(self, client: FlaskClient) -> None:
-        """Uniform distribution preview returns samples within range."""
-        resp = client.post(
-            "/api/fleet/preview-distribution",
-            json={
-                "type": "uniform",
-                "params": {"min": 2.0, "max": 8.0},
-                "n_samples": 20,
-            },
-        )
-        assert resp.status_code == 200
-        samples = resp.get_json()["samples"]
-        assert len(samples) == 20
-        assert all(2.0 <= s <= 8.0 for s in samples)
-
-    def test_unknown_distribution_returns_400(self, client: FlaskClient) -> None:
-        """A type the distribution editor does not offer is a 400 naming type and the type sent."""
-        resp = client.post(
-            "/api/fleet/preview-distribution",
-            json={"type": "banana", "params": {}},
-        )
-        assert resp.status_code == 400
-        assert resp.get_json() == {
-            "error": "type must be one of normal, uniform, weighted_discrete, shuffled_pool, "
-            "got 'banana'"
-        }
-
-    def test_params_without_what_the_type_is_drawn_from_return_400_naming_the_field(
+    def test_the_starting_form_answers_each_components_value_of_each_of_runs_homes(
         self, client: FlaskClient
     ) -> None:
-        """Params without a parameter the type is drawn from, a normal's mean, are a 400 naming its field under params, not samples drawn with an invented default."""
-        resp = client.post(
-            "/api/fleet/preview-distribution",
-            json={"type": "normal", "params": {}},
-        )
-        assert resp.status_code == 400
-        assert resp.get_json() == {
-            "error": "params.mean must be given: the preview draws a normal distribution from "
-            "its mean and std"
-        }
+        """P1: the page's starting form answers 200 with its 100 homes and fleet_component_values of parse_fleet_form's homes."""
+        form = fleet_page_starting_form()
+        homes = parse_fleet_form(form).homes
+        resp = client.post("/api/fleet/preview-distribution", json=form)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        body = resp.get_json()
+        values = body["values"]
+        assert len(set(values["pv"])) > 1
+        assert 0.0 in values["battery"]
+        assert body["homes"] == page_limits().fleet_size_default == len(homes)
+        assert values["pv"] == [home.pv_config.capacity_kw for home in homes]
+        assert values == fleet_component_values(homes)
 
-    def test_default_n_samples(self, client: FlaskClient) -> None:
-        """Default n_samples is 100."""
-        resp = client.post(
-            "/api/fleet/preview-distribution",
-            json={"type": "normal", "params": {"mean": 3.0, "std": 0.5}},
-        )
-        assert resp.status_code == 200
-        assert len(resp.get_json()["samples"]) == 100
-
-    @pytest.mark.parametrize(
-        ("body", "message"),
-        [
-            pytest.param(
-                {"type": "normal", "params": "x"},
-                "params: must be a mapping, got str",
-                id="normal-str-params",
-            ),
-            pytest.param(
-                {"type": "weighted_discrete", "params": {"values": ["x"], "weights": [1]}},
-                "params.values[0] must be a finite number, got 'x'",
-                id="weighted-discrete-str-value",
-            ),
-            pytest.param(
-                {"type": "shuffled_pool", "params": {"values": [4.0], "counts": "x"}},
-                "params.counts must be a list of whole numbers, got 'x'",
-                id="shuffled-pool-str-counts",
-            ),
-            pytest.param(
-                {"type": "shuffled_pool", "params": {"values": [4.0, 5.0], "counts": [1]}},
-                "params.values and params.counts must have the same length, got 2 and 1",
-                id="shuffled-pool-fewer-counts",
-            ),
-        ],
-    )
-    def test_malformed_params_return_400_naming_the_field(
-        self, client: FlaskClient, body: dict, message: str
-    ) -> None:
-        """Params that are not an object, a list cell that is not a number, a list that is not a list, or parallel lists of unequal length, are a 400 naming the field under params."""
-        resp = client.post("/api/fleet/preview-distribution", json=body)
-        assert resp.status_code == 400
-        assert resp.get_json() == {"error": message}
-
-    @pytest.mark.parametrize(
-        ("n_samples", "message"),
-        [
-            pytest.param("x", "n_samples must be a finite number, got 'x'", id="str"),
-            pytest.param(None, "n_samples must be a finite number, got None", id="null"),
-            pytest.param(
-                float("inf"), "n_samples must be a finite number, got inf", id="infinity"
-            ),
-            pytest.param(2.5, "n_samples must be a whole number, got 2.5", id="fraction"),
-            pytest.param(
-                MAX_FLEET_HOMES + 1,
-                f"n_samples must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}",
-                id="one-above-the-fleet-limit",
-            ),
-        ],
-    )
-    def test_n_samples_that_is_not_a_whole_number_in_range_returns_400_naming_it(
-        self, client: FlaskClient, n_samples: object, message: str
-    ) -> None:
-        """An n_samples that is not a whole number, or one above the dashboard's fleet limit, is a 400 naming n_samples and the value sent; a fraction is refused, not truncated."""
-        resp = client.post(
-            "/api/fleet/preview-distribution",
-            json={"type": "normal", "params": {"mean": 4.0, "std": 1.0}, "n_samples": n_samples},
-        )
-        assert resp.status_code == 400
-        assert message in resp.get_json()["error"]
-
-    @pytest.mark.parametrize(("params", "message"), UNUSABLE_SHUFFLED_POOL_COUNTS)
-    def test_shuffled_pool_count_it_cannot_use_returns_400_naming_it(
-        self, client: FlaskClient, params: dict, message: str
-    ) -> None:
-        """A shuffled_pool count that is not a whole number, a fraction included, or one above the dashboard's fleet limit, is a 400 naming the count under params and the value sent; so are counts that take the pool's total above that limit, naming params.counts and the total."""
-        resp = client.post(
-            "/api/fleet/preview-distribution",
-            json={"type": "shuffled_pool", "params": params},
-        )
-        assert resp.status_code == 400
-        assert resp.get_json() == {"error": message}
-
-    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
-    @pytest.mark.parametrize(
-        ("dist_type", "params", "field"),
-        [
-            pytest.param(
-                "normal", lambda v: {"mean": v, "std": 1.0}, "params.mean", id="normal-mean"
-            ),
-            pytest.param(
-                "uniform", lambda v: {"min": 2.0, "max": v}, "params.max", id="uniform-max"
-            ),
-            pytest.param(
-                "weighted_discrete",
-                lambda v: {"values": [3.0], "weights": [v]},
-                "params.weights[0]",
-                id="weighted-discrete-weight",
-            ),
-        ],
-    )
-    def test_params_number_that_is_not_finite_returns_400_naming_it(
-        self,
-        client: FlaskClient,
-        dist_type: str,
-        params: Callable[[object], dict],
-        field: str,
-        value: object,
-    ) -> None:
-        """A params number that is not a finite number, a boolean included, is a 400 naming its field under params and the value sent."""
-        resp = client.post(
-            "/api/fleet/preview-distribution",
-            json={"type": dist_type, "params": params(value), "n_samples": 3},
-        )
-        assert resp.status_code == 400
-        assert resp.get_json() == {"error": f"{field} must be a finite number, got {value!r}"}
-
-    def test_finite_params_whose_draws_are_not_finite_return_400_carrying_sample_distributions_refusal(
+    def test_a_form_without_a_battery_block_answers_the_batterys_absent_value_for_every_home(
         self, client: FlaskClient
     ) -> None:
-        """Finite params that draw a sample a float cannot hold are a 400 carrying sample_distribution's refusal, not a 200 whose samples JSON cannot write."""
-        body = {"type": "uniform", "params": {"min": -1.7e308, "max": 1.7e308}, "n_samples": 100}
-        with pytest.raises(ValueError) as refusal:
-            sample_distribution(body["type"], body["params"], body["n_samples"])
+        """A fleet without batteries reads 0 kWh, the battery editor's spelling of none, for each home."""
+        form = valid_distribution_form()
+        del form["battery"]
+        resp = client.post("/api/fleet/preview-distribution", json=form)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["values"]["battery"] == [0.0] * form["n_homes"]
+
+    def test_a_form_without_a_load_block_answers_null_for_each_homes_unscaled_load(
+        self, client: FlaskClient
+    ) -> None:
+        """A fleet without a load block leaves each home's load unscaled, which reads null."""
+        form = valid_distribution_form()
+        del form["load"]
+        resp = client.post("/api/fleet/preview-distribution", json=form)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["values"]["load"] == [None] * form["n_homes"]
+
+    @pytest.mark.parametrize("spec", PV_SPECS_RUN_REFUSES)
+    def test_a_pv_spec_run_refuses_answers_runs_400(self, client: FlaskClient, spec: dict[str, Any]) -> None:
+        """P2: a PV spec Run refuses is the preview's 400 carrying parse_fleet_form's refusal, as Run answers it."""
+        body = {**valid_distribution_form(), "n_homes": 6, "pv": {"capacity_kw": spec}}
+        expected = run_refusal(body)
+        assert "pv.capacity_kw" in expected
+        preview = client.post("/api/fleet/preview-distribution", json=body)
+        assert (preview.status_code, preview.get_json()) == (400, {"error": expected})
+        run = client.post("/api/simulate/fleet-from-distribution", json=body)
+        assert (run.status_code, run.get_json()) == (preview.status_code, preview.get_json())
+
+    def test_a_drawn_value_outside_its_components_range_answers_runs_400(self, client: FlaskClient) -> None:
+        """A normal far above PV's value_range draws PV no home may hold: the 400 carries refuse_homes_outside_ranges' refusal, as parse_fleet_form raises it."""
+        pv_range = FLEET_COMPONENTS["pv"].value_range
+        body = {
+            **valid_distribution_form(),
+            "pv": {"capacity_kw": {"type": "normal", "mean": pv_range.high * 10, "std": 1}},
+        }
+        expected = run_refusal(body)
+        assert expected.startswith(f"pv.capacity_kw must be {pv_range} for every home, got ")
         resp = client.post("/api/fleet/preview-distribution", json=body)
+        assert (resp.status_code, resp.get_json()) == (400, {"error": expected})
+
+    @pytest.mark.parametrize(
+        ("data", "content_type"),
+        [
+            pytest.param("not json", "text/plain", id="text-body"),
+            pytest.param(None, "application/json", id="empty-json-body"),
+        ],
+    )
+    def test_no_json_body_returns_400(self, client: FlaskClient, data: str | None, content_type: str) -> None:
+        """A body that does not read as a JSON object, plain text or an empty JSON body, returns 400."""
+        resp = client.post("/api/fleet/preview-distribution", data=data, content_type=content_type)
         assert resp.status_code == 400
-        assert resp.get_json() == {"error": str(refusal.value)}
+
+    def test_a_preview_queues_nothing(self, client: FlaskClient, mock_job_manager: NonCallableMagicMock) -> None:
+        """A 200 preview calls nothing on the job manager."""
+        resp = client.post("/api/fleet/preview-distribution", json=valid_distribution_form())
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert mock_job_manager.method_calls == []
 
 
 class TestFleetFromDistribution:
