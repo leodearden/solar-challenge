@@ -19,8 +19,9 @@ from solar_challenge.finance import FinanceConfig
 from solar_challenge.gridservices import FlatGridServices
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
-from solar_challenge.optimize import ConfigPoint, enumerate_configs
+from solar_challenge.optimize import ConfigPoint, enumerate_configs, iter_configs
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_knobs import KNOBS
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._read_outcomes import outcome_of
@@ -406,3 +407,109 @@ class TestBatteryHomogenization:
         assert base.homes[0].battery_config is orig_cap
         assert base.homes[0].battery_config.capacity_kwh == pytest.approx(7.0)
         assert base.homes[1].battery_config is None
+
+
+class TestConfigPointBatteryPower:
+    """ConfigPoint.battery_kw: an optional battery power, set on a point with a battery only."""
+
+    def test_battery_kw_defaults_to_none(self) -> None:
+        assert ConfigPoint(pv_kwp=4, battery_kwh=5.12, inverter_kw=3.68).battery_kw is None
+
+    def test_a_whole_battery_kw_is_held_as_the_float_it_reads(self) -> None:
+        cp = ConfigPoint(pv_kwp=4, battery_kwh=5.12, inverter_kw=3.68, battery_kw=2)
+        assert cp.battery_kw == 2.0
+        assert type(cp.battery_kw) is float
+
+    @pytest.mark.parametrize(
+        "battery_kw",
+        [
+            pytest.param(0.0, id="zero"),
+            pytest.param(-2.4, id="negative"),
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="word"),
+        ],
+    )
+    def test_a_battery_kw_that_is_not_a_positive_finite_number_is_refused_naming_it(
+        self, battery_kw: object
+    ) -> None:
+        with pytest.raises(ConfigurationError, match="^battery_kw "):
+            ConfigPoint(pv_kwp=4.0, battery_kwh=5.12, inverter_kw=3.68, battery_kw=battery_kw)  # type: ignore[arg-type]
+
+    def test_a_battery_kw_on_a_point_with_no_battery_is_refused_naming_both_fields(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            ConfigPoint(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=3.68, battery_kw=2.4)
+        assert "battery_kw" in str(exc_info.value)
+        assert "battery_kwh" in str(exc_info.value)
+
+
+class TestBatteryPowerPairing:
+    """enumerate_configs and iter_configs pair the i-th battery_kw with the i-th battery_kwh."""
+
+    @staticmethod
+    def _base_with_a_battery_of_other_power() -> ScenarioConfig:
+        """_make_fleet_base's three homes, homes[0] with a 3.3 kW battery and the others with none."""
+        base = _make_fleet_base(3)
+        first, *rest = base.homes
+        return dataclasses.replace(
+            base,
+            homes=(
+                dataclasses.replace(
+                    first,
+                    battery_config=BatteryConfig(capacity_kwh=7.0, max_charge_kw=3.3, max_discharge_kw=3.3),
+                ),
+                *rest,
+            ),
+        )
+
+    _PAIRED = ([4.0], [5.12, 10.24], [3.68])
+
+    def test_each_size_is_paired_with_its_power_in_order(self) -> None:
+        points = [
+            point
+            for point, _ in enumerate_configs(self._base_with_a_battery_of_other_power(), *self._PAIRED, battery_kw=[2.4, 3.68])
+        ]
+
+        assert points == [
+            ConfigPoint(pv_kwp=4.0, battery_kwh=5.12, inverter_kw=3.68, battery_kw=2.4),
+            ConfigPoint(pv_kwp=4.0, battery_kwh=10.24, inverter_kw=3.68, battery_kw=3.68),
+        ]
+
+    def test_every_home_of_a_point_has_its_size_at_its_power(self) -> None:
+        base = self._base_with_a_battery_of_other_power()
+        for point, scenario in enumerate_configs(base, *self._PAIRED, battery_kw=[2.4, 3.68]):
+            batteries = [home.battery_config for home in scenario.homes]
+            assert [
+                (battery.capacity_kwh, battery.max_charge_kw, battery.max_discharge_kw)
+                for battery in batteries
+                if battery is not None
+            ] == [(point.battery_kwh, point.battery_kw, point.battery_kw)] * len(base.homes)
+
+    def test_iter_configs_yields_what_enumerate_configs_returns(self) -> None:
+        base = self._base_with_a_battery_of_other_power()
+        assert list(iter_configs(base, *self._PAIRED, battery_kw=[2.4, 3.68])) == enumerate_configs(
+            base, *self._PAIRED, battery_kw=[2.4, 3.68]
+        )
+
+    def test_a_power_count_other_than_the_size_count_is_refused_naming_both_and_their_lengths(self) -> None:
+        base = self._base_with_a_battery_of_other_power()
+        with pytest.raises(ValueError, match=r"battery_kwh.*2.*battery_kw.*1|battery_kw.*1.*battery_kwh.*2"):
+            enumerate_configs(base, *self._PAIRED, battery_kw=[2.4])
+        with pytest.raises(ValueError, match=r"battery_kwh.*2.*battery_kw.*1|battery_kw.*1.*battery_kwh.*2"):
+            next(iter_configs(base, *self._PAIRED, battery_kw=[2.4]))
+
+    def test_without_battery_kw_each_home_keeps_its_power_as_the_three_knobs_set_it(self) -> None:
+        base = self._base_with_a_battery_of_other_power()
+
+        for point, scenario in enumerate_configs(base, *self._PAIRED):
+            expected = base
+            for knob, value in (
+                (KNOBS["pv_capacity_kw"], point.pv_kwp),
+                (KNOBS["battery_capacity_kwh"], point.battery_kwh),
+                (KNOBS["inverter_capacity_kw"], point.inverter_kw),
+            ):
+                expected = knob.apply(expected, value)
+            assert point.battery_kw is None
+            assert scenario == expected
+            first_battery = scenario.homes[0].battery_config
+            assert first_battery is not None
+            assert (first_battery.max_charge_kw, first_battery.max_discharge_kw) == (3.3, 3.3)

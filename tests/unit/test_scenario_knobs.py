@@ -81,9 +81,14 @@ def _fleet() -> ScenarioConfig:
 
 
 def _single_home() -> ScenarioConfig:
-    """A single-home scenario of the default home, carrying the fleets' finance block."""
+    """A single-home scenario of the default home with a 5 kWh battery, for the battery power knob to edit, carrying the fleets' finance block."""
     _, finance = make_scenario_and_finance()
-    return ScenarioConfig(name="single-home", period=make_period(), home=make_home_config(), finance=finance)
+    return ScenarioConfig(
+        name="single-home",
+        period=make_period(),
+        home=make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)),
+        finance=finance,
+    )
 
 
 def _leaves(value: object, path: str = "") -> Iterator[tuple[str, object]]:
@@ -109,6 +114,7 @@ _HOME_TARGETS = {
     "pv_capacity_kw": "pv_config.capacity_kw",
     "inverter_capacity_kw": "pv_config.inverter_capacity_kw",
     "battery_capacity_kwh": "battery_config",
+    "battery_power_kw": "battery_config",
     "annual_consumption_kwh": "load_config.annual_consumption_kwh",
     "degradation_rate_per_year": "pv_config.degradation_rate_per_year",
 }
@@ -189,8 +195,8 @@ class TestEachKnobIsOnePureFormPreservingEdit:
 class TestEachKnobDeclaresWhatItEdits:
     """Each knob's target names the part of a scenario its apply edits: each stored home, the SEG rate or the finance block."""
 
-    def test_the_home_knobs_are_the_five_install_load_and_degradation_settings(self) -> None:
-        """The HOMES knobs are the install, load and degradation settings, the SEG knob alone sets the SEG rate, and every other knob sets finance."""
+    def test_the_home_knobs_are_the_six_install_load_and_degradation_settings(self) -> None:
+        """The HOMES knobs are the install settings, battery power included, and the load and degradation settings; the SEG knob alone sets the SEG rate, and every other knob sets finance."""
         by_target = {
             target: {name for name, knob in KNOBS.items() if knob.target is target} for target in KnobTarget
         }
@@ -228,6 +234,48 @@ class TestTheBatteryKnob:
             KNOBS["battery_capacity_kwh"].apply(_fleet(), -1.0)
 
 
+class TestTheBatteryPowerKnob:
+    """battery_power_kw: a power sets each battery's charge and discharge power alike, and gives a home without a battery none."""
+
+    def test_a_power_sets_each_batterys_charge_and_discharge_power_keeping_its_other_settings(self) -> None:
+        fleet = _fleet()
+        original = fleet.homes[0].battery_config
+        assert original is not None
+
+        swept = KNOBS["battery_power_kw"].apply(fleet, 3.68)
+
+        assert swept.homes[0].battery_config == dataclasses.replace(
+            original, max_charge_kw=3.68, max_discharge_kw=3.68
+        )
+        assert swept.homes[0].battery_config.capacity_kwh == 5.0
+        assert swept.homes[0].battery_config.min_soc_fraction == 0.2
+
+    def test_a_home_without_a_battery_is_left_unchanged(self) -> None:
+        fleet = _fleet()
+
+        swept = KNOBS["battery_power_kw"].apply(fleet, 3.68)
+
+        assert swept.homes[1:] == fleet.homes[1:]
+
+    def test_the_knob_edits_the_homes(self) -> None:
+        assert KNOBS["battery_power_kw"].target is KnobTarget.HOMES
+
+    @pytest.mark.parametrize("power", [0.0, -1.0])
+    def test_a_power_battery_config_refuses_is_refused_as_it_refuses_it(self, power: float) -> None:
+        with pytest.raises(ConfigurationError, match="max_charge_kw"):
+            KNOBS["battery_power_kw"].apply(_fleet(), power)
+
+    @pytest.mark.parametrize("form", _FORMS, ids=["fleet", "single-home"])
+    def test_a_scenario_with_no_battery_home_is_refused_naming_the_knob_and_the_capacity_knob(
+        self, form: Callable[[], ScenarioConfig]
+    ) -> None:
+        """A power sets nothing on a scenario none of whose homes has a battery, so it is refused rather than ignored."""
+        batteryless = KNOBS["battery_capacity_kwh"].apply(form(), 0.0)
+
+        with pytest.raises(ConfigurationError, match=r"battery_power_kw.*no home.*battery_capacity_kwh"):
+            KNOBS["battery_power_kw"].apply(batteryless, 3.68)
+
+
 _ALIAS_FIELDS = {
     "retained_floor": "retained_cash_floor_per_home_per_year_gbp",
     "battery_cost": "battery_cost_per_kwh_gbp",
@@ -253,6 +301,7 @@ _REAL_NUMBER_FINANCE_FIELDS = {
     "opex_per_home_per_year_gbp",
     "own_use_rate_pence_per_kwh",
     "retained_cash_floor_per_home_per_year_gbp",
+    "battery_inverter_cost_per_kw_gbp",
 }
 
 

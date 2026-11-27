@@ -78,6 +78,7 @@ class TestFinanceConfig:
         "own_use_rate_pence_per_kwh": 15.0,
         "retained_cash_floor_per_home_per_year_gbp": 27.0,
         "grid_services_model": NoGridServices(),
+        "battery_inverter_cost_per_kw_gbp": 0.0,
     }
 
     def test_construction_with_required_arg(self) -> None:
@@ -366,6 +367,31 @@ class TestFinanceConfigValidation:
         fc = FinanceConfig(**self._BASE, inverter_cost_per_kw_gbp=0.0)
         assert fc.inverter_cost_per_kw_gbp == 0.0
 
+    # ---- battery_inverter_cost_per_kw_gbp (must be >= 0) ----
+
+    def test_battery_inverter_cost_is_held_as_the_float_it_reads(self) -> None:
+        fc = FinanceConfig(**self._BASE, battery_inverter_cost_per_kw_gbp=120)
+        assert fc.battery_inverter_cost_per_kw_gbp == 120.0
+        assert type(fc.battery_inverter_cost_per_kw_gbp) is float
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(-5.0, id="negative"),
+            pytest.param(math.nan, id="nan"),
+            pytest.param(math.inf, id="inf"),
+        ],
+    )
+    def test_battery_inverter_cost_that_is_negative_or_not_finite_is_refused_naming_it(
+        self, value: float
+    ) -> None:
+        with pytest.raises(ConfigurationError, match="battery_inverter_cost_per_kw_gbp"):
+            FinanceConfig(**self._BASE, battery_inverter_cost_per_kw_gbp=value)
+
+    def test_battery_inverter_cost_zero_accepted(self) -> None:
+        fc = FinanceConfig(**self._BASE, battery_inverter_cost_per_kw_gbp=0.0)
+        assert fc.battery_inverter_cost_per_kw_gbp == 0.0
+
     # ---- own_use_rate_pence_per_kwh (must be >= 0) ----
 
     def test_own_use_rate_negative_raises(self) -> None:
@@ -523,6 +549,19 @@ class TestFinanceConfigParsing:
         with pytest.raises(ConfigurationError):
             parse_finance_config(
                 {"standing_charge_pence_per_day": 60.0, "inverter_cost_per_kw_gbp": -5.0}
+            )
+
+    def test_battery_inverter_cost_key_round_trips(self) -> None:
+        result = parse_finance_config(
+            {"standing_charge_pence_per_day": 60.0, "battery_inverter_cost_per_kw_gbp": 150.0}
+        )
+        assert result is not None
+        assert result.battery_inverter_cost_per_kw_gbp == 150.0
+
+    def test_negative_battery_inverter_cost_is_refused_naming_the_key(self) -> None:
+        with pytest.raises(ConfigurationError, match="battery_inverter_cost_per_kw_gbp"):
+            parse_finance_config(
+                {"standing_charge_pence_per_day": 60.0, "battery_inverter_cost_per_kw_gbp": -5.0}
             )
 
     def test_out_of_range_propagates_configuration_error(self) -> None:

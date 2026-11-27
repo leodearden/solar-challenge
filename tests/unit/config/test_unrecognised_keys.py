@@ -1337,6 +1337,7 @@ class TestScenarioFileBlockKeys:
             "own_use_rate_pence_per_kwh": 12.0,
             "retained_cash_floor_per_home_per_year_gbp": 30.0,
             "grid_services_model": {"type": "capacity_at_events", **events_block},
+            "battery_inverter_cost_per_kw_gbp": 150.0,
         }
         document = {
             **_SCENARIO,

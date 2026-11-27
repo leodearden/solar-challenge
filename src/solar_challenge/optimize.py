@@ -12,12 +12,14 @@ docs/prds/discrete-install-config-sweep.md.
 from __future__ import annotations
 
 import itertools
+import math
 from collections import Counter
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Generic, Iterator, List, Mapping, Optional, Sequence, TypeVar
 
-from solar_challenge.battery import CAPACITY_SETTING_KWH
+from solar_challenge.battery import CAPACITY_SETTING_KWH, has_battery
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
@@ -58,32 +60,49 @@ class ConfigPoint:
             "no battery".
         inverter_kw: AC inverter rated capacity in kW, a finite number greater
             than 0, held as a float.
+        battery_kw: The battery's charge and discharge power in kW, a finite
+            number greater than 0 held as a float, or None (the default).  When
+            set, the ``battery_power_kw`` knob sets every home's
+            ``max_charge_kw`` and ``max_discharge_kw`` to it; None keeps each
+            home's own battery power.  A point with no battery
+            (``battery_kwh`` exactly 0) sets no power, and one that does is
+            refused.
     """
 
     pv_kwp: float
     battery_kwh: float
     inverter_kw: float
+    battery_kw: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Read the three install dimensions through number_fields, holding the floats read."""
+        """Read the install dimensions through number_fields, holding the floats read, and refuse a battery power on a point with no battery."""
         read_field(self, "pv_kwp", as_finite_float, POSITIVE)
         read_field(self, "battery_kwh", as_finite_float, CAPACITY_SETTING_KWH)
         read_field(self, "inverter_kw", as_finite_float, POSITIVE)
+        read_field(self, "battery_kw", as_finite_float, POSITIVE, optional=True)
+        if self.battery_kw is not None and not has_battery(self.battery_kwh, "battery_kwh"):
+            raise ConfigurationError(
+                f"battery_kw ({self.battery_kw:g}) needs a battery, but battery_kwh is 0, which means no battery"
+            )
 
 
-# Each install knob a ConfigPoint sets, with the dimension of the point it sets it to.
-_INSTALL_KNOBS: tuple[tuple[Knob, Callable[[ConfigPoint], float]], ...] = (
+# Each install knob a ConfigPoint sets, with the dimension of the point it sets it to; a
+# dimension that is None leaves its knob unapplied.
+_INSTALL_KNOBS: tuple[tuple[Knob, Callable[[ConfigPoint], Optional[float]]], ...] = (
     (KNOBS["pv_capacity_kw"], lambda point: point.pv_kwp),
     (KNOBS["battery_capacity_kwh"], lambda point: point.battery_kwh),
+    (KNOBS["battery_power_kw"], lambda point: point.battery_kw),
     (KNOBS["inverter_capacity_kw"], lambda point: point.inverter_kw),
 )
 
 
 def _installed(base: ScenarioConfig, point: ConfigPoint) -> ScenarioConfig:
-    """*base* with each install knob applied at its dimension of *point*."""
+    """*base* with each install knob applied at its dimension of *point*, a dimension that is None left unapplied."""
     scenario = base
     for knob, dimension in _INSTALL_KNOBS:
-        scenario = knob.apply(scenario, dimension(point))
+        value = dimension(point)
+        if value is not None:
+            scenario = knob.apply(scenario, value)
     return scenario
 
 
@@ -129,6 +148,16 @@ class ConfigResult:
         baseline_surplus_per_home_gbp: Project net surplus per home per year at
             the configured own-use rate (baseline_own_use_rate_pence_per_kwh).
             == project_economics.net_surplus_per_home_per_year_gbp.
+        n_homes: The fleet's homes, a whole number of at least 1.
+        year_one_grid_services_income_gbp: The fleet's grid-services income in
+            year 1 (£), the projection's age-0 income: year 1 is the year the
+            outlay is billed for (the projection's age-0 summaries).  A finite
+            number of at least 0.
+
+    ``capex_per_home_gbp`` and ``grid_services_income_per_home_gbp`` divide
+    ``total_capex_gbp`` and ``year_one_grid_services_income_gbp`` by
+    ``n_homes``; under ``capacity_at_events`` pricing the latter is the events
+    income per home.
     """
 
     config: ConfigPoint
@@ -158,6 +187,38 @@ class ConfigResult:
     baseline_surplus_per_home_gbp: float
     """Project net surplus per home per year at the configured own-use rate (£/home/year)."""
 
+    n_homes: int
+    """The fleet's homes, at least 1."""
+
+    year_one_grid_services_income_gbp: float
+    """The fleet's grid-services income in year 1, the projection's age-0 income (£)."""
+
+    def __post_init__(self) -> None:
+        """Refuse an n_homes that is not a whole number of at least 1, and a year-1 income that is not a finite number of at least 0.
+
+        Raises:
+            ValueError: Naming the field and its value; a computed result's
+                broken invariant is a defect, not a user refusal.
+        """
+        if isinstance(self.n_homes, bool) or not isinstance(self.n_homes, int) or self.n_homes < 1:
+            raise ValueError(f"ConfigResult.n_homes must be a whole number of at least 1; got n_homes={self.n_homes!r}")
+        income = self.year_one_grid_services_income_gbp
+        if not (math.isfinite(income) and income >= 0.0):
+            raise ValueError(
+                "ConfigResult.year_one_grid_services_income_gbp must be a finite number of at least 0; "
+                f"got year_one_grid_services_income_gbp={income!r}"
+            )
+
+    @property
+    def capex_per_home_gbp(self) -> float:
+        """The fleet capex per home (£/home)."""
+        return self.total_capex_gbp / self.n_homes
+
+    @property
+    def grid_services_income_per_home_gbp(self) -> float:
+        """The fleet's year-1 grid-services income per home (£/home/year)."""
+        return self.year_one_grid_services_income_gbp / self.n_homes
+
     @property
     def representative_outlay_gbp(self) -> float:
         """Representative home annual outlay at the solved rate (£), the solution's; the primary rank key."""
@@ -185,6 +246,69 @@ class ConfigResult:
 
 
 # ---------------------------------------------------------------------------
+# ReferenceComparison — one configuration against the sweep's reference
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReferenceComparison:
+    """One configuration's marginal figures and verdict against a reference configuration.
+
+    Every figure reads through the two results, so it cannot disagree with them.
+
+    Attributes:
+        result: The configuration compared.
+        reference: The configuration it is compared against.
+    """
+
+    result: ConfigResult
+    reference: ConfigResult
+
+    @property
+    def extra_capex_per_home_gbp(self) -> float:
+        """The result's capex per home less the reference's (£/home)."""
+        return self.result.capex_per_home_gbp - self.reference.capex_per_home_gbp
+
+    @property
+    def outlay_change_gbp(self) -> float:
+        """The result's representative outlay at its solved rate less the reference's (£/yr)."""
+        return self.result.representative_outlay_gbp - self.reference.representative_outlay_gbp
+
+    @property
+    def pays_for_itself(self) -> bool:
+        """Whether the result is feasible and its outlay is not above the reference's.
+
+        This is the cost-recovery ranking's verdict (PRD
+        docs/prds/event-dispatch-and-battery-sizing.md §6 decision 4): the
+        result recovers its own costs at no higher householder outlay.  It is not a
+        payback or NPV test.
+        """
+        return self.result.feasible and self.result.representative_outlay_gbp <= self.reference.representative_outlay_gbp
+
+
+def _install_order(point: ConfigPoint) -> tuple[float, float, bool, float, float]:
+    """*point*'s place in install order: pv_kwp, then battery_kwh, then battery_kw (the homes' own power, None, first), then inverter_kw, each ascending."""
+    return (
+        point.pv_kwp,
+        point.battery_kwh,
+        point.battery_kw is not None,
+        0.0 if point.battery_kw is None else point.battery_kw,
+        point.inverter_kw,
+    )
+
+
+def default_reference(points: Sequence[ConfigPoint]) -> ConfigPoint:
+    """The smallest battery at the smallest PV of *points*: the first in install order, least pv_kwp, then battery_kwh, then battery_kw (None first), then inverter_kw.
+
+    Raises:
+        ValueError: When *points* is empty.
+    """
+    if not points:
+        raise ValueError("default_reference: points must be non-empty; received none")
+    return min(points, key=_install_order)
+
+
+# ---------------------------------------------------------------------------
 # RankedSweep — aggregated sweep output
 # ---------------------------------------------------------------------------
 
@@ -196,7 +320,8 @@ class RankedSweep:
     Attributes:
         results: Feasible :class:`ConfigResult` objects sorted ascending by
             ``representative_outlay_gbp`` (deterministic tie-break: surplus
-            desc, pv_kwp asc, battery_kwh asc, inverter_kw asc).
+            desc, pv_kwp asc, battery_kwh asc, battery_kw asc with None
+            first, inverter_kw asc).
         infeasible: :class:`ConfigPoint` objects whose
             ``binding == 'infeasible_above_retail'``, in input order.
         retained_cash_floor_gbp: The retained-cash floor every config's
@@ -217,6 +342,10 @@ class RankedSweep:
             config's own-use is overridden to (``OwnUseBasis.OVERRIDE``), in
             (0, 1] as ``FinanceConfig`` reads it.  It has no default, so a
             sweep built by hand states the assumption it was solved under.
+        reference: The reference configuration's own :class:`ConfigResult`,
+            feasible or not, against which :meth:`against_reference` compares
+            each configuration: one of ``results`` (the same object) or a
+            result whose config is one of ``infeasible``.
     """
 
     results: tuple[ConfigResult, ...]
@@ -237,15 +366,27 @@ class RankedSweep:
     self_consumption_override: Optional[float]
     """The configs' common self_consumption_override, every solve's own-use assumption (None: simulated)."""
 
+    reference: ConfigResult
+    """The reference configuration's own result, one of results or at one of the infeasible points."""
+
     def __post_init__(self) -> None:
-        """Refuse a cheapest_feasible other than results[0].config, and a self_consumption_override FinanceConfig would refuse.
+        """Refuse a cheapest_feasible other than results[0].config, a reference that is not one of the sweep's configurations, and a self_consumption_override FinanceConfig would refuse.
 
         Raises:
             ValueError: If cheapest_feasible is not results[0].config, or not
-                None when results is empty.
+                None when results is empty; or if reference is neither one of
+                results nor a result whose config is one of infeasible.
             ConfigurationError: If self_consumption_override is not None and
                 not a finite number in (0, 1], naming it.
         """
+        if not (
+            any(result is self.reference for result in self.results)
+            or self.reference.config in self.infeasible
+        ):
+            raise ValueError(
+                "reference must be one of results or a result whose config is one of infeasible; "
+                f"got reference.config={self.reference.config!r}"
+            )
         read_field(self, "self_consumption_override", as_finite_float, FRACTION, optional=True)
         if self.results:
             if self.cheapest_feasible is not self.results[0].config:
@@ -261,6 +402,10 @@ class RankedSweep:
                     f"got {self.cheapest_feasible!r}"
                 )
 
+    def against_reference(self, result: ConfigResult) -> ReferenceComparison:
+        """*result* compared against this sweep's reference."""
+        return ReferenceComparison(result, self.reference)
+
 
 # ---------------------------------------------------------------------------
 # enumerate_configs
@@ -275,11 +420,27 @@ def _require_fleet_scenario(scenario: ScenarioConfig, caller: str) -> None:
         )
 
 
+def _battery_dimensions(
+    battery_kwh: Sequence[float], battery_kw: Optional[Sequence[float]]
+) -> list[tuple[float, Optional[float]]]:
+    """Each battery size with its power, the i-th with the i-th, or with None when *battery_kw* is None; ValueError when the two lengths differ."""
+    if battery_kw is None:
+        return [(kwh, None) for kwh in battery_kwh]
+    if len(battery_kw) != len(battery_kwh):
+        raise ValueError(
+            f"battery_kw must give one power per battery_kwh size: battery_kwh has "
+            f"{len(battery_kwh)} values, battery_kw {len(battery_kw)}."
+        )
+    return list(zip(battery_kwh, battery_kw))
+
+
 def iter_configs(
     base: ScenarioConfig,
     pv_kwp: Sequence[float],
     battery_kwh: Sequence[float],
     inverter_kw: Sequence[float],
+    *,
+    battery_kw: Optional[Sequence[float]] = None,
 ) -> Iterator[tuple[ConfigPoint, ScenarioConfig]]:
     """Generator variant of :func:`enumerate_configs` for memory-efficient sweeps.
 
@@ -289,11 +450,13 @@ def iter_configs(
     10×10×10 = 1 000-cell sweep over a 100-home fleet would otherwise produce
     100 000 :class:`~solar_challenge.home.HomeConfig` objects simultaneously).
 
-    Args and raises are identical to :func:`enumerate_configs`.
+    Args and raises are identical to :func:`enumerate_configs`; they are
+    checked before the first pair is yielded.
 
     Yields:
         ``(ConfigPoint, ScenarioConfig)`` pairs in
-        ``itertools.product(pv_kwp, battery_kwh, inverter_kw)`` order.
+        ``itertools.product(pv_kwp, battery sizes with their powers, inverter_kw)``
+        order.
     """
     _require_fleet_scenario(base, "iter_configs")
     if not pv_kwp:
@@ -302,9 +465,10 @@ def iter_configs(
         raise ValueError("battery_kwh must be a non-empty sequence.")
     if not inverter_kw:
         raise ValueError("inverter_kw must be a non-empty sequence.")
+    batteries = _battery_dimensions(battery_kwh, battery_kw)
 
-    for pv, batt, inv in itertools.product(pv_kwp, battery_kwh, inverter_kw):
-        point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv)
+    for pv, (batt, batt_kw), inv in itertools.product(pv_kwp, batteries, inverter_kw):
+        point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv, battery_kw=batt_kw)
         yield point, _installed(base, point)
 
 
@@ -313,6 +477,8 @@ def enumerate_configs(
     pv_kwp: Sequence[float],
     battery_kwh: Sequence[float],
     inverter_kw: Sequence[float],
+    *,
+    battery_kw: Optional[Sequence[float]] = None,
 ) -> list[tuple[ConfigPoint, ScenarioConfig]]:
     """Enumerate homogeneous-install scenarios over the cartesian product of three
     discrete install dimensions.
@@ -320,10 +486,13 @@ def enumerate_configs(
     For each combination in ``itertools.product(pv_kwp, battery_kwh, inverter_kw)``
     (pv outermost, inverter innermost) a :class:`ConfigPoint` is built and a new
     :class:`~solar_challenge.config.ScenarioConfig` is produced from *base* by
-    the ``pv_capacity_kw``, ``battery_capacity_kwh`` and ``inverter_capacity_kw``
-    knobs of :mod:`~solar_challenge.scenario_knobs`, so every scenario-level
-    field is kept.  The homes in the returned scenario are homogeneous in
-    PV/battery/inverter install capacity.
+    the ``pv_capacity_kw``, ``battery_capacity_kwh``, ``battery_power_kw`` and
+    ``inverter_capacity_kw`` knobs of :mod:`~solar_challenge.scenario_knobs`, so
+    every scenario-level field is kept.  The homes in the returned scenario are
+    homogeneous in PV/battery/inverter install capacity, and in battery power
+    when *battery_kw* is given.  *battery_kw* is parallel to *battery_kwh*: the
+    i-th power goes with the i-th size, so the pair is one dimension of the
+    product, not two.
 
     .. note::
         This function eagerly materialises the full product into a list.  For a
@@ -341,15 +510,22 @@ def enumerate_configs(
             battery nameplate (total) capacities in kWh (non-empty; 0.0 = no
             battery).
         inverter_kw: Discrete AC inverter capacities in kW (non-empty).
+        battery_kw: Keyword-only.  The battery power in kW of each
+            *battery_kwh* size, in the same order, set as
+            :attr:`ConfigPoint.battery_kw`; None (the default) keeps each
+            home's own battery power.
 
     Returns:
         A list of ``(ConfigPoint, ScenarioConfig)`` pairs in
         ``itertools.product`` order.
 
     Raises:
-        ValueError: If *base* is not a fleet scenario or any sequence is empty.
+        ValueError: If *base* is not a fleet scenario, any sequence is empty,
+            or *battery_kw*'s length differs from *battery_kwh*'s.
+        ConfigurationError: If a :class:`ConfigPoint` refuses its dimensions,
+            e.g. a power paired with the no-battery size 0.
     """
-    return list(iter_configs(base, pv_kwp, battery_kwh, inverter_kw))
+    return list(iter_configs(base, pv_kwp, battery_kwh, inverter_kw, battery_kw=battery_kw))
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +536,8 @@ __all__ = [
     "ConfigPoint",
     "ConfigResult",
     "RankedSweep",
+    "ReferenceComparison",
+    "default_reference",
     "enumerate_configs",
     "iter_configs",
     "run_sweep",
@@ -703,13 +881,16 @@ def feasible_split(
 def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
     """Sort ConfigResults by the sweep's rank key (pure, stable, no filtering).
 
-    Sort key (five levels, all applied for determinism):
+    Sort key (six levels, all applied for determinism):
 
     1. ``representative_outlay_gbp`` ascending — cheapest householder outlay first.
     2. ``surplus_at_solved_gbp`` **descending** — higher project surplus preferred on tie.
     3. ``config.pv_kwp`` ascending.
     4. ``config.battery_kwh`` ascending.
-    5. ``config.inverter_kw`` ascending.
+    5. ``config.battery_kw`` ascending, the homes' own power (``None``) first.
+    6. ``config.inverter_kw`` ascending.
+
+    Levels 3 to 6 are the install order :func:`default_reference` reads.
 
     Infeasible-binding records (``binding == 'infeasible_above_retail'``) are NOT
     filtered; they appear in the output at their natural sort position.  Use
@@ -724,13 +905,7 @@ def rank(results: Sequence["ConfigResult"]) -> "List[ConfigResult]":
     """
     return sorted(
         results,
-        key=lambda r: (
-            r.representative_outlay_gbp,
-            -r.surplus_at_solved_gbp,
-            r.config.pv_kwp,
-            r.config.battery_kwh,
-            r.config.inverter_kw,
-        ),
+        key=lambda r: (r.representative_outlay_gbp, -r.surplus_at_solved_gbp, *_install_order(r.config)),
     )
 
 
@@ -840,10 +1015,12 @@ def _evaluate_config(
         :class:`ConfigResult` with all fields populated.
     """
     finance = _required_finance(point, scenario)
-    run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=simulate)
+    fleet = scenario_fleet(scenario)
+    run = run_cost_recovery(fleet, finance, simulate=simulate)
     solution = run.solution
     econ = run.economics
     baseline_outlay = bill_distribution(run.projection.age0_summaries, finance).representative.total_outlay_gbp
+    _, year_one_income_gbp = run.projection.grid_services_income_gbp[0]
 
     return ConfigResult(
         config=point,
@@ -855,13 +1032,28 @@ def _evaluate_config(
         baseline_own_use_rate_pence_per_kwh=finance.own_use_rate_pence_per_kwh,
         baseline_outlay_gbp=baseline_outlay,
         baseline_surplus_per_home_gbp=econ.net_surplus_per_home_per_year_gbp,
+        n_homes=len(fleet.homes),
+        year_one_grid_services_income_gbp=year_one_income_gbp,
     )
+
+
+def _reference_point(points: Sequence[ConfigPoint], reference: Optional[ConfigPoint]) -> ConfigPoint:
+    """*reference*, or default_reference of *points* when it is None; ValueError naming it and *points* when it is not one of them."""
+    if reference is None:
+        return default_reference(points)
+    if reference not in points:
+        raise ValueError(
+            f"run_sweep: reference {reference!r} is not one of the configs' points: "
+            + ", ".join(repr(point) for point in points)
+        )
+    return reference
 
 
 def run_sweep(
     configs: List[tuple[ConfigPoint, ScenarioConfig]],
     *,
     simulate: FleetSimulate,
+    reference: Optional[ConfigPoint] = None,
 ) -> RankedSweep:
     """Drive a cartesian config grid through cost-recovery evaluation and rank results.
 
@@ -874,8 +1066,11 @@ def run_sweep(
 
     The feasible configs (``binding != 'infeasible_above_retail'``, split off by
     :func:`feasible_split`) are sorted ascending by ``representative_outlay_gbp``
-    with a deterministic 5-key tie-break (see :func:`rank`).  Infeasible configs
-    are collected as :class:`ConfigPoint` objects preserving input order.
+    with a deterministic tie-break (see :func:`rank`).  Infeasible configs
+    are collected as :class:`ConfigPoint` objects preserving input order.  The
+    reference configuration's own :class:`ConfigResult`, feasible or not, is
+    the sweep's ``reference``, which :meth:`RankedSweep.against_reference`
+    compares each configuration with; the ranking does not read it.
 
     Args:
         configs: List of ``(ConfigPoint, ScenarioConfig)`` pairs, typically from
@@ -888,6 +1083,10 @@ def run_sweep(
         simulate: The fleet simulator every config's projection runs
             through, such as a :class:`~solar_challenge.fleet.FleetRunner`'s
             ``simulate``.
+        reference: Keyword-only.  The configuration the sweep compares every
+            configuration against, one of *configs*' points; None (the
+            default) takes :func:`default_reference` of them, the smallest
+            battery at the smallest PV.
 
     Returns:
         :class:`RankedSweep` with sorted feasible results, infeasible points,
@@ -896,9 +1095,10 @@ def run_sweep(
 
     Raises:
         ValueError: When *configs* is empty, any scenario's ``finance`` is
-            None, or two configs' finance blocks set different retained-cash
-            floors or different self-consumption overrides; each is refused
-            before any simulation.
+            None, two configs' finance blocks set different retained-cash
+            floors or different self-consumption overrides, or *reference* is
+            not one of the configs' points; each is refused before any
+            simulation.
 
     .. note::
         **Simulation cost** — each config is one projection: at least
@@ -914,6 +1114,7 @@ def run_sweep(
         )
     common_floor = _RETAINED_CASH_FLOOR.common(configs)
     common_override = _SELF_CONSUMPTION_OVERRIDE.common(configs)
+    reference_point = _reference_point([point for point, _ in configs], reference)
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [
@@ -938,4 +1139,5 @@ def run_sweep(
         cheapest_feasible=cheapest,
         pareto_baseline=pareto,
         self_consumption_override=common_override,
+        reference=next(result for result in all_results if result.config == reference_point),
     )

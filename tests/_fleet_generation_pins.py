@@ -36,6 +36,7 @@ SHIPPED_FLEETS: tuple[str, ...] = (
     "scenarios/bristol-phase1-flex.yaml",
     "scenarios/bristol-fin-calibration.yaml",
     "scenarios/bristol-phase1-proportional-battery-sweep.yaml",
+    "scenarios/bristol-phase1-victron.yaml",
 )
 
 PROBE_FLEETS: tuple[str, ...] = (

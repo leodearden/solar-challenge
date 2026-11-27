@@ -11,6 +11,9 @@ Usage::
 
 from collections.abc import Iterable
 
+RANK = "## Cost-Recovery Rank"
+"""The heading of the report's first table: each feasible config's solved rate, outlay and economics, and its marginal figures against the reference."""
+
 TRADE_OFF = "## Configured-Rate Trade-Off"
 """The heading of the report's second table: each feasible config's baseline pair at its configured own-use rate."""
 

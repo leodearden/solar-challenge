@@ -13,6 +13,7 @@ from typing import Annotated, Optional
 
 import typer
 
+from solar_challenge.battery import has_battery
 from solar_challenge.board_report import generate_config_ranking_report
 from solar_challenge.cli.utils import (
     ASSUMPTION_BASES,
@@ -32,6 +33,7 @@ from solar_challenge.finance import DEFAULT_SPREADSHEET_SELF_CONSUMPTION, OwnUse
 from solar_challenge.gridservices import GridServicesEventsConfig, GridServicesModel
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
+    ConfigPoint,
     enumerate_configs,
     run_sweep,
     sensitivity_panel,
@@ -83,6 +85,81 @@ def _parse_float_list(raw: str, flag: str) -> list[float]:
         raise ValueError(
             f"--{flag} contains a non-numeric value: {raw!r}"
         ) from None
+
+
+def _battery_powers(raw: Optional[str], battery_list: list[float]) -> Optional[list[float]]:
+    """--battery-kw's powers, one per --battery size, or None when it is not given.
+
+    Raises:
+        ConfigurationError: Naming --battery-kw, --battery and both counts, when
+            the counts differ; or naming both flags, the power and the size,
+            when it gives a power to a size that means no battery.
+    """
+    if raw is None:
+        return None
+    powers = _parse_float_list(raw, "battery-kw")
+    if len(powers) != len(battery_list):
+        raise ConfigurationError(
+            f"--battery-kw must give one power per --battery size, in the same order: "
+            f"--battery-kw gives {len(powers)}, --battery {len(battery_list)}"
+        )
+    for kwh, kw in zip(battery_list, powers):
+        if not has_battery(kwh, "--battery"):
+            raise ConfigurationError(
+                f"--battery-kw gives {kw:g} kW to --battery {kwh:g}, which means no battery and takes no "
+                "power; sweep the no-battery configuration in a run without --battery-kw"
+            )
+    return powers
+
+
+_REFERENCE_FORM = "PV,BATTERY,INVERTER[,BATTERY_KW]"
+
+
+def _comma_form(point: ConfigPoint) -> str:
+    """*point* as --reference writes it: PV,BATTERY,INVERTER, then BATTERY_KW when it sets one."""
+    values = [point.pv_kwp, point.battery_kwh, point.inverter_kw]
+    if point.battery_kw is not None:
+        values.append(point.battery_kw)
+    return ",".join(f"{value:g}" for value in values)
+
+
+def _parse_reference(raw: Optional[str], *, with_battery_kw: bool) -> Optional[ConfigPoint]:
+    """The ConfigPoint --reference names, or None when it is not given.
+
+    Raises:
+        ConfigurationError: Naming --reference and its form, when it gives
+            other than three values, or four exactly when --battery-kw is given;
+            or naming --reference as given and ConfigPoint's refusal, when its
+            values are no configuration.
+    """
+    if raw is None:
+        return None
+    values = _parse_float_list(raw, "reference")
+    arity = 4 if with_battery_kw else 3
+    if len(values) != arity:
+        raise ConfigurationError(
+            f"--reference is written {_REFERENCE_FORM}, with BATTERY_KW exactly when --battery-kw "
+            f"is given, so it takes {arity} values here; got {len(values)}: {raw!r}"
+        )
+    pv_kwp, battery_kwh, inverter_kw, *battery_kw = values
+    try:
+        return ConfigPoint(
+            pv_kwp=pv_kwp,
+            battery_kwh=battery_kwh,
+            inverter_kw=inverter_kw,
+            battery_kw=battery_kw[0] if battery_kw else None,
+        )
+    except ConfigurationError as refusal:
+        raise ConfigurationError(f"--reference {raw}: {refusal}") from refusal
+
+
+def _require_in_grid(reference: Optional[ConfigPoint], points: list[ConfigPoint]) -> None:
+    """Refuse a --reference that is not one of the sweep's *points*, naming it and listing every point in its comma form, '; ' between points."""
+    if reference is not None and reference not in points:
+        raise ConfigurationError(
+            f"--reference {_comma_form(reference)} is not one of the sweep's configurations: "
+            + "; ".join(_comma_form(point) for point in points)
+        )
 
 
 def _banded_knob(name: str) -> Knob:
@@ -236,6 +313,30 @@ def configs(
                  "state-of-charge limits. Use 0 for no-battery.",
         ),
     ] = "0,5,10",
+    battery_kw: Annotated[
+        Optional[str],
+        typer.Option(
+            "--battery-kw",
+            help=(
+                "Comma-separated battery powers in kW, one per --battery size in the same "
+                "order, each setting that size's charge and discharge power alike "
+                "(e.g. '2.4,3.68').  Omitted, each home keeps its own battery power.  "
+                "Every --battery size must then be above 0."
+            ),
+        ),
+    ] = None,
+    reference: Annotated[
+        Optional[str],
+        typer.Option(
+            "--reference",
+            help=(
+                "The configuration the marginal columns compare against, as "
+                "PV,BATTERY,INVERTER, with a fourth value, BATTERY_KW, when --battery-kw "
+                "is given (e.g. '4,5.12,3.68,2.4').  Defaults to the smallest battery at "
+                "the smallest PV."
+            ),
+        ),
+    ] = None,
     inverter: Annotated[
         str,
         typer.Option(
@@ -302,6 +403,17 @@ def configs(
     for each config, ranks by householder outlay, and renders a two-table
     markdown report (cost-recovery rank + configured-rate trade-off).
 
+    --battery-kw pairs a power with each --battery size, setting each home's
+    battery charge and discharge power alike; its count must be --battery's.
+    The rank table's marginal columns compare each configuration with the
+    reference, --reference or, by default, the smallest battery at the
+    smallest PV: the extra capex per home and the outlay change against it,
+    the configuration's own year-1 grid-services income per home, and whether
+    it pays for itself (feasible, at an outlay not above the reference's).  A
+    --battery-kw count other than --battery's, a --reference of the wrong
+    arity, and a --reference that is not one of the sweep's configurations are
+    each refused before any simulation.
+
     Every config, the configured-rate trade-off and the sensitivity panel are
     computed under --assumptions' finance, ``finance.with_own_use_basis`` of
     the scenario's, as finance run computes each mode: physics clears any
@@ -330,6 +442,8 @@ def configs(
     pv_list = _parse_float_list(pv, "pv")
     battery_list = _parse_float_list(battery, "battery")
     inverter_list = _parse_float_list(inverter, "inverter")
+    battery_kw_list = _battery_powers(battery_kw, battery_list)
+    reference_point = _parse_reference(reference, with_battery_kw=battery_kw_list is not None)
 
     # ---- Parse sensitivity names and the ranking's own-use basis -------------
     requested_sensitivity = None if sensitivity is None else _parse_sensitivity(sensitivity)
@@ -374,12 +488,13 @@ def configs(
         )
 
     # ---- Enumerate configs --------------------------------------------------
-    all_configs = enumerate_configs(base, pv_list, battery_list, inverter_list)
+    all_configs = enumerate_configs(base, pv_list, battery_list, inverter_list, battery_kw=battery_kw_list)
+    _require_in_grid(reference_point, [point for point, _ in all_configs])
 
     # ---- Run sweep ----------------------------------------------------------
     print_info(cli, "Solving cost-recovery rates…")
     simulate = cli.runner.simulate
-    ranked = run_sweep(all_configs, simulate=simulate)
+    ranked = run_sweep(all_configs, simulate=simulate, reference=reference_point)
 
     # Report sweep summary so the user knows what to expect in the report.
     n_feasible = len(ranked.results)

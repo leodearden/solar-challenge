@@ -16,6 +16,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.board_report import generate_finance_report
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenarios
@@ -26,6 +27,7 @@ from solar_challenge.finance import (
     irr,
     npv,
 )
+from solar_challenge.home import HomeConfig
 from solar_challenge.projection import (
     MultiYearCurve,
     ProjectEconomics,
@@ -77,6 +79,7 @@ def _make_finance(
     roof_fit_cost_gbp: float = 1000.0,
     battery_cost_per_kwh_gbp: float = 250.0,
     inverter_cost_per_kw_gbp: float = 0.0,
+    battery_inverter_cost_per_kw_gbp: float = 0.0,
     grant_gbp: float = 0.0,
     equity_fraction: float = 0.75,
     loan_term_years: int = 15,
@@ -91,6 +94,7 @@ def _make_finance(
         roof_fit_cost_gbp=roof_fit_cost_gbp,
         battery_cost_per_kwh_gbp=battery_cost_per_kwh_gbp,
         inverter_cost_per_kw_gbp=inverter_cost_per_kw_gbp,
+        battery_inverter_cost_per_kw_gbp=battery_inverter_cost_per_kw_gbp,
         grant_gbp=grant_gbp,
         equity_fraction=equity_fraction,
         loan_term_years=loan_term_years,
@@ -1096,4 +1100,41 @@ class TestProjectEconomicsInverterCapex:
         # Must be 2.5 * 200 = 500, NOT 4.0 * 200 = 800
         assert (nonzero.total_capex_gbp - baseline.total_capex_gbp) == pytest.approx(
             2.5 * cost_per_kw
+        )
+
+
+class TestProjectEconomicsBatteryInverterCapex:
+    """The project capex prices each battery's discharge power at the battery inverter's cost."""
+
+    @staticmethod
+    def _fleet_of_a_battery_home_and_a_home_without_one() -> list[HomeConfig]:
+        battery_home = dataclasses.replace(
+            make_sized_home(pv_kwp=4.0),
+            battery_config=dataclasses.replace(
+                BatteryConfig(capacity_kwh=5.0), max_charge_kw=1.8, max_discharge_kw=2.4
+            ),
+        )
+        return [battery_home, make_sized_home(pv_kwp=3.0)]
+
+    def test_the_capex_rises_by_each_batterys_discharge_power_at_the_battery_inverter_cost(self) -> None:
+        homes = self._fleet_of_a_battery_home_and_a_home_without_one()
+        fleet = scenario_fleet(make_scenario_of(homes))
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=fleet_wired_dc_kw(homes))
+
+        unpriced = project_economics(curve, fleet, _make_finance(battery_inverter_cost_per_kw_gbp=0.0))
+        priced = project_economics(curve, fleet, _make_finance(battery_inverter_cost_per_kw_gbp=300.0))
+
+        assert priced.total_capex_gbp - unpriced.total_capex_gbp == pytest.approx(2.4 * 300.0)
+
+    def test_at_the_default_cost_the_capex_is_the_oracles_build_up(self) -> None:
+        homes = self._fleet_of_a_battery_home_and_a_home_without_one()
+        finance = _make_finance(inverter_cost_per_kw_gbp=200.0)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=fleet_wired_dc_kw(homes))
+
+        econ = project_economics(curve, scenario_fleet(make_scenario_of(homes)), finance)
+
+        assert finance.battery_inverter_cost_per_kw_gbp == 0.0
+        assert econ.total_capex_gbp == pytest.approx(
+            fleet_wired_dc_kw(homes) * finance.pv_cost_per_kwp_gbp
+            + roof_battery_inverter_capex_gbp(homes, finance)
         )

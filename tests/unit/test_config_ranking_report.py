@@ -12,9 +12,9 @@ from __future__ import annotations
 from typing import Optional
 
 from solar_challenge.board_report import generate_config_ranking_report
-from solar_challenge.optimize import ConfigPoint, RankedSweep, SensitivityAxis, SensitivityPanel
+from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep, SensitivityAxis, SensitivityPanel
 from tests._factories import make_bill_distribution_from_statistics, make_config_result, make_ranked_sweep
-from tests._ranking_report_tables import TRADE_OFF, config_column, config_row, section_under
+from tests._ranking_report_tables import RANK, TRADE_OFF, config_column, config_row, section_under
 
 
 # ---------------------------------------------------------------------------
@@ -255,12 +255,12 @@ class TestGenerateConfigRankingReportTable1:
         assert row["Equity IRR"] == "n/a", f"'n/a' for NaN IRR not found in the Equity IRR cell:\n{report}"
 
     def test_recommendation_marker_on_cheapest(self) -> None:
-        """The cheapest feasible config (results[0]), and no other, must be flagged '★ RECOMMENDATION' in its Config cell."""
+        """The cheapest feasible config (results[0]), and no other, must be flagged '★ RECOMMENDATION' in its Config cell; it is also make_ranked_sweep's default reference."""
         ranked = self._make_sweep_two_feasible()
         report = generate_config_ranking_report(ranked)
 
         expected = {
-            self.CHEAPEST: f"{self.CHEAPEST} ★ RECOMMENDATION",
+            self.CHEAPEST: f"{self.CHEAPEST} ★ RECOMMENDATION (reference)",
             self.SECOND_CHEAPEST: self.SECOND_CHEAPEST,
         }
         shown = config_column(report, "## Cost-Recovery Rank", "Config", expected)
@@ -610,3 +610,123 @@ class TestGenerateConfigRankingReportSensitivity:
         assert "—" in report, (
             f"'—' for None tops in sensitivity section not found:\n{report}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §E — Table (1)'s marginal columns against the reference
+# ---------------------------------------------------------------------------
+
+
+class TestMarginalColumnsAgainstTheReference:
+    """Each ranked row's extra capex, outlay change, year-1 income and verdict against a named reference."""
+
+    REFERENCE = "4.0 kWp / 5.1 kWh at 2.4 kW / 3.7 kW"
+    LARGER_BATTERY = "4.0 kWp / 10.2 kWh at 3.7 kW / 3.7 kW"
+    LARGER_PV = "5.0 kWp / 5.1 kWh at 2.4 kW / 3.7 kW"
+    EXTRA_CAPEX = "Extra CapEx vs Reference (£/home)"
+    OUTLAY_CHANGE = "Outlay Change vs Reference (£/yr)"
+    INCOME = "Grid Services Income Yr 1 (£/home)"
+    PAYS = "Pays For Itself"
+
+    _reference = make_config_result(
+        pv_kwp=4.0, battery_kwh=5.12, battery_kw=2.4, inverter_kw=3.68,
+        total_capex_gbp=40_000.0, n_homes=10, representative_outlay_gbp=400.0,
+        year_one_grid_services_income_gbp=360.0,
+    )
+    _larger_battery = make_config_result(
+        pv_kwp=4.0, battery_kwh=10.24, battery_kw=3.68, inverter_kw=3.68,
+        total_capex_gbp=52_800.0, n_homes=10, representative_outlay_gbp=412.5,
+        year_one_grid_services_income_gbp=500.0,
+    )
+    _larger_pv = make_config_result(
+        pv_kwp=5.0, battery_kwh=5.12, battery_kw=2.4, inverter_kw=3.68,
+        total_capex_gbp=33_600.0, n_homes=10, representative_outlay_gbp=396.75,
+        year_one_grid_services_income_gbp=240.0,
+    )
+
+    def _report(self, reference: ConfigResult | None = None, infeasible: tuple[ConfigPoint, ...] = ()) -> str:
+        sweep = make_ranked_sweep(
+            results=(self._larger_pv, self._reference, self._larger_battery),
+            infeasible=infeasible,
+            reference=self._reference if reference is None else reference,
+        )
+        return generate_config_ranking_report(sweep)
+
+    def test_each_row_reads_its_figures_against_the_reference(self) -> None:
+        report = self._report()
+
+        cells = {
+            label: {column: config_row(report, RANK, label)[column] for column in (self.EXTRA_CAPEX, self.OUTLAY_CHANGE, self.INCOME, self.PAYS)}
+            for label in (self.LARGER_BATTERY, self.LARGER_PV)
+        }
+        assert cells == {
+            self.LARGER_BATTERY: {self.EXTRA_CAPEX: "+£1,280", self.OUTLAY_CHANGE: "+£12.50", self.INCOME: "£50.00", self.PAYS: "no"},
+            self.LARGER_PV: {self.EXTRA_CAPEX: "-£640", self.OUTLAY_CHANGE: "-£3.25", self.INCOME: "£24.00", self.PAYS: "yes"},
+        }
+
+    def test_the_reference_row_reads_zero_and_is_labelled_the_reference(self) -> None:
+        row = config_row(self._report(), RANK, self.REFERENCE)
+
+        assert row["Config"] == f"{self.REFERENCE} (reference)"
+        assert (row[self.EXTRA_CAPEX], row[self.OUTLAY_CHANGE], row[self.INCOME], row[self.PAYS]) == (
+            "+£0", "+£0.00", "£36.00", "yes"
+        )
+
+    def test_a_recommended_reference_is_labelled_the_reference_after_the_recommendation(self) -> None:
+        sweep = make_ranked_sweep(results=(self._reference, self._larger_battery))
+
+        row = config_row(generate_config_ranking_report(sweep), RANK, self.REFERENCE)
+
+        assert row["Config"] == f"{self.REFERENCE} ★ RECOMMENDATION (reference)"
+
+    def test_the_section_names_the_reference_above_the_table(self) -> None:
+        section = section_under(self._report(), RANK)
+
+        line = f"Marginal columns compare each configuration against the reference **{self.REFERENCE}** (✔ Surplus meets floor)"
+        assert line in section
+        assert section.index(line) < section.index("| Config |")
+
+    def test_an_infeasible_reference_is_named_and_every_row_reads_against_it(self) -> None:
+        reference = make_config_result(
+            pv_kwp=6.0, battery_kwh=10.0, inverter_kw=5.0, feasible=False, binding="infeasible_above_retail",
+            total_capex_gbp=60_000.0, n_homes=10, representative_outlay_gbp=405.0,
+        )
+
+        report = self._report(reference=reference, infeasible=(reference.config,))
+
+        assert (
+            "Marginal columns compare each configuration against the reference "
+            "**6.0 kWp / 10.0 kWh / 5.0 kW** (✘ INFEASIBLE: required rate exceeds retail)"
+        ) in section_under(report, RANK)
+        assert config_column(report, RANK, self.EXTRA_CAPEX, (self.REFERENCE, self.LARGER_BATTERY, self.LARGER_PV)) == {
+            self.REFERENCE: "-£2,000", self.LARGER_BATTERY: "-£720", self.LARGER_PV: "-£2,640"
+        }
+        assert config_column(report, RANK, self.OUTLAY_CHANGE, (self.REFERENCE, self.LARGER_BATTERY, self.LARGER_PV)) == {
+            self.REFERENCE: "-£5.00", self.LARGER_BATTERY: "+£7.50", self.LARGER_PV: "-£8.25"
+        }
+        assert config_column(report, RANK, self.PAYS, (self.REFERENCE, self.LARGER_BATTERY, self.LARGER_PV)) == {
+            self.REFERENCE: "yes", self.LARGER_BATTERY: "no", self.LARGER_PV: "yes"
+        }
+
+    def test_a_battery_power_is_labelled_in_every_table_and_the_sensitivity_section(self) -> None:
+        sweep = make_ranked_sweep(
+            results=(self._larger_battery,),
+            infeasible=(ConfigPoint(pv_kwp=6.0, battery_kwh=10.24, inverter_kw=5.0, battery_kw=3.68),),
+        )
+        panel = _make_sensitivity_panel(
+            axes=(_make_sensitivity_axis(top_config=self._larger_battery.config),),
+            baseline_top=self._larger_battery.config,
+        )
+
+        report = generate_config_ranking_report(sweep, panel)
+
+        assert config_row(report, RANK, self.LARGER_BATTERY)
+        assert config_row(report, TRADE_OFF, self.LARGER_BATTERY)
+        assert "| 6.0 kWp / 10.2 kWh at 3.7 kW / 5.0 kW |" in section_under(report, "### Infeasible Configurations")
+        assert f"Baseline top config: {self.LARGER_BATTERY}" in section_under(report, "## Sensitivity Analysis")
+        assert f"| {self.LARGER_BATTERY} |" in report.split("### Axis:", 1)[1]
+
+    def test_a_config_without_a_battery_power_keeps_its_label(self) -> None:
+        sweep = make_ranked_sweep(results=(make_config_result(pv_kwp=4.0, battery_kwh=5.0, inverter_kw=5.0),))
+
+        assert config_row(generate_config_ranking_report(sweep), RANK, "4.0 kWp / 5.0 kWh / 5.0 kW")

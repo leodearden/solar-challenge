@@ -22,6 +22,9 @@ from tests._grid_charge_forecast_notices import PV_BLIND_AND_TRAILING_NOTICE, TR
 _PHYSICS_OPENING = "Self-consumption assumption: **Physics**\n\n"
 """The line a ranking report computed on simulated own-use opens with, above its first heading."""
 
+_REFERENCE_LINE_OPENING = "Marginal columns compare each configuration against the reference "
+"""How the line naming a ranking report's reference opens, after the first heading's notices and before its table."""
+
 
 def _annualised_from(window: SimulationWindow) -> BillDistribution:
     """make_bill_distribution's distribution, its yearly figures annualised from *window*."""
@@ -77,13 +80,15 @@ class TestGridChargeForecastNotice:
         sweep = make_ranked_sweep((make_config_result(outlay=_sized_by("pv_blind", "trailing_14_days")),))
 
         assert generate_config_ranking_report(sweep).startswith(
-            _PHYSICS_OPENING + "## Cost-Recovery Rank\n\n" + PV_BLIND_AND_TRAILING_NOTICE + "| Config"
+            _PHYSICS_OPENING + "## Cost-Recovery Rank\n\n" + PV_BLIND_AND_TRAILING_NOTICE + _REFERENCE_LINE_OPENING
         )
 
     def test_a_ranking_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
         sweep = make_ranked_sweep((make_config_result(outlay=_sized_by()),))
 
-        assert generate_config_ranking_report(sweep).startswith(_PHYSICS_OPENING + "## Cost-Recovery Rank\n\n| Config")
+        assert generate_config_ranking_report(sweep).startswith(
+            _PHYSICS_OPENING + "## Cost-Recovery Rank\n\n" + _REFERENCE_LINE_OPENING
+        )
 
 
 class TestExtrapolationNotice:
@@ -123,15 +128,14 @@ class TestExtrapolationNotice:
         assert generate_config_ranking_report(sweep).startswith(
             _PHYSICS_OPENING + "## Cost-Recovery Rank\n\n"
             "*Yearly figures are extrapolated ×12.200 from a 30-day window (2024-06-01 to 2024-06-30), "
-            "not whole calendar years.*\n\n"
-            "| Config"
+            "not whole calendar years.*\n\n" + _REFERENCE_LINE_OPENING
         )
 
     def test_a_ranking_report_from_a_whole_calendar_year_has_no_notice(self) -> None:
         report = generate_config_ranking_report(_one_config_sweep(make_window(days=365, first_day=date(2023, 1, 1))))
 
         assert "extrapolated" not in report
-        assert report.startswith(_PHYSICS_OPENING + "## Cost-Recovery Rank\n\n| Config")
+        assert report.startswith(_PHYSICS_OPENING + "## Cost-Recovery Rank\n\n" + _REFERENCE_LINE_OPENING)
 
 
 def _column_header(finance_report: str) -> str:
