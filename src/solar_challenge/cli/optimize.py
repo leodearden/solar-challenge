@@ -13,6 +13,7 @@ from typing import Annotated, Optional
 
 import typer
 
+from solar_challenge.battery import has_battery
 from solar_challenge.board_report import generate_config_ranking_report
 from solar_challenge.cli.utils import (
     ASSUMPTION_BASES,
@@ -91,7 +92,8 @@ def _battery_powers(raw: Optional[str], battery_list: list[float]) -> Optional[l
 
     Raises:
         ConfigurationError: Naming --battery-kw, --battery and both counts, when
-            the counts differ.
+            the counts differ; or naming both flags, the power and the size,
+            when it gives a power to a size that means no battery.
     """
     if raw is None:
         return None
@@ -101,6 +103,12 @@ def _battery_powers(raw: Optional[str], battery_list: list[float]) -> Optional[l
             f"--battery-kw must give one power per --battery size, in the same order: "
             f"--battery-kw gives {len(powers)}, --battery {len(battery_list)}"
         )
+    for kwh, kw in zip(battery_list, powers):
+        if not has_battery(kwh, "--battery"):
+            raise ConfigurationError(
+                f"--battery-kw gives {kw:g} kW to --battery {kwh:g}, which means no battery and takes no "
+                "power; sweep the no-battery configuration in a run without --battery-kw"
+            )
     return powers
 
 
@@ -115,12 +123,14 @@ def _comma_form(point: ConfigPoint) -> str:
     return ",".join(f"{value:g}" for value in values)
 
 
-def _reference_point(raw: Optional[str], *, with_battery_kw: bool) -> Optional[ConfigPoint]:
+def _parse_reference(raw: Optional[str], *, with_battery_kw: bool) -> Optional[ConfigPoint]:
     """The ConfigPoint --reference names, or None when it is not given.
 
     Raises:
         ConfigurationError: Naming --reference and its form, when it gives
-            other than three values, or four exactly when --battery-kw is given.
+            other than three values, or four exactly when --battery-kw is given;
+            or naming --reference as given and ConfigPoint's refusal, when its
+            values are no configuration.
     """
     if raw is None:
         return None
@@ -132,20 +142,23 @@ def _reference_point(raw: Optional[str], *, with_battery_kw: bool) -> Optional[C
             f"is given, so it takes {arity} values here; got {len(values)}: {raw!r}"
         )
     pv_kwp, battery_kwh, inverter_kw, *battery_kw = values
-    return ConfigPoint(
-        pv_kwp=pv_kwp,
-        battery_kwh=battery_kwh,
-        inverter_kw=inverter_kw,
-        battery_kw=battery_kw[0] if battery_kw else None,
-    )
+    try:
+        return ConfigPoint(
+            pv_kwp=pv_kwp,
+            battery_kwh=battery_kwh,
+            inverter_kw=inverter_kw,
+            battery_kw=battery_kw[0] if battery_kw else None,
+        )
+    except ConfigurationError as refusal:
+        raise ConfigurationError(f"--reference {raw}: {refusal}") from refusal
 
 
 def _require_in_grid(reference: Optional[ConfigPoint], points: list[ConfigPoint]) -> None:
-    """Refuse a --reference that is not one of the sweep's *points*, naming it and listing every point in its comma form."""
+    """Refuse a --reference that is not one of the sweep's *points*, naming it and listing every point in its comma form, '; ' between points."""
     if reference is not None and reference not in points:
         raise ConfigurationError(
             f"--reference {_comma_form(reference)} is not one of the sweep's configurations: "
-            + ", ".join(_comma_form(point) for point in points)
+            + "; ".join(_comma_form(point) for point in points)
         )
 
 
@@ -430,7 +443,7 @@ def configs(
     battery_list = _parse_float_list(battery, "battery")
     inverter_list = _parse_float_list(inverter, "inverter")
     battery_kw_list = _battery_powers(battery_kw, battery_list)
-    reference_point = _reference_point(reference, with_battery_kw=battery_kw_list is not None)
+    reference_point = _parse_reference(reference, with_battery_kw=battery_kw_list is not None)
 
     # ---- Parse sensitivity names and the ranking's own-use basis -------------
     requested_sensitivity = None if sensitivity is None else _parse_sensitivity(sensitivity)

@@ -996,8 +996,42 @@ class TestBatteryPowerAndReference:
         assert result.exit_code == 1, result.output
         assert "Configuration error:" in stderr
         assert "--reference" in stderr
-        assert "4,5.12,3.68,2.4" in stderr
-        assert "4,10.24,3.68,3.68" in stderr
+        assert "4,5.12,3.68,2.4; 4,10.24,3.68,3.68" in stderr
+        assert asked == []
+
+    @pytest.mark.parametrize(
+        ("battery_kw", "reference", "field"),
+        [
+            pytest.param(["--battery-kw", "2.4,3.68"], "4,0,3.68,2.4", "battery_kw", id="power-without-a-battery"),
+            pytest.param([], "-1,5.12,3.68", "pv_kwp", id="negative-pv"),
+        ],
+    )
+    def test_a_reference_that_is_no_configuration_is_refused_naming_it_before_any_simulation(
+        self,
+        tmp_path: Path,
+        optimize_fleet_results: FleetResults,
+        battery_kw: list[str],
+        reference: str,
+        field: str,
+    ) -> None:
+        result, asked = self._run(tmp_path, optimize_fleet_results, [*self._GRID, *battery_kw, "--reference", reference])
+
+        stderr = " ".join(result.stderr.split())
+        assert result.exit_code == 1, result.output
+        assert stderr.startswith(f"Configuration error: --reference {reference}: "), stderr
+        assert field in stderr
+        assert asked == []
+
+    def test_a_power_for_a_no_battery_size_is_refused_naming_both_flags_before_any_simulation(
+        self, tmp_path: Path, optimize_fleet_results: FleetResults
+    ) -> None:
+        options = ["--pv", "4", "--inverter", "3.68", "--sensitivity", "", "--battery", "0,5.12", "--battery-kw", "2.4,3.68"]
+        result, asked = self._run(tmp_path, optimize_fleet_results, options)
+
+        stderr = " ".join(result.stderr.split())
+        assert result.exit_code == 1, result.output
+        assert stderr.startswith("Configuration error: --battery-kw"), stderr
+        assert "--battery 0" in stderr
         assert asked == []
 
     @pytest.mark.parametrize(
