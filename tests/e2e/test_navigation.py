@@ -56,7 +56,7 @@ def _click_sidebar_link(page: Page, link_text: str) -> None:
     link = _desktop_sidebar(page).locator("a", has_text=link_text).first
     target = link.evaluate("link => link.href")
     link.click()
-    page.wait_for_url(target, wait_until="domcontentloaded")
+    page.wait_for_url(lambda url: url == target, wait_until="domcontentloaded")
 
 
 # ── Sidebar link navigation ───────────────────────────────────────────
@@ -128,8 +128,10 @@ def test_sidebar_history_link(page: Page, live_server: str) -> None:
     assert "/history/runs" in page.url
 
 
-# Defers each desktop-sidebar link's navigation by one second after its click, so the
-# navigation starts after Playwright's click has returned.
+# Defers each desktop-sidebar link's navigation by one second after its click, so on any
+# host whose click returns within that second the navigation starts after the click has
+# returned. A click that outlasts the second catches the navigation in its own auto-wait,
+# so a green run on a loaded host does not show the helper waits for the page it opens.
 _DEFER_SIDEBAR_LINK_NAVIGATION = """
 window.addEventListener(
     "click",
@@ -145,10 +147,10 @@ window.addEventListener(
 """
 
 
-def test_a_sidebar_link_opens_its_page_when_its_navigation_starts_after_the_click_returns(
+def test_click_sidebar_link_waits_for_a_navigation_that_starts_after_the_click_returns(
     page: Page, live_server: str
 ) -> None:
-    """A sidebar link test waits for the page the link opens, even when that page's navigation starts after the click returns."""
+    """`_click_sidebar_link` returns on the page the link opens, even when that page's navigation starts after the click returns."""
     page.add_init_script(_DEFER_SIDEBAR_LINK_NAVIGATION)
     page.goto(live_server + "/")
     page.wait_for_load_state("domcontentloaded")
