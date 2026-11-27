@@ -31,6 +31,8 @@ from solar_challenge.optimize import (
     ConfigPoint,
     ConfigResult,
     RankedSweep,
+    ReferenceComparison,
+    default_reference,
     enumerate_configs,
     pareto_baseline,
     run_sweep,
@@ -107,6 +109,17 @@ def _interior_finance(n_homes: int = 5) -> FinanceConfig:
         grant_gbp=0.0,
         own_use_rate_pence_per_kwh=15.0,
         retained_cash_floor=100.0,
+        retail_baseline_rate=30.0,
+    )
+
+
+def _infeasible_finance() -> FinanceConfig:
+    """Finance params that produce infeasible_above_retail at _interior_finance's floor: a PV capex no rate up to retail recovers."""
+    return _make_finance(
+        pv_cost_per_kwp_gbp=20000.0,
+        grant_gbp=0.0,
+        own_use_rate_pence_per_kwh=15.0,
+        retained_cash_floor=_interior_finance().retained_cash_floor_per_home_per_year_gbp,
         retail_baseline_rate=30.0,
     )
 
@@ -258,6 +271,7 @@ class TestRankedSweep:
             cheapest_feasible=cr.config,
             pareto_baseline=(pareto_pt,),
             self_consumption_override=None,
+            reference=cr,
         )
 
         assert rs.results == (cr,)
@@ -276,6 +290,7 @@ class TestRankedSweep:
             cheapest_feasible=cr.config,
             pareto_baseline=(),
             self_consumption_override=self_consumption_override,
+            reference=cr,
         )
 
     @pytest.mark.parametrize("override", [None, 0.6, 1.0], ids=["simulated", "an-override", "the-whole-generation"])
@@ -300,6 +315,7 @@ class TestRankedSweep:
                 retained_cash_floor_gbp=100.0,
                 cheapest_feasible=cr.config,
                 pareto_baseline=(),
+                reference=cr,
             )
 
     def test_cheapest_feasible_equals_results_0_config(self) -> None:
@@ -312,18 +328,21 @@ class TestRankedSweep:
             cheapest_feasible=cr.config,
             pareto_baseline=(),
             self_consumption_override=None,
+            reference=cr,
         )
         assert rs.cheapest_feasible is rs.results[0].config
 
     def test_cheapest_feasible_none_when_results_empty(self) -> None:
         """When results is empty, cheapest_feasible must be None."""
+        reference = make_config_result(feasible=False, binding="infeasible_above_retail")
         rs = RankedSweep(
             results=(),
-            infeasible=(),
+            infeasible=(reference.config,),
             retained_cash_floor_gbp=100.0,
             cheapest_feasible=None,
             pareto_baseline=(),
             self_consumption_override=None,
+            reference=reference,
         )
         assert rs.cheapest_feasible is None
 
@@ -339,6 +358,7 @@ class TestRankedSweep:
                 cheapest_feasible=wrong,
                 pareto_baseline=(),
                 self_consumption_override=None,
+                reference=cr,
             )
 
     def test_frozen_raises_on_assignment(self) -> None:
@@ -351,6 +371,7 @@ class TestRankedSweep:
             cheapest_feasible=cr.config,
             pareto_baseline=(),
             self_consumption_override=None,
+            reference=cr,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             rs.retained_cash_floor_gbp = 999.0  # type: ignore[misc]
@@ -656,14 +677,7 @@ class TestRunSweepMultiConfig:
         return simulate
 
     def _make_infeasible_finance(self) -> FinanceConfig:
-        """Finance params that produce infeasible_above_retail at _interior_finance's floor: a PV capex no rate up to retail recovers."""
-        return _make_finance(
-            pv_cost_per_kwp_gbp=20000.0,
-            grant_gbp=0.0,
-            own_use_rate_pence_per_kwh=15.0,
-            retained_cash_floor=_interior_finance().retained_cash_floor_per_home_per_year_gbp,
-            retail_baseline_rate=30.0,
-        )
+        return _infeasible_finance()
 
     def test_results_sorted_ascending_by_outlay(self) -> None:
         """results is sorted ascending by representative_outlay_gbp."""
@@ -808,6 +822,95 @@ class TestPerHomeFigures:
         for result in ranked.results:
             assert result.year_one_grid_services_income_gbp == 0.0
             assert result.grid_services_income_per_home_gbp == 0.0
+
+
+class TestTheReference:
+    """run_sweep compares every configuration against a reference, one of its configurations."""
+
+    _N_HOMES = 3
+
+    def _configs(self) -> list[tuple[ConfigPoint, ScenarioConfig]]:
+        return enumerate_configs(
+            _make_scenario(n_homes=self._N_HOMES, finance=_interior_finance(self._N_HOMES)),
+            [4.0, 5.0],
+            [5.12, 10.24],
+            [3.68],
+            battery_kw=[2.4, 3.68],
+        )
+
+    def _simulate(self) -> FleetSimulate:
+        return answering_with(_make_fleet_results(n_homes=self._N_HOMES))
+
+    def test_every_result_is_compared_against_the_reference_given(self) -> None:
+        configs = self._configs()
+        point = configs[3][0]
+
+        ranked = run_sweep(configs, simulate=self._simulate(), reference=point)
+
+        assert ranked.reference.config == point
+        for result in ranked.results:
+            assert ranked.against_reference(result) == ReferenceComparison(result, ranked.reference)
+        own = ranked.against_reference(ranked.reference)
+        assert (own.extra_capex_per_home_gbp, own.outlay_change_gbp) == (0.0, 0.0)
+        assert own.pays_for_itself is ranked.reference.feasible
+
+    def test_without_a_reference_the_default_reference_of_the_grid_is_taken(self) -> None:
+        configs = self._configs()
+
+        ranked = run_sweep(configs, simulate=self._simulate())
+
+        assert ranked.reference.config == default_reference([point for point, _ in configs])
+
+    def test_a_reference_outside_the_grid_is_refused_naming_it_and_the_grid_before_any_simulation(self) -> None:
+        configs = self._configs()
+        outside = ConfigPoint(pv_kwp=4.0, battery_kwh=7.0, inverter_kw=3.68, battery_kw=2.4)
+        asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError) as refusal:
+            run_sweep(configs, simulate=recording(asked, self._simulate()), reference=outside)
+
+        assert repr(outside) in str(refusal.value)
+        for point, _ in configs:
+            assert repr(point) in str(refusal.value)
+        assert asked == []
+
+    def test_an_infeasible_reference_is_held_and_never_pays_for_itself(self) -> None:
+        feasible_configs = enumerate_configs(
+            _make_scenario(n_homes=self._N_HOMES, finance=_interior_finance(self._N_HOMES)),
+            pv_kwp=[4.0],
+            battery_kwh=[6.0],
+            inverter_kw=[3.6],
+        )
+        infeasible_finance = _infeasible_finance()
+        infeasible_pt = ConfigPoint(pv_kwp=5.0, battery_kwh=6.0, inverter_kw=3.6)
+        configs = [
+            *feasible_configs,
+            (infeasible_pt, _make_scenario(n_homes=self._N_HOMES, finance=infeasible_finance)),
+        ]
+
+        ranked = run_sweep(configs, simulate=self._simulate(), reference=infeasible_pt)
+
+        assert ranked.reference.config == infeasible_pt
+        assert ranked.reference.feasible is False
+        assert infeasible_pt in ranked.infeasible
+        assert ranked.against_reference(ranked.reference).pays_for_itself is False
+
+    def test_a_ranked_sweep_refuses_a_reference_that_is_neither_a_result_nor_an_infeasible_point(self) -> None:
+        result = make_config_result(pv_kwp=4.0)
+        stranger = make_config_result(pv_kwp=6.0)
+        twin = make_config_result(pv_kwp=4.0)
+
+        for reference in (stranger, twin):
+            with pytest.raises(ValueError, match="reference"):
+                RankedSweep(
+                    results=(result,),
+                    infeasible=(ConfigPoint(pv_kwp=8.0, battery_kwh=10.0, inverter_kw=5.0),),
+                    retained_cash_floor_gbp=100.0,
+                    cheapest_feasible=result.config,
+                    pareto_baseline=(),
+                    self_consumption_override=None,
+                    reference=reference,
+                )
 
 
 # ---------------------------------------------------------------------------

@@ -193,6 +193,7 @@ def make_config_result(
     pv_kwp: float = 4.0,
     battery_kwh: float = 6.0,
     inverter_kw: float = 3.6,
+    battery_kw: Optional[float] = None,
     solved_own_use_rate_pence_per_kwh: float = 15.0,
     outlay: Optional[BillDistribution] = None,
     representative_outlay_gbp: Optional[float] = None,
@@ -225,7 +226,7 @@ def make_config_result(
         binding=binding,
     )
     return ConfigResult(
-        config=ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw),
+        config=ConfigPoint(pv_kwp=pv_kwp, battery_kwh=battery_kwh, inverter_kw=inverter_kw, battery_kw=battery_kw),
         solution=solution,
         total_capex_gbp=total_capex_gbp,
         min_dscr=min_dscr,
@@ -246,13 +247,18 @@ def make_ranked_sweep(
     pareto: Sequence[ConfigPoint] = (),
     floor: float = 27.0,
     self_consumption_override: Optional[float] = None,
+    reference: Optional[ConfigResult] = None,
 ) -> RankedSweep:
     """Build a RankedSweep whose cheapest_feasible is results[0].config, None when *results* is empty.
 
     That is the rule ``RankedSweep.__post_init__`` enforces, so the factory
     cannot build a sweep that breaks it; ``floor`` is the retained-cash floor
     and ``self_consumption_override`` the configs' own-use assumption.
+    ``reference`` defaults to results[0], or, when *results* is empty, to an
+    infeasible result at infeasible[0]'s dimensions.
     """
+    if reference is None:
+        reference = results[0] if results else _infeasible_result_at(infeasible[0])
     return RankedSweep(
         results=tuple(results),
         infeasible=tuple(infeasible),
@@ -260,6 +266,19 @@ def make_ranked_sweep(
         cheapest_feasible=results[0].config if results else None,
         pareto_baseline=tuple(pareto),
         self_consumption_override=self_consumption_override,
+        reference=reference,
+    )
+
+
+def _infeasible_result_at(point: ConfigPoint) -> ConfigResult:
+    """make_config_result's infeasible result at *point*'s dimensions."""
+    return make_config_result(
+        pv_kwp=point.pv_kwp,
+        battery_kwh=point.battery_kwh,
+        inverter_kw=point.inverter_kw,
+        battery_kw=point.battery_kw,
+        feasible=False,
+        binding="infeasible_above_retail",
     )
 
 

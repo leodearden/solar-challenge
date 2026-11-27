@@ -6,10 +6,16 @@ All tests run over synthetic ConfigResult sets — no simulation, no PVGIS.
 """
 from __future__ import annotations
 
+import itertools
 import random
 
+import pytest
+
 from solar_challenge.optimize import (
+    ConfigPoint,
+    ReferenceComparison,
     cheapest_feasible,
+    default_reference,
     feasible_split,
     pareto_baseline,
     rank,
@@ -358,3 +364,90 @@ class TestCheapestFeasible:
         )
         result = cheapest_feasible([low_surplus, high_surplus])
         assert result == high_surplus.config
+
+
+# ---------------------------------------------------------------------------
+# ReferenceComparison and default_reference — a configuration against the reference
+# ---------------------------------------------------------------------------
+
+
+class TestReferenceComparison:
+    """ReferenceComparison reads a configuration's marginal figures and verdict through it and the reference."""
+
+    _REFERENCE = make_config_result(
+        pv_kwp=4.0, total_capex_gbp=20_000.0, n_homes=4, representative_outlay_gbp=500.0
+    )
+
+    def test_the_marginal_figures_are_the_results_less_the_references(self) -> None:
+        result = make_config_result(
+            pv_kwp=5.0, total_capex_gbp=30_000.0, n_homes=5, representative_outlay_gbp=487.5
+        )
+
+        comparison = ReferenceComparison(result, self._REFERENCE)
+
+        assert comparison.extra_capex_per_home_gbp == pytest.approx(30_000.0 / 5 - 20_000.0 / 4)
+        assert comparison.outlay_change_gbp == pytest.approx(487.5 - 500.0)
+
+    @pytest.mark.parametrize(
+        ("outlay", "pays"),
+        [pytest.param(450.0, True, id="below"), pytest.param(500.0, True, id="equal"), pytest.param(512.5, False, id="above")],
+    )
+    def test_a_feasible_result_pays_for_itself_when_its_outlay_is_not_above_the_references(
+        self, outlay: float, pays: bool
+    ) -> None:
+        result = make_config_result(pv_kwp=5.0, representative_outlay_gbp=outlay)
+
+        assert ReferenceComparison(result, self._REFERENCE).pays_for_itself is pays
+
+    def test_an_infeasible_result_never_pays_for_itself(self) -> None:
+        result = make_config_result(
+            pv_kwp=5.0, feasible=False, binding="infeasible_above_retail", representative_outlay_gbp=300.0
+        )
+
+        assert ReferenceComparison(result, self._REFERENCE).pays_for_itself is False
+
+    @pytest.mark.parametrize(
+        ("feasible", "binding"),
+        [pytest.param(True, "floor", id="feasible"), pytest.param(False, "infeasible_above_retail", id="infeasible")],
+    )
+    def test_the_reference_against_itself_is_zeros_and_its_feasibility(self, feasible: bool, binding: str) -> None:
+        reference = make_config_result(feasible=feasible, binding=binding, total_capex_gbp=12_000.0, n_homes=3)
+
+        comparison = ReferenceComparison(reference, reference)
+
+        assert (comparison.extra_capex_per_home_gbp, comparison.outlay_change_gbp) == (0.0, 0.0)
+        assert comparison.pays_for_itself is feasible
+
+
+class TestDefaultReference:
+    """default_reference: the smallest battery at the smallest PV, ties broken by power then inverter."""
+
+    def test_a_grid_given_out_of_order_gives_the_smallest_battery_at_the_smallest_pv(self) -> None:
+        points = [
+            ConfigPoint(pv_kwp=pv, battery_kwh=kwh, inverter_kw=inv, battery_kw=kw)
+            for pv, (kwh, kw), inv in itertools.product([5.0, 4.0], [(10.24, 3.68), (5.12, 2.4)], [5.0, 3.68])
+        ]
+
+        assert default_reference(points) == ConfigPoint(pv_kwp=4.0, battery_kwh=5.12, inverter_kw=3.68, battery_kw=2.4)
+
+    def test_a_size_without_a_power_comes_before_the_size_at_any_power(self) -> None:
+        unpowered = ConfigPoint(pv_kwp=4.0, battery_kwh=5.12, inverter_kw=3.68)
+        points = [
+            ConfigPoint(pv_kwp=4.0, battery_kwh=5.12, inverter_kw=3.68, battery_kw=0.5),
+            unpowered,
+        ]
+
+        assert default_reference(points) == unpowered
+
+    def test_the_lower_power_then_the_smaller_inverter_breaks_a_tie(self) -> None:
+        points = [
+            ConfigPoint(pv_kwp=4.0, battery_kwh=5.12, inverter_kw=3.68, battery_kw=3.68),
+            ConfigPoint(pv_kwp=4.0, battery_kwh=5.12, inverter_kw=5.0, battery_kw=2.4),
+            ConfigPoint(pv_kwp=4.0, battery_kwh=5.12, inverter_kw=3.68, battery_kw=2.4),
+        ]
+
+        assert default_reference(points) == points[2]
+
+    def test_no_points_are_refused(self) -> None:
+        with pytest.raises(ValueError):
+            default_reference([])
