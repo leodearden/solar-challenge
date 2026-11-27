@@ -19,7 +19,6 @@ policy*, with the readers of scenario_import.py; this module declares what the f
 
 from collections.abc import Callable, Mapping
 from datetime import date
-from types import MappingProxyType
 from typing import Any, Optional
 
 from solar_challenge.config import ScenarioConfig, parse_scenario, read_fleet_scenario
@@ -40,10 +39,11 @@ from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
     require_json_object,
 )
+from solar_challenge.web.form_choices import flat_rate_choice
 from solar_challenge.web.scenario_import import (
     BlockRead,
+    HeldType,
     ImportedForm,
-    SettingReader,
     fleet_scenario_document,
     not_loaded,
     read_as_given,
@@ -53,7 +53,6 @@ from solar_challenge.web.scenario_import import (
     read_period,
     read_seg,
     read_typed_block,
-    required,
     scenario_yaml_document,
 )
 
@@ -278,10 +277,9 @@ _PAGE = "builder"
 #: The seg keys the builder form holds: a rate, its seg_rate_pence_per_kwh.
 _HELD_SEG_KEYS = frozenset({"rate_pence_per_kwh"})
 
-#: The tariff type the builder form holds, with a reader for its one setting, the import_rate.
-_FORM_TARIFF_SETTINGS: Mapping[str, Mapping[str, SettingReader]] = MappingProxyType({
-    "flat_rate": {"rate_per_kwh": required(_PAGE)},
-})
+#: The tariff the builder form holds, as its import reads it: a flat rate, its import_rate,
+#: whose input builder.html draws itself.
+_BUILDER_TARIFFS: tuple[HeldType, ...] = (flat_rate_choice(_PAGE).held_type(),)
 
 
 def builder_form_from_scenario(document: object) -> ImportedForm:
@@ -389,7 +387,7 @@ def _read_tariff(tariff: Any) -> BlockRead:
     """
     if tariff is None:
         return {}, ()
-    form_tariff, unheld = read_typed_block(tariff, "tariff", "type", _FORM_TARIFF_SETTINGS, _PAGE)
+    form_tariff, unheld = read_typed_block(tariff, "tariff", "type", _BUILDER_TARIFFS, _PAGE)
     return {"import_rate": form_tariff["rate_per_kwh"]}, unheld
 
 

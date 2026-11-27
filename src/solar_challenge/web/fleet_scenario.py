@@ -1,27 +1,28 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The fleet page's form both ways: the fleet a fleet form describes, as the simulate endpoint runs it and as a scenario document, and the fleet form a scenario describes.
+"""The fleet page's form both ways: the fleet a fleet form describes, as the simulate endpoint runs it and as a scenario document, and the fleet form a scenario describes; and the tariffs and dispatch strategies the form offers, FLEET_FORM_TARIFFS and FLEET_FORM_DISPATCH.
 
 A fleet form is the body fleet-simulator.js's buildPayload() posts; this module is the
 fleet page's counterpart of builder_form.py.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeVar
 
 import pandas as pd
 
 from solar_challenge.config import read_fleet_scenario
-from solar_challenge.dispatch import TOUOptimizedStrategyConfig
+from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import ComponentDistribution
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
-from solar_challenge.scenario_blocks import child_path, parse_dispatch_strategy_config
+from solar_challenge.number_fields import Interval
+from solar_challenge.scenario_blocks import child_path, parse_dispatch_strategy_config, parse_tariff_config
 from solar_challenge.scenario_writer import location_block
-from solar_challenge.tariff import PRESET_RATES, PresetRates
+from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
     FLEET_SIZE_DEFAULT,
@@ -41,6 +42,14 @@ from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
 )
 from solar_challenge.web.run_names import is_run_name
+from solar_challenge.web.form_choices import (
+    RATE_STEP,
+    RATE_WITHIN,
+    FormChoice,
+    FormSetting,
+    SettingInput,
+    flat_rate_choice,
+)
 from solar_challenge.web.scenario_import import (
     BlockRead,
     ImportedForm,
@@ -235,8 +244,6 @@ def _read_location(location: Location) -> BlockRead:
 def _read_battery(fleet: Mapping[str, Any], path: str, read: ComponentDistribution | None) -> BlockRead:
     """The fleet form's battery capacity and dispatch strategy: the battery block of the *path* fleet block *fleet*, whose grammar reading is *read*, none when it is absent or null.
 
-    A dispatch strategy on its tariff's clock loads none, and its path is named not loaded.
-
     Raises:
         ConfigurationError: From ComponentLimits.editor_spec, for a capacity the editor cannot
             hold, or for a dispatch strategy the form cannot hold.
@@ -263,38 +270,143 @@ def _or_default(default: float) -> SettingReader:
     return read_or_default
 
 
-def _economy_rate_readers(rates: PresetRates) -> Mapping[str, SettingReader]:
-    """The readers of an economy tariff's two rates, each filling a rate the scenario leaves out from *rates*, its preset's default rates."""
-    return {"peak_rate": _or_default(rates.peak_rate), "off_peak_rate": _or_default(rates.off_peak_rate)}
+def _economy_choice(tariff_type: str, title: str) -> FormChoice:
+    """The *tariff_type* economy preset as the fleet form holds it: its peak and off-peak rates, each starting at its PRESET_RATES rate, the rate a scenario that leaves it out is charged."""
+    rates = PRESET_RATES[tariff_type]
+    return FormChoice(
+        tariff_type,
+        title,
+        (
+            FormSetting(
+                "peak_rate", "Peak Rate (£/kWh)", RATE_WITHIN, RATE_STEP, rates.peak_rate, _or_default(rates.peak_rate)
+            ),
+            FormSetting(
+                "off_peak_rate",
+                "Off-peak Rate (£/kWh)",
+                RATE_WITHIN,
+                RATE_STEP,
+                rates.off_peak_rate,
+                _or_default(rates.off_peak_rate),
+            ),
+        ),
+    )
 
 
-def _one_peak_window(peak_hours: Any, path: str) -> list[list[Any]]:
-    """*peak_hours* as the fleet form's one [start, end] peak window.
+#: The tariffs the fleet form offers, the one it starts at first.
+FLEET_FORM_TARIFFS: tuple[FormChoice, ...] = (
+    flat_rate_choice(_PAGE),
+    _economy_choice("economy_7", "Economy 7"),
+    _economy_choice("economy_10", "Economy 10"),
+)
+
+
+def _one_window_or_the_clock(peak_hours: Any, path: str) -> list[list[Any]] | None:
+    """*peak_hours* as the fleet form holds it: None, the tariff's clock, or its one [start, end] peak window.
 
     Raises:
-        ConfigurationError: For any other number of windows, naming *path*.
+        ConfigurationError: For any other value, naming *path*.
     """
+    if peak_hours is None:
+        return None
     if not isinstance(peak_hours, list) or len(peak_hours) != 1:
         raise ConfigurationError(
-            f"{path} must hold exactly one [start, end] window, the fleet page's one "
-            f"peak window, got {peak_hours!r}"
+            f"{path} must be null, the tariff's clock, or hold exactly one [start, end] window, "
+            f"the fleet page's one peak window, got {peak_hours!r}"
         )
     return [list(peak_hours[0])]
 
 
-#: Each tariff type the fleet form holds, with a reader for each setting of it the form holds.
-_FORM_TARIFF_SETTINGS: Mapping[str, Mapping[str, SettingReader]] = MappingProxyType({
-    "flat_rate": {"rate_per_kwh": required(_PAGE)},
-    "economy_7": _economy_rate_readers(PRESET_RATES["economy_7"]),
-    "economy_10": _economy_rate_readers(PRESET_RATES["economy_10"]),
+#: The title of each dispatch strategy the fleet form offers, by its tag.
+_DISPATCH_TITLES: Mapping[str, str] = MappingProxyType({
+    "self_consumption": "Self Consumption (default)",
+    "tou_optimized": "Time-of-Use Optimised",
+    "peak_shaving": "Peak Shaving",
 })
 
-#: Each dispatch strategy the fleet form holds, with a reader for each setting of it the form holds.
-_FORM_DISPATCH_SETTINGS: Mapping[str, Mapping[str, SettingReader]] = MappingProxyType({
-    "self_consumption": {},
-    "tou_optimized": {"peak_hours": _one_peak_window},
-    "peak_shaving": {"import_limit_kw": required(_PAGE)},
+#: The setting the fleet form holds for each field of a dispatch strategy, by the field's name.
+_DISPATCH_SETTINGS: Mapping[str, FormSetting] = MappingProxyType({
+    setting.key: setting
+    for setting in (
+        FormSetting(
+            "peak_hours",
+            "Peak window",
+            Interval(0, 24),
+            1,
+            ((16, 19),),
+            _one_window_or_the_clock,
+            SettingInput.CLOCK_OR_WINDOW,
+        ),
+        FormSetting("import_limit_kw", "Import limit (kW)", Interval(0.1, 100), 0.1, 3.0, required(_PAGE)),
+    )
 })
+
+
+_Entry = TypeVar("_Entry")
+
+
+def _dispatch_form_entry(table_name: str, table: Mapping[str, _Entry], key: str, wanted: str) -> _Entry:
+    """*table*'s entry for *key*: the *wanted* a dispatch choice of the fleet form needs.
+
+    Raises:
+        KeyError: When *table* has no entry for *key*, naming *table_name*, *wanted* and the
+            rule it breaks.
+    """
+    try:
+        return table[key]
+    except KeyError:
+        raise KeyError(
+            f"{table_name} has no entry for {wanted}: every dispatch strategy the fleet form "
+            "offers needs a title in _DISPATCH_TITLES and, for each field its constructor takes, "
+            "a setting in _DISPATCH_SETTINGS"
+        ) from None
+
+
+def fleet_form_dispatch_choices(configs: Mapping[str, type[DispatchStrategyConfig]]) -> tuple[FormChoice, ...]:
+    """The dispatch strategies the fleet form offers: one choice per strategy of *configs*, by its tag, in its order, holding a setting for each field its constructor takes, in field order.
+
+    Raises:
+        KeyError: For a tag the form has no title for, naming it, or a field it has no
+            setting for, naming it and its strategy's tag; each names the table that lacks it.
+    """
+    return tuple(
+        FormChoice(
+            tag,
+            _dispatch_form_entry("_DISPATCH_TITLES", _DISPATCH_TITLES, tag, f"the dispatch strategy {tag!r}"),
+            tuple(
+                _dispatch_form_entry(
+                    "_DISPATCH_SETTINGS",
+                    _DISPATCH_SETTINGS,
+                    each.name,
+                    f"the field {each.name!r} of the dispatch strategy {tag!r}",
+                )
+                for each in fields(config)
+                if each.init
+            ),
+        )
+        for tag, config in configs.items()
+    )
+
+
+#: The dispatch strategies the fleet form offers, the one a battery that names none runs first.
+FLEET_FORM_DISPATCH: tuple[FormChoice, ...] = fleet_form_dispatch_choices(STRATEGY_CONFIG_BY_TYPE)
+
+
+def _refuse_a_start_the_grammar_does_not_read() -> None:
+    """Read each choice's starting block, the block the fleet form posts at its starts, with the grammar's reader of that block, at a path naming its table and its type.
+
+    Raises:
+        ConfigurationError: From parse_tariff_config or parse_dispatch_strategy_config, for a
+            type the grammar does not read or a start it refuses.
+    """
+    for choice in FLEET_FORM_TARIFFS:
+        parse_tariff_config(choice.starting_block("type"), block_path=f"FLEET_FORM_TARIFFS[{choice.type!r}]")
+    for choice in FLEET_FORM_DISPATCH:
+        parse_dispatch_strategy_config(
+            choice.starting_block("strategy_type"), block_path=f"FLEET_FORM_DISPATCH[{choice.type!r}]"
+        )
+
+
+_refuse_a_start_the_grammar_does_not_read()
 
 
 def _read_tariff(tariff: Any) -> BlockRead:
@@ -305,30 +417,21 @@ def _read_tariff(tariff: Any) -> BlockRead:
     """
     if tariff is None:
         return {}, ()
-    form_tariff, unheld = read_typed_block(tariff, "tariff", "type", _FORM_TARIFF_SETTINGS, _PAGE)
+    form_tariff, unheld = read_typed_block(
+        tariff, "tariff", "type", [choice.held_type() for choice in FLEET_FORM_TARIFFS], _PAGE
+    )
     return {"tariff": form_tariff}, unheld
 
 
 def _read_dispatch(dispatch: Any, path: str) -> BlockRead:
     """The fleet form's dispatch strategy: the *path* dispatch block, none when it is absent or null.
 
-    A tou_optimized on its tariff's clock, which the form has no control for, loads none and
-    names *path* not loaded.
-
     Raises:
         ConfigurationError: For a dispatch strategy the form cannot hold, naming its setting.
     """
     if dispatch is None:
         return {}, ()
-    if _on_its_tariffs_clock(dispatch, path):
-        return {}, (path,)
     form_dispatch, unheld = read_typed_block(
-        dispatch, path, "strategy_type", _FORM_DISPATCH_SETTINGS, _PAGE
+        dispatch, path, "strategy_type", [choice.held_type() for choice in FLEET_FORM_DISPATCH], _PAGE
     )
     return {"dispatch_strategy": form_dispatch}, unheld
-
-
-def _on_its_tariffs_clock(dispatch: dict[str, Any], path: str) -> bool:
-    """Whether the *path* dispatch block, one read_fleet_scenario accepted, is tou_optimized on its tariff's clock: it sets no peak_hours."""
-    strategy = parse_dispatch_strategy_config(dispatch, block_path=path)
-    return isinstance(strategy, TOUOptimizedStrategyConfig) and strategy.peak_hours is None

@@ -3,12 +3,14 @@
 
 The fleet page (fleet_scenario.py) and the scenario builder (builder_form.py) each read a
 scenario with these readers, declaring what their own form holds as the reads they give
-read_blocks.  Each reader that refuses names the setting and the *page* it refuses it for.
+read_blocks, and each typed block it holds, a tariff or a dispatch strategy, as the
+HeldType of each type it offers.  Each reader that refuses names the setting and the
+*page* it refuses it for.
 docs/web-ui-design.md, *Scenario import policy*, says what loads, what is named not
 loaded and what is refused.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Any
@@ -164,31 +166,46 @@ def required(page: str) -> SettingReader:
     return read_required
 
 
+@dataclass(frozen=True)
+class HeldType:
+    """A type a page's form holds for a typed block, a tariff or a dispatch strategy, with the reader of each setting it holds for it.
+
+    Attributes:
+        type: The type, as the block's type key names it.
+        settings: The reader of each setting of that type the form holds, by the setting's
+            key in the block, in the order the form holds them.
+    """
+
+    type: str
+    settings: Mapping[str, SettingReader]
+
+
 def read_typed_block(
     block: Mapping[str, Any],
     path: str,
     type_key: str,
-    settings: Mapping[str, Mapping[str, SettingReader]],
+    held: Sequence[HeldType],
     page: str,
 ) -> BlockRead:
-    """The *path* block, whose *type_key* names its type, as the *page*'s form holds it: its type and the settings *settings* reads for that type.
+    """The *path* block, whose *type_key* names its type, as the *page*'s form holds it: its type and each setting the form holds for that type, read by that setting's reader.
 
     Raises:
-        ConfigurationError: For a type *settings* has no readers for, naming the block's
-            *type_key*, the page and the types it holds, or from a setting's reader.
+        ConfigurationError: For a type none of *held* is, naming the block's *type_key*, the
+            page and the types it holds, or from a setting's reader.
     """
     block_type = block[type_key]
-    readers = settings.get(block_type)
-    if readers is None:
+    held_type = next((each for each in held if each.type == block_type), None)
+    if held_type is None:
         raise ConfigurationError(
             f"{child_path(path, type_key)} must be one the {page} holds "
-            f"({', '.join(settings)}), got {block_type!r}"
+            f"({', '.join(each.type for each in held)}), got {block_type!r}"
         )
     form = {
         type_key: block_type,
-        **{key: read(block.get(key), child_path(path, key)) for key, read in readers.items()},
+        **{key: read(block.get(key), child_path(path, key)) for key, read in held_type.settings.items()},
     }
-    return form, not_loaded(block, path, dict.fromkeys((type_key, *readers), ()))
+    held_keys = (type_key, *held_type.settings)
+    return form, not_loaded(block, path, dict.fromkeys(held_keys, ()))
 
 
 def read_seg(seg: Any, held: frozenset[str], page: str) -> BlockRead:

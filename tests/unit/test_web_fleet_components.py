@@ -420,6 +420,9 @@ class TestPageLimits:
             ("1 Week", days_window(7)),
         ]
 
+    def test_every_forms_flat_rate_starts_at_0_28(self) -> None:
+        assert page_limits().flat_rate_start == 0.28
+
     def test_the_components_are_fleet_components(self) -> None:
         components = page_limits().components
         assert list(components) == list(FLEET_COMPONENTS)
@@ -450,6 +453,7 @@ class TestPageLimits:
             "period_presets": [
                 {"title": title, "window": window(period)} for title, period in limits.period_presets.items()
             ],
+            "flat_rate_start": 0.28,
             "components": [
                 {
                     "key": component.key,

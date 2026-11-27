@@ -50,7 +50,55 @@ document.addEventListener('alpine:init', () => {
         return DistributionEditor.load(dist, (block || {})[component.grammar_key], component, path);
     }
 
-    Alpine.data('fleetSimulator', (tariffPresetRates) => ({
+    // How the form holds, posts and loads a setting of each input kind, form_choices.SettingInput's values
+    const SETTING_INPUTS = {
+        number: {
+            held: (start) => start,
+            posted: (held) => held,
+            loaded: (held, value) => value,
+        },
+        // The tariff's clock, posted as null, or one custom window, whose hours are kept while the clock is chosen
+        clock_or_window: {
+            held: (start) => ({ clock: false, hours: [...start[0]] }),
+            posted: (held) => (held.clock ? null : [[...held.hours]]),
+            loaded: (held, value) => (value === null ? { ...held, clock: true } : { clock: false, hours: [...value[0]] }),
+        },
+    };
+
+    // The one of `choices`, a table's choices as FormChoice.as_json writes them, whose type is `type`
+    function choiceOf(choices, type) {
+        return choices.find((choice) => choice.type === type);
+    }
+
+    // A typed block's state: the first choice's type, and each choice's settings held at their starts, by type and key
+    function choiceState(choices) {
+        const settings = Object.fromEntries(choices.map((choice) => [
+            choice.type,
+            Object.fromEntries(choice.settings.map((setting) => [setting.key, SETTING_INPUTS[setting.input].held(setting.start)])),
+        ]));
+        return { type: choices[0].type, settings };
+    }
+
+    // The block `state` posts: its type under `typeKey`, and each setting of its type's choice
+    function postedBlock(choices, state, typeKey) {
+        const held = state.settings[state.type];
+        const posted = choiceOf(choices, state.type).settings.map((setting) => [
+            setting.key, SETTING_INPUTS[setting.input].posted(held[setting.key]),
+        ]);
+        return Object.fromEntries([[typeKey, state.type], ...posted]);
+    }
+
+    // A new state holding `block`, a block postedBlock posts, over `state`: every other type keeps its settings
+    function loadedState(choices, state, block, typeKey) {
+        const type = block[typeKey];
+        const held = { ...state.settings[type] };
+        for (const setting of choiceOf(choices, type).settings) {
+            held[setting.key] = SETTING_INPUTS[setting.input].loaded(held[setting.key], block[setting.key]);
+        }
+        return { type, settings: { ...state.settings, [type]: held } };
+    }
+
+    Alpine.data('fleetSimulator', (tariffChoices, dispatchChoices) => ({
         n_homes: limits.fleet_size_default,
         seed: limits.seed_default,
         submitting: false,
@@ -77,18 +125,9 @@ document.addEventListener('alpine:init', () => {
 
         /* ---- Fleet-wide tariff / dispatch / SEG state ---- */
         tariffEnabled: false,
-        tariffType: 'flat_rate',
-        tariffRatePerKwh: 0.28,
-        tariffRates: tariffPresetRates,
-        // The economy rate inputs edit the selected type's pair.
-        get tariffPeakRate() { return this.tariffRates[this.tariffType]?.peak_rate; },
-        set tariffPeakRate(rate) { this.tariffRates[this.tariffType].peak_rate = rate; },
-        get tariffOffPeakRate() { return this.tariffRates[this.tariffType]?.off_peak_rate; },
-        set tariffOffPeakRate(rate) { this.tariffRates[this.tariffType].off_peak_rate = rate; },
-        dispatchStrategyType: 'self_consumption',
-        dispatchPeakStart: 16,
-        dispatchPeakEnd: 19,
-        dispatchImportLimitKw: 3.0,
+        // The tariff and dispatch strategy chosen, each choice keeping its own settings
+        tariff: choiceState(tariffChoices),
+        dispatch: choiceState(dispatchChoices),
         segEnabled: false,
         segPreset: 'custom',
         segRatePencePerKwh: 4.0,
@@ -121,11 +160,7 @@ document.addEventListener('alpine:init', () => {
 
             // Fleet-wide tariff overlay
             if (this.tariffEnabled) {
-                if (this.tariffType === 'flat_rate') {
-                    payload.tariff = { type: this.tariffType, rate_per_kwh: parseFloat(this.tariffRatePerKwh) };
-                } else {
-                    payload.tariff = { type: this.tariffType, peak_rate: parseFloat(this.tariffPeakRate), off_peak_rate: parseFloat(this.tariffOffPeakRate) };
-                }
+                payload.tariff = postedBlock(tariffChoices, this.tariff, 'type');
             }
 
             // Fleet-wide SEG overlay
@@ -137,15 +172,9 @@ document.addEventListener('alpine:init', () => {
                 }
             }
 
-            // Fleet-wide dispatch strategy overlay (only when battery enabled and non-default)
-            if (this.batteryEnabled && this.dispatchStrategyType !== 'self_consumption') {
-                const ds = { strategy_type: this.dispatchStrategyType };
-                if (this.dispatchStrategyType === 'tou_optimized') {
-                    ds.peak_hours = [[this.dispatchPeakStart, this.dispatchPeakEnd]];
-                } else if (this.dispatchStrategyType === 'peak_shaving') {
-                    ds.import_limit_kw = parseFloat(this.dispatchImportLimitKw);
-                }
-                payload.dispatch_strategy = ds;
+            // Fleet-wide dispatch strategy overlay, for the homes with a battery
+            if (this.batteryEnabled) {
+                payload.dispatch_strategy = postedBlock(dispatchChoices, this.dispatch, 'strategy_type');
             }
 
             return payload;
@@ -302,13 +331,7 @@ document.addEventListener('alpine:init', () => {
         _applyTariff(tariff) {
             this.tariffEnabled = Boolean(tariff);
             if (!tariff) return;
-            this.tariffType = tariff.type;
-            if (tariff.type === 'flat_rate') {
-                this.tariffRatePerKwh = tariff.rate_per_kwh;
-            } else {
-                this.tariffPeakRate = tariff.peak_rate;
-                this.tariffOffPeakRate = tariff.off_peak_rate;
-            }
+            this.tariff = loadedState(tariffChoices, this.tariff, tariff, 'type');
         },
 
         _applySeg(seg) {
@@ -322,12 +345,12 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
+        /* A form without a dispatch strategy runs the first choice's, the strategy a battery that names none runs. */
         _applyDispatch(dispatch) {
-            this.dispatchStrategyType = dispatch ? dispatch.strategy_type : 'self_consumption';
-            if (this.dispatchStrategyType === 'tou_optimized') {
-                [this.dispatchPeakStart, this.dispatchPeakEnd] = dispatch.peak_hours[0];
-            } else if (this.dispatchStrategyType === 'peak_shaving') {
-                this.dispatchImportLimitKw = dispatch.import_limit_kw;
+            if (dispatch) {
+                this.dispatch = loadedState(dispatchChoices, this.dispatch, dispatch, 'strategy_type');
+            } else {
+                this.dispatch.type = dispatchChoices[0].type;
             }
         }
     }));

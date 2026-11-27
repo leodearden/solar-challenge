@@ -4,12 +4,14 @@ Each switch shows, then hides, the settings it enables, among them the select
 that picks their variant; so does the fleet page's battery control, a checkbox
 that starts checked. The switch and that select are each found by role and by
 the accessible name its label gives it. Clicking a switch's label flips it
-just as clicking the switch does.
+just as clicking the switch does. Each simulate page's Enable Tariff shows its
+flat rate at the flat rate every form starts at.
 """
 
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
+from solar_challenge.web.fleet_components import page_limits
 from tests.e2e._home_form import open_tab
 
 
@@ -92,4 +94,20 @@ def test_clicking_a_switch_label_flips_the_switch(page: Page, live_server: str) 
         page.get_by_role("switch", name="Enable Battery", exact=True),
         page.locator("#battery_kwh"),
         flipped_by=page.get_by_text("Enable Battery", exact=True),
+    )
+
+
+@pytest.mark.parametrize("simulate_page", ["home", "fleet"])
+def test_each_simulate_pages_flat_rate_starts_at_the_flat_rate_start(
+    page: Page, live_server: str, simulate_page: str
+) -> None:
+    """Enable Tariff shows the flat rate at page_limits().flat_rate_start, on the home page's Tariff tab and on the fleet page."""
+    page.goto(live_server + f"/simulate/{simulate_page}")
+    if simulate_page == "home":
+        open_tab(page, "Tariff")
+
+    page.get_by_role("switch", name="Enable Tariff", exact=True).click()
+
+    expect(page.get_by_role("spinbutton", name="Rate (£/kWh)", exact=True)).to_have_value(
+        str(page_limits().flat_rate_start)
     )

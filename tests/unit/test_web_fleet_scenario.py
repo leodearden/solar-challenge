@@ -1,43 +1,63 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for solar_challenge.web.fleet_scenario, called directly with fleet forms: the bodies fleet-simulator.js's buildPayload() posts."""
 
+import dataclasses
+import json
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 import yaml
 
 pytest.importorskip("flask")
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import parse_scenario, read_fleet_scenario
-from solar_challenge.dispatch import SelfConsumptionStrategyConfig
+from solar_challenge.dispatch import (
+    STRATEGY_CONFIG_BY_TYPE,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
     NormalDistribution,
     parse_fleet_distribution_config,
     write_distribution_spec,
 )
+from solar_challenge.home import simulate_home
 from solar_challenge.location import LOCATION_PRESETS, Location
+from solar_challenge.number_fields import Interval
 from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
     parse_seg_rate,
     parse_tariff_config,
 )
 from solar_challenge.scenario_writer import location_block
-from solar_challenge.tariff import PRESET_RATES
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
+from solar_challenge.tariff import PRESET_RATES, TariffConfig
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
+    MAX_FLEET_HOMES,
+    MAX_FLEET_SEED,
+    MAX_WINDOW_DAYS,
+    page_limits,
+)
 from solar_challenge.web.fleet_config import read_form_fleet
 from solar_challenge.web.fleet_scenario import (
+    FLEET_FORM_DISPATCH,
+    FLEET_FORM_TARIFFS,
     ParsedFleetForm,
+    fleet_form_dispatch_choices,
     fleet_form_from_scenario,
     parse_fleet_form,
     scenario_from_fleet_form,
 )
+from solar_challenge.web.form_choices import FormChoice, SettingInput
 from solar_challenge.web.request_boundary import read_string, require_encodable_text
 from solar_challenge.web.scenario_import import ImportedForm
 from solar_challenge.web.simulation_params import parse_seg_tariff
 from tests._fleet_form import form_fleet_blocks, valid_distribution_form
+from tests._synthetic_weather import sunless_weather, weather_for
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {
@@ -944,16 +964,30 @@ class TestFleetFormFromScenario:
             pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, id="peak-hours-null"),
         ],
     )
-    def test_a_battery_dispatching_tou_optimized_on_its_tariffs_clock_is_not_loaded(
+    def test_a_battery_dispatching_tou_optimized_on_its_tariffs_clock_loads_with_the_clock_chosen_and_runs(
         self, dispatch_strategy: dict[str, Any]
     ) -> None:
-        """The fleet page has no control for a tou_optimized on its tariff's clock, so the rest loads and the battery's dispatch_strategy is named."""
+        """The fleet page holds the tariff's clock as a null peak_hours, so the strategy loads with it, every battery home dispatches on its Economy 7 tariff's clock, and a home runs.
+
+        It replaces a test that named such a strategy not loaded: that pinned the control the
+        page lacked, which it now has.
+        """
         battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "dispatch_strategy": dispatch_strategy}
 
-        assert fleet_form_from_scenario(_with_fleet_distribution(battery=battery)) == ImportedForm(
-            form=_without(_FLEET_FORM, "dispatch_strategy"),
-            not_loaded=("fleet_distribution.battery.dispatch_strategy",),
+        imported = fleet_form_from_scenario(_with_fleet_distribution(battery=battery))
+
+        assert imported == ImportedForm(
+            form={**_FLEET_FORM, "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": None}},
+            not_loaded=(),
         )
+        parsed = parse_fleet_form(imported.form)
+        battery_homes = [home for home in parsed.homes if home.battery_config is not None]
+        assert battery_homes
+        assert all(home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig() for home in battery_homes)
+        home = battery_homes[0]
+        day = parsed.start_date
+        results = simulate_home(home, day, day, weather=weather_for(home, sunless_weather(day, temp_air=5.0)))
+        assert len(results.tariff_rate) > 0
 
     def test_an_economy_tariff_that_sets_no_rate_loads_its_preset_rates(self) -> None:
         """An Economy 10 tariff that sets no rate loads the rates the loaders charge it, its PRESET_RATES row."""
@@ -1261,3 +1295,129 @@ class TestFleetFormFromScenario:
         read_fleet_scenario(document)
 
         assert fleet_form_from_scenario(document) == ImportedForm(form=form, not_loaded=not_loaded)
+
+
+@dataclasses.dataclass(frozen=True)
+class _TurboStrategyConfig:
+    """A dispatch strategy the fleet form has no title for."""
+
+    strategy_type: Literal["turbo"] = dataclasses.field(default="turbo", init=False)
+
+
+@dataclasses.dataclass(frozen=True)
+class _BoostStrategyConfig:
+    """A dispatch strategy setting, boost_kw, the fleet form has no setting for, under a strategy it titles."""
+
+    boost_kw: float
+    strategy_type: Literal["peak_shaving"] = dataclasses.field(default="peak_shaving", init=False)
+
+
+def _dispatch_choice(strategy_type: str) -> FormChoice:
+    (choice,) = (each for each in FLEET_FORM_DISPATCH if each.type == strategy_type)
+    return choice
+
+
+_PEAK_HOURS_PATH = "fleet_distribution.battery.dispatch_strategy.peak_hours"
+
+
+class TestFleetFormVocabulary:
+    """FLEET_FORM_TARIFFS and FLEET_FORM_DISPATCH: the tariff and dispatch choices the fleet form offers, each starting at a block the grammar reads (V1, V2)."""
+
+    def test_the_dispatch_choices_are_the_dispatch_strategies_in_their_order(self) -> None:
+        assert [choice.type for choice in FLEET_FORM_DISPATCH] == list(STRATEGY_CONFIG_BY_TYPE)
+
+    def test_each_dispatch_choices_settings_are_its_strategys_fields_in_their_order(self) -> None:
+        for choice in FLEET_FORM_DISPATCH:
+            config = STRATEGY_CONFIG_BY_TYPE[choice.type]
+            assert [setting.key for setting in choice.settings] == [
+                each.name for each in dataclasses.fields(config) if each.init
+            ]
+
+    def test_a_strategy_the_form_has_no_title_for_is_refused_naming_it_and_the_titles_table(self) -> None:
+        with pytest.raises(KeyError, match=r"_DISPATCH_TITLES has no entry for the dispatch strategy 'turbo'"):
+            fleet_form_dispatch_choices({**STRATEGY_CONFIG_BY_TYPE, "turbo": _TurboStrategyConfig})
+
+    def test_a_strategy_setting_the_form_has_no_setting_for_is_refused_naming_it_its_strategy_and_the_settings_table(
+        self,
+    ) -> None:
+        with pytest.raises(
+            KeyError,
+            match=r"_DISPATCH_SETTINGS has no entry for the field 'boost_kw' of the dispatch strategy 'peak_shaving'",
+        ):
+            fleet_form_dispatch_choices({**STRATEGY_CONFIG_BY_TYPE, "peak_shaving": _BoostStrategyConfig})
+
+    def test_the_first_dispatch_choice_is_the_strategy_a_battery_that_names_none_runs(self) -> None:
+        assert STRATEGY_CONFIG_BY_TYPE[FLEET_FORM_DISPATCH[0].type]() == BatteryConfig(capacity_kwh=5.0).dispatch_strategy
+
+    def test_each_dispatch_choice_starts_at_a_block_the_grammar_reads_as_its_strategy(self) -> None:
+        for choice in FLEET_FORM_DISPATCH:
+            strategy = parse_dispatch_strategy_config(choice.starting_block("strategy_type"))
+            assert isinstance(strategy, STRATEGY_CONFIG_BY_TYPE[choice.type])
+
+    def test_tou_optimized_holds_its_peak_hours_as_the_clock_or_one_window_starting_at_16_to_19(self) -> None:
+        (setting,) = _dispatch_choice("tou_optimized").settings
+
+        assert setting.key == "peak_hours"
+        assert setting.input is SettingInput.CLOCK_OR_WINDOW
+        assert setting.start == ((16, 19),)
+        assert setting.within == Interval(0, 24)
+        assert setting.step == 1
+
+    def test_the_tariff_choices_are_flat_rate_and_the_economy_presets(self) -> None:
+        assert [choice.type for choice in FLEET_FORM_TARIFFS] == ["flat_rate", "economy_7", "economy_10"]
+
+    def test_each_tariff_choice_starts_at_a_block_the_grammar_reads_as_its_tariff(self) -> None:
+        expected = {
+            "flat_rate": TariffConfig.flat_rate(page_limits().flat_rate_start),
+            "economy_7": TariffConfig.economy_7(),
+            "economy_10": TariffConfig.economy_10(),
+        }
+
+        assert {choice.type: parse_tariff_config(choice.starting_block("type")) for choice in FLEET_FORM_TARIFFS} == (
+            expected
+        )
+
+    def test_each_economy_choice_starts_at_its_preset_rates(self) -> None:
+        for choice in FLEET_FORM_TARIFFS:
+            if choice.type in PRESET_RATES:
+                assert {setting.key: setting.start for setting in choice.settings} == dataclasses.asdict(
+                    PRESET_RATES[choice.type]
+                )
+
+    @pytest.mark.parametrize(
+        ("peak_hours", "read"),
+        [
+            pytest.param(None, None, id="the-tariffs-clock"),
+            pytest.param([[16, 21]], [[16, 21]], id="one-window"),
+        ],
+    )
+    def test_peak_hours_reads_the_clock_or_one_window(self, peak_hours: Any, read: Any) -> None:
+        (setting,) = _dispatch_choice("tou_optimized").settings
+
+        assert setting.read(peak_hours, _PEAK_HOURS_PATH) == read
+
+    @pytest.mark.parametrize(
+        "peak_hours",
+        [
+            pytest.param([[8, 10], [16, 19]], id="two-windows"),
+            pytest.param([], id="no-window"),
+        ],
+    )
+    def test_peak_hours_holding_other_than_one_window_is_refused_naming_its_path(self, peak_hours: Any) -> None:
+        (setting,) = _dispatch_choice("tou_optimized").settings
+
+        with pytest.raises(ConfigurationError, match=re.escape(_PEAK_HOURS_PATH)):
+            setting.read(peak_hours, _PEAK_HOURS_PATH)
+
+    def test_tou_optimizeds_json_is_its_type_and_its_peak_hours_input_and_start(self) -> None:
+        assert _dispatch_choice("tou_optimized").as_json() == {
+            "type": "tou_optimized",
+            "settings": [{"key": "peak_hours", "input": "clock_or_window", "start": [[16, 19]]}],
+        }
+
+    @pytest.mark.parametrize(
+        "choice",
+        [pytest.param(choice, id=choice.type) for choice in (*FLEET_FORM_TARIFFS, *FLEET_FORM_DISPATCH)],
+    )
+    def test_each_choices_json_round_trips_through_json(self, choice: FormChoice) -> None:
+        assert json.loads(json.dumps(choice.as_json(), allow_nan=False)) == choice.as_json()
