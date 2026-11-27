@@ -173,8 +173,18 @@ conventions:
       took many independent edits that no test tied together (fk-94cab00e114e; D27 invariant 11;
       docs/prds/dashboard-limits-and-distribution-table.md §4.2;
       docs/prds/tariff-coverage-classifier-presets.md). β's text scan of web/static/js and
-      web/templates, W2's other half, and its page test, W3, extend the window half when they
-      land.
+      web/templates, W2's other half, and its page test, W3, extend the window half to the
+      dashboard's templates and scripts; both are in tests/unit/test_window_defaults.py.
+
+  - rule: "The dashboard's forms state what they accept and start at once, on the server: every form page's bounds, limits and starting values (the fleet size, seed, window, component ranges and starting distributions) render from web/fleet_components.page_limits(), through base.html's #page-limits element and the template context; each distribution editor offers and titles its types from fleet_distribution.DISTRIBUTION_TYPES (editor_types); both fleet pages post, preview and import a component's field as the grammar's own spec, and refuse a home outside its component's value_range alike; the fleet page's tariff and dispatch choices render from web/fleet_scenario.py's FLEET_FORM_TARIFFS and FLEET_FORM_DISPATCH; and no template or script restates any of them (tests/integration/test_dashboard_forms_one_table.py; what the browser posts, tests/e2e/test_distribution_editor_wire.py)"
+    why: >
+      Before S18 each page and script restated the fleet-size limit, the component ranges, the
+      starting distributions and the type list, with two wire shapes, two decoders and two
+      import policies, so one page could drift from the other unseen (fk-a6d9f3e5a7e2,
+      fk-1df9dbc0d971; docs/prds/dashboard-limits-and-distribution-table.md §4 and §5, row G1).
+      The integration module states each check across both fleet pages, with every expected
+      value computed from page_limits(), the table or the refusing reader, so it fails a form
+      edit that leaves one page off the table or the limits value.
 
   - rule: "Every dataclass the public-API contract pins, in FROZEN_SURFACE or FROZEN_CLOSURE, is frozen, unless UNFROZEN_PINNED_DATACLASSES names it with the task that freezes it (tests/unit/test_public_api_surface.py::test_every_pinned_dataclass_is_frozen). Config and domain objects check their domain constraints in __post_init__, at construction, and must stay picklable."
     why: >
