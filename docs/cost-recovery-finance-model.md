@@ -1079,8 +1079,12 @@ of a DFS-style historical baseline, the mean of recent like days. The product
 text that would fix it has not been read
 (docs/prds/event-dispatch-and-battery-sizing.md §12 question 1), and the
 rate-calibration gate, task 1708, reads it. Displaced self-use is not reported
-under dispatched: the same run's bills already hold the import the events
-caused, and its event export earns each home's SEG rate there. Each projection
+under dispatched: the run's simulated grid import already holds what the events
+caused, so the bills on the simulated own-use basis include it, and its event
+export earns each home's SEG rate there. Bills on the override basis split each
+home's demand and generation by the fixed self-consumption share whatever the
+run imported, so they leave that import out, and the displaced self-use is then
+reported nowhere. Each projection
 age is an enrolled run of its aged fleet, priced from its own run. Under both
 participations the breakdown reports `per_window_battery_export_kwh_per_event`:
 per window, the battery homes' battery export in its rows, summed over homes on
@@ -1135,8 +1139,9 @@ event days; the value-per-year row sums the windows. A note says the income is
 gross of the displaced self-use, and that a home without a tariff values it at
 £0. Under dispatched participation the delivery rows read *Per-event metered
 delivery* and *Delivery on 50%* and *on 90% of event days*, the two displaced
-rows read *not reported*, and the note says instead that the bills in the report
-include the import the events caused. The flexibility-value block's
+rows read *not reported*, and the note says instead that the Physics bills
+include the import the events caused and the Spreadsheet bills, split by a fixed
+self-consumption share, do not. The flexibility-value block's
 grid-services row (`--flex-band`) is that booked income per battery home and per
 kW of battery discharge, under a headline of the band's time-shift plus it; a
 scenario that prices no grid services shows the band's consulting figure there,

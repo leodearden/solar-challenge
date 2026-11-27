@@ -208,7 +208,7 @@ def test_finance_run_on_a_dispatched_scenario_prices_the_delivery_metered_from_i
     (export_kwh,) = breakdown.per_window_battery_export_kwh_per_event
     assert export_kwh > 0
     assert row_cells(result.output, _WINDOW_HEADING, "Battery export per event") == [f"{export_kwh:.1f} kWh"]
-    assert "The bills in this report include the import the events caused" in result.output
+    assert "Physics bills include the import the events caused" in result.output
 
 
 def test_finance_run_refuses_a_dispatched_scenario_whose_fleet_was_not_enrolled(

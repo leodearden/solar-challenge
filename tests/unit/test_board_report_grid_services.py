@@ -183,7 +183,10 @@ _BOOKED_HEADING = "### Booked by the projection (£ a year)"
 _WINDOW_HEADING = "### This window's fleet, the same under every assumption"
 _FLEX_HEADING = "## Flexibility Value (per battery home)"
 _SPREADSHEET_AT_70 = "Spreadsheet (70% self-consumption)"
-_BILLS_INCLUDE_THE_EVENTS_IMPORT = "The bills in this report include the import the events caused"
+_PHYSICS_BILLS_INCLUDE_THE_EVENTS_IMPORT = "Physics bills include the import the events caused"
+_SPREADSHEET_BILLS_DO_NOT = (
+    "Spreadsheet bills, which split each home's demand and generation by a fixed self-consumption share, do not"
+)
 
 _TWO_WINDOWS = GridServicesAtEvents(
     annual_income_gbp=19.944,
@@ -271,7 +274,7 @@ class TestGridServicesIncomeSection:
         ]
         assert "gross of the evening self-use an event displaces" in report
         assert "£0 for a home simulated without one" in report
-        assert _BILLS_INCLUDE_THE_EVENTS_IMPORT not in report
+        assert _PHYSICS_BILLS_INCLUDE_THE_EVENTS_IMPORT not in report
         assert "is one event window's figure" not in report
 
     def test_a_dispatched_breakdown_renders_its_metered_delivery_and_reports_no_displaced_self_use(self) -> None:
@@ -288,7 +291,8 @@ class TestGridServicesIncomeSection:
             ["Evening self-use displaced, value per year", "not reported"],
         ]
         assert "gross of the evening self-use" not in report
-        assert _BILLS_INCLUDE_THE_EVENTS_IMPORT in report
+        assert _PHYSICS_BILLS_INCLUDE_THE_EVENTS_IMPORT in report
+        assert _SPREADSHEET_BILLS_DO_NOT in report
         assert "is one event window's figure" not in report
 
     def test_with_several_event_windows_no_per_window_figure_is_summed(self) -> None:
@@ -328,7 +332,8 @@ class TestGridServicesIncomeSection:
             assert row_cells(report, _WINDOW_HEADING, label) == ["not reported"], label
         assert row_cells(report, _WINDOW_HEADING, "Annual fleet income") == ["£20"]
         assert "is one event window's figure" in report
-        assert _BILLS_INCLUDE_THE_EVENTS_IMPORT in report
+        assert _PHYSICS_BILLS_INCLUDE_THE_EVENTS_IMPORT in report
+        assert _SPREADSHEET_BILLS_DO_NOT in report
 
     def test_each_modes_column_books_its_own_projections_first_and_last_year(self) -> None:
         physics = make_fleet_projection([(0, 20.0), (12, 18.0), (24, 15.0)], asset_life_years=25)

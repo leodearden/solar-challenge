@@ -1245,7 +1245,7 @@ class _PricedWindows:
         totals: Each window's fleet figure on each of its event days.
         observed_event_days: Each window's per-home event days when the fleet is
             observed, which its displaced self-use is computed from; None when it is
-            dispatched, whose bills already hold the import its events caused.
+            dispatched, whose simulated grid import already holds what its events caused.
     """
 
     battery_homes: list[tuple["SimulationResults", BatteryConfig]]
@@ -1388,7 +1388,7 @@ def compute_grid_services_at_events(
           ``per_window_displaced_import_gbp_per_year`` — the evening self-use an
           event displaces and its value, reported beside the income, which is
           gross of them; both ``()``, not reported, when dispatched, since the
-          run's bills already hold the import its events caused.
+          run's simulated grid import already holds what its events caused.
         - ``per_window_battery_export_kwh_per_event`` — the battery export an
           event's window holds, the mean over the window's event days.
 

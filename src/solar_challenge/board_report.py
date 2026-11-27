@@ -215,7 +215,7 @@ class GridServicesIncome:
         if reported != (self.pricing.participation is EventParticipation.OBSERVED):
             raise ValueError(
                 "GridServicesIncome's events breakdown reports displaced self-use exactly when its pricing's "
-                "participation is observed, since a dispatched fleet's bills hold the import its events caused: "
+                "participation is observed, since a dispatched fleet's simulated import holds what its events caused: "
                 f"got participation={self.pricing.participation} with per_window_displaced_self_use_kwh_per_event="
                 f"{self.at_events.per_window_displaced_self_use_kwh_per_event!r}, "
                 "per_window_displaced_import_gbp_per_year="
@@ -472,8 +472,10 @@ _PARTICIPATION_READINGS: Mapping[EventParticipation, _ParticipationReading] = {
     ),
     EventParticipation.DISPATCHED: _ParticipationReading(
         _at_events_rows("Per-event metered delivery", "Delivery on 50% of event days", "Delivery on 90% of event days"),
-        "*The bills in this report include the import the events caused: the fleet was simulated discharging "
-        "through each drawn event window, so no displaced self-use is reported beside the income.*",
+        "*The fleet was simulated discharging through each drawn event window, so no displaced self-use is "
+        f"reported beside the income. {ASSUMPTION_LABELS[OwnUseBasis.SIMULATED]} bills include the import the "
+        f"events caused; {ASSUMPTION_LABELS[OwnUseBasis.OVERRIDE]} bills, which split each home's demand and "
+        "generation by a fixed self-consumption share, do not.*",
     ),
 }
 """Under events pricing, this window's breakdown rows and note, by the pricing's participation."""
@@ -591,8 +593,8 @@ def generate_finance_report(
     home simulated without a tariff.  Dispatched, it is the per-event metered
     delivery, the delivery on 50% and on 90% of event days and the battery
     export per event, read the same way, the displaced self-use rows reading
-    not reported, and a note that the bills include the import the events
-    caused.
+    not reported, and a note that the Physics bills include the import the
+    events caused and the Spreadsheet bills do not.
 
     The flexibility-value block shows the band's consulting time-shift.  Its
     grid-services row is *grid_services*' income per battery home and per kW
