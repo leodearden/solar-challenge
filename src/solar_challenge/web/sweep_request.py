@@ -41,7 +41,8 @@ class SweepParameter:
     Raises:
         ValueError: For a knob whose target is not KnobTarget.HOMES, which would simulate the
             same home at every point; a default_min or default_max outside the component's
-            value_range; or a default_min not below default_max; naming the field and the value.
+            value_range; a default_min not below default_max; or a starting range SweepSpec's
+            default mode cannot sweep in _DEFAULT_STEPS steps; naming the field and the value.
     """
 
     knob: Knob
@@ -63,6 +64,14 @@ class SweepParameter:
                 f"default_min of the {self.knob.name} sweep must be below its default_max, "
                 f"{self.default_max!r}, got {self.default_min!r}"
             )
+        try:
+            SweepSpec(self.default_min, self.default_max, _DEFAULT_STEPS)
+        except ConfigurationError as refusal:
+            raise ValueError(
+                f"default_min and default_max of the {self.knob.name} sweep must make a "
+                f"{_DEFAULT_STEPS}-step sweep in SweepSpec's default mode, the sweep a body naming "
+                f"only the parameter asks for; got {self.default_min!r} to {self.default_max!r}: {refusal}"
+            ) from refusal
 
     @property
     def label(self) -> str:
@@ -79,7 +88,7 @@ SWEEP_PARAMETERS: Mapping[str, SweepParameter] = MappingProxyType({
     parameter.knob.name: parameter
     for parameter in (
         SweepParameter(knob_named("pv_capacity_kw"), FLEET_COMPONENTS["pv"], 2.0, 8.0),
-        SweepParameter(knob_named("battery_capacity_kwh"), FLEET_COMPONENTS["battery"], 0.0, 13.5),
+        SweepParameter(knob_named("battery_capacity_kwh"), FLEET_COMPONENTS["battery"], 1.0, 13.5),
         SweepParameter(knob_named("annual_consumption_kwh"), FLEET_COMPONENTS["load"], 2000.0, 5000.0),
     )
 })
