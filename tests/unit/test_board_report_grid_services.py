@@ -42,6 +42,7 @@ _AT_EVENTS = GridServicesAtEvents(
     per_window_avail_p90_kw=(1.0,),
     per_window_displaced_self_use_kwh_per_event=(2.3,),
     per_window_displaced_import_gbp_per_year=(8.1,),
+    per_window_battery_export_kwh_per_event=(0.4,),
 )
 """One event window's breakdown: £14.958 a year from 1.5 kW."""
 
@@ -166,6 +167,7 @@ _TWO_WINDOWS = GridServicesAtEvents(
     per_window_avail_p90_kw=(1.0, 0.3),
     per_window_displaced_self_use_kwh_per_event=(2.25, 0.75),
     per_window_displaced_import_gbp_per_year=(8.1, 1.9),
+    per_window_battery_export_kwh_per_event=(0.4, 0.2),
 )
 """Two event windows' breakdown: £19.944 a year."""
 
