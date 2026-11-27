@@ -8,7 +8,8 @@ holds (TestBatteryExportPerEvent).  Pricing refuses a fleet whose battery homes 
 than its participation gives them (TestPricingRefusesAMismatchedEnrolment, PRD
 docs/prds/event-dispatch-and-battery-sizing.md §9 B10).  A dispatched fleet is priced from the delivery
 metered on its drawn event days: under the capacity baseline, its battery homes' whole in-window discharge
-(TestCapacityMetering, §9 B8).
+(TestCapacityMetering, §9 B8); under the operational baseline, the fall in their net import below its mean
+over the nearest eligible days with no event (TestOperationalMetering, §9 B9).
 """
 
 import dataclasses
@@ -26,6 +27,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
+    OPERATIONAL_BASELINE_DAYS,
     EventParticipation,
     EventWindow,
     GridServicesEventsConfig,
@@ -325,10 +327,13 @@ def _drawn(cfg: GridServicesEventsConfig, position: int = 0) -> tuple[date, ...]
 
 
 def _kw_series(
-    kw_by_window_day: Mapping[tuple[EventWindow, date], float], *, elsewhere_kw: float
+    kw_by_window_day: Mapping[tuple[EventWindow, date], float],
+    *,
+    elsewhere_kw: float,
+    index: Optional[pd.DatetimeIndex] = None,
 ) -> pd.Series:
-    """January 2024, hourly: each (window, day)'s kW on that day's rows in the window, *elsewhere_kw* in every other row."""
-    index = _january().generation.index
+    """*index*, January 2024 hourly by default: each (window, day)'s kW on that day's rows in the window, *elsewhere_kw* in every other row."""
+    index = _january().generation.index if index is None else index
     values = np.full(len(index), elsewhere_kw)
     dates = index.date
     for (window, day), kw in kw_by_window_day.items():
@@ -451,3 +456,119 @@ class TestCapacityMetering:
             assert len(texts) == 1, texts
             assert "months=(6,)" in texts[0][0]
             assert texts[0][1] == __file__
+
+
+_OPERATIONAL = GridServicesEventsConfig(participation=EventParticipation.DISPATCHED)
+_ONE_EVENT_A_WINTER = EventWindow(
+    months=(1, 2), weekdays=(0, 1, 2, 3, 4), hours=(17,), events_per_year=1, event_hours=1.0
+)
+"""January and February weekdays at 17:00, one event a year: six winter weeks, 30 of their 44 weekdays, draw one day."""
+_SIX_WINTER_WEEKS = (date(2024, 1, 1), date(2024, 2, 11))
+
+
+def _importing_home(
+    window: EventWindow,
+    import_kw: Mapping[date, float],
+    export_kw: Mapping[date, float],
+    period: tuple[date, date] = _JANUARY,
+) -> SimulationResults:
+    """A battery home over *period*, hourly, importing *import_kw* and exporting *export_kw* in *window*'s rows of each day they give; 500 kW import in every other row, outside the window or on a day *import_kw* does not give, and no export."""
+    first, last = period
+    base = make_sim_results(days=(last - first).days + 1, first_day=first)
+    index = base.generation.index
+    return dataclasses.replace(
+        base,
+        grid_import=_kw_series({(window, day): kw for day, kw in import_kw.items()}, elsewhere_kw=500.0, index=index),
+        grid_export=_kw_series({(window, day): kw for day, kw in export_kw.items()}, elsewhere_kw=0.0, index=index),
+    )
+
+
+def _eligible(window: EventWindow, period: tuple[date, date]) -> list[date]:
+    """The days of *period* whose month and weekday *window* admits."""
+    return [day for day in every_date(*period) if day.month in window.months and day.weekday() in window.weekdays]
+
+
+class TestOperationalMetering:
+    """§9 B9: under the operational baseline a drawn day delivers D(d) = max(0, B(d) − N(d)), N the battery homes' summed mean in-window net import and B its mean over the ten nearest eligible days with no event."""
+
+    def test_a_drawn_day_delivers_its_fall_in_net_import_below_the_non_event_days(self) -> None:
+        drawn = _drawn(_OPERATIONAL)
+        quiet = [day for day in _eligible(_WINDOW, _JANUARY) if day not in drawn]
+        imports = {**dict.fromkeys(quiet, 0.8), **dict.fromkeys(drawn, 0.0)}
+        exports = dict.fromkeys(drawn, 1.2)
+        home = _importing_home(_WINDOW, imports, exports)
+
+        breakdown = compute_grid_services_at_events(_enrolled_fleet(_OPERATIONAL, home, home), _OPERATIONAL)
+
+        # Each of two homes: 0.8 kW imported on a quiet day, 1.2 kW exported on a drawn one.
+        assert breakdown.per_window_avail_kw == pytest.approx((2 * (0.8 + 1.2),))
+        assert breakdown.annual_income_gbp == pytest.approx(2 * (0.8 + 1.2) * _CENTRAL_GBP_PER_KW)
+        assert breakdown.annual_income_gbp == _OPERATIONAL.annual_income_gbp(_enrolled_fleet(_OPERATIONAL, home, home))
+
+    def test_the_baseline_is_the_ten_nearest_eligible_days_before_the_drawn_day(self) -> None:
+        cfg = dataclasses.replace(_OPERATIONAL, event_windows=(_ONE_EVENT_A_WINTER,), event_day_seed=2)
+        eligible = _eligible(_ONE_EVENT_A_WINTER, _SIX_WINTER_WEEKS)
+        (drawn,) = drawn_event_days(_ONE_EVENT_A_WINTER, every_date(*_SIX_WINTER_WEEKS), 2, position=0)
+        before = [day for day in eligible if day < drawn]
+        assert drawn == date(2024, 2, 5) and len(before) == 25
+        imports = {**dict.fromkeys(eligible, 50.0), **dict.fromkeys(before[-10:], 1.0), drawn: 0.0}
+        home = _importing_home(_ONE_EVENT_A_WINTER, imports, {drawn: 0.5}, _SIX_WINTER_WEEKS)
+
+        breakdown = compute_grid_services_at_events(_enrolled_fleet(cfg, home, home), cfg)
+
+        assert breakdown.per_window_avail_kw == pytest.approx((2 * (1.0 + 0.5),))
+
+    def test_fewer_than_ten_days_before_are_completed_with_the_nearest_after(self) -> None:
+        cfg = dataclasses.replace(_OPERATIONAL, event_windows=(_ONE_EVENT_A_WINTER,), event_day_seed=11)
+        eligible = _eligible(_ONE_EVENT_A_WINTER, _SIX_WINTER_WEEKS)
+        (drawn,) = drawn_event_days(_ONE_EVENT_A_WINTER, every_date(*_SIX_WINTER_WEEKS), 11, position=0)
+        before = [day for day in eligible if day < drawn]
+        after = [day for day in eligible if day > drawn]
+        assert drawn == date(2024, 1, 5) and len(before) == 4
+        imports = {**dict.fromkeys(eligible, 50.0), **dict.fromkeys([*before, *after[:6]], 1.0), drawn: 0.0}
+        home = _importing_home(_ONE_EVENT_A_WINTER, imports, {drawn: 0.5}, _SIX_WINTER_WEEKS)
+
+        breakdown = compute_grid_services_at_events(_enrolled_fleet(cfg, home, home), cfg)
+
+        assert breakdown.per_window_avail_kw == pytest.approx((2 * (1.0 + 0.5),))
+
+    def test_another_window_s_drawn_day_is_never_a_baseline_day(self) -> None:
+        mornings = dataclasses.replace(_ONE_EVENT_A_WINTER, hours=(8,))
+        cfg = dataclasses.replace(_OPERATIONAL, event_windows=(_ONE_EVENT_A_WINTER, mornings), event_day_seed=0)
+        dates = every_date(*_SIX_WINTER_WEEKS)
+        (drawn,) = drawn_event_days(_ONE_EVENT_A_WINTER, dates, 0, position=0)
+        (morning_event,) = drawn_event_days(mornings, dates, 0, position=1)
+        eligible = _eligible(_ONE_EVENT_A_WINTER, _SIX_WINTER_WEEKS)
+        assert morning_event in [day for day in eligible if day < drawn][-10:]
+        quiet_before = [day for day in eligible if day < drawn and day != morning_event]
+        imports = {**dict.fromkeys(eligible, 50.0), **dict.fromkeys(quiet_before[-10:], 1.0), drawn: 0.0}
+        home = _importing_home(_ONE_EVENT_A_WINTER, imports, {drawn: 0.5}, _SIX_WINTER_WEEKS)
+
+        breakdown = compute_grid_services_at_events(_enrolled_fleet(cfg, home, home), cfg)
+
+        assert breakdown.per_window_avail_kw[0] == pytest.approx(2 * (1.0 + 0.5))
+
+    def test_a_drawn_day_importing_more_than_its_baseline_delivers_0(self) -> None:
+        drawn = _drawn(_OPERATIONAL)
+        quiet = [day for day in _eligible(_WINDOW, _JANUARY) if day not in drawn]
+        home = _importing_home(_WINDOW, {**dict.fromkeys(quiet, 0.8), **dict.fromkeys(drawn, 1.8)}, {})
+
+        breakdown = compute_grid_services_at_events(_enrolled_fleet(_OPERATIONAL, home, home), _OPERATIONAL)
+
+        assert breakdown.per_window_avail_kw == (0.0,)
+        assert breakdown.annual_income_gbp == 0.0
+
+    def test_the_baseline_reads_the_ten_days_the_prd_sets(self) -> None:
+        assert OPERATIONAL_BASELINE_DAYS == 10
+
+    @pytest.mark.parametrize("price", _PRICINGS)
+    def test_a_period_whose_every_eligible_day_is_drawn_has_no_baseline_and_is_refused(self, price: Pricing) -> None:
+        every_day = EventWindow(months=(1,), weekdays=tuple(range(7)), hours=(17,), events_per_year=366, event_hours=1.0)
+        cfg = dataclasses.replace(_OPERATIONAL, event_windows=(every_day,))
+        assert _drawn(cfg) == every_date(*_JANUARY)
+
+        with pytest.raises(ConfigurationError) as refused:
+            price(_enrolled_fleet(cfg, _january(), _january()), cfg)
+
+        assert "months=(1,)" in str(refused.value)
+        assert "operational" in str(refused.value)
