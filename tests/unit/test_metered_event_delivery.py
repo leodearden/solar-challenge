@@ -352,18 +352,13 @@ def _metered_home(
     )
 
 
-def _ranked(values: list[float], percent: int) -> float:
-    """The ⌈percent·n / 100⌉-th largest of *values*."""
-    return sorted(values, reverse=True)[-(-percent * len(values) // 100) - 1]
-
-
 class TestCapacityMetering:
     """§9 B8: under the capacity baseline a drawn day delivers the battery homes' in-window discharge over the event's hours, D(d) = Σ_home Σ_{t∈d∩w} discharge(t)·Δt / h."""
 
     def _fleet(self) -> tuple[FleetResults, list[float], list[float]]:
-        """Two battery homes discharging a_k = 1 + k/2 and b_k = (k + 1)/4 kW, and exporting k/10 and 0.2 kW, through drawn day k's window; and each D(d_k) = a_k + b_k and in-window export 3·(k/10 + 0.2) kWh."""
+        """Two battery homes discharging a_k = 1 + k/2 and b_k = (k + 1)/4 kW, and exporting k/10 and 0.2 kW, through drawn day k's window, of January's three drawn days; and each D(d_k) = a_k + b_k, 1.25, 2.0 and 2.75 kW, and in-window export 3·(k/10 + 0.2) kWh."""
         days = _drawn(_CAPACITY)
-        assert len(days) >= 3
+        assert len(days) == 3
         home_a = _metered_home(
             {(_WINDOW, day): 1.0 + k / 2 for k, day in enumerate(days)},
             {(_WINDOW, day): k / 10 for k, day in enumerate(days)},
@@ -385,11 +380,12 @@ class TestCapacityMetering:
 
     def test_its_reliability_figures_rank_the_drawn_days_deliveries(self) -> None:
         fleet, delivered, _ = self._fleet()
+        assert delivered == pytest.approx([1.25, 2.0, 2.75])
 
         breakdown = compute_grid_services_at_events(fleet, _CAPACITY)
 
-        assert breakdown.per_window_avail_p50_kw == pytest.approx((_ranked(delivered, 50),))
-        assert breakdown.per_window_avail_p90_kw == pytest.approx((_ranked(delivered, 90),))
+        assert breakdown.per_window_avail_p50_kw == pytest.approx((2.0,)), "the ⌈0.5·3⌉ = 2nd largest"
+        assert breakdown.per_window_avail_p90_kw == pytest.approx((1.25,)), "the ⌈0.9·3⌉ = 3rd largest"
 
     def test_the_income_books_the_mean_delivery_at_the_central_rates(self) -> None:
         fleet, delivered, _ = self._fleet()

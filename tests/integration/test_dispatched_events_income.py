@@ -216,7 +216,9 @@ def test_finance_run_refuses_a_dispatched_scenario_whose_fleet_was_not_enrolled(
 ) -> None:
     path = _scenario_file(tmp_path, weather_cache, "dispatched")
     stored_homes = load_scenario(path).homes
-    assert any(home.battery_config is not None for home in stored_homes)
+    first_battery_home = next(
+        (position, home) for position, home in enumerate(stored_homes) if home.battery_config is not None
+    )
     un_enrolled = make_fleet_results_of(
         [make_sim_results(days=5, first_day=_FIRST_DAY) for _ in stored_homes], homes=stored_homes
     )
@@ -224,8 +226,12 @@ def test_finance_run_refuses_a_dispatched_scenario_whose_fleet_was_not_enrolled(
     result = invoke_finance_run([str(path)], un_enrolled)
 
     assert result.exit_code == 1, result.output
-    assert "Configuration error:" in result.output
-    assert "dispatched" in result.output
+    output = " ".join(result.output.split())
+    position, home = first_battery_home
+    assert "Configuration error:" in output
+    assert "participation is dispatched" in output
+    assert f"home {position} {home.name!r} expects" in output, output
+    assert "and carries no event window" in output, output
 
 
 @pytest.fixture
