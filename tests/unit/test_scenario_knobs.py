@@ -253,6 +253,7 @@ _REAL_NUMBER_FINANCE_FIELDS = {
     "opex_per_home_per_year_gbp",
     "own_use_rate_pence_per_kwh",
     "retained_cash_floor_per_home_per_year_gbp",
+    "battery_inverter_cost_per_kw_gbp",
 }
 
 

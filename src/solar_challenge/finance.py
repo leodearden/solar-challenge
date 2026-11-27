@@ -124,6 +124,8 @@ class FinanceConfig:
             docs/cost-recovery-finance-model.md §8.1), or a
             :class:`~solar_challenge.gridservices.GridServicesEventsConfig`
             pricing capacity at events.  Any other value is refused.
+        battery_inverter_cost_per_kw_gbp: The battery inverter-charger's capex per
+            kW of each battery's max_discharge_kw (default 0.0; 0 permitted).
     """
 
     standing_charge_pence_per_day: float
@@ -143,6 +145,7 @@ class FinanceConfig:
     own_use_rate_pence_per_kwh: float = 15.0
     retained_cash_floor_per_home_per_year_gbp: float = 27.0
     grid_services_model: GridServicesModel = NoGridServices()
+    battery_inverter_cost_per_kw_gbp: float = 0.0
 
     def __post_init__(self) -> None:
         """Read every number through number_fields, then refuse a grid-services pricing of none of the GridServicesModel types or an asset life shorter than the loan term, raising ConfigurationError."""
@@ -162,6 +165,7 @@ class FinanceConfig:
         read_field(self, "asset_life_years", as_whole_number)
         read_field(self, "own_use_rate_pence_per_kwh", as_finite_float, NON_NEGATIVE)
         read_field(self, "retained_cash_floor_per_home_per_year_gbp", as_finite_float, NON_NEGATIVE)
+        read_field(self, "battery_inverter_cost_per_kw_gbp", as_finite_float, NON_NEGATIVE)
         if not isinstance(self.grid_services_model, GridServicesModel):
             raise ConfigurationError.must_be(
                 "grid_services_model",
