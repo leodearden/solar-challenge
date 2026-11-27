@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, fields
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from types import MappingProxyType
-from typing import ClassVar, Final, List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
+from typing import ClassVar, Final, List, Literal, Optional, Tuple, TypeAlias, TypeVar, assert_never, get_args
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
@@ -1140,19 +1140,28 @@ class EventDischargeWindow:
     hours: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        """Read days and hours, refuse an empty one or one that repeats an element, naming it, and hold each sorted."""
-        object.__setattr__(self, "days", _as_event_days(self.days, "days"))
+        """Read days and hours, and hold each sorted, once _each_once_sorted has judged it."""
+        object.__setattr__(self, "days", _each_once_sorted(_as_event_days(self.days, "days"), "days", "day"))
         read_field(self, "hours", as_whole_numbers, _EVENT_HOURS)
-        for name, what in (("days", "day"), ("hours", "hour")):
-            values = getattr(self, name)
-            if not values:
-                raise ConfigurationError(f"{name} must hold at least one {what}; it is empty")
-            repeated = sorted(value for value, count in Counter(values).items() if count > 1)
-            if repeated:
-                raise ConfigurationError(
-                    f"{name} must hold each {what} once; it repeats {', '.join(map(str, repeated))}"
-                )
-            object.__setattr__(self, name, tuple(sorted(values)))
+        object.__setattr__(self, "hours", _each_once_sorted(self.hours, "hours", "hour"))
+
+
+_EventSlot = TypeVar("_EventSlot", date, int)
+
+
+def _each_once_sorted(values: tuple[_EventSlot, ...], field: str, what: str) -> tuple[_EventSlot, ...]:
+    """Return *values*, the field *field* of an event window, sorted.
+
+    Raises:
+        ConfigurationError: If *values* is empty, or repeats a *what*, naming *field* and each
+            repeated element.
+    """
+    if not values:
+        raise ConfigurationError(f"{field} must hold at least one {what}; it is empty")
+    repeated = sorted(value for value, count in Counter(values).items() if count > 1)
+    if repeated:
+        raise ConfigurationError(f"{field} must hold each {what} once; it repeats {', '.join(map(str, repeated))}")
+    return tuple(sorted(values))
 
 
 def as_event_discharge_windows(value: object, field: str) -> tuple[EventDischargeWindow, ...]:
