@@ -16,9 +16,9 @@ from typing import Any
 import yaml
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import ComponentDistribution
+from solar_challenge.fleet_distribution import ComponentDistribution, FleetDistributionConfig
 from solar_challenge.scenario_blocks import child_path
-from solar_challenge.web.fleet_components import ComponentLimits
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, ComponentLimits
 from solar_challenge.web.simulation_params import read_iso_date
 
 
@@ -42,6 +42,10 @@ BlockRead = tuple[dict[str, Any], tuple[str, ...]]
 
 #: Reads a setting a page's form holds from its value in a scenario and its path there.
 SettingReader = Callable[[Any, str], Any]
+
+#: Reads a page's form's battery from a fleet_distribution block, its path and the grammar's
+#: reading of its battery block, None for a fleet without a battery.
+BatteryReader = Callable[[Mapping[str, Any], str, ComponentDistribution | None], BlockRead]
 
 
 def scenario_yaml_document(yaml_text: str) -> object:
@@ -207,6 +211,28 @@ def read_seg(seg: Any, held: frozenset[str], page: str) -> BlockRead:
                 f"{holds}, got {value!r}"
             )
     return {"seg": dict(seg)}, ()
+
+
+def read_fleet_distribution(
+    fleet: Mapping[str, Any], parsed: FleetDistributionConfig, read_battery: BatteryReader
+) -> BlockRead:
+    """The form's fleet size, seed and distributions: the scenario's fleet_distribution block *fleet*, as the grammar read it, *parsed*, a seed it leaves out none; its battery as the page's *read_battery* reads it.
+
+    Raises:
+        ConfigurationError: From read_component or *read_battery*, for a field the form cannot hold.
+    """
+    path = "fleet_distribution"
+    return read_blocks(
+        fleet,
+        path,
+        {
+            "n_homes": ({"n_homes": parsed.n_homes}, ()),
+            "seed": ({} if parsed.seed is None else {"seed": parsed.seed}, ()),
+            "pv": read_component(fleet, path, FLEET_COMPONENTS["pv"], parsed.pv),
+            "battery": read_battery(fleet, path, parsed.battery),
+            "load": read_component(fleet, path, FLEET_COMPONENTS["load"], parsed.load),
+        },
+    )
 
 
 def read_component(

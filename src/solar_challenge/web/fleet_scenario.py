@@ -16,7 +16,7 @@ import pandas as pd
 from solar_challenge.config import read_fleet_scenario
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import ComponentDistribution, FleetDistributionConfig
+from solar_challenge.fleet_distribution import ComponentDistribution
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import child_path, parse_dispatch_strategy_config
@@ -50,7 +50,7 @@ from solar_challenge.web.scenario_import import (
     not_loaded,
     read_as_given,
     read_blocks,
-    read_component,
+    read_fleet_distribution,
     read_period,
     read_seg,
     read_typed_block,
@@ -198,7 +198,7 @@ def fleet_form_from_scenario(document: object) -> ImportedForm:
             "name": read_as_given("name", scenario.get("name")),
             "period": _read_period(period),
             "location": _read_location(read.location),
-            "fleet_distribution": _read_fleet_distribution(scenario["fleet_distribution"], read.fleet),
+            "fleet_distribution": read_fleet_distribution(scenario["fleet_distribution"], read.fleet, _read_battery),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": read_seg(scenario.get("seg"), _HELD_SEG_KEYS, _PAGE),
         },
@@ -232,28 +232,8 @@ def _read_location(location: Location) -> BlockRead:
     return {}, ("location",)
 
 
-def _read_fleet_distribution(fleet: Mapping[str, Any], parsed: FleetDistributionConfig) -> BlockRead:
-    """The fleet form's fleet size, seed, distributions and dispatch strategy: the scenario's fleet_distribution block *fleet*, as the grammar read it, *parsed*, a seed it leaves out none.
-
-    Raises:
-        ConfigurationError: From the readers of its distributions and dispatch strategy.
-    """
-    path = "fleet_distribution"
-    return read_blocks(
-        fleet,
-        path,
-        {
-            "n_homes": ({"n_homes": parsed.n_homes}, ()),
-            "seed": ({} if parsed.seed is None else {"seed": parsed.seed}, ()),
-            "pv": read_component(fleet, path, FLEET_COMPONENTS["pv"], parsed.pv),
-            "battery": _read_battery(fleet.get("battery"), child_path(path, "battery"), parsed.battery),
-            "load": read_component(fleet, path, FLEET_COMPONENTS["load"], parsed.load),
-        },
-    )
-
-
-def _read_battery(battery: Any, path: str, read: ComponentDistribution | None) -> BlockRead:
-    """The fleet form's battery capacity and dispatch strategy: the *path* battery block's, whose grammar reading is *read*, none when it is absent or null.
+def _read_battery(fleet: Mapping[str, Any], path: str, read: ComponentDistribution | None) -> BlockRead:
+    """The fleet form's battery capacity and dispatch strategy: the battery block of the *path* fleet block *fleet*, whose grammar reading is *read*, none when it is absent or null.
 
     A dispatch strategy on its tariff's clock loads none, and its path is named not loaded.
 
@@ -264,12 +244,14 @@ def _read_battery(battery: Any, path: str, read: ComponentDistribution | None) -
     if read is None:
         return {}, ()
     limits = FLEET_COMPONENTS["battery"]
-    capacity = editor_field(limits, read, path)
+    battery = fleet[limits.key]
+    battery_path = child_path(path, limits.key)
+    capacity = editor_field(limits, read, battery_path)
     dispatch, dispatch_not_loaded = _read_dispatch(
-        battery.get("dispatch_strategy"), child_path(path, "dispatch_strategy")
+        battery.get("dispatch_strategy"), child_path(battery_path, "dispatch_strategy")
     )
     held = {limits.grammar_key: (), "dispatch_strategy": dispatch_not_loaded}
-    return {"battery": {limits.grammar_key: capacity}, **dispatch}, not_loaded(battery, path, held)
+    return {limits.key: {limits.grammar_key: capacity}, **dispatch}, not_loaded(battery, battery_path, held)
 
 
 def _or_default(default: float) -> SettingReader:

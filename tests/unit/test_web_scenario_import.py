@@ -13,6 +13,7 @@ pytest.importorskip("flask")
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
+    ComponentDistribution,
     NormalDistribution,
     parse_fleet_distribution_config,
     write_distribution_spec,
@@ -21,10 +22,12 @@ from solar_challenge.web.builder_form import builder_form_from_scenario
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_scenario import fleet_form_from_scenario
 from solar_challenge.web.scenario_import import (
+    BlockRead,
     ImportedForm,
     not_loaded,
     read_blocks,
     read_component,
+    read_fleet_distribution,
     read_period,
     read_seg,
     read_typed_block,
@@ -225,6 +228,59 @@ class TestReadComponent:
         fleet = {"n_homes": 2, "pv": {"capacity_kw": 4, "azimuth": 180}}
 
         assert _pv_read(fleet) == ({"pv": {"capacity_kw": 4.0}}, ("fleet_distribution.pv.azimuth",))
+
+
+class TestReadFleetDistribution:
+    """read_fleet_distribution reads a fleet_distribution block as both pages' forms hold it, its battery by the page's own reader."""
+
+    @staticmethod
+    def _read(fleet: dict[str, Any]) -> tuple[BlockRead, list[tuple[Any, ...]]]:
+        """read_fleet_distribution's reading of *fleet*, with each call of a battery reader that loads a probe setting."""
+        calls: list[tuple[Any, ...]] = []
+
+        def read_battery(block: Any, path: str, read: ComponentDistribution | None) -> BlockRead:
+            calls.append((block, path, read))
+            return {"battery_probe": "loaded"}, ("fleet_distribution.battery.probe",)
+
+        return read_fleet_distribution(fleet, parse_fleet_distribution_config(fleet), read_battery), calls
+
+    def test_its_size_seed_and_pv_and_load_fields_load_beside_the_pages_battery_read(self) -> None:
+        fleet = {
+            "n_homes": 3,
+            "seed": 9,
+            "pv": {"capacity_kw": 4},
+            "battery": {"capacity_kwh": 5},
+            "load": {"annual_consumption_kwh": 3000},
+        }
+
+        (form, unheld), calls = self._read(fleet)
+
+        assert form == {
+            "n_homes": 3,
+            "seed": 9,
+            "pv": {"capacity_kw": 4.0},
+            "battery_probe": "loaded",
+            "load": {"annual_consumption_kwh": 3000.0},
+        }
+        assert unheld == ("fleet_distribution.battery.probe",)
+        [(block, path, read)] = calls
+        assert (block, path) == (fleet, "fleet_distribution")
+        assert read == parse_fleet_distribution_config(fleet).battery
+
+    def test_a_fleet_without_a_battery_or_seed_gives_the_battery_reader_none_and_loads_no_seed(self) -> None:
+        fleet = {"n_homes": 2, "pv": {"capacity_kw": 4}}
+
+        (form, _), calls = self._read(fleet)
+
+        assert "seed" not in form
+        assert [read for _, _, read in calls] == [None]
+
+    def test_a_key_of_the_block_no_page_holds_is_named_in_the_blocks_order(self) -> None:
+        fleet = {"random_order": "bristol_legacy", "n_homes": 2, "pv": {"capacity_kw": 4, "azimuth": 180}}
+
+        (_, unheld), _ = self._read(fleet)
+
+        assert unheld == ("fleet_distribution.random_order", "fleet_distribution.pv.azimuth")
 
 
 class TestReadSeg:

@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 from solar_challenge.config import ScenarioConfig, parse_scenario, read_fleet_scenario
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import FleetDistributionConfig
+from solar_challenge.fleet_distribution import ComponentDistribution
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import location_block
@@ -49,6 +49,7 @@ from solar_challenge.web.scenario_import import (
     read_as_given,
     read_blocks,
     read_component,
+    read_fleet_distribution,
     read_period,
     read_seg,
     read_typed_block,
@@ -305,7 +306,7 @@ def builder_form_from_scenario(document: object) -> ImportedForm:
             "description": read_as_given("description", scenario.get("description")),
             "period": _read_period(period or page_limits().default_window),
             "location": _read_location(scenario.get("location"), read.location),
-            "fleet_distribution": _read_fleet_distribution(scenario["fleet_distribution"], read.fleet),
+            "fleet_distribution": read_fleet_distribution(scenario["fleet_distribution"], read.fleet, _read_battery),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),
         },
@@ -365,33 +366,19 @@ def _read_location(block: Any, location: Location) -> BlockRead:
     return {"location_preset": "custom", **coordinates}, not_loaded(block or {}, "location", held)
 
 
-def _read_fleet_distribution(fleet: Mapping[str, Any], parsed: FleetDistributionConfig) -> BlockRead:
-    """The builder form's fleet size, seed and distributions: the scenario's fleet_distribution block *fleet*, as the grammar read it, *parsed*, a seed it leaves out none.
+def _read_battery(fleet: Mapping[str, Any], path: str, read: ComponentDistribution | None) -> BlockRead:
+    """The builder form's battery capacity: the battery block of the *path* fleet block *fleet*, whose grammar reading is *read*.
 
-    A fleet without a battery loads a null battery capacity, a home without a battery, since
-    the builder always posts a battery block.
+    A fleet without a battery loads a null capacity, a home without a battery, since the
+    builder always posts a battery block.
 
     Raises:
-        ConfigurationError: From ComponentLimits.editor_spec, for a field an editor cannot hold.
+        ConfigurationError: From ComponentLimits.editor_spec, for a capacity the editor cannot hold.
     """
-    path = "fleet_distribution"
-    battery_limits = FLEET_COMPONENTS["battery"]
-    battery = (
-        ({"battery": {battery_limits.grammar_key: None}}, ())
-        if parsed.battery is None
-        else read_component(fleet, path, battery_limits, parsed.battery)
-    )
-    return read_blocks(
-        fleet,
-        path,
-        {
-            "n_homes": ({"n_homes": parsed.n_homes}, ()),
-            "seed": ({} if parsed.seed is None else {"seed": parsed.seed}, ()),
-            "pv": read_component(fleet, path, FLEET_COMPONENTS["pv"], parsed.pv),
-            "battery": battery,
-            "load": read_component(fleet, path, FLEET_COMPONENTS["load"], parsed.load),
-        },
-    )
+    limits = FLEET_COMPONENTS["battery"]
+    if read is None:
+        return {limits.key: {limits.grammar_key: None}}, ()
+    return read_component(fleet, path, limits, read)
 
 
 def _read_tariff(tariff: Any) -> BlockRead:
