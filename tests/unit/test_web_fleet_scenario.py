@@ -1333,12 +1333,17 @@ class TestFleetFormVocabulary:
                 each.name for each in dataclasses.fields(config) if each.init
             ]
 
-    def test_a_strategy_the_form_has_no_title_for_is_refused_naming_it(self) -> None:
-        with pytest.raises(KeyError, match="turbo"):
+    def test_a_strategy_the_form_has_no_title_for_is_refused_naming_it_and_the_titles_table(self) -> None:
+        with pytest.raises(KeyError, match=r"_DISPATCH_TITLES has no entry for the dispatch strategy 'turbo'"):
             fleet_form_dispatch_choices({**STRATEGY_CONFIG_BY_TYPE, "turbo": _TurboStrategyConfig})
 
-    def test_a_strategy_setting_the_form_has_no_setting_for_is_refused_naming_it(self) -> None:
-        with pytest.raises(KeyError, match="boost_kw"):
+    def test_a_strategy_setting_the_form_has_no_setting_for_is_refused_naming_it_its_strategy_and_the_settings_table(
+        self,
+    ) -> None:
+        with pytest.raises(
+            KeyError,
+            match=r"_DISPATCH_SETTINGS has no entry for the field 'boost_kw' of the dispatch strategy 'peak_shaving'",
+        ):
             fleet_form_dispatch_choices({**STRATEGY_CONFIG_BY_TYPE, "peak_shaving": _BoostStrategyConfig})
 
     def test_the_first_dispatch_choice_is_the_strategy_a_battery_that_names_none_runs(self) -> None:

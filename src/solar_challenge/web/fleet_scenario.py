@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from datetime import date
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeVar
 
 import pandas as pd
 
@@ -341,18 +341,47 @@ _DISPATCH_SETTINGS: Mapping[str, FormSetting] = MappingProxyType({
 })
 
 
+_Entry = TypeVar("_Entry")
+
+
+def _dispatch_form_entry(table_name: str, table: Mapping[str, _Entry], key: str, wanted: str) -> _Entry:
+    """*table*'s entry for *key*: the *wanted* a dispatch choice of the fleet form needs.
+
+    Raises:
+        KeyError: When *table* has no entry for *key*, naming *table_name*, *wanted* and the
+            rule it breaks.
+    """
+    try:
+        return table[key]
+    except KeyError:
+        raise KeyError(
+            f"{table_name} has no entry for {wanted}: every dispatch strategy the fleet form "
+            "offers needs a title in _DISPATCH_TITLES and, for each field its constructor takes, "
+            "a setting in _DISPATCH_SETTINGS"
+        ) from None
+
+
 def fleet_form_dispatch_choices(configs: Mapping[str, type[DispatchStrategyConfig]]) -> tuple[FormChoice, ...]:
     """The dispatch strategies the fleet form offers: one choice per strategy of *configs*, by its tag, in its order, holding a setting for each field its constructor takes, in field order.
 
     Raises:
-        KeyError: For a tag the form has no title for, or a field it has no setting for,
-            naming it.
+        KeyError: For a tag the form has no title for, naming it, or a field it has no
+            setting for, naming it and its strategy's tag; each names the table that lacks it.
     """
     return tuple(
         FormChoice(
             tag,
-            _DISPATCH_TITLES[tag],
-            tuple(_DISPATCH_SETTINGS[each.name] for each in fields(config) if each.init),
+            _dispatch_form_entry("_DISPATCH_TITLES", _DISPATCH_TITLES, tag, f"the dispatch strategy {tag!r}"),
+            tuple(
+                _dispatch_form_entry(
+                    "_DISPATCH_SETTINGS",
+                    _DISPATCH_SETTINGS,
+                    each.name,
+                    f"the field {each.name!r} of the dispatch strategy {tag!r}",
+                )
+                for each in fields(config)
+                if each.init
+            ),
         )
         for tag, config in configs.items()
     )
