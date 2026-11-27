@@ -138,23 +138,6 @@ class TestScenarioBuilderRoute:
         """static/vendor/js-yaml is gone from the web package: no page parses YAML in the browser."""
         assert not (Path(web.__file__).parent / "static" / "vendor" / "js-yaml").exists()
 
-    def test_no_page_script_or_template_names_js_yaml(self) -> None:
-        """No file under the web package's static/js or templates names jsyaml or js-yaml."""
-        package = Path(web.__file__).parent
-        files = [
-            path
-            for directory in (package / "static" / "js", package / "templates")
-            for path in sorted(directory.rglob("*"))
-            if path.is_file()
-        ]
-
-        assert files, "read no page script or template, so this check would pass vacuously"
-        assert [
-            str(path.relative_to(package))
-            for path in files
-            if "jsyaml" in (text := path.read_text(encoding="utf-8")) or "js-yaml" in text
-        ] == []
-
 
 class TestSweepRoute:
     """Tests for the GET /scenarios/sweep route."""

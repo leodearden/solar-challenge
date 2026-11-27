@@ -12,7 +12,6 @@ pytest.importorskip("flask")
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.web.builder_form import builder_form_from_yaml
 from solar_challenge.web.builtin_scenarios import (
-    builtin_scenario_files,
     builtin_scenario_form,
     builtin_scenarios_loaded_by,
     scenario_files_in,
@@ -203,10 +202,13 @@ def test_a_scenario_file_holding_the_fleet_pages_default_pv_pool_with_200_homes_
     assert error_records(caplog) == []
 
 
-def test_the_builtin_scenarios_an_importer_loads_are_those_of_the_builtin_files_it_loads() -> None:
-    assert builtin_scenarios_loaded_by(builder_form_from_yaml) == scenario_files_loaded_by(
-        builtin_scenario_files(), builder_form_from_yaml
-    )
+def test_a_builtin_scenario_is_offered_to_each_page_whose_importer_loads_it() -> None:
+    """bristol-phase1-flex's Economy 7 tariff is one the fleet form holds and the builder's does not."""
+    builder = builtin_scenarios_loaded_by(builder_form_from_yaml)
+    fleet_page = builtin_scenarios_loaded_by(fleet_form_from_yaml)
+
+    assert ("bristol-phase1" in builder, "bristol-phase1-flex" in builder) == (True, False)
+    assert ("bristol-phase1" in fleet_page, "bristol-phase1-flex" in fleet_page) == (True, True)
 
 
 def test_no_form_is_read_for_a_name_no_builtin_file_holds() -> None:

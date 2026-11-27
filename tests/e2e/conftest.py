@@ -13,10 +13,11 @@ live server's own RunStorage, for tests that need pre-existing
 simulation runs (dashboard, results pages, history interactions,
 compare page); home_preset_saved_under_a_builtin_name, which writes
 a saved home preset under a built-in preset's name straight into the
-live server's database; and
+live server's database;
 fleet_preset_saved_under_a_builtin_scenario_name, which saves a fleet
 preset under a built-in scenario's name through the live server's
-POST /api/scenarios/save.
+POST /api/scenarios/save; and preset_name_deleted_at_teardown, a name
+no saved preset holds, for a test that saves a preset from a page.
 Also stubs the Run History page's runs-list API for tests that need it
 empty, unanswered or listing a run of each badge, and collects the
 errors a page reports. release_held_simulations holds the live server's
@@ -436,6 +437,19 @@ def fleet_preset_saved_under_a_builtin_scenario_name(_e2e_app: Flask) -> Iterato
     yield {"name": builtins[0], "form": form}
     with database_of(_e2e_app).transaction() as conn:
         conn.execute("DELETE FROM config_presets WHERE id = ?", (saved.get_json()["id"],))
+
+
+@pytest.fixture
+def preset_name_deleted_at_teardown(_e2e_app: Flask) -> Iterator[str]:
+    """A preset name unique to the test, which no saved preset holds.
+
+    The session's tests share the database, so a preset the test saves under the name is
+    deleted at teardown.
+    """
+    name = f"e2e preset {uuid.uuid4().hex[:8]}"
+    yield name
+    with database_of(_e2e_app).transaction() as conn:
+        conn.execute("DELETE FROM config_presets WHERE name = ?", (name,))
 
 
 # ---------------------------------------------------------------------------

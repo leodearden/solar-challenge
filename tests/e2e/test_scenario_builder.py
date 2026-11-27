@@ -1,7 +1,6 @@
 """End-to-end tests for the Scenario Builder page (/scenarios/builder)."""
 
 import re
-import uuid
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -1385,10 +1384,10 @@ def _save_under_the_scenario_name(page: Page) -> Response:
 
 
 def test_a_scenario_saved_from_the_builder_is_listed_in_load_preset_without_a_reload(
-    page: Page, live_server: str
+    page: Page, live_server: str, preset_name_deleted_at_teardown: str
 ) -> None:
     """Once Save has saved the named scenario, Load Preset lists it under the name it was saved as; no reload is needed."""
-    name = f"Saved without reload {uuid.uuid4().hex[:8]}"
+    name = preset_name_deleted_at_teardown
     open_builder(page, live_server)
     page.get_by_role("textbox", name="Scenario Name", exact=True).fill(name)
 
@@ -1399,9 +1398,11 @@ def test_a_scenario_saved_from_the_builder_is_listed_in_load_preset_without_a_re
     expect(page.get_by_role("button", name=name, exact=True)).to_be_visible()
 
 
-def test_a_saved_preset_reloads_to_a_form_whose_validate_sends_what_was_saved(page: Page, live_server: str) -> None:
+def test_a_saved_preset_reloads_to_a_form_whose_validate_sends_what_was_saved(
+    page: Page, live_server: str, preset_name_deleted_at_teardown: str
+) -> None:
     """A scenario saved with a name and a seed of its own, chosen from Load Preset on a freshly opened builder, sets the form Validate then sends to the one the builder saved."""
-    name = f"Saved and reloaded {uuid.uuid4().hex[:8]}"
+    name = preset_name_deleted_at_teardown
     open_builder(page, live_server)
     page.get_by_role("textbox", name="Scenario Name", exact=True).fill(name)
     _open_section(page, "Fleet Distribution")
